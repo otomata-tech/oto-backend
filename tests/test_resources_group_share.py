@@ -29,12 +29,6 @@ def _wire(monkeypatch, *, member_of=(42,), group=GROUP):
     monkeypatch.setattr(R.ownership, "grant", _grant)
     monkeypatch.setattr(R.ownership, "revoke",
                         lambda rt, rid, pt, pid: calls["revokes"].append((rt, rid, pt, pid)) or True)
-    # #480 : le prêt des clés d'un projet vit dans la chaîne de grants — hors base ici.
-    calls["heritage"] = []
-    monkeypatch.setattr(R.heritage, "declarer",
-                        lambda pid, pt, pi, mode, by: calls["heritage"].append((pid, pt, pi, mode)))
-    monkeypatch.setattr(R.heritage, "modes_du_projet", lambda pid: {})
-    monkeypatch.setattr(R.heritage, "mode_de", lambda pid, pt, pi: R.heritage.OWN)
     return calls
 
 
@@ -70,8 +64,6 @@ def test_unshare_group(monkeypatch):
                                             resource_id="7", group_id=5))
     assert ("project", "7", "group", "5") in calls["revokes"]
     assert out["removed"] is True
-    # Retirer l'accès retire aussi le prêt des clés (#480).
-    assert (7, "group", "5", "own") in calls["heritage"]
 
 
 def test_unshare_deleted_group_still_revokes(monkeypatch):

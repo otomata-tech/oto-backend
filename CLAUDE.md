@@ -61,7 +61,7 @@ et la métadonnée RFC 8414 divergeraient sinon ; « openid » sans `resource` =
 remplace jamais** (`MCP_AUDIENCE_ALT`, `OTO_MCP_CORS_ORIGINS`, `MAILER_FROM_DOMAINS`, SPF, redirect URIs), chaque env
 ayant la sienne (`docs/auth-logto.md`, `docs/tenants.md`).
 Paliers `member < admin < super_admin` ; clé résolue à chaque appel par le **walker unique** `access.walk_cascade`
-(`perso > cross-org > équipe active > org > tenant > plateforme`), jamais recopié ; un credential qui se **pose** est
+(`nommé > perso > équipe active > org > tenant > plateforme`, filtré par le niveau des règles de comptes), jamais recopié ; un credential qui se **pose** est
 **multi-compte** · ⚠️ compte nommé introuvable ⇒ « introuvable », **jamais un repli plateforme silencieux**
 (`docs/roles-and-resolution.md`, `docs/connector-vault.md`).
 **Mettre un compte en pause** (03/09/2026) : le cran qui manquait entre « vivant » et « supprimé » — et **la
@@ -225,8 +225,8 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `architecture.md` — l'arbre des modules, les 4 couches
 - `couches-et-capacites.md` — ADR 0004 + capacités
 - `connector-vault.md` — registre, coffre, instances, **garde d'egress** (`OTO_EGRESS_ALLOW`)
-- `partage-de-compte.md` — un seul geste « partager » (personne, équipe, org) ; le compte de l'org vs le compte
-  prêté, qui ne sert que désigné explicitement ; ce que deviennent les chemins d'avant
+- `partage-de-compte.md` — les règles de comptes (#1499) : niveau détenu, ordre de résolution, garde de niveau,
+  le compte d'autrui ne sert que nommé, décisions D1–D3 en attente
 - `roles-and-resolution.md` — paliers, cascade de clé
 - `groups-and-roles.md` — hiérarchie de droits
 - `org-context.md` — session / maison / consultation ; jeton de délégation borné à l'org de son travail

@@ -32,13 +32,12 @@ from oto_mcp.db import grants as db_grants
 AIARK = [{"label": "acme", "share_mode": "closed",
           "share_down": ["org:262", "org:269", "org:196", "org:178", "org:192",
                          "org:264", "org:270", "org:273", "org:255"],
-          "share_side": [], "meta": {}}]
+          "meta": {}}]
 APIFY = [{"label": "acme", "share_mode": "closed",
           "share_down": ["org:196", "org:264", "org:270", "org:269", "org:255"],
-          "share_side": [], "meta": {}}]
+          "meta": {}}]
 # La clé serper : OUVERTE à tous. Même symptôme vu du classeur, autre remède.
-SERPER = [{"label": "env", "share_mode": "open", "share_down": [], "share_side": [],
-           "meta": {"rate_limit": 200}}]
+SERPER = [{"label": "env", "share_mode": "open", "share_down": [], "meta": {"rate_limit": 200}}]
 
 
 @pytest.fixture

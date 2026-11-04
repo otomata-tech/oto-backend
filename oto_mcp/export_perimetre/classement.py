@@ -206,7 +206,7 @@ CLASSEMENT: dict[str, Table] = {
                                       secrets=("secret_enc",)),
     "connector_instances": possedee(ParEntite()),
     "connector_loan_events": possedee(ParEntite("entity_type", "entity_id"),
-                                      "le journal des prêts suit la ligne du coffre prêtée"),
+                                      "le journal des prêts d'avant #1499 suit la ligne du coffre"),
     # Les règles d'accès d'un compte (#1499) sont à l'org du compte ; leur sujet nommé
     # peut être un ANCIEN membre : la règle est rattachée à son jumeau ou omise.
     "connector_account_rules": possedee(ParOrg(), comptes=("subject_user",)),
@@ -225,8 +225,6 @@ CLASSEMENT: dict[str, Table] = {
     "connector_selection_reconciled": exclue(ParOrg(), "une marque de cache (une clé "
                                              "utilisable installe son connecteur) : son absence "
                                              "fait recalculer à la session suivante"),
-    "connector_account_grants": possedee(ParSub("owner_sub")),
-    "connector_account_group_grants": possedee(ParSub("owner_sub")),
     "credential_disparitions": possedee(ParOrg()),
     "grants": possedee(ParEntite("grantor_kind", "grantor_id"),
                        "une arête part avec qui l'accorde, si son bénéficiaire est du "
@@ -242,7 +240,6 @@ CLASSEMENT: dict[str, Table] = {
                                    "d'Apollo les relit pendant la même fenêtre"),
     # ── messagerie hébergée ────────────────────────────────────────────────────
     "unipile_accounts": possedee(ParOrg(), comptes=("sub",)),
-    "unipile_operated_accounts": possedee(ParSub()),
     "unipile_pending": exclue(ParSub(), "connexion en cours : un état éphémère, qui ne "
                               "survit pas à une bascule"),
     # ── runner, abonnements de modèle, transcription ───────────────────────────

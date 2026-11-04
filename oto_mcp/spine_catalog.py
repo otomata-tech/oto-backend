@@ -103,8 +103,8 @@ SPINE_FAMILIES: tuple[SpineFamily, ...] = (
         "formulaires — rangés dans un projet, sur ses tableaux et ses agents",
     ),
     SpineFamily(
-        "oto_resource* / oto_account_access",
-        ("oto_resource", "oto_account_access"),
+        "oto_resource*",
+        ("oto_resource",),
         "gouvernance d'une ressource possédée (ADR 0030) : propriétaire, TRANSFERT à une "
         "personne / une équipe / une org, partage, publication",
     ),

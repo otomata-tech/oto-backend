@@ -36,8 +36,7 @@ pytestmark = pytest.mark.usefixtures("sans_droit_declare")
 # nominatifs dans `rate_limit_by`. Les tests jouent contre CETTE forme, pas contre une
 # forme idéale — c'est elle que la migration doit reproduire.
 PROD_INSTANCE = {
-    "label": "env", "share_mode": "open", "share_down": [], "share_side": [],
-    "meta": {"rate_limit": 5, "rate_limit_by": {"user:granted-sub": 200,
+    "label": "env", "share_mode": "open", "share_down": [], "meta": {"rate_limit": 5, "rate_limit_by": {"user:granted-sub": 200,
                                                 "user:other-sub": 5}},
 }
 REF = "platform:fullenrich:env"
@@ -197,8 +196,7 @@ def test_unchained_connectors_never_touch_the_chain(monkeypatch):
     monkeypatch.setattr(db_grants, "edges_for", boom)
     monkeypatch.setattr(credentials_store, "list_platform_instances",
                         lambda p: [{"label": "env", "share_mode": "open",
-                                    "share_down": [], "share_side": [],
-                                    "meta": {"rate_limit": 42}}])
+                                    "share_down": [], "meta": {"rate_limit": 42}}])
     for provider in NEVER_CHAINED:
         assert access._platform_grant_meta("s", provider, None) == {
             "label": "env", "daily_quota": 42}, provider
@@ -211,8 +209,7 @@ def test_wave2_open_key_without_edges_resolves_like_legacy(monkeypatch):
     monkeypatch.setattr(db_grants, "edges_for", lambda ref, grantees: [])
     monkeypatch.setattr(credentials_store, "list_platform_instances",
                         lambda p: [{"label": "env", "share_mode": "open",
-                                    "share_down": [], "share_side": [],
-                                    "meta": {"rate_limit": 42}}])
+                                    "share_down": [], "meta": {"rate_limit": 42}}])
     for provider in WAVE2:
         assert access._platform_grant_meta("s", provider, None) == \
             access._legacy_platform_grant_meta("s", provider, None), provider
@@ -226,8 +223,7 @@ def test_wave2_revocation_cuts_access_even_on_open_key(monkeypatch):
     no-op (le free-tier re-accorderait aussitôt)."""
     monkeypatch.setattr(credentials_store, "list_platform_instances",
                         lambda p: [{"label": "env", "share_mode": "open",
-                                    "share_down": [], "share_side": [],
-                                    "meta": {"rate_limit": 42}}])
+                                    "share_down": [], "meta": {"rate_limit": 42}}])
     for provider in WAVE2:
         ref = f"platform:{provider}:env"
         monkeypatch.setattr(db_grants, "edges_for", lambda r, g, _ref=ref: [

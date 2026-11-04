@@ -87,7 +87,7 @@ def test_le_resultat_reste_identique_avec_ou_sans_prechargement(monkeypatch):
     la lecture est mutualisée, jamais le verdict."""
     instances = {
         "serper": [{"label": "plat-1", "share_mode": "all", "share_down": [],
-                    "share_side": [], "meta": {"rate_limit": 500}}],
+                    "meta": {"rate_limit": 500}}],
         "hunter": [],
     }
     for provider in ("serper", "hunter", "jamais_installe"):

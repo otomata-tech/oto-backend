@@ -177,11 +177,10 @@ lecture refusait sans lire le défaut.
   = non / pas d'accès. **Toute reprise d'une valeur héritée en ligne de droit traduit
   le `0` « illimité » en `SANS_PLAFOND`** — recopié tel quel, il deviendrait « aucun
   accès » et le maximum le laisserait perdre face au défaut.
-- **(e) La ligne « personne dans l'org » d'un ancien membre reste lue** s'il agit dans
-  cette org par un projet partagé AVEC prêt (`heritage.org_partagee` rend l'org) :
-  `value_for(sub, org)` ne vérifie pas l'appartenance. Sans prêt, l'org n'est pas
-  servie et seule sa ligne partout compte. Retirer la ligne au départ du membre est
-  l'affaire du producteur.
+- **(e) La ligne « personne dans l'org » d'un ancien membre** n'est plus lue : un projet
+  partagé ne prête plus l'org (#1499), elle n'est donc jamais servie à un non-membre, et
+  seule sa ligne partout compte. `value_for(sub, org)` ne vérifie pas l'appartenance ;
+  retirer la ligne au départ du membre est l'affaire du producteur.
 
 ## L'écriture — `db/entitlements.py`
 

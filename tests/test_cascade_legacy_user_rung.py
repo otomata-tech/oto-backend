@@ -52,7 +52,7 @@ def _occupant_synthetique(monkeypatch):
 
 def _probe(*, legacy=False):
     return access.CascadeProbe(
-        member=lambda s, o, p: None, member_cross=lambda s, o, p: None,
+        member=lambda s, o, p: None,
         legacy_user=lambda s, p: ("LK" if legacy else None),
         group=lambda g, p: None, org=lambda o, p: None, tenant=lambda t, p: None,
         platform=lambda s, p, o: None,

@@ -29,7 +29,6 @@ and it is the only one the window must see at zero.
 | `elargissement_equipe` | the cascade only reads the **ACTIVE** team; the reachable set reads **all** the subject's teams in the org. A member of "finance" active in "sales" resolves nothing today and would resolve finance's key tomorrow. **Counted per org**, because it is a served behavior that changes for a named customer |
 | `free_tier_hors_modele` | the old path wins the platform rung through the OPEN free tier (`share_mode='open'`, empty `share_down`) — and 0053 has **no** "everyone" beneficiary. It was the only real hole in the model; **decided on 29/08: an explicit "everyone" edge first, the measured phase-out connector by connector afterwards.** This class must therefore fall to **zero** before the removal (PR 3), and it is the edge laid in PR 2 that brings it there |
 | `partage_hors_modele` | the platform key is CLOSED on an allowlist (`share_down`) **and no edge expresses it**. Sister of the previous one, different remedy: it is the NAMED edges that are missing. L5's seeding only covered the switched connectors, so any closed key outside that list falls in this case. Experienced on 29/08: 17 observations on `aiark` and `apify` fell into `inconnu` for lack of this name — a perfectly explainable divergence that closed the door for a wrong reason |
-| `perso_cross_org` | the personal cross-org instance (#172): the cascade follows the subject's key in ANOTHER org, 0053's reachable set is scoped to the context org |
 
 ## Two method rules, held mechanically
 
@@ -37,7 +36,7 @@ and it is the only one the window must see at zero.
    the registry (`is_byo_user`, `org_shareable`, `auth_modes`), an instance's
    suspension, the `grants` edges. This module writes a different TRAVERSAL, not
    a second copy of the gates. It is the same discipline as
-   `connectors/instance_visibility.py`, which already inverts the walker without cloning it.
+   the derived visibility (R9) had, which inverted the walker without cloning it.
 2. **The comparison is on the RUNG, not on the account.** The choice of a
    multi-identity account is a level of the instance (0053-D9), not an authorization: replaying
    it here would duplicate `_shared_auto_account` to produce a false discrepancy.
@@ -72,10 +71,9 @@ ELARGISSEMENT_EQUIPE = "elargissement_equipe"
 # Taken from `chain_resolution`, which records them — never redeclared.
 FREE_TIER_HORS_MODELE = chain_resolution.FREE_TIER_HORS_MODELE
 PARTAGE_HORS_MODELE = chain_resolution.PARTAGE_HORS_MODELE
-PERSO_CROSS_ORG = "perso_cross_org"
 INCONNU = "inconnu"
 CLASSES = (ACCORD, ELARGISSEMENT_EQUIPE, FREE_TIER_HORS_MODELE,
-           PARTAGE_HORS_MODELE, PERSO_CROSS_ORG, INCONNU)
+           PARTAGE_HORS_MODELE, INCONNU)
 
 # Flush period of the AGREEMENT, in seconds. Agreement is the nominal case: counting
 # it in the database on every call would put a write on the hot path of a single-loop
@@ -106,8 +104,6 @@ def classify(legacy, chain: Optional[chain_resolution.ChainPick], *,
     exercises on the shapes observed in prod, without a database."""
     if _key(legacy) == _key(chain):
         return ACCORD
-    if legacy is not None and getattr(legacy, "via", "local") == "cross_org":
-        return PERSO_CROSS_ORG
     if chain is not None and chain.mode == "group":
         return ELARGISSEMENT_EQUIPE
     if (chain is None and legacy is not None

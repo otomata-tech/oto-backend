@@ -77,7 +77,7 @@ def test_une_cle_sans_compte_devient_l_instance_plateforme_ouverte_du_slug(base)
         assert convertir(c, SLUG) == {"hunter": SLUG}
         assert _ligne(c, "tenant", SLUG, "hunter") is None
         p = _ligne(c, "platform", SLUG, "hunter")
-        assert (p["share_mode"], p["share_down"], p["share_side"]) == ("open", [], [])
+        assert (p["share_mode"], p["share_down"]) == ("open", [])
         assert p["set_by"] == "admin" and p["meta"]["note"] == "garde"
         assert p["meta"]["_conversion"]["from"] == f"tenant:{SLUG}"
         assert decrypt_with_key(CLE, p["secret_enc"], cs._aad("platform", SLUG, "hunter")) \
@@ -117,7 +117,7 @@ def test_tout_le_monde_est_accorde_et_les_aretes_sans_contrainte_s_archivent(bas
 
 @pytest.mark.parametrize("pose, motif", [
     (lambda c: _arete(c, "hunter", 12, {"quota": 100}), "AVEC contrainte"),
-    (lambda c: c.execute("UPDATE connector_credentials SET share_side = '[\"org:3\"]' "
+    (lambda c: c.execute("UPDATE connector_credentials SET share_down = '[\"org:3\"]' "
                          "WHERE entity_type = 'tenant'"), "porte un partage"),
     (lambda c: _cle_tenant(c, "attio"), "pas de mode `platform`"),
     (lambda c: _cle_tenant(c, "hunter", compte="Second"), "plusieurs clés tenant"),

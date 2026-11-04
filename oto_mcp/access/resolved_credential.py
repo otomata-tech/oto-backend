@@ -29,7 +29,9 @@ class ResolvedCredential:
     - `config` (lazy): declared NON-secret fields (data_center, base_url…) ∪ the
       credential's public `meta` (e.g. unipile `dsn`). The config travels with the key.
     - `entity_type`/`entity_id`: winning level (None for a platform grant — its
-      config is the environment, not a vault credential)."""
+      config is the environment, not a vault credential).
+    - `instance_id`: the ACCOUNT (`connector_instances.id`) whose level the resolver
+      judged (#1499) — None where no level is judged (own key, tenant, platform)."""
     provider: str
     secret: str
     is_platform: bool
@@ -37,6 +39,7 @@ class ResolvedCredential:
     entity_type: Optional[str] = None
     entity_id: Optional[str] = None
     account: str = ""
+    instance_id: Optional[int] = None
 
     def __repr__(self) -> str:
         # The key NEVER leaks through repr (#564) — see `secret_repr`.

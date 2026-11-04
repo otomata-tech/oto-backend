@@ -36,11 +36,10 @@ pytestmark = pytest.mark.usefixtures("sans_droit_declare")
 
 REF = "platform:serper:env"
 # La clé serper telle qu'elle est en prod : ouverte à tous, quota par défaut 200.
-OUVERTE = [{"label": "env", "share_mode": "open", "share_down": [], "share_side": [],
-            "meta": {"rate_limit": 200}}]
+OUVERTE = [{"label": "env", "share_mode": "open", "share_down": [], "meta": {"rate_limit": 200}}]
 # Une clé FERMÉE sur une allowlist : là, chaque bénéficiaire a son arête.
 FERMEE = [{"label": "env", "share_mode": "closed", "share_down": ["org:42"],
-           "share_side": [], "meta": {"rate_limit": 200}}]
+           "meta": {"rate_limit": 200}}]
 
 
 def _edge(grantee, quota=200, revoked=None, edge_id=1):
@@ -162,7 +161,7 @@ def test_la_commande_rattrape_les_nominatives_restees_derriere(socle, cmd, monke
     bascule d'autorité perdrait des accès et des plafonds en silence."""
     monkeypatch.setattr(credentials_store, "list_platform_instances", lambda p: [
         {"label": "env", "share_mode": "closed", "share_down": ["org:42"],
-         "share_side": [], "meta": {"rate_limit": 200,
+         "meta": {"rate_limit": 200,
                                     "rate_limit_by": {"user:alice": 50}}}])
     monkeypatch.setattr(db_grants, "edge_exists", lambda ref, k, i, conn=None: False)
     m = cmd._manquantes()
@@ -175,7 +174,7 @@ def test_la_commande_rattrape_les_nominatives_restees_derriere(socle, cmd, monke
 def test_un_scope_hors_vocabulaire_est_NOMME_et_pas_pose(socle, cmd, monkeypatch):
     monkeypatch.setattr(credentials_store, "list_platform_instances", lambda p: [
         {"label": "env", "share_mode": "closed", "share_down": ["group:7"],
-         "share_side": [], "meta": {}}])
+         "meta": {}}])
     monkeypatch.setattr(db_grants, "edge_exists", lambda ref, k, i, conn=None: False)
     m = cmd._manquantes()
     assert [x["genre"] for x in m] == ["hors_vocabulaire"]
@@ -267,7 +266,7 @@ def test_la_lecture_reste_celle_de_la_sonde(socle, monkeypatch):
     vert en silence — et la sélection de compte multi-identités aurait deux copies."""
     class _Sonde:
         member = staticmethod(lambda *a: (_ for _ in ()).throw(RuntimeError("sonde")))
-        member_cross = group = org = platform = staticmethod(lambda *a: None)
+        group = org = platform = staticmethod(lambda *a: None)
     pick = chain_resolution.ChainPick("user", credentials_store.MEMBER, "7:u")
     with pytest.raises(RuntimeError, match="sonde"):
         chain_resolution.rung_for_pick(pick, _Sonde, "u", "serper", 7)
@@ -292,7 +291,6 @@ def test_sous_chain_une_cle_de_TENANT_est_vraiment_SERVIE(socle, monkeypatch):
 
     class _Sonde:
         member = staticmethod(lambda *a: None)
-        member_cross = staticmethod(lambda *a: None)
         group = staticmethod(lambda *a: None)
         org = staticmethod(lambda *a: None)
         tenant = staticmethod(lambda slug, p: ("CLE-DU-TENANT", ""))
@@ -314,7 +312,7 @@ def test_le_via_d_une_arete_de_tenant_reste_un_grant(socle):
     from oto_mcp.access import chain_resolution
 
     class _Sonde:
-        member = member_cross = group = org = staticmethod(lambda *a: None)
+        member = group = org = staticmethod(lambda *a: None)
         tenant = staticmethod(lambda slug, p: ("K", ""))
         platform = staticmethod(lambda *a: None)
 
@@ -329,7 +327,7 @@ def test_une_cle_de_tenant_absente_ne_retombe_pas_sur_la_plateforme(socle):
     from oto_mcp.access import chain_resolution
 
     class _Sonde:
-        member = member_cross = group = org = staticmethod(lambda *a: None)
+        member = group = org = staticmethod(lambda *a: None)
         tenant = staticmethod(lambda slug, p: None)
         platform = staticmethod(lambda *a: pytest.fail("repli muet sur la plateforme"))
 

@@ -96,12 +96,14 @@ def peupler() -> Jeu:
         _cle("group", equipe_b, nom)
     for nom in perso[12:15]:
         _cle("member", credentials_store.member_id(autre, SUB), nom)
-    # Prêts d'un autre membre : à mon équipe, et à moi nommément.
+    # Comptes d'un autre membre partagés par règle (#1499) : à mon équipe, et à moi.
+    from oto_mcp.db import connector_instances, regles_de_comptes
     for i, nom in enumerate(perso[15:19]):
         _cle("member", credentials_store.member_id(org, PRETEUR), nom)
-        cible = f"group:{equipe}" if i % 2 else f"user:{SUB}"
-        credentials_store.set_instance_sharing(
-            "member", credentials_store.member_id(org, PRETEUR), nom, share_side=[cible])
+        iid = connector_instances.instance_id_for_vault_row(
+            "member", credentials_store.member_id(org, PRETEUR), nom, "")
+        sujet = {"subject_group": equipe} if i % 2 else {"subject_user": SUB}
+        regles_de_comptes.poser_regle(org, iid, **sujet, level="read", acteur=PRETEUR)
     # Plateforme : accordée à l'org, à moi, et une non accordée.
     for i, nom in enumerate(plateforme[:5]):
         credentials_store.set_platform_key(f"cle-{nom}", nom, "valeur-factice-1148")

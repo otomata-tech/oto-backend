@@ -872,6 +872,50 @@ d'emploi d'un connecteur se lit à l'ouverture de son panneau
 - Pour un champ repris, `include=card` sert **exactement** la valeur de la carte
   verbeuse (`tests/test_connecteurs_include_card_1245.py`).
 
+## Les règles d'un compte — `/api/me/connector-instances/{instance_id}/rules` (#1499)
+
+Un compte (une instance, `inst:<n>` de `GET /api/me/connector-instances`) donne à
+chaque personne de son org un niveau `none < read < write < sensitive < manage`, calculé
+depuis ses règles (`docs/partage-de-compte.md`). Quatre routes, réservées à qui GÈRE le
+compte (son titulaire pour un compte personnel — aucun rôle n'atteint le compte propre
+d'une personne —, le chef de son équipe, un admin de l'org pour les comptes d'équipe et
+d'org, ou qui une règle met à `manage`) — sinon `403 insufficient_level`, qui nomme qui le gère :
+
+| route | capacité | ce qu'elle fait |
+|---|---|---|
+| `GET …/{instance_id}/rules` | `connectors.instances.rules.list` | les règles, qui gère le compte, `your_level` |
+| `PUT …/{instance_id}/rules` | `connectors.instances.rules.set` | pose ou remplace la règle d'UN sujet (`to` : e-mail ou sub d'un membre, ou e-mail du compte oto d'une personne HORS de l'org ; `to_group` : une équipe de l'org du compte ; ou `to_org: true`) à `level` ; `services` sur un compte Google ou Microsoft seulement |
+| `DELETE …/{instance_id}/rules` | `connectors.instances.rules.remove` | retire la règle d'un sujet (corps JSON, même forme) |
+| `GET …/{instance_id}/share-events` | `connectors.instances.share_events` | le journal des règles, le plus récent d'abord (`limit`, 1 à 500) ; `outside_org` dit si le sujet est hors de l'org |
+| `POST …/{instance_id}/transfer` | `connectors.instances.transfer` | change le propriétaire (`to`, `to_group` ou `to_org: true`, dans l'org du compte) ; le compte garde son id, son secret et ses règles, sauf la règle d'org et celle qui nommerait son nouveau titulaire s'il devient personnel |
+
+Transfert : l'appelant gère le compte avant ; vers une équipe ou l'org, il le gère encore
+après (sinon `403 insufficient_level`) ; le donner à une personne de l'org est réservé à
+un admin de l'org (`403 owner_change_forbidden`), et c'est alors elle qui le gère ;
+vers une équipe ou l'org, seulement un connecteur que ces paliers lisent
+(`400 not_shareable`) ; la base refuse `404 not_found`, `400 not_transferable` (compte de
+messagerie hébergée), `409 same_owner`, `409 account_name_taken`. Le journal note
+`action: "transferred"` avec `owner_before`.
+
+Bornes : seul un admin de l'org donne `manage` ; un chef d'équipe donne au plus `write`
+(`403 level_not_grantable`). Une règle ne nomme jamais le titulaire d'un compte
+personnel (`400 invalid_arguments`, `details.reason = "owner_subject"`).
+
+Hors org (D1) : une règle peut nommer une PERSONNE hors de l'org du compte, désignée par
+l'e-mail d'un compte oto existant (jamais une équipe ni une org d'ailleurs) ; mêmes droits
+et mêmes bornes qu'une règle locale. Le refus d'une adresse est NEUTRE :
+`404 unknown_subject`, même message que l'adresse soit inconnue ou qu'elle ne porte aucun
+compte désignable (un compte de tenant tiers), pour ne rien dire de l'existence d'un
+compte. Ce compte sert la personne NOMMÉ seulement, au niveau de sa règle ;
+`GET /api/me/connector-instances` le lui montre avec `lent_by_org` (le nom de l'org
+prêteuse) et `your_level`, rien d'autre de cette org (ni titulaire, ni auteur, ni autre
+compte) ; sa propre clé posée dans une autre org y figure avec `elsewhere_org`. Les trois
+écritures rendent l'état des règles APRÈS le geste. Côté MCP : `oto_instance`
+`op=rules|set_rule|remove_rule|share_events|transfer`, `instance="inst:<n>"`.
+
+Retirés sans alias par la même bascule : `POST/GET /api/me/connectors/{connector}/lend`
+(le prêt) et `GET /api/orgs/{id}/loans` (la vue des prêts d'une org).
+
 ## Une adresse web ne transporte pas de liste (#367, garde posée le 28/08)
 
 L'adaptateur verse la query string telle quelle — `dict(request.query_params)`, donc **des

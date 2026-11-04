@@ -1,5 +1,6 @@
-"""Le journal des prêts contre un VRAI PostgreSQL : la révision 0058, la pose et le
-retrait d'un prêt journalisés dans la transaction du `share_side`, et rien de plus.
+"""Le journal des prêts contre un VRAI PostgreSQL : la révision 0058 pose la table, que le
+démarrage pose aussi. Plus rien n'y écrit depuis la bascule des comptes (#1499) : elle
+garde l'historique des prêts d'avant, en lecture.
 
 `pg_dsn` (conftest) : `OTO_TEST_PG_DSN`, sinon un conteneur jetable, sinon skip.
 """
@@ -11,13 +12,11 @@ from pathlib import Path
 import pytest
 
 RACINE = Path(__file__).resolve().parents[1]
-ORG, PRETEUSE, PAIR = 41, "preteuse-x", "pair-y"
-LIGNE = ("member", f"{ORG}:{PRETEUSE}", "hunter", "")
 
 
 @pytest.fixture()
 def live(pg_dsn, monkeypatch):
-    """Une base JETABLE par test, bootée par le vrai chemin, une ligne de coffre."""
+    """Une base JETABLE par test, bootée par le vrai chemin."""
     psycopg = pytest.importorskip("psycopg")
     from oto_mcp.db import _conn as dbconn
 
@@ -31,9 +30,6 @@ def live(pg_dsn, monkeypatch):
     try:
         from oto_mcp.db import init_db
         init_db()
-        _executer(dsn, "INSERT INTO connector_credentials (entity_type, entity_id, "
-                       "connector, account, secret_enc) VALUES "
-                       f"('{LIGNE[0]}', '{LIGNE[1]}', '{LIGNE[2]}', '', 'chiffre-factice')")
         yield dsn
     finally:
         if dbconn._pool is not None:
@@ -72,41 +68,3 @@ def test_la_revision_pose_la_table_du_demarrage_et_la_retire(live):
     assert _executer(live, _COLONNES)[0] == neuve
     command.downgrade(_alembic(), "0057_contraintes_create_table")
     assert _executer(live, _COLONNES)[0] == []
-
-
-def test_la_pose_et_le_retrait_d_un_pret_sont_journalises(live, monkeypatch):
-    from oto_mcp import access, db
-    from oto_mcp.capabilities._types import ResolvedCtx
-    from oto_mcp.capabilities.connectors import sharing
-    from oto_mcp.db import loan_events
-    monkeypatch.setattr(access, "current_org", lambda sub: ORG)
-    monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
-    ctx = ResolvedCtx(sub=PRETEUSE, org_id=ORG)
-
-    def preter(**k):
-        return sharing._lend_instance(ctx, sharing.LendInstanceInput(connector="hunter", **k))
-
-    assert preter(to_org=True)["lent_to_org"] is True
-    preter(to_org=True)                       # répété : l'état ne change pas, rien de noté
-    preter(to=PAIR)
-    sortie = preter(to_org=True, revoke=True)
-    assert (sortie["lent_to_org"], sortie["lent_to"]) == (False, [PAIR])
-    gestes = loan_events.pour_la_ligne(*LIGNE)
-    assert [(g["actor_sub"], g["org_id"], g["target"], g["action"]) for g in gestes] == [
-        (PRETEUSE, ORG, f"org:{ORG}", "revoke"),
-        (PRETEUSE, ORG, f"user:{PAIR}", "lend"),
-        (PRETEUSE, ORG, f"org:{ORG}", "lend")]
-    assert all(g["at"] is not None and (g["entity_type"], g["entity_id"], g["connector"],
-                                        g["account"]) == LIGNE for g in gestes)
-    (colonnes,) = _executer(live, _COLONNES)
-    assert not {c[0] for c in colonnes} & {"secret", "secret_enc", "meta"}
-
-
-def test_un_geste_qui_ne_se_journalise_pas_ne_change_pas_le_partage(live):
-    from oto_mcp import credentials_store
-    with pytest.raises(ValueError):
-        credentials_store.set_instance_sharing(
-            *LIGNE, share_side=[f"org:{ORG}"],
-            journal=[{"actor_sub": PRETEUSE, "org_id": ORG, "target": f"org:{ORG}",
-                      "action": "inconnue"}])
-    assert credentials_store.get_instance_sharing(*LIGNE) == ([], [])

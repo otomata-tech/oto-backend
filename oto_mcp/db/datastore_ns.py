@@ -569,19 +569,6 @@ def manager_resource_grants(resource_type: str, resource_ids: list[str],
     return {str(r["resource_id"]) for r in rows}
 
 
-def principals_with_live_grant(resource_type: str, resource_id: str) -> set[tuple[str, str]]:
-    """Les principals `(type, id)` qui tiennent un partage VIVANT de cette ressource —
-    ce que l'héritage des clés d'un projet (`access/heritage.evaluer`) croise avec ses
-    arêtes : un prêt de clés ne survit pas à l'échéance du partage qui le porte."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT principal_type, principal_id FROM resource_grants "
-            f"WHERE resource_type = %s AND resource_id = %s AND {PARTAGE_VIVANT}",
-            (resource_type, resource_id),
-        ).fetchall()
-    return {(r["principal_type"], str(r["principal_id"])) for r in rows}
-
-
 def list_resource_grants(resource_type: str, resource_id: str) -> list[dict]:
     """Bénéficiaires d'une ressource (principal + permission + email si user), pour
     l'UI de gestion du partage.

@@ -169,7 +169,13 @@ class ContextInput(BaseModel):
 
 
 def _context(ctx: ResolvedCtx, inp: ContextInput) -> dict:
-    return {"org_id": ctx.org_id, "context": _instructions._block_c(ctx.sub, ctx.org_id)}
+    from .. import access
+    return {"org_id": ctx.org_id, "context": _instructions._block_c(ctx.sub, ctx.org_id),
+            # #1499: the accounts of other orgs to NAME (lent to you, D1; your own key
+            # elsewhere, #172) and the defaults that settle a tie (D3).
+            "accounts": access.comptes_du_contexte(
+                ctx.sub, ctx.org_id,
+                access.current_group(ctx.sub) if ctx.org_id is not None else None)}
 
 
 CAPABILITIES += [
@@ -191,6 +197,9 @@ CAPABILITIES += [
                     "Returns the contextual instructions for your CURRENT effective scope: "
                     "your org (its readme = its working rules; your role, active team and "
                     "connectors, recent projects and runs) and YOU — your profile card "
+                    "(`accounts`: the accounts of other orgs you may NAME — lent to you, "
+                    "with the lending org and your level, or your own key elsewhere — and "
+                    "the defaults of your org and team, with who set them and when) "
                     "(`oto_profile`) and your own readme (`oto_guide scope=user "
                     "delivery=init`). No procedure index here: `oto_procedure op=list`.\n"
                     "⚠️ The same context is also injected at connection time, but do NOT "

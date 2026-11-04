@@ -40,8 +40,12 @@ A doubt is the most constraining class, never `lire` by default.
 platform tools (`oto_*`, `data_*`, `run_*`, `email_send`, `feedback`) — plus the
 capabilities declared but not mounted yet (feature flag off).
 
-**Nothing reads this table at call time yet**: `effet()` is what the next lots plug into
-the common path. No call is refused because of it today.
+**Read at call time by the account level guard** (#1499): the edge of a call notes the
+tool and its arguments (`access.noter_l_appel`, in `middleware/call_context.py` and
+`tools/meta.executer_cible`), and the resolver requires, on the account it really
+resolves, the level of the class: `lire` → `read`, `ecrire` → `write`, `envoyer` and
+`detruire` → `sensitive` (`access/niveaux.besoin`). An undeclared op raises there
+(`effect_undeclared`): no account is chosen for it.
 """
 from __future__ import annotations
 
@@ -1161,7 +1165,6 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "data_write": "ecrire",
     "email_send": "envoyer",
     "feedback": "ecrire",
-    "oto_account_access": {"lire": "list", "envoyer": "grant", "detruire": "revoke"},
     "oto_admin_access_shadow": {"lire": "read"},
     "oto_admin_account": {"ecrire": "resume", "detruire": "suspend"},
     "oto_admin_agent_repair": {"lire": "list get diagnose", "ecrire": "close", "envoyer": "rerun escalate"},
@@ -1214,13 +1217,17 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_guide_v2": {"lire": "list read revisions", "ecrire": "write patch restore", "detruire": "delete"},
     "oto_identity": {"lire": "list", "ecrire": "rename", "detruire": "set"},
     "oto_import": "ecrire",
-    "oto_instance": {"lire": "list verify", "envoyer": "lend"},
+    # an account rule is set by whoever MANAGES the account, inside its org, and journaled
+    # (`connector_account_share_events`): a setting of the account, not a send (#1499)
+    # removing a rule takes a level away: a removal, judged `detruire` like any delete
+    "oto_instance": {"lire": "list verify rules share_events", "ecrire": "set_rule transfer",
+                     "detruire": "remove_rule"},
     "oto_list_my_tools": {"lire": "list search"},
     "oto_list_orgs": "lire",
     "oto_node": "lire",
     "oto_node_edit": {"ecrire": "create update move", "detruire": "delete"},
     "oto_node_rows": "lire",
-    "oto_org": {"lire": "list_invites list_loans", "ecrire": "create update accept_invite", "envoyer": "invite", "detruire": "archive reject_invite"},
+    "oto_org": {"lire": "list_invites", "ecrire": "create update accept_invite", "envoyer": "invite", "detruire": "archive reject_invite"},
     "oto_org_monitoring": {"lire": "summary calls call connectors adoption runs run gaps tool_quality signals export agents_en_echec"},
     "oto_org_settings": {"lire": "get preview", "detruire": "set"},
     "oto_procedure": {"lire": "get list describe library_list library_get share_get share_readers", "ecrire": "create rename unarchive fork", "envoyer": "publish share_publish", "detruire": "set archive delete unpublish share_unpublish share_set"},

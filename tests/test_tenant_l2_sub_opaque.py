@@ -1,9 +1,8 @@
 """Lot L2 (ADR 0052) — tripwire « le sub reste une chaîne opaque ».
 
 **L'énoncé naïf est faux.** « Aucun call-site ne parse `:` » ne tient pas une
-journée : au scope membre, `entity_id` vaut `{org}:{sub}` et trois endroits le
-découpent LÉGITIMEMENT (`credentials_store.list_member_orgs_for`,
-`connectors_instances._shared_ref` / `._shared_owner`). Un tripwire qui affirme une
+journée : au scope membre, `entity_id` vaut `{org}:{sub}` et des endroits le
+découpent LÉGITIMEMENT (`connectors_instances._shared_ref` / `._shared_owner`). Un tripwire qui affirme une
 chose fausse se fait désarmer — ou pire, s'écrit en exemptant nommément le call-site
 qui compte.
 
@@ -27,7 +26,7 @@ Deux découpages ne sont PAS des oublis et méritent d'être nommés ici :
 - `instance_refs.parse_ref` fait un `split(":")` sur un ref qui CONTIENT un sub —
   mais le sub y est percent-encodé (`quote(sub, safe="")`), donc son `:` devient
   `%3A`. C'est vérifié empiriquement plus bas, pas par une exemption.
-- `access._sub_matches_scopes` et `capabilities/platform_connectors` (ex-
+- `platform_grant._platform_grantee_scope` et `capabilities/platform_connectors` (ex-
   `api/connectors`, migré le 2026-08-27) partitionnent des scopes
   `user:<sub>` au premier `:` et recomparent le reste EN ENTIER — même forme que
   `entity_id`, même sûreté. Testé empiriquement plus bas.
@@ -190,14 +189,15 @@ def test_un_ref_dinstance_survit_a_un_sub_qualifie():
 
 
 def test_un_scope_nominatif_reconnait_un_sub_qualifie():
-    """`user:<sub>` (allowlists `share_down`, prêts `share_side`, ADR 0044) : même
+    """`user:<sub>` (allowlists `share_down` des clés plateforme, ADR 0044) : même
     forme que `entity_id`, même sûreté — le premier `:` sépare, le reste est
     recomparé en entier."""
-    from oto_mcp import access
+    from oto_mcp.access import platform_grant
 
-    assert access._sub_matches_scopes(_QUALIFIE, [f"user:{_QUALIFIE}"])
-    assert not access._sub_matches_scopes(_QUALIFIE, ["user:abc123"])
-    assert not access._sub_matches_scopes("abc123", [f"user:{_QUALIFIE}"])
+    assert platform_grant._platform_grantee_scope(
+        _QUALIFIE, None, [f"user:{_QUALIFIE}"]) == f"user:{_QUALIFIE}"
+    assert platform_grant._platform_grantee_scope(_QUALIFIE, None, ["user:abc123"]) is None
+    assert platform_grant._platform_grantee_scope("abc123", None, [f"user:{_QUALIFIE}"]) is None
 
 
 def test_un_sub_qualifie_ne_ressemble_a_aucun_autre_entity_id():

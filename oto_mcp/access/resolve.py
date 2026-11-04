@@ -30,7 +30,7 @@ from .. import links
 from .. import (providers, credentials_store, db, group_store, instance_refs, org_store,
                 session_org, tenant_vault)
 from ..connectors import cle_perso
-from . import (cascade, chain_shadow, credits, heritage, indices, platform_rate, prets,
+from . import (cascade, chain_shadow, comptes, credits, indices, niveaux, platform_rate,
                quotas, rbac, resolve_anon, scope, tenant_budget)
 from .resolved_credential import ResolvedCredential
 
@@ -71,10 +71,6 @@ def resolve_credential(provider: str, want: str = "auto",
     try:
         resolved = _resolve_credential_impl(provider, want, sub, account=account,
                                             check_usage=check_usage, units=units)
-        # A lent Google/Microsoft account serves only the services its loan lends —
-        # checked HERE, at the single resolver, whatever path served the loan (`_account=`
-        # at a team or org rung, `_instance=`, the Microsoft loan resolver).
-        prets.exiger_service_prete(sub, provider, resolved)
     except McpError:
         if emit_on_failure:
             _emit_connector_failure(provider, sub)
@@ -124,7 +120,9 @@ def _note_resolved_instance(rc: ResolvedCredential) -> ResolvedCredential:
     # the health tracking marks when upstream refuses for lack of credits, and
     # clears on first success (`connectors.health.suivre_appel`). Neither journaled
     # (outside `_TRACED_ARGS`) nor billed.
-    session_org.note_call_trace(instance=ref, resolved_connector=rc.provider,
+    # `instance_id`: the account whose level the resolver judged (#1499).
+    session_org.note_call_trace(instance=ref, instance_id=rc.instance_id,
+                                resolved_connector=rc.provider,
                                 resolved_account=rc.account,
                                 key_mode=rc.mode,
                                 credential_row=(rc.entity_type, rc.entity_id,
@@ -176,12 +174,13 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # fall back to the cascade, thus potentially onto ANOTHER key than the one requested).
     porteur = providers.credential_provider(provider)
     pinned = session_org.current_call_instance()
-    if pinned is not None and providers.credential_provider(pinned.connector or "") == porteur:
+    if pinned is not None and providers.credential_provider(pinned.connector or "") == porteur \
+            and not (pinned.account or "").startswith("canal:"):   # hosted: ref_du_canal
         # The vault READ names the carrier, like the comparison above:
         # the pinned row is stored under it, and `require_credential` REFUSES a
         # delegator's name. Passing the bare name here raised a raw `ValueError` on
         # every channel call made under a pin — the pin was recognized then lost.
-        return _resolve_pinned_instance(porteur, sub, pinned)
+        return _resolve_pinned_instance(porteur, sub, pinned, provider)
 
     # PROJECT binding (ADR 0038 B5): the call's project (`_project=`) binds an
     # instance for this provider → HARD resolution, RE-GUARDED for the CALLER (the
@@ -190,9 +189,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # most specific token of the call.
     bound = scope.project_pinned_instance(porteur)
     if bound is not None:
-        if not heritage.instance_heritee(sub, bound):   # lent by a share (#480)
-            rbac.guard_instance_access(sub, bound)
-        return _resolve_pinned_instance(porteur, sub, bound)
+        rbac.guard_instance_access(sub, bound)
+        return _resolve_pinned_instance(porteur, sub, bound, provider)
 
     # MEMBER scope (ADR 0033): "my key" exists ONLY in the context org —
     # set in org A, it does not resolve from org B. The org is resolved via
@@ -202,8 +200,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
 
     # Account NAMED by the caller — explicit account (param) > call axis
     # `_account=` (#108) > project pin — resolved ONCE, before the walk:
-    # it serves every tier (`_pick_account`) AND the post-walk guard (a
-    # named account not found anywhere RAISES, never a fallback — review #399 F2).
+    # it is looked for at every step, then among the accounts other persons share with
+    # the caller (#1499); not found anywhere, it RAISES — never a fallback (#399 F2).
     # None = nothing named (automatic selection per tier).
     # Pin read on the called connector, then on its CARRIER: a link on the Google
     # ACCOUNT card pins every service that borrows it (#1160).
@@ -215,19 +213,10 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                          or (scope.project_pinned_identity(porteur)
                              if porteur != provider else None))
 
-    def _pick_account(entity_type: str, entity_id: str, mprov: str, where: str,
-                      scope: Optional[str] = None) -> tuple:
-        """The EFFECTIVE account of a multi-account tier = named account (cf.
-        `named_account`) > single auto account > set default (`oto_identity(op='set')`)
-        > McpError — never a silent fallback to ANOTHER account (anti-impersonation).
-        '' = legacy mono. Returns `(account, explicit)`: an account NAMED by the
-        caller may live at a lower tier (Phase 2: the org "had" it, the
-        member did not) — the tier that does not have it hands over, and it is the
-        POST-WALK guard that raises if it exists nowhere. An automatically chosen
-        account is never looked for elsewhere."""
-        if named_account is not None:
-            return named_account, True
-        return cascade._shared_auto_account(entity_type, entity_id, mprov, where, scope), False
+    # Who calls, what the call requires, which account of each step serves (#1499).
+    choix = comptes.ChoixDuParcours(
+        niveaux.Appelant(sub, active_org, lambda: scope.current_group(sub)),
+        provider, niveaux.besoin())
 
     def _not_found(eff: str, mprov: str) -> McpError:
         noun = cascade.account_noun(mprov).capitalize()
@@ -240,164 +229,166 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             )), eff)
 
     def _member_fetch(msub: str, morg: int, mprov: str) -> Optional[tuple]:
-        """MEMBER fetch probe: account selection in multi-account ("2 Zoho"),
-        cf. `_pick_account`. An explicit/pinned account not found RAISES (we do not
-        act under another identity).
-
-        A SUSPENDED instance (batch 2 / ADR 0044 §KeyStack) is treated as
-        absent: the member rung passes its turn and the level below
-        (group/org/platform) takes over — same verdict as the PRESENCE/FETCH probes,
-        otherwise the real resolution contradicts what the KeyStack
-        announces (#401). Suspending is a member's act on THEIR key: the handover is
-        the contract, not an impersonation. (SUSPENDED NAMED account: the handover never
-        goes as far as the platform key — the named account's post-walk guard
-        raises, review #399 F2.)"""
-        if not cascade._is_multi_account(mprov, morg):
-            key = db.get_member_api_key(msub, morg, mprov)
-            if key and db.member_instance_suspended(msub, morg, mprov):
-                return None
-            return (key, "") if key else None
-        eff, explicit = _pick_account(credentials_store.MEMBER,
-                                      credentials_store.member_id(morg, msub),
-                                      mprov, "in this org")
+        """The caller's OWN account in the call's org: she manages it, no level to judge.
+        Several: the named one, else the only one, else her default (D3), else
+        `ambiguous_account`. A SUSPENDED key is refused by name — it no longer hands
+        over to the team or org key (#1499)."""
+        # Named: that account alone (absent, the step hands over). Mono-account, or none
+        # listed: the row `''`.
+        multi = cascade._is_multi_account(mprov, morg)
+        lignes = ([(named_account if multi else "", False)]
+                  if named_account is not None or not multi else
+                  [(a["account"], bool((a.get("meta") or {}).get("is_default")))
+                   for a in credentials_store.list_accounts(
+                       credentials_store.MEMBER, credentials_store.member_id(morg, msub),
+                       mprov)] or [("", False)])
+        actives = (lignes if len(lignes) == 1 else    # one: suspension judged on its key
+                   [(a, d) for a, d in lignes
+                    if not db.member_instance_suspended(msub, morg, mprov, a)])
+        if not actives:
+            raise _suspendu(mprov, lignes[0][0])
+        if len(actives) > 1:
+            tranche = [a for a, d in actives if d]
+            if len(tranche) != 1:
+                raise cascade.CompteAmbigu(ErrorData(
+                    code=INVALID_PARAMS,
+                    message=(f"Multiple {cascade.account_noun(mprov)}s `{mprov}` of your own ("
+                             + ", ".join(f"`{a}`" for a, _ in actives)
+                             + ") and no default — pass `_account=\"<name>\"`, or set a "
+                             f"default with oto_identity(op='set', connector='{mprov}', "
+                             "identity_id='<name>'). Nothing was done."),
+                    data={"code": niveaux.CODE_COMPTE_AMBIGU, "retryable": False,
+                          "accounts": [a for a, _ in actives]}))
+            actives = [(tranche[0], True)]
+        eff = actives[0][0]
         key = db.get_member_api_key(msub, morg, mprov, eff)
-        if eff and not key and not explicit:
-            raise _not_found(eff, mprov)
-        # Suspension PER account (the `account` of providers.instances.suspend):
-        # an existing but set-aside key skips the rung — after the
-        # "not found" check, which keeps its semantics (absent ≠ suspended).
-        if key and db.member_instance_suspended(msub, morg, mprov, eff):
-            return None
-        # Named but absent here: perhaps a shared key (team/org) — we
-        # hand over, never taking another account at this tier.
+        if key and len(lignes) == 1 and db.member_instance_suspended(msub, morg, mprov, eff):
+            raise _suspendu(mprov, eff)
         return (key, eff) if key else None
 
-    prets_vus = prets.PretsDuParcours()   # the lent rule along this walk
+    def _suspendu(mprov: str, eff: str) -> McpError:
+        return McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Your `{mprov}` key{' `' + eff + '`' if eff else ''} is suspended: "
+                     "reactivate it (oto_instance op='resume'), or name another account "
+                     "with `_account=`. It no longer hands over to a team or org key. "
+                     "Nothing was done."),
+            data={"code": niveaux.CODE_COMPTE_SUSPENDU, "retryable": False}))
+
+    def _etape(entity_type: str, entity_id: str, mprov: str, ou: str, lire):
+        """A TEAM or ORG step: the account its level lets serve (`a_l_etape`); `lire`
+        reads the step's key of an account."""
+        multi = cascade._is_multi_account(mprov, active_org)
+        if multi and named_account is not None:
+            lignes = [(named_account, False)] if lire(named_account) else []
+        elif multi:
+            lignes = [(a["account"], bool((a.get("meta") or {}).get("is_default")))
+                      for a in credentials_store.list_accounts(entity_type, entity_id, mprov)]
+        else:
+            lignes = [("", False)] if lire("") else []
+        compte = choix.a_l_etape(entity_type, entity_id, lignes,
+                                 named_account if multi else None, ou=ou)
+        key = lire(compte.account) if compte is not None else None
+        return (key, compte.account) if key else None
 
     def _group_fetch(gid: int, mprov: str):
-        """TEAM fetch probe: same account selection as the member (Phase 2).
-        Mono-account → the historical read (account=''); a loan, only NAMED (`prets`)."""
-        # The CONTEXT org, not the group's: an override is read on the
-        # requester (same seam as everywhere else).
-        multi = cascade._is_multi_account(mprov, active_org)
-        decide, hit = prets_vus.au_palier_equipe(gid, mprov, named_account if multi else None,
-                                                 multi=multi)
-        if decide:
-            return hit
-        if not multi:
-            return group_store.get_group_secret(gid, mprov)
-        eff, explicit = _pick_account("group", str(gid), mprov, "for your team",
-                                      scope="group")
-        key = prets_vus.cle_de_l_equipe(gid, mprov, eff)
-        if eff and not key and not explicit:
-            raise _not_found(eff, mprov)
-        return (key, eff) if key else None
+        return _etape("group", str(gid), mprov, "of your team",
+                      lambda a: group_store.get_group_secret(gid, mprov, a))
 
     def _org_fetch(oid: int, mprov: str):
-        """ORG fetch probe: same account selection as the member (Phase 2).
-        A NAMED account absent here hands over like the other tiers — it is
-        the post-walk guard that raises (the walker may never reach this
-        rung: context org None, non-org-shareable connector). A loan to the
-        whole org, only NAMED (`prets`)."""
-        multi = cascade._is_multi_account(mprov, oid)
-        decide, hit = prets_vus.au_palier_org(oid, mprov, sub, named_account if multi else None,
-                                              multi=multi)
-        if decide:
-            return hit
-        if not multi:
-            return org_store.get_org_secret(oid, mprov)
-        eff, explicit = _pick_account("org", str(oid), mprov, "for your org",
-                                      scope="org")
-        key = org_store.get_org_secret(oid, mprov, eff)
-        if eff and not key and not explicit:
-            raise _not_found(eff, mprov)
-        return (key, eff) if key else None
+        return _etape("org", str(oid), mprov, "of your org",
+                      lambda a: org_store.get_org_secret(oid, mprov, a))
 
     def _tenant_fetch(slug: str, mprov: str):
-        """TENANT fetch probe (L-keys PR 1): same account selection as the org.
-        The walker only calls it for a sub of a third-party tenant (`rung_tenant`)."""
+        """TENANT fetch probe (L-keys PR 1): unchanged by the account rules."""
         if not cascade._is_multi_account(mprov, active_org):
             return tenant_vault.get_tenant_secret(slug, mprov)
-        eff, explicit = _pick_account(credentials_store.TENANT, slug, mprov,
-                                      "for your tenant")
+        eff = (named_account if named_account is not None
+               else cascade._shared_auto_account(credentials_store.TENANT, slug, mprov,
+                                                 "for your tenant"))
         key = tenant_vault.get_tenant_secret(slug, mprov, eff)
-        if eff and not key and not explicit:
+        if eff and not key and named_account is None:
             raise _not_found(eff, mprov)
         return (key, eff) if key else None
 
     # Single walk (only the winner is decrypted); `group` LAZY: resolved only if needed.
-    probe = cascade.CascadeProbe(member=_member_fetch, member_cross=cascade.FETCH_PROBE.member_cross,
-                         legacy_user=cascade.FETCH_PROBE.legacy_user,
-                         group=_group_fetch, org=_org_fetch, tenant=_tenant_fetch,
-                         platform=cascade.FETCH_PROBE.platform)
+    probe = cascade.CascadeProbe(member=_member_fetch,
+                                 legacy_user=cascade.FETCH_PROBE.legacy_user,
+                                 group=_group_fetch, org=_org_fetch, tenant=_tenant_fetch,
+                                 platform=cascade.FETCH_PROBE.platform)
     # L7 (ADR 0053 blueprint) — a FLAG says who decides, the path not taken
     # computes alongside and is compared. Same probe, same downstream guards: only the
     # traversal changes. Detail and reversibility: `chain_shadow.barreau_gagnant`.
     win = chain_shadow.barreau_gagnant(
         provider, sub, active_org, probe=probe, want=want,
-        group=lambda: scope.current_group(sub))
+        group=lambda: choix.appelant.equipe_active)
 
-    prets_vus.refuser_si_seuls(win, porteur)
-    # The org forbids personal keys here (#1239) and nothing shared serves: say so.
-    if win is None or (named_account and win.mode == "platform"):
-        cle_perso.refuser_si_interdite(active_org, porteur, cle_perso.A_L_APPEL)
-    # Post-walk guard (review #399 F2): a NAMED account (param/axis/pin)
-    # that won at NO keyed tier raises "not found" — never a PLATFORM key
-    # silently (the platform tier has no accounts: answering there
-    # under a different credential than the one requested would be an impersonation), never the
-    # generic "no key" message. Covers the rungs the walker does not
-    # reach: context org None, multi non-org-shareable connector (google,
-    # browser, planity…).
+    # A NAMED account no keyed step holds: another person's account of the org, else an
+    # account of another org (the caller's own key there, #172; one a rule naming her
+    # opens, D1) — served only named and at the level its rules give (#1499), never a
+    # platform key in its place.
     if named_account and (win is None or win.mode == "platform"):
+        autrui = choix.autrui_nomme(named_account)
+        if autrui is not None:
+            key = credentials_store.get_credential(autrui.owner_type, autrui.owner_id,
+                                                   porteur, autrui.account)
+            if key:
+                return ResolvedCredential(provider, key, False, "user", autrui.owner_type,
+                                          autrui.owner_id, account=autrui.account,
+                                          instance_id=autrui.instance_id)
         raise _not_found(named_account, provider)
+    choix.refuser_si_sous_le_niveau(win)
+    # The org forbids personal keys here (#1239) and nothing shared serves: say so.
+    if win is None:
+        cle_perso.refuser_si_interdite(active_org, porteur, cle_perso.A_L_APPEL)
 
     if win is None:
-        lien_org = heritage.org_du_lien(sub, active_org)   # #480: their account, not the org
+        # The accounts of other orgs the caller could NAME (#172, D1): never a fallback,
+        # but listed so she can name one right away.
+        a_nommer = choix.a_nommer()
+        en_plus = niveaux.phrase_des_candidats(a_nommer)
         # byo-only: no platform tier (basic_auth mounts, multi-secrets).
         if want == "byo":
             raise CredentialUnavailable(ErrorData(
                 code=INVALID_PARAMS,
-                message=(
-                    indices.refus_sans_cle(
-                        sub, active_org, provider,
-                        f"No `{provider}` credential configured for you. ",
-                        f"Set it{links.ou_poser_la_cle(sub, org=lien_org, connecteur=provider)}.")
-                    + heritage.indice_refus(sub, active_org, provider)
-                ),
+                message=indices.refus_sans_cle(
+                    sub, active_org, provider,
+                    f"No `{provider}` credential configured for you. ",
+                    f"Set it{links.ou_poser_la_cle(sub, org=active_org, connecteur=provider)}."
+                ) + en_plus,
+                data={"to_name": a_nommer} if a_nommer else None,
             ))
         # The platform tier only exists if the registry ALLOWS it (gate in the walker).
         raise CredentialUnavailable(ErrorData(
             code=INVALID_PARAMS,
-            # The key is set on the CARRIER (delegation): sending someone to
-            # "the Whatsapp section" of their account page, where there is no field,
-            # is a dead end. The "a team has the key" hint is also looked up
-            # under the carrier — that is where shared secrets exist.
-            # A team of the caller holding the key opens the refusal (#1317).
-            message=(
-                indices.refus_sans_cle(sub, active_org, porteur,
-                                       f"No `{porteur}` key configured for you. ",
-                                       indices._poser_ou_accorder(sub, lien_org, porteur))
-                + heritage.indice_refus(sub, active_org, porteur)
-            ),
+            # The key is set on the CARRIER (delegation); a team of the caller holding the
+            # key opens the refusal (#1317).
+            message=indices.refus_sans_cle(sub, active_org, porteur,
+                                           f"No `{porteur}` key configured for you. ",
+                                           indices._poser_ou_accorder(sub, active_org,
+                                                                      porteur)) + en_plus,
+            data={"to_name": a_nommer} if a_nommer else None,
         ))
 
+    # The org that PAYS for the call: the call's org, for a member of it — a beneficiary
+    # of a project of another org draws on none of that org's budgets (#1499, D1).
+    org_m = scope.org_d_appartenance(sub, active_org)
     if check_usage and win.mode == "tenant":
         # Per-org budget of the tenant→org edge (L-keys PR 2) — no-op without an edge.
-        # Read on the KEYS org (#480), like the walker: a beneficiary outside the
-        # project's org does not draw on that org's budget.
-        tenant_budget.enforce(win.entity_id, porteur,
-                              heritage.org_des_cles(sub, active_org))
+        tenant_budget.enforce(win.entity_id, porteur, org_m)
         if credits.rang_refacture(win.mode, win.entity_id) is not None:
             # The PRIMARY tenant's key, which the operator pays and re-bills like the
             # platform's: the units budget, after the edge's quota (a refusal there
             # leaves no hold).
-            credits.reserver(sub, heritage.org_des_cles(sub, active_org), "tenant")
+            credits.reserver(sub, org_m, "tenant")
     if win.mode != "platform":
-        return ResolvedCredential(provider, win.payload, False, win.mode,
-                                  *prets_vus.ligne_servie(win), account=win.account)
+        servi = choix.servis.get((win.entity_type, win.entity_id, win.account or ""))
+        return ResolvedCredential(provider, win.payload, False, win.mode, win.entity_type,
+                                  win.entity_id, account=win.account,
+                                  instance_id=servi.instance_id if servi else None)
     if check_usage:  # paid option RE-READ on every use (ADR 0070 §7), no fallback
         quotas.exiger_option_payante(provider, sub, active_org)
-        platform_rate.enforce(provider, sub, heritage.org_des_cles(sub, active_org),
+        platform_rate.enforce(provider, sub, org_m,
                               hint=lambda: links.ou_poser_la_cle(sub, org=active_org))
 
     # ADR 0044 §F R3: the platform tier reads the PLATFORM-scope instances of the
@@ -432,7 +423,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     if check_usage:
         # The units budget: a tool of the perimeter reserves its worst case on the
         # operator's key, after every other guard — a refusal above leaves no hold.
-        credits.reserver(sub, heritage.org_des_cles(sub, active_org), "platform")
+        credits.reserver(sub, org_m, "platform")
     return ResolvedCredential(provider, win.payload["secret"], True, "platform",
                               credentials_store.PLATFORM, win.payload["label"])
 
@@ -454,23 +445,24 @@ def _win_quota(win, sub: str, provider: str,
     return used, limit
 
 
-def _resolve_pinned_instance(provider: str, sub: str, ref) -> ResolvedCredential:
-    """HARD resolution of an explicit instance (`_instance=` OR project binding,
-    ADR 0038 B6/B5): reads exactly the vault row the ref designates. ACCESS
-    was guarded by `guard_instance_access` (at pin time for the axis; re-guarded for
-    the CALLER on the binding path). Row absent = actionable McpError, NEVER a fallback to
-    another tier (§C: acting under an identity other than the one requested is
-    forbidden)."""
-    from .. import instance_refs
+def _plus_resolue(ref) -> McpError:
+    return McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message=(f"Instance `{instance_refs.format_ref(ref)}` no longer resolves "
+                 "(credential removed or account renamed?). List again with "
+                 "oto_instance(op='list') — no fallback to another identity.")))
+
+
+def _resolve_pinned_instance(provider: str, sub: str, ref,
+                             service: Optional[str] = None) -> ResolvedCredential:
+    """HARD resolution of an explicit instance (`_instance=` OR project binding, ADR 0038
+    B6/B5): exactly the vault row the ref designates. ACCESS was guarded by
+    `guard_instance_access`; the LEVEL the call requires is judged here, on that account
+    (#1499). Row absent = actionable McpError, NEVER another tier (§C)."""
+    instance_id = None
     if ref.level == "member":
-        # ⚠️ `ref.sub`, NOT the current `sub`: a `member` ref lent to a peer
-        # (share_side, ADR 0044) carries the OWNER's identity, not the
-        # borrower's — the borrower keeps their own org context elsewhere
-        # (`guard_instance_access` co-sets that org), but the vault row to
-        # READ remains the owner's. Bug found 2026-09-02: `sub`
-        # here pointed to the borrower, so EVERY member-to-member loan failed
-        # with "the instance no longer resolves" — a misleading message, the row
-        # existed, it was just looked up under the wrong identity.
+        # `ref.sub`, NOT the current `sub`: another person's account carries its OWNER's
+        # identity; the caller keeps her own org context.
         etype, eid = credentials_store.MEMBER, credentials_store.member_id(ref.org_id, ref.sub)
         mode = "user"
         cle_perso.refuser_si_interdite(ref.org_id, provider, cle_perso.A_L_INSTANCE)  # #1239
@@ -484,16 +476,24 @@ def _resolve_pinned_instance(provider: str, sub: str, ref) -> ResolvedCredential
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message="`platform:` instance ref cannot be resolved via `_instance=` (B6)."))
+    if mode != "tenant":
+        choix = comptes.ChoixDuParcours(
+            niveaux.Appelant(sub, scope.current_org(sub), lambda: scope.current_group(sub)),
+            service or provider, niveaux.besoin())
+        compte = comptes.comptes_des_lignes(provider, [(etype, eid, ref.account or "")]).get(
+            (etype, eid, ref.account or ""))
+        if compte is None:
+            raise _plus_resolue(ref)
+        if not (mode == "user" and ref.sub == sub):
+            choix.exiger(compte)
+        choix.servir(compte)    # an account of another org: the echo says so (#1499)
+        instance_id = compte.instance_id
     secret = credentials_store.get_credential(etype, eid, provider, ref.account)
     if not secret:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(f"Instance `{instance_refs.format_ref(ref)}` no longer resolves "
-                     "(credential removed or account renamed?). List again with "
-                     "oto_instance(op='list') — no fallback to another identity.")))
+        raise _plus_resolue(ref)
     try:
         return ResolvedCredential(provider, secret, False, mode, etype, eid,
-                                  account=ref.account)
+                                  account=ref.account, instance_id=instance_id)
     finally:
         # The decrypted secret does not stay bound in this frame (#564): an
         # exception passing through it afterwards would have nothing to pick up.

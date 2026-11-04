@@ -46,7 +46,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 def _figer(valeur: Any) -> Any:
-    """La forme hachable d'un argument : une liste (`list_shared_with(['user:x'])`)
+    """La forme hachable d'un argument : une liste (`emails_by_subs(['x'])`)
     devient un tuple. Ce qui reste non hachable LÈVE au hachage de la clé."""
     if isinstance(valeur, (list, tuple)):
         return tuple(_figer(v) for v in valeur)

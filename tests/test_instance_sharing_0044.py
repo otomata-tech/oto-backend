@@ -1,45 +1,12 @@
-"""ADR 0044 — partage d'instance : share_side (étendre, prêt nominatif). Le cran
-`share_down` BYO (restreindre sous le niveau) a été RETIRÉ (2026-07-08) : une
-instance BYO est utilisable par tout le sous-arbre de son owner, restreindre =
-poser l'instance au bon niveau (équipe). `share_down` ne subsiste que sur les
-instances PLATFORM (liste des grantees — test_free_tier_platform_key). Exerce la
-VRAIE logique (get_instance_sharing mocké avec des données), pas le fail-safe sans DB."""
-import types
+"""ADR 0038 B6 — le pin d'une instance (`_instance=`) : la garde d'accès par palier.
 
+Le prêt nominatif (`share_side`, ADR 0044) est RETIRÉ par la bascule des comptes
+(#1499, L3) : le compte d'une autre personne se juge par ses règles
+(`tests/access/test_niveaux_*`). Restent ici les paliers org, équipe et propriétaire."""
 import pytest
 from oto_mcp.mcp_errors import McpError
-from oto_mcp import (access, credentials_store, group_store, roles, instance_refs, db, org_store,
-                     providers)
-from oto_mcp.capabilities.connectors import sharing as connectors_sharing
-from oto_mcp.capabilities._types import AuthzDenied
+from oto_mcp import access, group_store, roles, instance_refs
 
-
-# ── _sub_matches_scopes : vocabulaire commun aux deux axes ────────────────────
-def test_sub_matches_scopes_user(monkeypatch):
-    assert access._sub_matches_scopes("alice", ["user:alice"]) is True
-    assert access._sub_matches_scopes("alice", ["user:bob"]) is False
-
-def test_sub_matches_scopes_org_is_everyone():
-    assert access._sub_matches_scopes("whoever", ["org"]) is True
-
-def test_sub_matches_scopes_group_membership(monkeypatch):
-    monkeypatch.setattr(group_store, "is_group_member",
-                        lambda sub, gid: sub == "alice" and gid == 5)
-    assert access._sub_matches_scopes("alice", ["group:5"]) is True
-    assert access._sub_matches_scopes("bob", ["group:5"]) is False
-
-def test_sub_matches_scopes_empty_is_false():
-    assert access._sub_matches_scopes("alice", []) is False
-
-def test_sub_matches_scopes_ignores_malformed(monkeypatch):
-    monkeypatch.setattr(group_store, "is_group_member", lambda s, g: False)
-    assert access._sub_matches_scopes("alice", ["group:notanint", "user:alice"]) is True
-
-
-# ── guard : pin d'une instance d'ORG = ouvert à tout membre (plus d'allowlist) ─
-def _mock_sharing(monkeypatch, down, side):
-    monkeypatch.setattr(credentials_store, "get_instance_sharing",
-                        lambda et, eid, conn, acct="": (down, side))
 
 def test_guard_org_pin_open_to_any_member(monkeypatch):
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
@@ -48,8 +15,18 @@ def test_guard_org_pin_open_to_any_member(monkeypatch):
     # résiduel en base est SANS effet — le cran BYO est retiré)
     assert access.guard_instance_access("member", ref) == 35
 
+def _ailleurs(monkeypatch):
+    """L'appelant agit dans une autre org, et aucune règle ne lui ouvre le compte
+    (#1499 : hors de l'appartenance, seule une règle qui le nomme ouvre un compte)."""
+    monkeypatch.setattr(access, "current_org", lambda sub: 99)
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(group_store, "is_group_member", lambda sub, gid: False)
+    monkeypatch.setattr(roles, "can_admin_group", lambda sub, gid: False)
+
+
 def test_guard_org_pin_rejects_non_member(monkeypatch):
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: False)
+    _ailleurs(monkeypatch)
     ref = instance_refs.parse_ref(instance_refs.make_org_ref(35, "zoho"))
     with pytest.raises(McpError, match="not a member of org"):
         access.guard_instance_access("intrus", ref)
@@ -65,244 +42,13 @@ def test_guard_group_pin_reader_and_org_admin(monkeypatch):
     ref = instance_refs.parse_ref(instance_refs.make_group_ref(2, "pennylane"))
     assert access.guard_instance_access("finance_guy", ref) == 35
     assert access.guard_instance_access("clemence_admin", ref) == 35
+    _ailleurs(monkeypatch)
     with pytest.raises(McpError, match="not a member of group"):
         access.guard_instance_access("other_dept", ref)
 
-
-# ── guard : share_side (prêt à un pair) ───────────────────────────────────────
-def test_guard_member_share_side_allows_beneficiary(monkeypatch):
-    # instance de "owner" dans l'org 8, prêtée à "bob" — prêteur vivant (#898 : la
-    # garde lit l'état de pause du prêteur ; le cas en pause est sur base réelle,
-    # tests/test_account_suspension_prets.py)
-    _mock_sharing(monkeypatch, [], ["user:bob"])
-    monkeypatch.setattr(db, "get_suspension", lambda sub: None)
-    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: (sub, org) == ("owner", 8))
-    monkeypatch.setattr(access, "current_org", lambda sub: 99)  # org de l'APPELANT
-    ref = instance_refs.parse_ref(instance_refs.make_member_ref(8, "owner", "zoho"))
-    # bob emprunte : autorisé, co-pose SON org (99), pas celle de l'owner (8)
-    assert access.guard_instance_access("bob", ref) == 99
-
-
-@pytest.mark.parametrize("side", [["user:bob"], ["group:5"]])
-def test_guard_member_share_side_stops_when_the_lender_left_the_org(monkeypatch, side):
-    """Le prêt né dans l'org 8 cesse quand son prêteur la quitte — à une personne comme
-    à une équipe ; rien n'est détaché (la ligne et son `share_side` restent)."""
-    _mock_sharing(monkeypatch, [], side)
-    monkeypatch.setattr(group_store, "is_group_member", lambda s, g: (s, g) == ("bob", 5))
-    monkeypatch.setattr(db, "get_suspension", lambda sub: None)
-    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: False)
-    ref = instance_refs.parse_ref(instance_refs.make_member_ref(8, "owner", "zoho"))
-    with pytest.raises(McpError) as e:
-        access.guard_instance_access("bob", ref)
-    assert e.value.error.data == {"code": "lender_left_org", "retryable": False}
-    assert "org #8" in e.value.error.message
-
-def test_guard_member_share_side_rejects_non_beneficiary(monkeypatch):
-    _mock_sharing(monkeypatch, [], ["user:bob"])
-    ref = instance_refs.parse_ref(instance_refs.make_member_ref(8, "owner", "zoho"))
-    with pytest.raises(McpError, match="another member"):
-        access.guard_instance_access("carol", ref)
 
 def test_guard_member_owner_still_works(monkeypatch):
     # le propriétaire garde le chemin owner (pas de lecture share_side nécessaire)
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
     ref = instance_refs.parse_ref(instance_refs.make_member_ref(8, "owner", "zoho"))
     assert access.guard_instance_access("owner", ref) == 8
-
-
-# ── oto_lend_instance : write path de share_side ──────────────────────────────
-def _lend_wiring(monkeypatch, *, existing_side=None, write_ok=True, accounts=("",),
-                 meta=None, team_keys=()):
-    """`accounts` = the caller's OWN member rows; `team_keys` = ids of the caller's teams
-    whose own row holds the connector (#1343)."""
-    captured = {}
-    monkeypatch.setattr(providers, "connector_for_provider", lambda c: object())
-    monkeypatch.setattr(credentials_store, "list_accounts",
-                        lambda et, eid, conn: (
-                            [{"account": a, "meta": dict(meta or {})} for a in accounts]
-                            if et == credentials_store.MEMBER
-                            else [{"account": "", "meta": {}}]
-                            if et == "group" and int(eid) in team_keys else []))
-    monkeypatch.setattr(group_store, "list_groups_for_user",
-                        lambda sub, org: [{"group_id": g, "name": f"team-{g}"}
-                                          for g in (51, 47)])
-    monkeypatch.setattr(credentials_store, "services_pretes", lambda *a, **k: {})
-    monkeypatch.setattr(access, "current_org", lambda sub: 35)
-    monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
-    monkeypatch.setattr(credentials_store, "get_instance_sharing",
-                        lambda et, eid, conn, acct="": ([], list(existing_side or [])))
-    def _set(et, eid, conn, acct="", *, share_down=None, share_side=None,
-             share_services=None, journal=()):
-        captured["share_side"] = share_side
-        captured["share_services"] = share_services
-        captured["journal"] = list(journal)
-        captured["eid"] = eid
-        captured["row"] = (conn, acct)
-        return write_ok
-    monkeypatch.setattr(credentials_store, "set_instance_sharing", _set)
-    return captured
-
-def _ctx(sub="alice"):
-    return types.SimpleNamespace(sub=sub)
-
-def test_lend_adds_beneficiary(monkeypatch):
-    cap = _lend_wiring(monkeypatch)
-    inp = connectors_sharing.LendInstanceInput(connector="zoho", to="bob")
-    out = connectors_sharing._lend_instance(_ctx("alice"), inp)
-    assert cap["share_side"] == ["user:bob"]
-    assert cap["eid"] == "35:alice"          # ne prête QUE sa propre ligne
-    assert out["lent_to"] == ["bob"] and out["revoked"] is False
-
-def test_lend_revoke_removes(monkeypatch):
-    cap = _lend_wiring(monkeypatch, existing_side=["user:bob", "user:carol"])
-    inp = connectors_sharing.LendInstanceInput(connector="zoho", to="bob", revoke=True)
-    out = connectors_sharing._lend_instance(_ctx("alice"), inp)
-    assert cap["share_side"] == ["user:carol"]
-    assert out["lent_to"] == ["carol"] and out["revoked"] is True
-
-def test_lend_no_instance_raises(monkeypatch):
-    _lend_wiring(monkeypatch, write_ok=False)  # aucune ligne à mettre à jour
-    inp = connectors_sharing.LendInstanceInput(connector="zoho", to="bob")
-    with pytest.raises(AuthzDenied, match="nothing to lend|No `"):
-        connectors_sharing._lend_instance(_ctx("alice"), inp)
-
-def test_lend_self_rejected(monkeypatch):
-    _lend_wiring(monkeypatch)
-    inp = connectors_sharing.LendInstanceInput(connector="zoho", to="alice")
-    with pytest.raises(AuthzDenied, match="yourself"):
-        connectors_sharing._lend_instance(_ctx("alice"), inp)
-
-def test_lend_unknown_user_rejected(monkeypatch):
-    _lend_wiring(monkeypatch)
-    monkeypatch.setattr(db, "get_user", lambda sub: None)
-    inp = connectors_sharing.LendInstanceInput(connector="zoho", to="ghost")
-    with pytest.raises(AuthzDenied, match="Unknown user"):
-        connectors_sharing._lend_instance(_ctx("alice"), inp)
-
-
-# ── `to` = l'email d'un membre de l'org courante (mesuré en prod : un agent a passé
-# l'adresse d'une collègue, l'outil l'a refusée comme « inconnue ») ─────────────────
-def _membres(monkeypatch, annuaire):
-    vus = []
-
-    def _par_email(org, email):
-        vus.append(org)
-        sub = annuaire.get(email.strip().lower())
-        return {"sub": sub, "org_role": "org_member"} if sub else None
-    monkeypatch.setattr(org_store, "get_org_member_by_email", _par_email)
-    return vus
-
-
-def test_lend_par_email_d_un_membre_de_l_org(monkeypatch):
-    cap = _lend_wiring(monkeypatch)
-    vus = _membres(monkeypatch, {"bob@x.test": "bob"})
-    inp = connectors_sharing.LendInstanceInput(connector="zoho", to=" Bob@X.test ")
-    out = connectors_sharing._lend_instance(_ctx("alice"), inp)
-    assert cap["share_side"] == ["user:bob"] and out["lent_to"] == ["bob"]
-    assert vus == [35], "l'email se résout parmi les membres de l'org COURANTE seulement"
-
-
-def test_lend_par_email_hors_org_dit_que_l_appartenance_manque(monkeypatch):
-    cap = _lend_wiring(monkeypatch)
-    _membres(monkeypatch, {})
-    # Un compte oto qui porte cet email AILLEURS ne change rien au refus.
-    monkeypatch.setattr(db, "get_user_by_email",
-                        lambda e: pytest.fail("pas d'annuaire de la plateforme"), raising=False)
-    inp = connectors_sharing.LendInstanceInput(connector="zoho", to="ext@y.test")
-    with pytest.raises(AuthzDenied) as e:
-        connectors_sharing._lend_instance(_ctx("alice"), inp)
-    assert e.value.code == "not_an_org_member"
-    assert "not the email of a member of your organization" in e.value.message
-    assert "the email or the sub of a member of your organization" in e.value.message
-    assert "share_side" not in cap
-
-
-def test_lend_par_son_propre_email_refuse(monkeypatch):
-    _lend_wiring(monkeypatch)
-    _membres(monkeypatch, {"alice@x.test": "alice"})
-    inp = connectors_sharing.LendInstanceInput(connector="zoho", to="alice@x.test")
-    with pytest.raises(AuthzDenied, match="yourself"):
-        connectors_sharing._lend_instance(_ctx("alice"), inp)
-
-
-def test_le_refus_d_un_sub_inconnu_dit_ce_qui_est_accepte(monkeypatch):
-    _lend_wiring(monkeypatch)
-    monkeypatch.setattr(db, "get_user", lambda sub: None)
-    inp = connectors_sharing.LendInstanceInput(connector="zoho", to="ghost")
-    with pytest.raises(AuthzDenied, match="the email or the sub of a member"):
-        connectors_sharing._lend_instance(_ctx("alice"), inp)
-
-
-def test_le_texte_servi_dit_qu_un_email_est_accepte():
-    from oto_mcp.capabilities.registry import CAPABILITIES
-    instance = next(c for c in CAPABILITIES if c.mcp == "oto_instance")
-    assert "the email or the sub of a member of your organization" in instance.description
-
-
-# ── le compte prêté sur un connecteur multi-compte, et la carte d'un service ────────
-# Mesuré en prod : `lend connector=microsoft` sans `account` répondait « No instance »
-# à une personne qui en avait une ; `connector=outlook` aussi (la carte n'a pas de ligne).
-def test_lend_sans_account_prend_le_seul_compte(monkeypatch):
-    cap = _lend_wiring(monkeypatch, accounts=("jane@contoso.example",))
-    out = connectors_sharing._lend_instance(
-        _ctx("alice"), connectors_sharing.LendInstanceInput(connector="zoho", to="bob"))
-    assert cap["row"] == ("zoho", "jane@contoso.example")
-    assert out["account"] == "jane@contoso.example" and out["lent_to"] == ["bob"]
-
-
-def test_lend_sans_account_sur_plusieurs_comptes_les_nomme(monkeypatch):
-    cap = _lend_wiring(monkeypatch, accounts=("a@x.test", "b@x.test"))
-    with pytest.raises(AuthzDenied) as e:
-        connectors_sharing._lend_instance(
-            _ctx("alice"), connectors_sharing.LendInstanceInput(connector="zoho", to="bob"))
-    assert e.value.code == "account_required"
-    assert "pass `account=`: one of `a@x.test`, `b@x.test`" in e.value.message
-    assert "No `" not in e.value.message and "share_side" not in cap
-
-
-def test_lend_d_un_compte_qui_n_est_pas_le_sien_les_nomme(monkeypatch):
-    _lend_wiring(monkeypatch, accounts=("a@x.test",))
-    with pytest.raises(AuthzDenied) as e:
-        connectors_sharing._lend_instance(_ctx("alice"), connectors_sharing.LendInstanceInput(
-            connector="zoho", to="bob", account="z@x.test"))
-    assert e.value.code == "unknown_account" and "`a@x.test`" in e.value.message
-
-
-def test_lend_sans_aucune_ligne_dit_no_instance(monkeypatch):
-    cap = _lend_wiring(monkeypatch, accounts=())
-    with pytest.raises(AuthzDenied, match="nothing to lend") as e:
-        connectors_sharing._lend_instance(
-            _ctx("alice"), connectors_sharing.LendInstanceInput(connector="zoho", to="bob"))
-    assert e.value.code == "no_instance" and "share_side" not in cap
-
-
-@pytest.mark.parametrize("account", ["", "group:51:sivan"])
-def test_preter_une_cle_d_equipe_dit_que_seule_une_cle_perso_se_prete(monkeypatch, account):
-    """#1343 : la clé est celle d'une équipe de l'appelant, pas la sienne. Le refus
-    `no_instance` (« configure your key first ») disait qu'elle n'existait pas."""
-    cap = _lend_wiring(monkeypatch, accounts=(), team_keys=(51,))
-    monkeypatch.setattr(group_store, "get_group", lambda gid: {"id": gid, "org_id": 35})
-    with pytest.raises(AuthzDenied) as e:
-        connectors_sharing._lend_instance(_ctx("alice"), connectors_sharing.LendInstanceInput(
-            connector="sivan", to_group=47, account=account))
-    assert e.value.code == "team_key_not_lendable"
-    assert "#51" in e.value.message and "#47" not in e.value.message
-    assert "only a personal key" in e.value.message and "share_side" not in cap
-
-
-@pytest.mark.parametrize("carte", ["outlook", "microsoft"])
-def test_lend_d_une_carte_service_prete_le_porteur_et_le_dit(monkeypatch, carte):
-    """La ligne prêtée est celle du PORTEUR ; ce qui est prêté, ses SERVICES : la carte
-    nommée seule, ou ce que le compte a autorisé ce jour-là (signal 1399)."""
-    from oto_mcp.auth import microsoft as ms_auth
-    scopes = " ".join(ms_auth.service_scopes("outlook") + ms_auth.service_scopes("sharepoint"))
-    cap = _lend_wiring(monkeypatch, accounts=("jane@contoso.example",),
-                       meta={"scopes": scopes})
-    out = connectors_sharing._lend_instance(
-        _ctx("alice"), connectors_sharing.LendInstanceInput(connector=carte, to="bob"))
-    assert cap["row"] == ("microsoft", "jane@contoso.example"), "la ligne du PORTEUR"
-    assert out["connector"] == "microsoft"
-    attendus = ["outlook"] if carte == "outlook" else ["outlook", "sharepoint"]
-    assert out["services"] == attendus
-    assert cap["share_services"] == {"user:bob": attendus}
-    assert "jane@contoso.example" in out["note"] and "only" in out["note"]

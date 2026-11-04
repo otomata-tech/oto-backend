@@ -1,7 +1,7 @@
 """B3 : unipile_client tire le DSN de la config du credential résolu (apparié à
 la clé gagnante de la cascade). Clé plateforme → DSN None (instance env/défaut).
-+ #55 : le grant de compte partagé = SEULE exception au no-fallback anti-usurpation
-(pointeur « identité opérée » revalidé à chaque appel, pin projet accepté si accordé)."""
+Le compte d'un autre membre ne sert que NOMMÉ par l'appel (#1499,
+`test_unipile_compte_d_autrui`) : jamais par un pin de projet."""
 from oto_mcp import credentials_store
 import pytest
 from oto_mcp.mcp_errors import McpError
@@ -16,14 +16,6 @@ class _FakeClient:
         self.provider = provider
 
 
-def _no_grants(monkeypatch):
-    """Défauts #55 : pas de pointeur opéré, pas de grant reçu."""
-    monkeypatch.setattr(unipile_tool.db, "get_operated_account", lambda sub, prov: None)
-    monkeypatch.setattr(unipile_tool.db, "granted_accounts_for", lambda sub, prov: {})
-    # #898 : aucun prêteur en pause par défaut.
-    monkeypatch.setattr(unipile_tool.db, "suspended_lenders_for", lambda sub, prov: {})
-
-
 def test_unipile_client_byo_passes_dsn(monkeypatch):
     rc = ResolvedCredential("unipile", "KEY", False, "org", "org", "39")
     monkeypatch.setattr(access, "resolve_credential", lambda p, want="auto": rc)
@@ -35,7 +27,6 @@ def test_unipile_client_byo_passes_dsn(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
     monkeypatch.setattr(unipile_tool.db, "get_unipile_account_id", lambda sub, org, prov: "ACC")
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeClient)
-    _no_grants(monkeypatch)
 
     cli = unipile_tool.unipile_client("LINKEDIN")
     assert cli.dsn == "api6.unipile.com:13616"
@@ -49,7 +40,6 @@ def test_unipile_client_platform_dsn_none(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
     monkeypatch.setattr(unipile_tool.db, "get_unipile_account_id", lambda sub, org, prov: "ACC")
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeClient)
-    _no_grants(monkeypatch)
 
     cli = unipile_tool.unipile_client("LINKEDIN")
     assert cli.dsn is None and cli.api_key == "PK"
@@ -62,7 +52,6 @@ def _wire_basic(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
     monkeypatch.setattr(unipile_tool.db, "get_unipile_account_id", lambda sub, org, prov: "DEFAULT")
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeClient)
-    _no_grants(monkeypatch)
 
 
 def test_project_pin_applied_when_owned_and_channel_match(monkeypatch):
@@ -95,81 +84,15 @@ def test_project_pin_rejected_on_channel_mismatch(monkeypatch):
     assert unipile_tool.unipile_client("WHATSAPP").account_id == "DEFAULT"
 
 
-# --- #55 : compte accordé (pointeur « identité opérée » + pin projet) --------
-
-def test_operated_account_resolves_when_granted(monkeypatch):
-    # Le pointeur opéré posé + grant vivant → on agit comme le compte du owner.
-    _wire_basic(monkeypatch)
-    monkeypatch.setattr(unipile_tool.db, "get_operated_account",
-                        lambda sub, prov: {"account_id": "OWNER_ACC", "owner_sub": "owner"})
-    monkeypatch.setattr(unipile_tool.db, "granted_accounts_for",
-                        lambda sub, prov: {"OWNER_ACC": {"owner_sub": "owner",
-                                                         "owner_email": "o@x.io"}})
-    assert unipile_tool.unipile_client("LINKEDIN").account_id == "OWNER_ACC"
-
-
-def test_operated_account_revoked_raises_no_silent_fallback(monkeypatch):
-    # Grant révoqué (ou owner déconnecté) MAIS pointeur encore posé → erreur
-    # EXPLICITE, jamais de repli silencieux sur le compte propre (identité ≠ donnée).
-    _wire_basic(monkeypatch)
-    monkeypatch.setattr(unipile_tool.db, "get_operated_account",
-                        lambda sub, prov: {"account_id": "OWNER_ACC", "owner_sub": "owner"})
-    monkeypatch.setattr(unipile_tool.db, "granted_accounts_for", lambda sub, prov: {})
-    with pytest.raises(McpError, match="no longer operable"):
-        unipile_tool.unipile_client("LINKEDIN")
-
-
-def test_operated_account_channel_scoped(monkeypatch):
-    # Le pointeur LinkedIn n'affecte pas WhatsApp (pointeur ET grant par canal).
-    _wire_basic(monkeypatch)
-    monkeypatch.setattr(
-        unipile_tool.db, "get_operated_account",
-        lambda sub, prov: ({"account_id": "OWNER_ACC", "owner_sub": "owner"}
-                           if prov == "LINKEDIN" else None))
-    monkeypatch.setattr(
-        unipile_tool.db, "granted_accounts_for",
-        lambda sub, prov: ({"OWNER_ACC": {"owner_sub": "owner", "owner_email": None}}
-                           if prov == "LINKEDIN" else {}))
-    assert unipile_tool.unipile_client("WHATSAPP").account_id == "DEFAULT"
-
-
-def test_project_pin_accepted_when_granted(monkeypatch):
-    # #55 rouvre le pin projet Unipile : un pin sur un compte ACCORDÉ (pas possédé)
-    # est honoré — la seule exception au no-fallback, re-checkée à cet appel.
+def test_project_pin_on_another_members_account_is_inert(monkeypatch):
+    """#1499 : le compte d'un autre membre ne sert que NOMMÉ par l'appel ; un pin de
+    projet qui le désigne reste inerte (fail-soft #57 : repli sur le compte propre)."""
     _wire_basic(monkeypatch)
     monkeypatch.setattr(access, "project_pinned_identity", lambda c: "OWNER_ACC")
     monkeypatch.setattr(unipile_tool.db, "list_unipile_accounts",
-                        lambda sub: [{"account_id": "DEFAULT", "provider": "LINKEDIN"}])
-    monkeypatch.setattr(unipile_tool.db, "granted_accounts_for",
-                        lambda sub, prov: {"OWNER_ACC": {"owner_sub": "owner",
-                                                         "owner_email": None}})
-    assert unipile_tool.unipile_client("LINKEDIN").account_id == "OWNER_ACC"
-
-
-def test_project_pin_inert_after_revoke(monkeypatch):
-    # Pin sur un compte accordé puis révoqué → pin inerte (fail-soft #57 : repli défaut).
-    _wire_basic(monkeypatch)
-    monkeypatch.setattr(access, "project_pinned_identity", lambda c: "OWNER_ACC")
-    monkeypatch.setattr(unipile_tool.db, "list_unipile_accounts",
-                        lambda sub: [{"account_id": "DEFAULT", "provider": "LINKEDIN"}])
+                        lambda sub: [{"account_id": "DEFAULT", "provider": "LINKEDIN",
+                                      "org_id": 39}])
     assert unipile_tool.unipile_client("LINKEDIN").account_id == "DEFAULT"
-
-
-def test_project_pin_on_a_paused_lender_is_a_NAMED_refusal(monkeypatch):
-    """#898 (arbitrage du 23/09/2026, option A) : le projet épingle un compte prêté
-    dont le prêteur est en pause — ni repli sur le défaut (on agirait sous une autre
-    identité que celle déclarée), ni « révoqué » : le refus nommé `lender_suspended`."""
-    _wire_basic(monkeypatch)
-    monkeypatch.setattr(access, "project_pinned_identity", lambda c: "OWNER_ACC")
-    monkeypatch.setattr(unipile_tool.db, "list_unipile_accounts",
-                        lambda sub: [{"account_id": "DEFAULT", "provider": "LINKEDIN"}])
-    monkeypatch.setattr(unipile_tool.db, "suspended_lenders_for",
-                        lambda sub, prov: {"OWNER_ACC": {"owner_sub": "owner",
-                                                         "owner_email": "o@x.io"}})
-    with pytest.raises(McpError, match="en pause") as e:
-        unipile_tool.unipile_client("LINKEDIN")
-    assert e.value.error.data == {"code": "lender_suspended", "retryable": False}
-    assert "o@x.io" in e.value.error.message
 
 
 def test_channel_reaches_the_client(monkeypatch):

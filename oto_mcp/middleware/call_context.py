@@ -37,9 +37,8 @@ def _cible(name: str, args: dict) -> str:
 
 def _echo_account(result, tool_name: str, rappel: Optional[dict] = None):
     """Dit à l'agent SOUS QUEL COMPTE l'appel est parti, quand il en a plusieurs — et,
-    pour un compte PRÊTÉ, à qui il est : `rappel` = le descripteur de la règle commune
-    (`access.rappel_du_compte` : `_account`, `lent_by`, `lent_via_group` ou
-    `lent_via_org`), par défaut `{_account}` seul.
+    pour le compte d'une AUTRE personne, à qui il est : `rappel` = le descripteur
+    (`access.rappel_du_compte` : `_account`, `lent_by`), par défaut `{_account}` seul.
 
     Un agent qui détient deux workspaces Slack en visait un — par défaut posé, par
     épinglage de projet ou par `_account=` — sans que rien ne le lui confirme :
@@ -69,8 +68,11 @@ def _echo_account(result, tool_name: str, rappel: Optional[dict] = None):
             return result
         trace = session_org.current_call_trace() or {}
         account = trace.get("resolved_account") or ""
-        if not account or (providers.credential_provider(trace.get("resolved_connector") or "")
-                           != providers.credential_provider(namespace_of(tool_name))):
+        # A mono-account row is anonymous (no echo) — unless it is an account of ANOTHER
+        # org, which is always said (#1499, D1/#172).
+        if not (account or trace.get("compte_d_une_autre_org")) or (
+                providers.credential_provider(trace.get("resolved_connector") or "")
+                != providers.credential_provider(namespace_of(tool_name))):
             return result
         payload = redaction.extract_payload(result)
         if not isinstance(payload, dict) or "_account" in payload:
@@ -82,13 +84,13 @@ def _echo_account(result, tool_name: str, rappel: Optional[dict] = None):
         return result
 
 
-def _rappel_hors_boucle(account: str, row) -> dict:
-    """The descriptor of a MEMBER row that served: the caller's identity, the lender's
-    label and the sharing all read the base — off-loop. A failed lookup still says the
-    account is LENT (by the lender's sub): the signal matters more than the label."""
+def _rappel_hors_boucle(account: str, row, autre_org: Optional[dict] = None) -> dict:
+    """The descriptor of a MEMBER row that served: the owner's label reads the base —
+    off-loop. A failed lookup still says the account is ANOTHER person's (by her sub):
+    the signal matters more than the label."""
     sub = current_user_sub_from_token()
     try:
-        return access.rappel_du_compte(sub, account, row)
+        return access.rappel_du_compte(sub, account, row, autre_org)
     except Exception:  # noqa: BLE001 — le prêt reste signalé, par son sub
         logger.warning("loan descriptor unreadable", exc_info=True)
         preteur = access.preteur_de_la_ligne(sub, row)
@@ -101,13 +103,19 @@ async def _rappel_de_l_appel() -> Optional[dict]:
     succeeded."""
     trace = session_org.current_call_trace() or {}
     account = trace.get("resolved_account") or ""
-    if not account:
+    # An account of ANOTHER org served (#1499, D1/#172): always said, named or not.
+    autre_org = trace.get("compte_d_une_autre_org")
+    if not account and not autre_org:
         return None
     row = trace.get("credential_row")
     if not access.ligne_d_un_membre(row):
-        return {"_account": account}
+        out = {"_account": account}
+        if autre_org:   # pure: what the resolution noted, no read
+            out.update({"your_account_in_org": autre_org["org"]} if autre_org.get("own")
+                       else {"lent_by_org": autre_org["org"], "level": autre_org["level"]})
+        return out
     try:
-        return await run_in_threadpool(_rappel_hors_boucle, account, row)
+        return await run_in_threadpool(_rappel_hors_boucle, account, row, autre_org)
     except Exception:  # noqa: BLE001 — un écho ne casse pas un appel réussi
         logger.warning("loan descriptor unreadable", exc_info=True)
         return {"_account": account}
@@ -289,6 +297,11 @@ class CallContextMiddleware(Middleware):
             # Le budget d'unités : un outil du périmètre reçoit son relevé (identifiant,
             # arguments) avant de partir, la résolution de la clé plateforme y réserve.
             budget.ouvrir_appel(name, args)
+            # What the call does (its op's class, `tools/effets`): the level the account
+            # resolved for it must give (`access/niveaux`, #1499) — judged at resolution,
+            # on the account REALLY resolved. Same note, same place, as in `oto_call`.
+            undo.append((access.oublier_l_appel, access.noter_l_appel(
+                name, args, await self._en_lecture(context, name))))
             try:
                 result = await call_next(context)
             except Exception as e:
@@ -306,6 +319,18 @@ class CallContextMiddleware(Middleware):
         finally:
             for reset, tok in reversed(undo):
                 reset(tok)
+
+    @staticmethod
+    async def _en_lecture(context, name: str) -> bool:
+        """Does the tool declare itself read-only (`tools/lecture`)? Read on its FastMCP
+        object; a relay (`oto_call`) is judged on its target, by `executer_cible`."""
+        if name == "oto_call":
+            return False
+        serveur = getattr(getattr(context, "fastmcp_context", None), "fastmcp", None)
+        if serveur is None:    # no server to declare it: judged on its op (stricter)
+            return False
+        from ..tools import lecture
+        return lecture.en_lecture(await serveur.get_tool(name))
 
     @staticmethod
     async def _schema_of(context, name: str):

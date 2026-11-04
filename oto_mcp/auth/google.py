@@ -719,22 +719,16 @@ def _no_account_message(sub: str, org_id: Optional[int], account: Optional[str])
 # An org admin or a team lead connects ONE Google account on behalf of everyone — a
 # shared mailbox, a team calendar. Resolution order at call time: the MEMBER's account
 # first (their own, or the one they name), then that of their active TEAM,
-# then that of their ORG. Nobody reaches another person's PERSONAL account: only the
-# accounts an admin has set as such are shared.
+# then that of their ORG, each at the level its rules give the member. Another person's
+# PERSONAL account serves only when the call names it, at the level its rules give
+# (#1499, `access/comptes.ChoixDuParcours.autrui_nomme`): it is not listed here.
 
 def _shared_targets(sub: str, org_id: int) -> list:
     """The shared-account holders reachable by this member, from nearest to
-    broadest: their active team, the owning team lent to them by a share,
-    then their org.
-
-    Same rungs as the key cascade (`access.cascade`, #480): under `_project=`
-    of an org the caller is not a member of, the org's account is only lent to them
-    if the share granted it (`credentials="inherit"`) — otherwise a mere
-    beneficiary read and sent from the org's shared mailbox."""
+    broadest: their ACTIVE team, then their org — the key cascade's rungs."""
     from .. import access
-    from ..access import heritage
-    return heritage.paliers_partages(org_id, access.current_group(sub),
-                                     heritage.du_contexte(sub, org_id))
+    equipe = access.current_group(sub)
+    return ([("group", int(equipe))] if equipe is not None else []) + [("org", int(org_id))]
 
 
 def scope_target(sub: str, scope: str) -> tuple:
@@ -806,7 +800,7 @@ def reachable_accounts(sub: str, service: Optional[str] = None) -> list[dict]:
 def set_default_shared(sub: str, account: str, scope: str) -> bool:
     """The default shared account of a scope — admin action (`scope_target`)."""
     _, target = scope_target(sub, scope)
-    return db.set_default_shared_google_account(scope, target, account)
+    return db.set_default_shared_google_account(scope, target, account, par=sub)
 
 
 def _refuse_two_names(account: Optional[str]) -> None:
@@ -1137,7 +1131,7 @@ def _revoke_shared(sub: str, account: Optional[str], scope: str) -> None:
             # noqa: SILENT — declared debt: the refresh_token stays alive at Google (#424, verdict C)
             except Exception:
                 pass
-    db.delete_shared_google_oauth(scope, target, account=account)
+    db.delete_shared_google_oauth(scope, target, account=account, par=sub)
 
 
 def revoke(sub: str, account: Optional[str] = None, scope: str = "member") -> None:

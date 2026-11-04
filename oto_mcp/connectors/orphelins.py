@@ -27,9 +27,7 @@ Exclus du constat, et pourquoi :
   `access_shadow_l7`, `tool_calls`) : une trace du passé, pas une référence à résoudre ;
 - le budget d'unités (`credit_scale_lines`, `credit_holds`, `credit_movements`) : un
   barème versé par le commerce et ses traces ; une ligne sans connecteur servi ne
-  s'applique simplement à aucun appel ;
-- `connector_account_grants.provider` : un CANAL de messagerie (`LINKEDIN`…), pas un nom
-  du registre.
+  s'applique simplement à aucun appel.
 
 Feuille : aucun import d'`oto_mcp` au niveau du module (`providers` et `db` en tardif),
 pour que les lecteurs du coffre, de la sélection et des réglages puissent l'appeler.

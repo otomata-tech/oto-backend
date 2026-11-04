@@ -19,15 +19,12 @@ owner_id TEXT NOT NULL,
 account TEXT NOT NULL DEFAULT '',
 label TEXT,
 config JSONB NOT NULL DEFAULT '{}'::jsonb,
-visibility TEXT NOT NULL DEFAULT 'inherited',
 parent_id BIGINT REFERENCES connector_instances(id),
 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 revoked_at TIMESTAMPTZ,
 revoked_reason TEXT,
 CONSTRAINT connector_instances_owner_type_check
-CHECK (owner_type IN ('platform', 'tenant', 'org', 'group', 'member', 'user')),
-CONSTRAINT connector_instances_visibility_check
-CHECK (visibility IN ('inherited', 'hidden', 'org'))
+CHECK (owner_type IN ('platform', 'tenant', 'org', 'group', 'member', 'user'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_instances_vault
 ON connector_instances(owner_type, owner_id, connector, account)

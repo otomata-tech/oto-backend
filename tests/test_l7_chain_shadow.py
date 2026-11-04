@@ -36,10 +36,10 @@ pytestmark = pytest.mark.usefixtures("sans_droit_declare")
 # (`share_mode='open'`, aucune allowlist). C'est la forme que 0053 ne sait PAS dire —
 # elle n'a pas de bénéficiaire, et « tout le monde » n'est pas un scope de grant.
 FREE_SERPER = [{"label": "env", "share_mode": "open", "share_down": [],
-                "share_side": [], "meta": {"rate_limit": 200}}]
+                "meta": {"rate_limit": 200}}]
 # La même instance, refermée sur une allowlist : là, un grant EXISTE à reproduire.
 CLOSED_SERPER = [{"label": "env", "share_mode": "closed", "share_down": ["user:u"],
-                  "share_side": [], "meta": {"rate_limit": 200}}]
+                  "meta": {"rate_limit": 200}}]
 
 
 def _edge(grantee=("user", "u"), revoked=None):
@@ -173,15 +173,6 @@ def test_le_free_tier_ouvert_est_nomme_comme_un_trou_du_modele(vide, monkeypatch
     legacy = cascade.CascadeRung("platform", credentials_store.PLATFORM, "env", {})
     assert chain_shadow.classify(legacy, None, hors_modele=chain_shadow.FREE_TIER_HORS_MODELE) \
         == chain_shadow.FREE_TIER_HORS_MODELE
-
-
-def test_l_instance_personnelle_cross_org_est_classee_a_part(vide):
-    """La cascade suit la clé du sujet dans une AUTRE org (#172) ; l'ensemble
-    atteignable de 0053 est scopé à l'org de contexte."""
-    legacy = cascade.CascadeRung("user", credentials_store.MEMBER, "9:u", "K",
-                                 via="cross_org")
-    assert chain_shadow.classify(legacy, None, hors_modele=None) \
-        == chain_shadow.PERSO_CROSS_ORG
 
 
 def test_la_classe_inconnue_est_ATTEIGNABLE(vide):

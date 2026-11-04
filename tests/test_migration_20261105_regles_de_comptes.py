@@ -1,13 +1,13 @@
-"""La révision `20261105_0900_regles_de_comptes` pose les règles de comptes et reprend les prêts.
+"""La révision `20261105_0900_regles_de_comptes` pose les règles de comptes.
 
 Joué sur une vraie base ramenée à l'état d'avant (tables et fonctions retirées, sans
-sous-instance) : la révision pose les tables, les déclencheurs, une sous-instance par
-compte Unipile et les règles reprises ; le retour arrière retire les tables et archive
-les sous-instances ; rejouée, elle redonne le même état.
+sous-instance) : la révision pose les tables, les déclencheurs et une sous-instance par
+compte Unipile ; elle ne pose AUCUNE règle — la reprise des prêts vit, figée, dans la
+révision de la bascule (`test_migration_20261105_bascule_comptes.py`). Le retour arrière
+retire les tables et archive les sous-instances ; rejouée, elle redonne le même état.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -61,14 +61,7 @@ def base_d_avant(live, pg_module_dsn):
     with psycopg.connect(pg_module_dsn, autocommit=True) as c:
         for sub in ("proprio", "pair"):
             c.execute("INSERT INTO org_members (org_id, sub) VALUES (%s, %s)", (org, sub))
-        c.execute("INSERT INTO connector_credentials (entity_type, entity_id, connector, "
-                  "secret_enc, share_side) VALUES ('member', %s, 'zoho', 'x', %s)",
-                  (f"{org}:proprio", json.dumps(["user:pair"])))
-        c.execute("INSERT INTO connector_instances (connector, owner_type, owner_id) "
-                  "VALUES ('zoho', 'member', %s), ('attio', 'org', %s)",
-                  (f"{org}:proprio", str(org)))
     db.set_unipile_account("proprio", "ACC", None, org_id=org, provider="LINKEDIN")
-    db.set_account_grant("proprio", "LINKEDIN", "ACC", "pair", granted_by="proprio")
     with psycopg.connect(pg_module_dsn, autocommit=True) as c:
         c.execute("DROP TABLE connector_account_share_events")
         c.execute("DROP TABLE connector_account_rules")
@@ -79,19 +72,14 @@ def base_d_avant(live, pg_module_dsn):
     return {"dsn": pg_module_dsn, "org": org}
 
 
-def test_la_revision_pose_reprend_et_le_retour_arriere_retire(base_d_avant):
+def test_la_revision_pose_sans_reprendre_et_le_retour_arriere_retire(base_d_avant):
     from alembic import command
     dsn, org = base_d_avant["dsn"], base_d_avant["org"]
     assert _tables(dsn) == [] and _sous_instances(dsn) == []
     command.upgrade(_alembic(), _REVISION)
     assert _tables(dsn) == ["connector_account_rules", "connector_account_share_events"]
     assert _sous_instances(dsn) == [(f"{org}:proprio", "canal:LINKEDIN")]
-    regles = _regles(dsn)
-    assert {(r[1], r[2], r[3], r[4], r[6]) for r in regles} == {
-        ("pair", None, False, "sensitive", "reprise"),   # prêt du coffre
-        (None, None, True, "sensitive", "reprise"),      # compte d'org (a)
-    } and len(regles) == 3                               # + le prêt Unipile au pair
-    assert len(_un(dsn, "SELECT 1 FROM connector_account_share_events")) == 3
+    assert _regles(dsn) == []          # la reprise est celle de la bascule (L3)
     assert {r[0] for r in _un(dsn, "SELECT tgname FROM pg_trigger WHERE tgrelid = "
                                    "'connector_account_rules'::regclass "
                                    "AND NOT tgisinternal")} == {
@@ -101,4 +89,4 @@ def test_la_revision_pose_reprend_et_le_retour_arriere_retire(base_d_avant):
     assert _tables(dsn) == [] and _sous_instances(dsn) == []
 
     command.upgrade(_alembic(), _REVISION)
-    assert len(_regles(dsn)) == 3 and len(_sous_instances(dsn)) == 1
+    assert _regles(dsn) == [] and len(_sous_instances(dsn)) == 1

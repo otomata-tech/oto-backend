@@ -61,11 +61,11 @@ STOCK: dict[str, str] = {
     "oto_mcp.capabilities.unipile_me::_status":
         "unipile.status_for",
     "oto_mcp.connectors.identities::_unipile_list":
-        "_unipile_chosen, _unipile_client, access.current_org, db.list_account_grants_to, db.list_unipile_accounts",
+        "_unipile_client, access.current_org, db.list_unipile_accounts",
     "oto_mcp.connectors.identities::_unipile_live_status_map":
         "access.resolve_credential",
     "oto_mcp.connectors.identities::_unipile_select":
-        "_unipile_client, access.current_org, db.clear_operated_account, db.list_account_grants_to, db.list_unipile_accounts, db.set_operated_account, db.set_unipile_account",
+        "_unipile_client, access.current_org, db.list_unipile_accounts, db.set_unipile_account",
     "oto_mcp.middleware.account_suspended::AccountSuspendedMiddleware.on_request":
         "[dormant] current_user_sub_from_token",
     "oto_mcp.middleware.alias::ToolAliasMiddleware.on_call_tool":

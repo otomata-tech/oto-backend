@@ -309,11 +309,10 @@ def test_la_cle_du_tenant_devenu_primaire_est_une_instance_plateforme_ouverte(ci
     with psycopg.connect(cible["dsn"], row_factory=dict_row) as c:
         assert c.execute("SELECT count(*) AS n FROM connector_credentials "
                          "WHERE entity_type = 'tenant'").fetchone()["n"] == 0
-        cle = c.execute("SELECT entity_id, share_mode, share_down, share_side "
+        cle = c.execute("SELECT entity_id, share_mode, share_down "
                         "FROM connector_credentials WHERE entity_type = 'platform' "
                         "AND connector = 'hunter'").fetchall()
-        assert cle == [{"entity_id": slug, "share_mode": "open", "share_down": [],
-                        "share_side": []}]
+        assert cle == [{"entity_id": slug, "share_mode": "open", "share_down": []}]
         assert c.execute("SELECT count(*) AS n FROM grants WHERE resource_id = %s AND "
                          "grantee_kind = 'platform' AND grantee_id = 'platform' AND "
                          "revoked_at IS NULL", (f"platform:hunter:{slug}",)

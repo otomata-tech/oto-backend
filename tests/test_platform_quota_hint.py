@@ -33,7 +33,7 @@ from oto_mcp import access, grants_chain
 from oto_mcp.mcp_errors import McpError
 
 _INSTANCE = [{"label": "env", "share_mode": "open", "share_down": [],
-             "share_side": [], "meta": {"rate_limit": 20}}]
+             "meta": {"rate_limit": 20}}]
 
 
 @pytest.fixture

@@ -39,11 +39,19 @@ Le rôle (`users.role`) décide de l'accès à l'admin UI, sur **3 paliers**
 > Les `admin` historiques (= tout-puissants) ont été migrés → `super_admin`
 > (`scripts/migrate_admin_to_super.py`). Un `admin` aujourd'hui = opérateur.
 
-Résolution par appel (`resolve_api_key` / `resolve_credential`) :
+Résolution par appel (`resolve_api_key` / `resolve_credential`), l'ordre d'oto-core
+(#1499, `docs/partage-de-compte.md`) :
 
+0. Le compte que l'appel **nomme** (`_account=` / `_instance=`) — seul chemin vers le
+   compte d'une autre personne, au niveau que lui donnent ses règles.
 1. Clé **membre** (sub, org de contexte — ADR 0033) → directe, sans quota.
-2. Instance **personnelle cross-org** (#172, providers `personal_cross_org`).
+2. (retiré par la bascule des comptes : l'instance personnelle d'une autre org, #172.)
 3. Secret d'**équipe active**, puis d'**org active** (providers org-shareables).
+   À chaque palier 0 à 3, seuls servent les comptes dont le niveau
+   (`access/niveaux.niveau`) couvre ce que l'op exige (`tools/effets` : lire → `read`,
+   écrire → `write`, envoyer ou détruire → `sensitive`) ; deux au même palier =
+   `ambiguous_account` sauf défaut ; des comptes vus tous sous le niveau =
+   `insufficient_level`, jamais la clé plateforme à leur place.
 4. Secret de **tenant** (coffre `entity_type='tenant'`, ADR 0052 ; barreau livré le
    29/08/2026 avec L-clés) — sert toutes les orgs du tenant qui n'ont rien de plus proche.
 5. Instance **plateforme** (grant/free-tier, ADR 0044 §F) avec quota.
@@ -59,14 +67,11 @@ son `_group=<id>` ; plusieurs : toutes listées, aucune choisie (`access/indices
 L'élargissement à toutes les équipes est celui de la chaîne de grants (ADR 0053, `elargissement_equipe`
 ci-dessous), qui arrive avec la bascule L7, pas par la cascade.
 
-⚠️ **Projet partagé à un non-membre** (#480, `access/heritage.py`) : sous `_project=` d'une
-org dont l'appelant n'est pas membre, les paliers **org** (3) et les accès plateforme
-`org:<id>` (5) de cette org sont **sautés**, et le palier 2 s'ouvre à tout connecteur à clé
-personnelle (sa clé posée dans une autre de ses orgs) — sauf héritage déclaré au partage
-(`credentials="inherit"`), borné aux droits du partageur. L'arête tenant→org du palier
-tenant (4) se lit elle aussi sur cette org des clés bornée (`heritage.org_des_cles`) : ni
-le budget ni la révocation de l'org du projet n'atteignent un bénéficiaire à qui rien
-n'est prêté. Détail : `docs/ownership.md`.
+⚠️ **Projet partagé à un non-membre** : depuis la bascule des comptes (#1499), sous `_project=` d'une org dont l'appelant n'est pas membre, il travaille avec
+SES comptes, dans son org ; aucun compte de l'org ou de l'équipe propriétaire ne lui est
+prêté (l'héritage #480 et l'option `credentials="inherit"` sont retirés). Seul un compte
+qu'une règle NOMME ouvre à la personne sert hors de son org, nommé
+([`partage-de-compte.md`](partage-de-compte.md), D1).
 
 > **Cet énoncé est le seul.** La source est le walker `access/cascade.py` ; la cascade
 > était recopiée dans trois autres documents, et **trois sur quatre ignoraient l'étage
@@ -165,7 +170,7 @@ quelque 680 appels qui lisent la façade. D'où la cible, gardée à zéro par
   qu'elle ré-exporte, et n'importe jamais une **fonction** par son nom (le lien serait
   figé à l'import) — types et constantes, oui ;
 - un test patche la façade, jamais un sous-module qu'elle ré-exporte ;
-- un sous-module que la façade ne ré-exporte pas (`heritage`, `chain_shadow`,
+- un sous-module que la façade ne ré-exporte pas (`chain_shadow`,
   `chain_resolution`) n'a pas d'autre adresse : il se lit et se patche en direct.
 
 La garde ne voit pas une assertion que tient une capture trop large quand la doublure
@@ -202,34 +207,21 @@ se rejoue en remplaçant la règle d'écriture de la façade, pas en lisant le c
 >   effective ne vivait que dans le journal, qu'il ne lit pas. Trois gardes : compte nommé
 >   seulement (mono ⟹ aucun bruit), même **porteur** que l'outil appelé (un tool composite
 >   résout des credentials auxiliaires ; comparer les noms nus taisait l'écho d'un compte
->   Microsoft prêté, résolu sous `microsoft` pour un outil `outlook_*`), payload dict.
->   Un compte **prêté** par un pair (ligne membre d'un autre sub, lue dans le relevé
->   `credential_row`) ajoute `lent_by` = e-mail (ou nom) du prêteur, et `lent_via_group`
->   pour un prêt à une équipe, `lent_via_org` pour un prêt à toute l'org
->   (`access.rappel_du_compte`, `access/prets.py`). L'écho est injecté **au-dessus de
+>   Microsoft d'autrui, résolu sous `microsoft` pour un outil `outlook_*`), payload dict.
+>   Un compte d'**une autre personne** (ligne membre d'un autre sub, lue dans le relevé
+>   `credential_row`) ajoute `lent_by` = e-mail (ou nom) de son propriétaire
+>   (`access.rappel_du_compte`, `access/comptes.py`). L'écho est injecté **au-dessus de
 >   la rédaction** — sinon il serait redacté, et la capture passive de schéma
 >   l'enregistrerait comme un champ du connecteur.
-> - **le prêt ne sert que nommé** (15/10/2026) — un compte prêté ne sert que si
->   `_account=` (ou `_instance=`) le nomme ; sans nom ni compte propre, refus
->   `account_required` qui liste les prêts et leur prêteur — règle COMMUNE
->   `access.pret_a_servir` (`access/prets.py`), appliquée par Microsoft et par les sondes
->   équipe et org de la résolution pour tout autre connecteur (`PretsDuParcours` : un
->   prêt à l'équipe ou à l'org n'est jamais choisi d'office, ni remplacé par la clé
->   plateforme) ; les
->   comptes de l'org ou de l'équipe ELLES-MÊMES ne sont pas des prêts et servent sans nom
->   (Microsoft compris depuis le lot 5 : ses paliers équipe et org ne lisent que ces
->   comptes-là, ses prêts restent à son résolveur, `prets.RESOLVEUR_PROPRE`).
->   Un prêt à une ÉQUIPE (`group:<id>`) est servi à ses membres, dans l'org du prêt ; une
->   équipe à qui rien ne servirait le prêt (porteur non org-partageable hors Microsoft)
->   est refusée à la pose (`team_loan_not_served`). Un prêt à TOUTE L'ORG (`org:<id>`,
->   `to_org`) suit la même règle pour les membres de l'org, la ligne du prêteur exceptée
->   (`org_loan_not_served` à la pose dans le même cas).
->   Mesuré : une emprunteuse sans compte propre opérait la boîte d'une collègue sans le
->   savoir, puis la sienne dès qu'elle l'a connectée, sans un signal. `_account` est annoncé
->   STATIQUEMENT sur les cartes Microsoft (porteur + services, comme Google) : l'annonce
->   dynamique ne voit pas les prêts. Une même ligne du coffre a UNE réf d'instance, celle
->   du porteur, qu'on l'atteigne par la carte ou par le porteur (`_pin_instance` et la
->   résolution comparent les porteurs, la trace du journal l'écrit sous le porteur).
+> - **le compte d'autrui ne sert que nommé** (15/10/2026, repris par la bascule des
+>   comptes #1499) — `_account=` (ou `_instance=`) le nomme, et il sert au niveau que lui
+>   donnent ses règles ; jamais choisi d'office, ni remplacé par la clé plateforme. Les
+>   comptes de l'org ou de l'équipe ELLES-MÊMES servent sans nom, au niveau de leurs
+>   règles. Mesuré : une emprunteuse sans compte propre opérait la boîte d'une collègue
+>   sans le savoir. Une même ligne du coffre a UNE réf d'instance, celle du porteur,
+>   qu'on l'atteigne par la carte ou par le porteur (`_pin_instance` et la résolution
+>   comparent les porteurs, la trace du journal l'écrit sous le porteur ; `instance_id`
+>   y dit l'instance servie).
 > - `oto_identity` porte enfin `scope` côté agent (member/org/group), comme la face REST.
 
 ## Walker de cascade — source unique (2026-07-16, `access/cascade.py`)
@@ -264,8 +256,8 @@ et ce sont des décisions de l'ADR, pas des bugs — la chaîne lit **toutes** l
 elle n'a pas
 de bénéficiaire « tout le monde » pour une clé plateforme ouverte
 (`free_tier_hors_modele`, comblé par une arête explicite en PR 2) ; et son ensemble
-atteignable est scopé à l'org, là où la cascade suit une clé personnelle cross-org
-(`perso_cross_org`). Seule la classe `inconnu` doit rester à zéro : c'est elle qui
+atteignable est scopé à l'org, comme la cascade depuis la bascule des comptes
+(`perso_cross_org` n'a plus de cas). Seule la classe `inconnu` doit rester à zéro : c'est elle qui
 ouvre la porte de l'inversion.
 
 Lecture sans SQL : `oto_admin_access_shadow(op='read')` / `GET /api/admin/access-shadow`
@@ -321,8 +313,7 @@ plateforme du connecteur, et la lecture refuse dès qu'**une** clé porte le ref
 autre clé ouverte, ou une clé posée après la révocation, ne sert pas l'appelant révoqué.
 Accorder, révoquer et re-poser verrouillent les lignes lues (`FOR UPDATE`) : deux gestes
 concurrents ne s'effacent plus. Le refus
-prime sur tout (`access.platform_grant._platform_denied` — palier ouvert, `share_down`,
-`share_side`), y compris sur une clé `open` à `share_down` vide qu'un simple retrait de
+prime sur tout (`access.platform_grant._platform_denied` — palier ouvert, `share_down`), y compris sur une clé `open` à `share_down` vide qu'un simple retrait de
 liste ne coupait pas ; seul `platform_grant` l'efface, et sur une clé ouverte à tous il
 n'y pose que le quota, sans la fermer. Retirer le dernier bénéficiaire d'une clé `open` à
 liste la passe `closed`, jamais « ouverte à tous ». Côté chaîne, révoquer un scope sans
@@ -345,7 +336,7 @@ rotation ne rouvre jamais une clé fermée, y compris vidée par la révocation 
 dernier bénéficiaire (liste vide = personne).
 **Une org ne vide pas seule une clé commune (F-051).** Au palier plateforme d'une
 exécution (`check_usage`), `access/platform_rate.enforce` compte un appel pour l'org
-dont la clé est consommée (`heritage.org_des_cles` ; `user:<sub>` sans org ; l'org du
+dont la clé est consommée (l'org de l'appel ; `user:<sub>` sans org ; l'org du
 projet pour l'endpoint anonyme) dans la table `platform_key_rate`, par fenêtre FIXE
 sur l'horloge de la base. Au-delà de `OTO_PLATFORM_KEY_ORG_RATE_LIMIT` (120) appels par
 `OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S` (60 s), surchargeable par porteur

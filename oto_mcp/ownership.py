@@ -111,12 +111,12 @@ def active_owner(org_id: Optional[int]) -> Optional[tuple[str, str]]:
 def owner_de_portee(sub: Optional[str], org_id: Optional[int]) -> Optional[tuple[str, str]]:
     """`active_owner` de l'org, si `sub` en est un PRINCIPAL dans ce contexte — None pour
     un bénéficiaire HORS de l'org qui y travaille par un projet partagé (`_project=`,
-    `access.heritage.org_du_perimetre`). Source unique de la pièce `("org", X)` des
+    `access.org_d_appartenance`). Source unique de la pièce `("org", X)` des
     seams de portée : `active_org_principals` (donc `principaux_de_liste` et
     `visible_in_org`), `project_scope_owners`, `owner_in_scope`. Sans verdict de
     projet partagé (tout appel hors `_project=`), c'est `active_owner` à l'identique."""
-    from .access import heritage
-    return active_owner(heritage.org_du_perimetre(sub, org_id))
+    from . import access
+    return active_owner(access.org_d_appartenance(sub, org_id))
 
 
 def active_org_principals(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
@@ -934,7 +934,7 @@ def _project_context_org(row: dict, new_owner_id: str) -> Optional[int]:
 
     Le contexte ne décide plus où le projet est LISTÉ (un perso se liste dans l'org
     perso, décision du 28/09/2026) ; il décide sous quelle org le projet TRAVAILLE —
-    les clés que résout son axe `project=` (`access/heritage`) et l'org d'origine
+    les comptes que résout son axe `project=` (`call_axes._contexte_du_projet`) et l'org d'origine
     affichée (`org_origin`). On garde le projet là où il travaillait déjà (org
     détentrice, org du groupe détenteur, ou contexte courant) si le destinataire y est
     membre ; sinon on retombe sur SON org perso — jamais NULL."""

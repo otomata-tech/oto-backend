@@ -103,10 +103,9 @@ def test_sans_sub_rien_n_est_garde(contexte, monkeypatch):
 
 # --- le contexte qui POSSÈDE la clé servie, pas seulement celui de l'appel ----------
 #
-# L'appel se juge sous (org, équipe active) ; or trois chemins servent la clé d'une
-# AUTRE équipe que l'active : l'équipe propriétaire d'un projet partagé prêtée par
-# héritage (`groupe_herite`, #480), l'instance épinglée par `_instance=`, l'instance liée
-# par le projet. Sous l'org au niveau `full`, l'équipe propriétaire au niveau `read` :
+# L'appel se juge sous (org, équipe active) ; or deux chemins servent la clé d'une
+# AUTRE équipe que l'active : l'instance épinglée par `_instance=`, l'instance liée par le
+# projet (l'héritage des clés d'un projet partagé est retiré, #1499). Sous l'org au niveau `full`, l'équipe propriétaire au niveau `read` :
 # la clé de cette équipe ne doit pas écrire.
 
 PROPRIO = 33          # l'équipe qui a restreint, et dont la clé serait servie
@@ -142,14 +141,6 @@ def _refus_d_ecriture():
     _appel("zoho_record", {"module": "Leads", "op": "get"})       # la lecture, servie
 
 
-def test_la_cle_d_equipe_pretee_par_heritage_garde_son_niveau(equipe_restreinte):
-    from oto_mcp import session_org
-    from oto_mcp.access.heritage import ClesDuProjet
-    cles = ClesDuProjet(sub="sub-x", projet=7, org=ORG, membre=True, org_heritee=False,
-                        groupe_herite=PROPRIO)
-    _avec(session_org.set_call_cles, session_org.reset_call_cles, cles, _refus_d_ecriture)
-
-
 def test_l_instance_d_equipe_epinglee_garde_son_niveau(equipe_restreinte):
     from oto_mcp import instance_refs, session_org
     ref = instance_refs.parse_ref(f"group:{PROPRIO}:zoho")
@@ -166,109 +157,24 @@ def test_l_instance_d_equipe_liee_au_projet_garde_son_niveau(equipe_restreinte,
     _refus_d_ecriture()
 
 
-# --- un compte PRÊTÉ à l'équipe restreinte : ne sert que désigné, jugé sous elle --------
+# --- le compte d'une autre personne, épinglé d'une autre org : jugé sous son org --------
 #
-# La prêteuse (org ORG) prête son compte zoho `jane` à l'équipe PROPRIO, qui n'est pas
-# l'équipe active de l'appel. Le prêt ne sert que désigné (`_instance=` ou `_account=`) :
-# la désignation, connue avant la résolution, fait juger l'équipe emprunteuse.
+# Le prêt est retiré (#1499) : le compte d'une collègue sert NOMMÉ au niveau de ses règles.
+# Épinglé depuis une autre org de l'appelant, il reste jugé sous l'org qui le possède.
 
-PRETEUSE = "preteuse"
-
-
-@pytest.fixture
-def pret_a_l_equipe(equipe_restreinte, monkeypatch):
-    from oto_mcp import account_suspension, credentials_store, group_store, roles
-    ligne = {"entity_type": credentials_store.MEMBER, "entity_id": f"{ORG}:{PRETEUSE}",
-             "connector": "zoho", "account": "jane", "meta": {}}
-    monkeypatch.setattr(credentials_store, "get_instance_sharing",
-                        lambda et, eid, con, acc="": (None, [f"group:{PROPRIO}"]))
-    monkeypatch.setattr(credentials_store, "list_shared_with",
-                        lambda scopes: [ligne] if scopes == [f"group:{PROPRIO}"] else [])
-    monkeypatch.setattr(group_store, "is_group_member",
-                        lambda sub, gid: (sub, gid) == ("sub-x", PROPRIO))
-    monkeypatch.setattr(group_store, "list_groups_for_user", lambda sub, org=None: [
-        {"group_id": PROPRIO, "name": "Ventes"}] if sub == "sub-x" else [])
-    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: org == ORG)
-    monkeypatch.setattr(account_suspension, "refus_preteur", lambda *a, **k: None)
+TITULAIRE = "titulaire"
 
 
-def test_le_pret_a_l_equipe_epingle_garde_le_niveau_de_l_equipe(pret_a_l_equipe):
-    from oto_mcp import instance_refs, session_org
-    ref = instance_refs.parse_ref(instance_refs.make_member_ref(ORG, PRETEUSE, "zoho", "jane"))
-    _avec(session_org.set_call_instance, session_org.reset_call_instance, ref,
-          _refus_d_ecriture)
-
-
-def test_le_pret_a_l_equipe_nomme_par_account_garde_le_niveau_de_l_equipe(pret_a_l_equipe):
-    from oto_mcp import session_org
-    _avec(session_org.set_call_account, session_org.reset_call_account, "jane",
-          _refus_d_ecriture)
-
-
-def test_un_autre_compte_nomme_ne_juge_pas_l_equipe_du_pret(pret_a_l_equipe):
-    from oto_mcp import session_org
-    _avec(session_org.set_call_account, session_org.reset_call_account, "siege",
-          lambda: _appel("zoho_record", {"module": "Leads", "op": "delete"}))
-
-
-def test_le_pret_nominatif_nomme_garde_le_niveau_de_l_org_du_preteur(contexte, monkeypatch):
-    """Un prêt à une personne traverse les orgs : nommé, il est jugé sous l'org de la
-    prêteuse (celle qui l'a restreint), pas seulement sous celle de l'appel."""
-    from oto_mcp import credentials_store, session_org
-    autre_org = 44
-    monkeypatch.setattr(al, "settings", lambda org, group: (
-        {"zoho": {"org": "read", "group": None}} if org == autre_org else {}))
-    monkeypatch.setattr(credentials_store, "list_shared_with", lambda scopes: [
-        {"entity_type": credentials_store.MEMBER, "entity_id": f"{autre_org}:{PRETEUSE}",
-         "connector": "zoho", "account": "jane", "meta": {}}]
-        if scopes == ["user:sub-x"] else [])
-    monkeypatch.setattr(access.group_store, "list_groups_for_user", lambda sub, org=None: [])
-    _appel("zoho_record", {"module": "Leads", "op": "delete"})       # sans nom : l'org passe
-    with pytest.raises(McpError) as e:
-        _avec(session_org.set_call_account, session_org.reset_call_account, "jane",
-              lambda: _appel("zoho_record", {"module": "Leads", "op": "delete"}))
-    assert (e.value.error.data["scope"], e.value.error.data["org_id"]) == ("org", autre_org)
-
-
-# --- un compte PRÊTÉ à TOUTE L'ORG : jugé sous l'org du prêt et sous l'appel ------------
-
-@pytest.fixture
-def pret_a_l_org(contexte, monkeypatch):
-    """La prêteuse prête son compte zoho `jane` à toute l'org ORG (`org:<id>`)."""
-    from oto_mcp import account_suspension, credentials_store, org_store, roles
-    ligne = {"entity_type": credentials_store.MEMBER, "entity_id": f"{ORG}:{PRETEUSE}",
-             "connector": "zoho", "account": "jane", "meta": {}}
-    monkeypatch.setattr(credentials_store, "get_instance_sharing",
-                        lambda et, eid, con, acc="": (None, [f"org:{ORG}"]))
-    monkeypatch.setattr(credentials_store, "list_shared_with",
-                        lambda scopes: [ligne] if scopes == [f"org:{ORG}"] else [])
-    monkeypatch.setattr(access.group_store, "list_groups_for_user", lambda sub, org=None: [])
-    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: org == ORG)
-    monkeypatch.setattr(org_store, "get_org", lambda oid: {"id": oid, "name": "Acme"})
-    monkeypatch.setattr(account_suspension, "refus_preteur", lambda *a, **k: None)
-
-
-def test_le_pret_a_l_org_nomme_ne_s_ecrit_pas_sous_une_equipe_en_lecture(pret_a_l_org,
-                                                                        monkeypatch):
-    from oto_mcp import session_org
-    monkeypatch.setattr(al, "settings", lambda org, group: (
-        {"zoho": {"org": None, "group": "read"}} if group == EQUIPE else {}))
-    with pytest.raises(McpError) as e:
-        _avec(session_org.set_call_account, session_org.reset_call_account, "jane",
-              lambda: _appel("zoho_record", {"module": "Leads", "op": "delete"}))
-    assert (e.value.error.data["scope"], e.value.error.data["group_id"]) == ("group", EQUIPE)
-
-
-def test_le_pret_a_l_org_epingle_d_ailleurs_garde_le_niveau_de_l_org_du_pret(pret_a_l_org,
-                                                                            monkeypatch):
-    """Épinglé depuis une autre org de l'emprunteuse (réglée `full`), le prêt à l'org ORG
-    reste jugé sous ORG, réglée `read` : il ne s'y écrit pas."""
+def test_le_compte_d_autrui_epingle_d_ailleurs_garde_le_niveau_de_son_org(contexte,
+                                                                         monkeypatch):
     from oto_mcp import instance_refs, session_org
     autre_org = 44
     monkeypatch.setattr(access, "current_org", lambda sub: autre_org)
+    monkeypatch.setattr(access.group_store, "list_groups_for_user", lambda sub, org=None: [])
     monkeypatch.setattr(al, "settings", lambda org, group: (
         {"zoho": {"org": "read", "group": None}} if org == ORG else {}))
-    ref = instance_refs.parse_ref(instance_refs.make_member_ref(ORG, PRETEUSE, "zoho", "jane"))
+    ref = instance_refs.parse_ref(instance_refs.make_member_ref(ORG, TITULAIRE, "zoho",
+                                                                "jane"))
     _appel("zoho_record", {"module": "Leads", "op": "delete"})      # sans pin : l'org passe
     with pytest.raises(McpError) as e:
         _avec(session_org.set_call_instance, session_org.reset_call_instance, ref,
@@ -276,10 +182,8 @@ def test_le_pret_a_l_org_epingle_d_ailleurs_garde_le_niveau_de_l_org_du_pret(pre
     assert (e.value.error.data["scope"], e.value.error.data["org_id"]) == ("org", ORG)
 
 
-def test_le_pret_a_l_org_nomme_porte_le_contexte_de_l_org_du_pret(pret_a_l_org):
-    from oto_mcp import session_org
-    assert _avec(session_org.set_call_account, session_org.reset_call_account, "jane",
-                 lambda: gate._loan_contexts("sub-x", "zoho", "zoho", None)) == [(ORG, None)]
+def test_le_gate_ne_juge_plus_aucun_contexte_de_pret():
+    assert not hasattr(gate, "_loan_contexts")
 
 
 def test_une_instance_d_un_autre_connecteur_ne_juge_rien(equipe_restreinte):

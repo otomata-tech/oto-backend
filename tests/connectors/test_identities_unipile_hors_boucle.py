@@ -59,7 +59,6 @@ def _wire_byo(monkeypatch, cli):
                         lambda prov, want="auto", sub=None: ResolvedCredential(
                             "unipile", "KEY", False, "org", "org", "39"))
     monkeypatch.setattr("oto.tools.unipile.make_unipile_client", lambda **k: cli)
-    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
 
 
 # --- 1. `_call_unipile` — le mécanisme de base -------------------------------
@@ -107,7 +106,8 @@ def test_unipile_list_byo_tourne_hors_boucle(monkeypatch):
     vu: dict = {}
     _wire_byo(monkeypatch, _FakeUnipile(vu, accounts=[
         {"id": "A1", "name": "Jane", "type": "LINKEDIN", "sources": [{"status": "OK"}]}]))
-    monkeypatch.setattr(I, "_unipile_chosen", lambda sub, ch: None)
+    monkeypatch.setattr(I, "_own_unipile_account_id", lambda sub, ch: None)
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
 
     boucle = _joue(I._unipile_list("u1"))
     assert vu["list_accounts_thread"] is not boucle, (
@@ -143,7 +143,6 @@ def test_unipile_select_tourne_hors_boucle(monkeypatch):
     _wire_byo(monkeypatch, cli)
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: [])
     monkeypatch.setattr("oto_mcp.db.set_unipile_account", lambda *a, **k: None)
-    monkeypatch.setattr("oto_mcp.db.clear_operated_account", lambda sub, prov: None)
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
 
     boucle = _joue(I._unipile_select("u1", "A1"))

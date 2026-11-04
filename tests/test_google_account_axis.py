@@ -129,11 +129,8 @@ def test_sans_compte_le_refus_dit_de_connecter(env, monkeypatch, service):
 
     # Les indices du refus générique lisent la base (révocations, instances à
     # portée) : hors sujet ici, c'est le refus de Google qu'on vérifie.
-    from oto_mcp.access import heritage
-
     for indice in ("_revoked_hint", "_reachable_hint", "_poser_ou_accorder"):
         monkeypatch.setattr(access, indice, lambda *a, **k: "")
-    monkeypatch.setattr(heritage, "indice_refus", lambda *a, **k: "")
     monkeypatch.setattr(G, "_reconnecter", lambda sub: "https://app.exemple.test/c")
     with pytest.raises(RuntimeError, match="No Google account connected"):
         _creds(service)

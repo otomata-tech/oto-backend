@@ -255,31 +255,14 @@ def test_page_echue_ne_donne_plus_acces(monde):
     assert db_shell.direct_grants(benef) == []
 
 
-def test_l_heritage_des_cles_s_eteint_avec_le_partage_qui_le_porte(monde):
-    """P garde l'accès au projet par un partage à sa personne (`own`), mais le prêt
-    des clés venait du partage à son ÉQUIPE, échu : il ne vaut plus."""
-    from oto_mcp.access import heritage
-    m = monde
-    _partager(m, "project", m["pid"], "team", credentials="inherit")
-    _partager(m, "project", m["pid"], "person")
-
-    def verdict():
-        return heritage.evaluer(m["benef"], m["pid"], m["org_a"], None, None)
-    assert verdict().org_heritee
-    _echoir("project", m["pid"], ("group", str(m["team"])))
-    assert not verdict().org_heritee
-
-
 def test_partage_non_echu_et_sans_echeance_fonctionnent_comme_avant(monde):
     from oto_mcp import ownership
-    from oto_mcp.access import heritage
     m, benef = monde, monde["benef"]
-    borne = _partager(m, "project", m["pid"], "team", ttl_days=30, credentials="inherit")
+    borne = _partager(m, "project", m["pid"], "team", ttl_days=30)
     assert borne["expires_at"] is not None
     libre = _partager(m, "project", m["pid"], "person")
     assert libre["expires_at"] is None
     assert ownership.can_access(benef, "project", str(m["pid"]))
-    assert heritage.evaluer(benef, m["pid"], m["org_a"], None, None).org_heritee
     grants = {g["principal_type"]: g for g in _lire(m, "project", m["pid"])["grants"]}
     assert grants["group"]["expires_at"] is not None and grants["group"]["expired"] is False
     assert grants["user"]["expires_at"] is None and grants["user"]["expired"] is False

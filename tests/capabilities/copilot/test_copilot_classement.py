@@ -61,7 +61,7 @@ def test_un_outil_declare_destructeur_demande_meme_s_il_se_dit_lecteur():
 
 
 @pytest.mark.parametrize("nom", [
-    "oto_admin_org", "oto_clear_org", "oto_use_org", "oto_shell", "oto_account_access",
+    "oto_admin_org", "oto_clear_org", "oto_use_org", "oto_shell",
     "oto_enable_tool", "oto_disable_tool", "run_start", "run_finish", "oto_call",
 ])
 def test_interdits(nom):

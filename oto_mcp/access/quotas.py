@@ -25,7 +25,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import entitlements_catalogue as catalogue, providers, db, grants_chain
 from ..db import grants as db_grants
 from ..mcp_errors import McpError
-from . import entitlements, heritage, scope
+from . import entitlements, scope
 
 # DERIVED from the single-source registry (`providers/` package): daily quota per
 # provider (fallback if there is no env var nor grant).
@@ -89,10 +89,10 @@ def paid_option_refusal(connector: str, sub: "str | None",
 def exiger_option_payante(connector: str, sub: "str | None", org: "int | None") -> None:
     """Raise the refusal of `paid_option_refusal` at the PLATFORM rung of a resolution. The
     rights read are those of the person `sub` and of the org the caller can
-    consume: for the beneficiary of a shared project to whom nothing is lent, no
-    org (#480, `heritage.org_partagee`) — only their person rows everywhere remain.
+    consume: for the beneficiary of a shared project of an org she is not a member of,
+    no org (`scope.org_d_appartenance`, #1499) — only her person rows everywhere remain.
     `sub` None (anonymous endpoint): the org alone."""
-    org_servie = heritage.org_des_cles(sub, org)
+    org_servie = scope.org_d_appartenance(sub, org)
     refus = paid_option_refusal(connector, sub, org_servie)
     if refus:
         if org_servie is not None:
@@ -220,9 +220,9 @@ def platform_used_today(sub: str, provider: str, edge_counter: Optional[str],
 def quotas_leves(sub: str, org: Optional[int]) -> bool:
     """Does the `platform_unmetered` right lift the platform quotas for the person
     `sub` acting in `org` (ADR 0070 §7)? The right of the org the caller can
-    consume — none for the beneficiary of a shared project without a loan (#480) —,
+    consume — none for the beneficiary of a shared project of another org (#1499) —,
     or a row set on the person, in the org or everywhere."""
-    plan_org = heritage.org_des_cles(sub, org)
+    plan_org = scope.org_d_appartenance(sub, org)
     return entitlements.has_right(sub, plan_org, entitlements.PLATFORM_UNMETERED)
 
 

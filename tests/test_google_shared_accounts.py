@@ -192,52 +192,13 @@ def test_le_membre_dabord_puis_lequipe_puis_lorg(monkeypatch):
     assert _sert(account="hello@x.test") == "hello@x.test"
 
 
-@pytest.fixture
-def _beneficiaire(monkeypatch):
-    """Sous `_project=` d'une org dont l'appelant n'est PAS membre (#480) : ni son
-    équipe active, ni l'org — sauf ce que le partage lui prête."""
-    from oto_mcp import session_org
-    from oto_mcp.access import heritage
-    monkeypatch.setattr(access, "current_group", lambda sub: None)
-    # Ses propres clés posées dans une autre org : aucune ici.
-    monkeypatch.setattr(access, "personal_instance_org", lambda *a, **k: None)
-    jetons = []
-
-    def poser(org_heritee=False, groupe_herite=None):
-        jetons.append(session_org.set_call_cles(heritage.ClesDuProjet(
-            sub="u", projet=1, org=ORG, membre=False, org_heritee=org_heritee,
-            groupe_herite=groupe_herite)))
-    yield poser
-    for t in reversed(jetons):
-        session_org.reset_call_cles(t)
-
-
-def test_un_beneficiaire_hors_org_natteint_pas_le_compte_partage(monkeypatch, _beneficiaire):
-    """Revue de #1081 (B1) : le barreau org des comptes partagés suit la cascade des
-    clés — un simple bénéficiaire d'un projet ne lit ni n'envoie depuis la boîte de
-    l'org, ni à l'usage, ni dans la liste."""
-    from oto_mcp.access import heritage
-
-    _beneficiaire()
-    _coffre(monkeypatch, org="hello@x.test")
-    _partages(monkeypatch)
-    # Les indices du refus générique lisent la base : hors sujet ici.
-    for indice in ("_revoked_hint", "_reachable_hint", "_poser_ou_accorder"):
-        monkeypatch.setattr(access, indice, lambda *a, **k: "")
-    monkeypatch.setattr(heritage, "indice_refus", lambda *a, **k: "")
-    assert G._shared_targets("u", ORG) == []
-    assert G.list_shared_accounts("u") == []
-    with pytest.raises(RuntimeError):
-        G.credentials_for("u", service="gmail")
-    with pytest.raises(RuntimeError, match="hello@x.test"):
-        G.credentials_for("u", account="hello@x.test", service="gmail")
-
-
-def test_un_partage_qui_prete_les_cles_prete_aussi_le_compte(monkeypatch, _beneficiaire):
-    _beneficiaire(org_heritee=True, groupe_herite=GROUP)
+def test_les_comptes_partages_sont_ceux_de_l_equipe_active_puis_de_l_org(monkeypatch):
+    """Les paliers de la cascade (#1499 retire l'héritage d'un projet partagé) : l'équipe
+    ACTIVE, puis l'org ; sans équipe active, l'org seule."""
+    monkeypatch.setattr(access, "current_group", lambda sub: GROUP)
     assert G._shared_targets("u", ORG) == [("group", GROUP), ("org", ORG)]
-    _coffre(monkeypatch, org="hello@x.test")
-    assert _sert() == "hello@x.test"
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    assert G._shared_targets("u", ORG) == [("org", ORG)]
 
 
 def test_le_refresh_et_la_sante_secrivent_sur_lentite_partagee(monkeypatch):
@@ -270,7 +231,7 @@ def test_retirer_un_compte_partage_est_un_geste_dadmin(monkeypatch):
                         lambda scope, target: [{"google_email": "hello@x.test"}])
     monkeypatch.setattr(G.db, "get_shared_google_oauth", lambda *a, **k: None)
     monkeypatch.setattr(G.db, "delete_shared_google_oauth",
-                        lambda scope, target, account=None: retraits.append((scope, target, account)))
+                        lambda scope, target, account=None, *, par: retraits.append((scope, target, account)))
     _admins(monkeypatch, org=False)
     with pytest.raises(AuthzDenied) as e:
         fo._google_revoke(ResolvedCtx(sub="u"), fo.GoogleRevokeInput(account="hello@x.test", scope="org"))
@@ -282,7 +243,7 @@ def test_retirer_un_compte_partage_est_un_geste_dadmin(monkeypatch):
 
 def test_le_defaut_partage_se_choisit_par_un_admin(monkeypatch):
     monkeypatch.setattr(G.db, "set_default_shared_google_account",
-                        lambda scope, target, account: (scope, target) == ("group", GROUP))
+                        lambda scope, target, account, *, par: (scope, target) == ("group", GROUP))
     _admins(monkeypatch, group=True)
     out = fo._google_set_default(ResolvedCtx(sub="u"),
                                  fo.GoogleDefaultInput(account="team@x.test", scope="group"))
@@ -296,6 +257,10 @@ def test_le_defaut_partage_se_choisit_par_un_admin(monkeypatch):
 # ─── 4. la lecture ────────────────────────────────────────────────────────────
 
 def _partages(monkeypatch):
+    from oto_mcp import roles
+    # Ni chef de l'équipe ni admin de l'org : le niveau lu est celui des défauts.
+    monkeypatch.setattr(roles, "can_admin_group", lambda sub, gid: False)
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: False)
     monkeypatch.setattr(G.db, "list_shared_google_accounts", lambda scope, target: [
         {"google_email": f"{scope}@x.test", "is_default": True, "scopes": ALL,
          "granted_at": None, "scope": scope, "target_id": target,
@@ -336,19 +301,21 @@ def test_la_carte_dun_service_est_reliee_par_un_compte_partage(monkeypatch):
     assert connector_link.state("drive", "u").accounts == 2
 
 
-def test_les_identites_proposent_les_comptes_partages_etiquetes(monkeypatch):
+def test_les_identites_proposent_les_comptes_partages_avec_leur_niveau(monkeypatch):
+    """#1499 : plus de marque `shared` ; un compte qui n'est pas le sien porte le
+    `level` que ses règles donnent (sans règle : les défauts d'oto-core — membre de
+    l'équipe `sensitive`, membre de l'org `read`) et son `owner`."""
     _partages(monkeypatch)
     ids = identities.list_identities("u", "gmail")
     assert [i["id"] for i in ids] == ["group@x.test", "org@x.test"]
-    assert all(i["is_default"] is False and i["shared"] is True for i in ids)
-    # Le libellé reste l'adresse (l'écran dit « partagé » lui-même) ; le palier est servi.
-    assert [(i["label"], i["shared_scope"]) for i in ids] == [
-        ("group@x.test", "team"), ("org@x.test", "org")]
+    assert all(i["is_default"] is False and "shared" not in i for i in ids)
+    assert [(i["label"], i["level"], i["owner"]["type"]) for i in ids] == [
+        ("group@x.test", "sensitive", "group"), ("org@x.test", "read", "org")]
 
 
-def test_le_contrat_sert_shared_pour_que_le_front_masque_revoquer(monkeypatch):
-    """`shared` traverse le modèle de sortie (il le supprimait) : `true` sur un compte
-    partagé par l'équipe/l'org, `false` sur un compte du membre."""
+def test_le_contrat_sert_level_et_owner_jamais_shared(monkeypatch):
+    """`level` et `owner` traversent le modèle de sortie ; absents sur un compte du
+    membre (il le gère)."""
     from oto_mcp.capabilities.connectors.identities import ConnectorIdentities
 
     _partages(monkeypatch)
@@ -357,9 +324,11 @@ def test_le_contrat_sert_shared_pour_que_le_front_masque_revoquer(monkeypatch):
     servi = ConnectorIdentities(connector="gmail", supported=True,
                                 identities=identities.list_identities("u", "gmail")
                                 ).model_dump(mode="json")
-    assert {i["id"]: (i["shared"], i["shared_scope"]) for i in servi["identities"]} == {
-        "moi@x.test": (False, None), "group@x.test": (True, "team"),
-        "org@x.test": (True, "org")}
+    assert {i["id"]: (i["level"], (i["owner"] or {}).get("type"))
+            for i in servi["identities"]} == {
+        "moi@x.test": (None, None), "group@x.test": ("sensitive", "group"),
+        "org@x.test": ("read", "org")}
+    assert not any("shared" in i or "granted" in i for i in servi["identities"])
 
 
 def test_le_compte_google_accepte_le_palier_org_et_ses_services_non():
@@ -485,9 +454,10 @@ def test_un_coffre_illisible_ne_fait_pas_revoquer(monkeypatch):
     assert G._grant_held_elsewhere("moi@x.test", "cid-env", ("org", str(ORG))) is True
 
 
-def test_le_descriptif_openapi_decrit_shared():
+def test_le_descriptif_openapi_decrit_level():
     from oto_mcp import openapi
 
     proprietes = openapi.build()["components"]["schemas"]["Identity"]["properties"]
-    assert proprietes["shared"]["type"] == "boolean" and proprietes["shared"]["default"] is False
-    assert {"type": "string", "enum": ["team", "org"]} in proprietes["shared_scope"]["anyOf"]
+    assert "shared" not in proprietes and "granted" not in proprietes
+    assert {"type": "string", "enum": ["read", "write", "sensitive", "manage"]} in \
+        proprietes["level"]["anyOf"]

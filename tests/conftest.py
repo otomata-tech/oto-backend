@@ -244,16 +244,35 @@ def _cle_perso_permise_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _aucun_pret_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Sans base, aucune instance n'est prêtée. Le palier équipe lit les instances
-    prêtées à l'équipe (`group_store.lent_instances` → `list_shared_with`) à chaque
-    lecture de clé d'équipe ; un banc qui double le coffre d'équipe sans base n'a rien
-    à y lire. Un banc sur base réelle lit la vraie colonne ; un banc qui teste le prêt
-    double lui-même `list_shared_with`."""
+def _comptes_sans_regle_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans base, chaque ligne de coffre a son compte (instance), SANS règle, et personne
+    d'autre n'a de compte du même nom. La résolution lit le compte et les règles d'une
+    ligne d'équipe ou d'org pour juger le niveau (`access/comptes`, #1499) ; un banc qui
+    double le coffre sans base n'a rien à y lire : il obtient les défauts d'oto-core
+    (membre d'équipe `sensitive`, membre d'org `read`). Un banc sur base réelle lit les
+    vraies règles ; un banc qui teste les règles double lui-même ces lectures. Aucun
+    compte d'une autre org n'est nommable (`comptes_hors_org`)."""
     if os.environ.get("DATABASE_URL"):
         return
-    from oto_mcp import credentials_store
-    monkeypatch.setattr(credentials_store, "list_shared_with", lambda scopes: [])
+    from oto_mcp import access
+
+    def _sans_regle(porteur, lignes):
+        out = {}
+        for entity_type, entity_id, account in lignes:
+            org = None
+            if entity_type == "org" and str(entity_id).isdigit():
+                org = int(entity_id)
+            elif entity_type == "member" and str(entity_id).partition(":")[0].isdigit():
+                org = int(str(entity_id).partition(":")[0])
+            out[(entity_type, str(entity_id), account or "")] = access.Compte(
+                instance_id=None, owner_type=entity_type, owner_id=str(entity_id),
+                connector=porteur, account=account or "", org_id=org)
+        return out
+
+    monkeypatch.setattr(access, "comptes_des_lignes", _sans_regle)
+    monkeypatch.setattr(access, "comptes_d_autrui", lambda *a: [])
+    monkeypatch.setattr(access, "comptes_hors_org", lambda *a, **k: [])
+    monkeypatch.setattr(access, "defauts_des_etapes", lambda *a: [])
 
 
 @pytest.fixture(autouse=True)

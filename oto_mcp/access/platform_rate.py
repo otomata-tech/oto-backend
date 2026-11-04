@@ -16,7 +16,7 @@ processes that share the database and nothing else.
   (a call that then fails at the provider still counts; there is no single
   post-call seam to count on success).
 - **Who is counted**: the org whose keys the call consumes
-  (`heritage.org_des_cles`), every member together; a call without an org counts
+  (`scope.org_d_appartenance`), every member together; a call without an org counts
   for the person (`user:<sub>`). The anonymous endpoint counts for the project's org.
 - **Rollout**: `OTO_PLATFORM_KEY_ORG_RATE` = `enforce` | `report` (DEFAULT: logs
   each window an org crosses the limit, refuses nothing) | `off` (no counting at

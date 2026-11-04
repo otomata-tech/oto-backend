@@ -265,8 +265,6 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     ("GET", "/api/me/connectors"): None,
     ("GET", "/api/me/connectors/{name}/oauth-status"): None,
     ("GET", "/api/me/connectors/{provider}/effect"): None,
-    # À qui la personne prête un de SES comptes de O (sa ligne membre de O seulement).
-    ("GET", "/api/me/connectors/{connector}/lend"): None,
     ("GET", "/api/settings/api-keys/{provider}"): None,
     # Projets, pages, nœuds.
     ("POST", "/api/me/projects"): frozenset({

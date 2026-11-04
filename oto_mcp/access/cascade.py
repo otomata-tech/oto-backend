@@ -1,7 +1,13 @@
 """The single WALKER of the credentials cascade (ADR 0024/0044).
 
-The cascade `personal > cross-org > active team > org > tenant > platform` was written by
-hand in six places; it lives here, and nowhere else. The walker is
+The cascade `personal > active team > org > tenant > platform` was written by hand in six
+places; it lives here, and nowhere else. Since the switch to account rules (#1499, L3) the
+personal rung is the caller's own key IN THE CALL'S ORG only (no cross-org key, #172), the
+team rung is her ACTIVE team's (no team inherited through a shared project, #480), the
+org rung, the org's tenant edge and platform access serve only a MEMBER of the call's org
+(`scope.org_d_appartenance`: none in a project shared from another org, D1), and
+which account of a team or of the org serves is the resolver's choice, by level
+(`access/comptes`). The walker is
 parameterized by a PROBE (`CascadeProbe`): presence (no decryption),
 fetch (decrypts only the winner), or preloaded (the same answers in a
 few reads). Adding a rung means editing `walk_cascade` — never a
@@ -22,7 +28,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import (providers, credentials_store, db, grants_chain, group_store, org_store,
                 tenant_vault)
 from ..connectors import cardinality, cle_perso
-from . import heritage, platform_grant, secret_repr
+from . import platform_grant, scope, secret_repr
 
 # DERIVED from the single-source registry (`providers/` package): providers whose
 # secret can be OWNED by an org and shared (auth_mode byo_org) — excludes
@@ -89,7 +95,6 @@ def _shared_auto_account(entity_type: str, entity_id: str, provider: str,
     (`ensure_named_coexistence` migrates the `''` row to "principal" at the first
     named account — review #399 F3). `scope` non-None ⇒ the `oto_identity` refs in the
     ambiguity message carry the tier's scope (org/group)."""
-    # A loan to the team is never picked automatically (`access/prets.py`): its own only.
     accts = credentials_store.list_accounts(entity_type, entity_id, provider)
     if len(accts) == 1:
         return accts[0]["account"]
@@ -112,30 +117,8 @@ def _shared_auto_account(entity_type: str, entity_id: str, provider: str,
         )))
 
 
-def personal_instance_org(sub: str, provider: str,
-                          exclude_org: Optional[int] = None) -> Optional[int]:
-    """Org carrying the cross-org PERSONAL instance of `sub` for a per-person
-    connector (issue #172, track A; `Connector.personal_cross_org`), or None.
-
-    Deterministic (never a silent choice between two identities of the SAME human): the
-    MOST RECENTLY set key. The personal org no longer has a preference (2026-09-29: a
-    personal org is an org like any other). `exclude_org` rules out the context org (already tested
-    upstream by the local member tier). Safe by construction: same `sub` ⟹ zero
-    impersonation — we only find THEIR own key set elsewhere.
-
-    `provider` is normalized to the credential carrier (delegation): the personal
-    key of a unipile channel is the ACCOUNT's, and the org to retain is the one where
-    that key lives. The hosted account will be looked up in the SAME org
-    (`connectors/identities._own_unipile_account_id`) — key and account paired,
-    never the key from here with the account from there."""
-    provider = providers.credential_provider(provider)
-    orgs = [o for o in credentials_store.list_member_orgs_for(sub, provider)
-            if o != exclude_org]
-    return orgs[0] if orgs else None  # set_at DESC → the most recent
-
-
 # ── Single cascade walker ──────────────────────────────────────────────────────
-# The cascade `personal > cross-org > active team > org > tenant > platform` was written by
+# The cascade `personal > active team > org > tenant > platform` was written by
 # hand in 6 places (resolution, mode, status ×2, anonymous, publication probe)
 # — every new rung had to be carried over N times, and every omission made a
 # surface LIE (seen 2026-07-16: status_for's fields loop stayed
@@ -148,13 +131,13 @@ def personal_instance_org(sub: str, provider: str,
 class CascadeRung:
     """A WINNING rung of the walk: level + entity + probe payload
     (`payload` = secret/grant in fetch, True/meta in presence). `via` distinguishes the
-    LOCAL member key (editable here) from the cross-org personal instance (#172)."""
+    rung reached through a grant (tenant edge) from the others."""
     mode: str                       # user | group | org | tenant | platform
     entity_type: Optional[str]      # credentials_store.MEMBER | 'group' | 'org' | TENANT | PLATFORM
     entity_id: Optional[str]
     payload: object
     account: str = ""
-    via: str = "local"              # local | cross_org | grant | heritage
+    via: str = "local"              # local | grant
 
     def __repr__(self) -> str:
         """Redacted UNCONDITIONALLY (#564): `payload` carries the decrypted secret in
@@ -167,12 +150,11 @@ class CascadeRung:
 class CascadeProbe:
     """Probe of a rung — same interface for presence and fetch. `member` returns
     `(payload, account)` or None (the resolution fetch encapsulates its multi-account
-    selection there, McpErrors included); `member_cross` is always single-account;
+    selection there, McpErrors included);
     `tenant` receives the SLUG (L-keys PR 1) and answers like `org`; `platform` returns
     the grant (meta or resolved) or None. REQUIRED field for each: a probe that
     forgot a rung would skip it silently — the defect of #409."""
     member: Callable[[str, int, str], Optional[tuple]]
-    member_cross: Callable[[str, int, str], Optional[object]]
     legacy_user: Callable[[str, str], Optional[object]]
     group: Callable[[int, str], Optional[object]]
     org: Callable[[int, str], Optional[object]]
@@ -180,18 +162,12 @@ class CascadeProbe:
     platform: Callable[[Optional[str], str, Optional[int]], Optional[dict]]
 
 
-# A SUSPENDED member instance (batch 2 / ADR 0044 §KeyStack) is folded into the
-# real probes: the key exists in the vault but the cascade treats it as absent
-# → resolution AND status skip the member rung (the level below takes
-# over). It stays listed by `oto_instance op=list` (KeyStack), reactivatable.
-# ⚠️ The member probe of the RESOLUTION path is NOT this one: it is `_member_fetch`
-# (in `_resolve_credential_impl`), which carries the multi-account selection — it must
-# return the SAME suspension verdict (seen #401: it did not read it, a suspended
-# key still won while KeyStack announced the takeover).
+# A SUSPENDED personal key is PRESENT for the walk: since the switch to account rules
+# (#1499, L3) it no longer hands over to the team or org key below it — the resolver
+# refuses it by name (`account_suspended`, `access/resolve._member_fetch`), and the
+# status shows the rung that would serve, the suspended key.
 PRESENCE_PROBE = CascadeProbe(
-    member=lambda s, o, p: ((True, "") if db.has_member_api_key(s, o, p)
-                            and not db.member_instance_suspended(s, o, p) else None),
-    member_cross=lambda s, o, p: (True if db.has_member_api_key(s, o, p) else None),
+    member=lambda s, o, p: ((True, "") if db.has_member_api_key(s, o, p) else None),
     legacy_user=lambda s, p: (True if credentials_store.has_credential(
         credentials_store.USER, s, p) else None),
     group=lambda g, p: (True if group_store.has_group_secret(g, p) else None),
@@ -206,10 +182,8 @@ PRESENCE_PROBE = CascadeProbe(
 # own CascadeProbe on top — do not plug FETCH_PROBE as-is into a
 # new resolution path of a multi-account connector (review #399 F3).
 FETCH_PROBE = CascadeProbe(
-    member=lambda s, o, p: ((lambda k: (k, "") if k
-                             and not db.member_instance_suspended(s, o, p) else None)(
-                                 db.get_member_api_key(s, o, p))),
-    member_cross=lambda s, o, p: db.get_member_api_key(s, o, p),
+    member=lambda s, o, p: ((lambda k: (k, "") if k else None)(
+        db.get_member_api_key(s, o, p))),
     legacy_user=lambda s, p: credentials_store.get_credential(
         credentials_store.USER, s, p),
     group=lambda g, p: group_store.get_group_secret(g, p),
@@ -247,9 +221,7 @@ def group_secret_map(groups: Optional[list] = None) -> dict:
     par_groupe: dict = {}
     for g in (groups or []):
         gid = int(g["group_id"] if isinstance(g, dict) else g)
-        par_groupe[gid] = ({r["connector"]
-                            for r in cs.list_credentials("group", str(gid))}
-                           | {i["connector"] for i in group_store.lent_instances(gid)})
+        par_groupe[gid] = {r["connector"] for r in cs.list_credentials("group", str(gid))}
     return par_groupe
 
 
@@ -258,7 +230,7 @@ def preloaded_presence_probe(sub: str, *, org: Optional[int],
     """`PRESENCE_PROBE`, but preloaded: the same answers, in a few reads.
 
     **This is a THIRD PROBE, not a second path.** The walker is not touched
-    by a single line: the whole cascade — byo_user gates, cross-org personal instance,
+    by a single line: the whole cascade — byo_user gates,
     ORG_SHAREABLE, platform eligibility — stays where it is. Only the
     way the five questions find their answer changes: in memory, from an
     inventory read once, instead of one round-trip per connector.
@@ -270,9 +242,7 @@ def preloaded_presence_probe(sub: str, *, org: Optional[int],
     instead of producing two truths.
 
     Measured (33 installed connectors, real account): the five probes cost 425 ms
-    walking once per connector. What it does NOT cover, and on purpose:
-    - `personal_instance_org` is called by the WALKER, not by the probe (one call,
-      12 ms) — preloading it would mean touching the walker, which we refuse.
+    walking once per connector.
 
     ⚠️ **09/17: the platform rung is no longer in this list** — the 08/21 note
     above measured ONE call, not the COUNT on a real account: measured
@@ -285,15 +255,8 @@ def preloaded_presence_probe(sub: str, *, org: Optional[int],
     from .. import credentials_store as cs
 
     membre: set = set()
-    suspendues: set = set()
     if org is not None:
-        for r in cs.list_credentials(cs.MEMBER, cs.member_id(org, sub)):
-            membre.add(r["connector"])
-            if (r.get("meta") or {}).get("suspended") in (True, "true"):
-                # Suspension only applies to the MONO account (account '') — that is
-                # what the original probe queries (`account=""`).
-                if not r.get("account"):
-                    suspendues.add(r["connector"])
+        membre = {r["connector"] for r in cs.list_credentials(cs.MEMBER, cs.member_id(org, sub))}
 
     par_groupe = group_secret_map(groups)
 
@@ -313,16 +276,10 @@ def preloaded_presence_probe(sub: str, *, org: Optional[int],
     instances_par_provider = cs.list_all_platform_instances()
 
     return CascadeProbe(
-        # The inventory only covers the CONTEXT org: another org (the key of a
-        # shared-project beneficiary, set on their side — #480) re-reads at the source.
+        # The inventory only covers the CONTEXT org — the only one the walker reads.
         member=lambda s, o, p: (PRESENCE_PROBE.member(s, o, p) if o != org
-                                else (True, "") if p in membre and p not in suspendues
-                                else None),
-        # Cross-org: the inventory covers ONLY the active org, so we fall back to the
-        # original read. It is one call, not thirty-three: the walker only gets there
-        # for single-account `personal_cross_org` connectors.
-        member_cross=PRESENCE_PROBE.member_cross,
-        legacy_user=PRESENCE_PROBE.legacy_user,  # (#876) same exception as member_cross
+                                else (True, "") if p in membre else None),
+        legacy_user=PRESENCE_PROBE.legacy_user,  # (#876) read at the source
         group=lambda g, p: (True if p in par_groupe.get(int(g), ()) else None),
         org=lambda o, p: (True if p in org_secrets else None),
         tenant=lambda t, p: (True if p in tenant_secrets else None),
@@ -337,7 +294,7 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
     """Generator of the winning rungs, IN the cascade's ORDER. Consuming the
     first = resolution (`cascade_winner`); consuming all = status (the levels
     configured beyond the winner remain displayable). Each gate (byo_user,
-    ORG_SHAREABLE, personal_cross_org, platform eligibility, `want='byo'`)
+    ORG_SHAREABLE, platform eligibility, `want='byo'`)
     lives HERE — never again in a call-site.
 
     **Credential delegation** (`Connector.credential_of`): `provider` is first
@@ -351,14 +308,10 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
     to call: activation, ACL and selection stay gated on the BARE name, in the
     caller."""
     provider = providers.credential_provider(provider)
-    # SHARED project (#480): the verdict set by `_project=` when the caller does not reach
-    # all of the owner's keys on their own. None outside this case — and then
-    # nothing below changes. Read from a contextvar: no query here.
-    cles = heritage.du_contexte(sub, org)
-    # The org whose SHARED rights the caller consumes (org key, org platform
-    # access): the context one, except for a beneficiary outside the org to whom
-    # nothing was lent.
-    org_cles = heritage.org_partagee(org, cles)
+    # The org whose SHARED rights the caller consumes (org accounts, the org's tenant
+    # edge and platform access): the call's, unless `_project=` set the org of a shared
+    # project she is not a member of — then none (#1499, D1). Zero queries.
+    org_membre = scope.org_d_appartenance(sub, org)
     # A PERSONAL key is skipped when the org forbids it for this connector (#1239) — read
     # only once one exists, so a keyless member pays nothing. Same rule in the chain.
     if sub is not None and org is not None and providers.is_byo_user(provider):
@@ -367,26 +320,6 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
             payload, account = hit
             yield CascadeRung("user", credentials_store.MEMBER,
                               credentials_store.member_id(org, sub), payload, account)
-    # Cross-org personal instance (#172, amends ADR 0033): per-person connector
-    # (unipile) → my key set in ANOTHER org follows me (same sub, zero impersonation).
-    # Single-account only. Takes precedence over the shared tiers, like the local key.
-    # Also open to the BENEFICIARY of a project of an org they are not a member of
-    # (#480): they work there with THEIR keys, and this is where those follow them — including
-    # multi-account, read by the MEMBER probe (account selection, suspension)
-    # on the org where they set them.
-    beneficiaire = heritage.hors_org(cles) and providers.is_byo_user(provider)
-    if sub is not None and (beneficiaire or (providers.is_personal_cross_org(provider)
-                                             and not _is_multi_account(provider, org))):
-        pio = personal_instance_org(sub, provider, exclude_org=org)
-        if pio is not None:
-            if beneficiaire:
-                payload, account = probe.member(sub, pio, provider) or (None, "")
-            else:
-                payload, account = probe.member_cross(sub, pio, provider), ""
-            if payload is not None and not cle_perso.interdite(org, provider):
-                yield CascadeRung("user", credentials_store.MEMBER,
-                                  credentials_store.member_id(pio, sub), payload,
-                                  account, via="cross_org")
     # LEGACY scope (#876): ONLY the REQUESTING sub's row, closed list.
     if sub is not None and provider in LEGACY_USER_SCOPE_PROVIDERS:
         payload = probe.legacy_user(sub, provider)
@@ -405,22 +338,12 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
                 # probe answers a boolean, the rung stays mono ('').
                 payload, account = hit if isinstance(hit, tuple) else (hit, "")
                 yield CascadeRung("group", "group", str(g), payload, account)
-        # The OWNING team of a shared project, lent through inheritance (#480).
-        herite = cles.groupe_herite if cles is not None else None
-        if herite is not None and herite != g:
-            hit = probe.group(herite, provider)
+        # The ORG rung: the call's org, for its members only.
+        if org_membre is not None:
+            hit = probe.org(org_membre, provider)
             if hit is not None:
                 payload, account = hit if isinstance(hit, tuple) else (hit, "")
-                yield CascadeRung("group", "group", str(herite), payload, account,
-                                  via="heritage")
-        # The ORG rung requires membership, or inheritance (#480): until then it
-        # was guarded by nothing, and `_project=` let a non-member in.
-        if org_cles is not None:
-            hit = probe.org(org_cles, provider)
-            if hit is not None:
-                payload, account = hit if isinstance(hit, tuple) else (hit, "")
-                yield CascadeRung("org", "org", str(org_cles), payload, account,
-                                  via="heritage" if heritage.hors_org(cles) else "local")
+                yield CascadeRung("org", "org", str(org_membre), payload, account)
         # TENANT tier (L-keys PR 1, ADR 0052): the shared key of the
         # CALLER's tenant — read from their qualified sub, never from the org's
         # attachment (batch L1). `rung_tenant` returns None for a bare sub (primary tenant: its shared
@@ -441,10 +364,7 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
                 # without a key: SILENT ⟹ the key serves (PR 1); GRANTS ⟹ it serves, the
                 # budget is settled at resolution (`tenant_budget`); REFUSES ⟹ the
                 # rung is SKIPPED and the org falls back to the platform.
-                # On the KEYS org (#480): the tenant→org edge is a right of the
-                # org — neither its budget nor its revocation reach a beneficiary
-                # outside it to whom nothing was lent.
-                verdict = grants_chain.tenant_rung(slug, provider, org_cles)
+                verdict = grants_chain.tenant_rung(slug, provider, org_membre)
                 if verdict is None or verdict.granted:
                     payload, account = hit if isinstance(hit, tuple) else (hit, "")
                     yield CascadeRung("tenant", credentials_store.TENANT, slug, payload,
@@ -452,7 +372,7 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
     if want != "byo":
         con = providers.connector_for_provider(provider)
         if con is not None and "platform" in con.auth_modes:
-            grant = probe.platform(sub, provider, org_cles)
+            grant = probe.platform(sub, provider, org_membre)
             if grant:
                 yield CascadeRung("platform", credentials_store.PLATFORM,
                                   grant.get("label"), grant)

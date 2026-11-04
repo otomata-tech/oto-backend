@@ -306,14 +306,13 @@ _MEMBERSHIP_TABLES = (("org_members", "org_id"), ("org_group_members", "group_id
 # pas seulement cette table. Même patron que les appartenances : on jette la ligne de
 # l'ancien (le canonique est le nouveau), puis on repointe.
 #
-# ⚠️ Ces quatre colonnes portent des données que personne ne peut recréer de mémoire :
-# le canal de messagerie opéré et les prêts de compte (ADR 0044 §H / #55). Elles
+# ⚠️ Ces colonnes portent des données que personne ne peut recréer de mémoire. Les
+# premières (canal opéré, prêts de compte, ADR 0044 §H / #55, retirés par #1499)
 # étaient **hors inventaire** — donc emportées par le `DELETE FROM users` de l'étape 4,
 # en silence. Trouvées le 13/08 en dérivant les FK `ON DELETE CASCADE` du DDL plutôt
 # qu'en relisant la liste (garde-fou `tests/test_migrate_sub_cascade.py`).
 # `(table, colonne de sub, reste de la PK)`.
 _PK_SUB_TABLES = (
-    ("unipile_operated_accounts", "sub", ("provider",)),
     # L'abonnement d'une personne (OTO-130) suit le compte fusionné : sa ligne porte
     # le `sandbox_id`, que le worker relit — le sandbox reste celui où elle s'est connectée.
     ("user_model_subscriptions", "sub", ("famille",)),
@@ -322,19 +321,6 @@ _PK_SUB_TABLES = (
     ("user_model_subscription_loans", "sub", ("famille", "org_id")),
     # Et les orgs où il sert : même raison, c'est un choix de la personne.
     ("user_model_subscription_orgs", "sub", ("famille", "org_id")),
-    ("connector_account_grants", "owner_sub", ("provider", "grantee_sub")),
-    ("connector_account_grants", "grantee_sub", ("owner_sub", "provider")),
-    # Le même prêt, cible GROUPE (oto#40) : `owner_sub` entre dans la PK
-    # `(owner_sub, provider, grantee_group_id)` — l'UPDATE nu de `_SUB_COLUMNS` y
-    # lèverait `UniqueViolation`, et donc ferait échouer TOUT le merge, dès que les
-    # deux comptes de la personne ont prêté le même canal au même groupe (le cas
-    # n'est pas tordu : c'est le même geste, refait après la bascule). Sans ce
-    # pré-traitement, la ligne partait en CASCADE avec l'ancien compte à l'étape 4 :
-    # le groupe perdait l'accès en silence, et le propriétaire fusionné n'avait plus
-    # aucune trace de ce qu'il avait prêté — un partage d'équipe ne se re-consent pas
-    # de mémoire.
-    ("connector_account_group_grants", "owner_sub",
-     ("provider", "grantee_group_id")),
     # Dossier du 23/08 (les colonnes à sub que le merge ABANDONNAIT — cf. le tripwire
     # `test_migrate_sub_sub_bearing_columns_are_triaged`) :
     # - l'acceptation CGU suit la personne : sans repointage, le compte fusionné se
@@ -423,15 +409,12 @@ _UNIQUE_INDEX_SUB_TABLES = (
 )
 
 # Colonnes JSONB qui NOMMENT une personne (`user:<sub>`) et la SUIVENT à la fusion :
-# étape 3 quater de `repointer_patrimoine` — `credentials_store.suivre_les_prets_recus`
-# (prêts, #1251) et `credentials_store.suivre_les_accords_recus` (accords et refus d'une
-# clé plateforme, #1258 : `share_down`, et dans `meta` les seules clés `share_denied` et
+# étape 3 quater de `repointer_patrimoine` — `credentials_store.suivre_les_accords_recus`
+# (accords et refus d'une clé plateforme, #1258 : `share_down`, et dans `meta` les seules clés `share_denied` et
 # `rate_limit_by`). Hors AAD du coffre, donc un UPDATE suffit. Toute colonne JSONB du
 # DDL est triée — ici, ou dans l'allowlist motivée du garde-fou
 # `test_migrate_sub_inventory.py::test_toute_colonne_jsonb_est_triee_pour_la_fusion`.
 _JSONB_SUB_COLUMNS = (
-    ("connector_credentials", "share_side"),
-    ("connector_credentials", "share_services"),
     ("connector_credentials", "share_down"),
     ("connector_credentials", "meta"),
 )
@@ -466,9 +449,6 @@ _SUB_COLUMNS = [
     # une clé d'org, et le compte de service de l'org (#1188) : idem.
     ("user_api_tokens", "revoked_by"), ("user_api_tokens", "created_by"),
     ("org_service_accounts", "created_by"),
-    # Le PROPRIÉTAIRE d'un canal opéré : hors PK `(sub, provider)`, donc UPDATE nu
-    # (le TITULAIRE, lui, est en PK → `_PK_SUB_TABLES`).
-    ("unipile_operated_accounts", "owner_sub"),
     # ressources possédées + grants (ère ownership 0030/0042/0048 — ajoutées Phase H B1 :
     # l'inventaire n'avait jamais suivi, une bascule de tenant orphelinait les ressources
     # user-owned et les grants nominatifs). `owner_id`/`principal_id` mélangent sub et
@@ -581,17 +561,6 @@ _SUB_COLUMNS = [
     ("project_files", "created_by"),
     ("doc_change_requests", "requested_by"), ("doc_change_requests", "resolved_by"),
     ("scheduled_emails", "created_by"), ("connector_credentials", "set_by"),
-    ("connector_account_grants", "granted_by"),
-    # Le pendant GROUPE (oto#40). Colonne d'AUTEUR, hors PK et SANS FK : elle
-    # survit donc au `DELETE FROM users` de l'étape 4 en désignant une ligne `users`
-    # qui n'existe plus. Ne pas la repointer ne CONSERVE pas la trace — ça la rend
-    # illisible (jointure vide, « inconnu » à l'affichage). Et le merge ne change
-    # pas d'auteur : il donne un nouvel identifiant à la MÊME personne (borné à un
-    # tenant, ADR 0052 §6). Sur ce chemin l'auteur EST le propriétaire
-    # (`granted_by=ctx.sub`, le même sub qu'`owner_sub`) : repointer l'un sans
-    # l'autre ferait dire à la ligne « accordé par un identifiant mort de celui qui
-    # la possède ». L'identifiant d'origine reste retrouvable par `sub_aliases`.
-    ("connector_account_group_grants", "granted_by"),
     ("option_comps", "granted_by"), ("grants", "created_by"),
     # Qui a posé un droit déclaré (ADR 0070 §7) : colonne d'AUTEUR, hors PK et sans FK.
     # L'UPDATE nu ne touche que les lignes signées par l'ancien compte ; une étiquette
@@ -848,15 +817,7 @@ def repointer_patrimoine(conn, old_sub: str, new_sub: str, *,
     #    contourner ; une collision ou une ligne illisible reste en place, et le dit.
     from .. import credentials_store
     bilan = credentials_store.rekey_personal_credentials(conn, old_sub, new_sub)
-    # 3 quater. Les PRÊTS faits À la personne (#1251) : `user:<old_sub>` dans le
-    #    `share_side` (et `share_services`) de la ligne d'un PRÊTEUR devient
-    #    `user:<new_sub>`, sans doublon, `group:`/`org:` intacts — colonnes hors AAD,
-    #    un UPDATE suffit (`_JSONB_SUB_COLUMNS`). Sans lui, le compte prêté par son nom
-    #    cessait de servir l'emprunteur fusionné, sans refus qui l'explique.
-    #    ⚠️ Le journal des prêts (`connector_loan_events.target`) garde la cible TELLE
-    #    QU'ELLE a été nommée : c'est un journal, on ne le réécrit pas.
-    credentials_store.suivre_les_prets_recus(conn, old_sub, new_sub)
-    #    Et les ACCORDS d'une clé plateforme (#1258) : `share_down`, `meta.share_denied`
+    # 3 quater. Les ACCORDS d'une clé plateforme (#1258) : `share_down`, `meta.share_denied`
     #    (la révocation F-046 — sans elle, le compte fusionné était servi à nouveau) et
     #    `meta.rate_limit_by` (deux quotas qui se rencontrent : le plus restrictif).
     credentials_store.suivre_les_accords_recus(conn, old_sub, new_sub)

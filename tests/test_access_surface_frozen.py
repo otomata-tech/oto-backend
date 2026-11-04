@@ -38,12 +38,12 @@ _SURFACE = """
     INVALID_PARAMS MEMBER McpError ORG_SHAREABLE_PROVIDERS Optional
     PRESENCE_PROBE ROLES ResolvedCredential SLOT_PREFIX SUPER_ADMIN
     _PAID_OPTION_BY_CONNECTOR _QUOTA_DEFAULTS _UNSET
-    _emit_connector_failure _instance_side_shares_safe _is_multi_account
+    _emit_connector_failure _is_multi_account
     _legacy_platform_grant_meta _note_resolved_instance
     _platform_grant_meta _platform_grantee_scope _platform_instance_usable
     _platform_quota _reachable_hint _resolve_credential_anon
     _resolve_credential_impl _resolve_pinned_instance _resolve_platform_grant
-    _shared_auto_account _sub_matches_scopes annotations cascade_winner
+    _shared_auto_account annotations cascade_winner
     connector_link connector_resolvable_for_org credential_mode_for
     credentials_store current_group current_org current_project
     current_user_sub_from_token current_user_sub_or_raise dataclass db
@@ -51,7 +51,7 @@ _SURFACE = """
     group_store guard_instance_access has_option
     instance_refs is_platform_operator is_super_admin logger logging
     option_open org_admin_hidden_tools org_store os paid_option_for
-    personal_instance_org preloaded_presence_probe project_declared_identities
+    preloaded_presence_probe project_declared_identities
     project_pinned_identity project_pinned_instance quota_for
     reachable_instances reachable_instances_map
     reachable_team_key
@@ -100,11 +100,19 @@ def test_l_inventaire_n_est_pas_vide():
     `record_platform_usage` retiré — un outil ne débite plus la clé plateforme
     lui-même, il note ses `units` et le bord de l'appel règle (L8,
     `access/reglement.py`) ; un appel de plus ailleurs compterait deux fois.
+    84 → 83 le 04/11/2026 : `personal_instance_org` retiré — il cherchait la clé
+    personnelle d'une AUTRE org de l'appelant (#172) ; depuis la bascule vers les
+    règles de comptes (#1499, D1), aucun compte d'une autre org ne sert, et le nom
+    n'a plus de lecteur.
+    83 → 81 le 04/11/2026 : `_sub_matches_scopes` (le sub couvert par une liste de
+    portées de prêt, `share_side`) et `_instance_side_shares_safe` (la lecture de ce prêt
+    par la garde d'instance) retirés avec le prêt (#1499) : le compte d'autrui sert par
+    ses règles, que lit `access/niveaux`.
     Ce compte n'est pas décoratif — c'est lui
     qui oblige à écrire POURQUOI la surface bouge. Une baisse qu'on ne peut pas
     justifier nom par nom est un rabotage, pas un nettoyage.
     """
-    assert len(_SURFACE) == 84
+    assert len(_SURFACE) == 81
 
 
 def test_une_ecriture_sur_la_facade_traverse_les_sous_modules(monkeypatch):

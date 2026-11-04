@@ -150,32 +150,24 @@ def test_le_preteur_est_lu_dans_la_ligne_qui_a_servi():
     assert access.preteur_de_la_ligne("emprunteuse", ("org", "8", "slack", "x")) is None
 
 
-def _rappel(monkeypatch, sub, side, groupes=()):
+def _rappel(monkeypatch, sub):
     import asyncio
 
-    from oto_mcp import credentials_store, db, group_store
+    from oto_mcp import db
     monkeypatch.setattr(call_context, "current_user_sub_from_token", lambda: sub)
     monkeypatch.setattr(db, "emails_by_subs",
-                        lambda subs: {"preteuse": "preteuse@contoso.example"})
-    monkeypatch.setattr(credentials_store, "get_instance_sharing", lambda *a, **k: ([], side))
-    monkeypatch.setattr(group_store, "is_group_member", lambda s, gid: gid in groupes)
-    monkeypatch.setattr(group_store, "get_group", lambda gid: {"id": gid, "name": "Ventes"})
+                        lambda subs: {"titulaire": "titulaire@contoso.example"})
     return asyncio.run(call_context._rappel_de_l_appel())
 
 
-def test_le_rappel_d_un_pret_nomme_le_preteur_par_son_email(trace, monkeypatch):
+def test_le_rappel_du_compte_d_une_autre_personne_la_nomme_par_son_email(trace, monkeypatch):
+    """Another person's account served (named, at its rule's level, #1499): the response
+    says whose it is. No `lent_via_group` any more: the loan to a team is gone, the
+    level comes from a rule and the echo names the owner only."""
     session_org.note_call_trace(resolved_account="j",
-                                credential_row=("member", "8:preteuse", "microsoft", "j"))
-    assert _rappel(monkeypatch, "emprunteuse", ["user:emprunteuse"]) == {
-        "_account": "j", "lent_by": "preteuse@contoso.example"}
-
-
-def test_le_rappel_d_un_pret_a_une_equipe_nomme_l_equipe(trace, monkeypatch):
-    session_org.note_call_trace(resolved_account="j",
-                                credential_row=("member", "8:preteuse", "microsoft", "j"))
-    assert _rappel(monkeypatch, "emprunteuse", ["group:3", "group:49"], groupes={49}) == {
-        "_account": "j", "lent_by": "preteuse@contoso.example",
-        "lent_via_group": {"id": 49, "name": "Ventes"}}
+                                credential_row=("member", "8:titulaire", "microsoft", "j"))
+    assert _rappel(monkeypatch, "collegue") == {
+        "_account": "j", "lent_by": "titulaire@contoso.example"}
 
 
 def test_le_rappel_d_un_compte_propre_ne_lit_rien(trace, monkeypatch):

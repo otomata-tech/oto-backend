@@ -96,10 +96,10 @@ def test_revoquer_un_compte_le_coupe_meme_s_il_change_d_org(base):
     assert _platform_grant_meta("autre", "aiark", 42) is not None
 
 
-def test_la_revocation_prime_sur_un_pret_lateral(base):
+def test_la_revocation_prime_sur_un_accord_de_l_org(base):
     from oto_mcp.access.platform_grant import _platform_instance_usable
 
-    inst = {"share_mode": "open", "share_down": [], "share_side": ["org:42"],
+    inst = {"share_mode": "open", "share_down": ["org:42"],
             "meta": {"share_denied": ["org:42"]}}
     assert not _platform_instance_usable("membre", 42, inst)
 

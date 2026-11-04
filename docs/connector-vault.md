@@ -347,7 +347,8 @@ que l'ordre de proximité (tri membre < groupe < org < plateforme).
 
 Depuis le 2026-08-27, une instance de connecteur **existe comme objet**, dans une table
 posée **à côté** du coffre : `connector_instances(id, connector, owner_type, owner_id,
-account, label, config, visibility, parent_id, created_at, revoked_at)`. Arbitrage R1,
+account, label, config, parent_id, created_at, revoked_at)` (`visibility`, inerte, est
+retirée par la bascule des comptes). Arbitrage R1,
 prononcé par Alexis : *« la table à côté »*.
 
 **Pourquoi à côté et pas dans le coffre.** L'AAD lie le ciphertext aux **quatre colonnes
@@ -424,7 +425,7 @@ inverse jusqu'au 28/08 ; elle est corrigée sur place.
 **Ce que la pièce 2 NE fait pas.** `config` reste **inerte** — la config publique vit
 toujours dans `meta`, les `config_fields` packés vivent dans le ciphertext (les sortir
 suppose de déchiffrer, c'est un lot à part). `label` reste vide, le nom affiché reste
-dérivé. `visibility` et `parent_id` restent posés et inertes.
+dérivé. `parent_id` reste posé (il relie une sous-instance de canal à sa clé Unipile).
 
 **Ce que le filet de boot fait, et ne fait pas.** `_init.init_db` continue de nommer les
 lignes de coffre orphelines (idempotent, en lots, journalisé, rejoué à chaque boot) — mais
@@ -443,113 +444,21 @@ pièce 2 ce cas ne naît plus que d'un geste manuel en base (archiver une instan
 laissant vivre sa clé). Ce n'est donc pas au filet de le rattraper, c'est à l'**invariant**
 de le montrer.
 
-### Qui VOIT une instance — R9, la visibilité dérivée
+### Qui peut se servir d'une instance — les règles de comptes (#1499)
 
-Arbitrage prononcé par Alexis le 27/08 : *« la visibilité est une propriété de
-l'INSTANCE »*, dérivée de la chaîne — **découvrable par les scopes sous son
-propriétaire, dans la même org, jamais cross-org**, avec surcharge explicite du
-propriétaire. Le domicile de la dérivation est
-`oto_mcp/connectors/instance_visibility.py` ; `GET /api/me/connector-instances` et
-`oto_instance op=list` servent le résultat en `visible_to`.
+Depuis la bascule (révision `20261105_1000_bascule_comptes`), une instance s'ouvre à une
+personne, une équipe ou l'org par une **règle** (`connector_account_rules`, un niveau
+`none` < `read` < `write` < `sensitive` < `manage`, `services` pour Google et Microsoft),
+posée par qui gère le compte, et journalisée (`connector_account_share_events`). Le modèle,
+le niveau détenu, l'ordre de résolution, la garde de niveau et les décisions de #1499
+vivent dans [`partage-de-compte.md`](partage-de-compte.md) — une seule fois.
 
-**Ce que ça n'est PAS, et c'est la moitié du lot.** `visible_to` ne filtre rien,
-n'élargit aucune liste, ne gate aucun appel. Un non-membre continue de voir *aucune
-clé configurée* — la divulgation (« il existe un accès à demander, et chez qui ») reste
-une question **produit**, que R9 range dans un réglage d'org opt-in, plus tard. Ce qui
-est livré est **descriptif** : la même liste qu'avant, où chaque instance dit qui la
-voit.
-
-**Pourquoi la question est dérivable.** 0053-D2 a retiré l'enjeu de protection —
-masquer ne protège de rien, tout se refuse à l'appel. Ce qui reste est de l'ergonomie,
-et sa réponse honnête est *qui peut la résoudre la voit*. La résolution est déjà écrite
-une fois pour toutes dans `access.cascade.walk_cascade` ; la dérivation l'**inverse**.
-
-| Palier | Audience | Gate |
-|---|---|---|
-| membre (et le résidu `user`) | `user:<sub>` — la personne, jamais le couple `(org, sub)` | — |
-| équipe | `group:<id>` | `org_shareable` : sinon **personne** (la clé existe, la cascade ne la lit jamais) |
-| org | `org:<id>` | idem |
-| plateforme | les bénéficiaires | `auth_modes ∋ platform` : sinon **personne** |
-| *tous* | + `share_side` (prêts nominatifs, ADR 0044) — une **extension**, jamais une allowlist ; peut viser hors de l'org | — |
-
-**Prêter une instance à une ÉQUIPE** (`oto_instance op=lend to_group=<id>`, `group:<id>` dans
-`share_side`) : `group_store.lent_instances` verse le prêt au palier équipe — listé avec
-ses clés (`has_group_secret`, `list_group_secrets`, `group_secret_map`, identités) —, mais
-il ne sert ses membres **que nommé** (`_account=`, ou `_instance=` pour un connecteur
-mono-compte), jamais choisi d'office (`docs/partage-de-compte.md`). La règle se décide dans
-la sonde équipe de la résolution (`access.resolve._group_fetch` →
-`access.prets.PretsDuParcours`), pas dans le walker, qui n'est pas recopié : sans nom, le
-compte de l'équipe elle-même sert, sinon le palier suivant (org, tenant) ; si seuls des
-prêts auraient servi, refus `account_required` qui les nomme avec leur prêteur — jamais la
-clé plateforme à leur place. Le prêt servi est la ligne du PRÊTEUR (trace du journal, écho
-`lent_by`/`lent_via_group`, rotation d'un jeton). Il reste au prêteur : même org que
-l'équipe seulement (un prêt à une équipe ne traverse pas d'org), ignoré dès que le prêteur
-quitte l'org, se met en pause, suspend l'instance, ou que l'org interdit la clé perso pour
-ce connecteur (#1239, refusé aussi à la pose) ; un nom de compte que l'équipe détient déjà
-masque le prêt ; l'équipe ne le renomme pas et n'en fait pas son défaut
-(`connectors.identities._refuse_lent`). Un prêt à une PERSONNE (`user:<sub>`) s'épingle
-(`_instance=`) et cesse de même quand son prêteur quitte l'org où il est né (refus
-`lender_left_org`, `access.guard_instance_access`) — rien n'est détaché. La garde des
-niveaux d'accès juge un prêt désigné sous l'org du prêteur et sous l'équipe emprunteuse
-(`connectors/access_level_gate._loan_contexts`).
-
-**Prêter une instance à TOUTE L'ORG** (`oto_instance op=lend to_org=true`, REST
-`POST /api/me/connectors/{connector}/lend` `{"to_org": true}`, `org:<id>` de l'org COURANTE
-dans `share_side` ; la réponse dit `lent_to_org`) : même règle qu'un prêt à une équipe,
-décidée dans la sonde org de la résolution (`access.resolve._org_fetch` →
-`PretsDuParcours.au_palier_org`), pour les membres de cette org seulement, la ligne du
-prêteur exceptée — sans nom, le compte de l'org elle-même sert ; nommé, le prêt sert et
-l'écho dit `lent_by`/`lent_via_org`. Mêmes conditions de vie (`group_store.live_loans` :
-même org, prêteur membre et pas en pause, instance non suspendue, clé perso non
-interdite) ; même refus à la pose d'un porteur que rien ne servirait
-(`org_loan_not_served`, Microsoft servi par son résolveur). Listé aux membres
-(`via=shared_with_me`) ; `visible_to` du prêteur contient `org:<id>`.
-
-**Un compte Microsoft de l'org ou d'une équipe** (lot 5 de `docs/partage-de-compte.md`) : le
-porteur `microsoft` est org-partageable (`byo_org`), un admin d'org ou le chef de l'équipe
-active le connecte au nom de l'une ou de l'autre (`scope=org|group` du flux), la ligne vit à
-l'entité `org`/`group` sous `microsoft` (pas de clé collée : `org_secret_meta` refuse un
-OAuth). Les paliers équipe et org de la résolution la servent aux membres sans nom, et la
-listent dans leurs instances (`visible_to` = l'équipe ou l'org). Ces paliers n'y lisent que
-les lignes de l'équipe et de l'org elles-mêmes : les prêts Microsoft restent jugés par son
-résolveur seul (`access.prets.RESOLVEUR_PROPRE`, `PretsDuParcours.cle_de_l_equipe`).
-
-**Le journal des prêts** (`connector_loan_events`, révision `0058_journal_des_prets`,
-`db/loan_events`) : chaque pose et chaque retrait EFFECTIF d'une cible (`user:`, `group:`,
-`org:`) y laisse une ligne — qui (`actor_sub`), quel compte (la ligne du coffre du
-prêteur : `entity_type`, `entity_id`, `connector`, `account`), vers qui (`target`), quand
-(`at`), quel geste (`lend`/`revoke`) —, écrite dans la transaction du `share_side`
-(`credentials_store.set_instance_sharing(journal=…)`). Append-only, jamais de secret. Un
-geste répété qui ne change rien n'y entre pas. ⚠️ **Aucune surface ne le lit encore** :
-la lecture par le propriétaire (`db.loan_events.pour_la_ligne`) reste à exposer.
-
-Le palier plateforme est le seul dont l'audience n'est pas structurelle. Trois issues,
-dans l'ordre où la résolution les prend : la **chaîne accorde** (0053, L5) ⟹ les
-bénéficiaires des arêtes vivantes ; la **chaîne refuse** (des arêtes existent, toutes
-révoquées) ⟹ personne, **sans repli** (c'est ce qui rend une révocation vraie) ; la
-**chaîne est muette** ⟹ l'ancien chemin, à l'identique (`closed` ⟹ l'allowlist ;
-`open` ⟹ l'allowlist si elle existe, sinon `platform`, le mot de l'audience non bornée).
-
-**La surcharge** vit dans `connector_instances.visibility` : `inherited` (défaut — la
-dérivation décide), `hidden` (le propriétaire seul), `org` (l'org du propriétaire en
-plus). ⚠️ **Rien ne l'écrit aujourd'hui** — les deux autres branches sont écrites et
-testées, pas servies ; le geste qui les pose est un lot produit, et un test fige
-l'absence d'écrivain. ⚠️ `hidden` est un cran d'**ergonomie**, pas de sécurité : celui
-qui résout continue de résoudre, il cesse seulement de la voir listée.
-
-⚠️ **Le risque du lot, et son garde-fou.** Inverser un walker, c'est risquer d'en
-écrire une deuxième copie — le défaut que `keyStack.ts` porte déjà côté dashboard, et
-qui ne casse pas : il **ment**. Deux réponses, toutes deux mécaniques : (1) aucune règle
-n'est recopiée — les gates sont lus à leur source (le registre, les colonnes de partage
-du coffre, `grants_chain`), et un registre consulté deux fois n'est pas une duplication ;
-(2) `tests/test_instance_visibility.py` **confronte** l'audience dérivée au verdict réel
-de `walk_cascade` sur un vrai PostgreSQL, pour deux appelants aux droits différents. Si
-les deux divergent, ce test rougit.
-
-**Coût** : deux requêtes en lot pour toute la liste (les identifiants et le partage),
-jamais deux par instance ; plus, pour les seules clés plateforme d'un connecteur
-basculé, la lecture de leurs arêtes. Fail-open loggé et **séparé** de celui de `id` :
-le partage peut tomber sans emporter l'identifiant.
+Ce qui a disparu avec la bascule : le prêt (`share_side`, `share_services`,
+`oto_instance op=lend`), la délégation des messageries (`connector_account_grants`,
+`connector_account_group_grants`, `unipile_operated_accounts`), la visibilité dérivée
+(`connectors/instance_visibility.py`, `visible_to`, `connector_instances.visibility`).
+L'ancien journal des prêts (`connector_loan_events`) reste, en lecture. `share_mode` et
+`share_down` restent : ils portent l'accès aux clés plateforme (`grants_chain`).
 
 ### Nettoyer les orphelines d'avant la pièce 2 — une commande, pas un boot
 
@@ -1058,8 +967,7 @@ python -m scripts.deplacer_cles_org --org <id> --sub <sub> --connectors a,b,c \
   ceux qui résolvent la clé d'org aujourd'hui et la perdront ; en `--vers equipe`, les
   membres de l'équipe et leur équipe active (`--show-members` pour les subs). Les
   partages de l'instance d'org ne sont pas repris (comptés) : `share_down` ne vit plus
-  que sur les clés plateforme, `share_side` n'est lu qu'au niveau membre, et
-  `share_mode='open'` est la valeur par défaut, pas un partage.
+  que sur les clés plateforme, et `share_mode='open'` est la valeur par défaut, pas un partage.
 - **Aucun secret** dans la sortie ni les logs (banc `tests/test_deplacer_cles_org.py`).
   Même prérequis que ci-dessus : `OTO_MCP_MASTER_KEY` doit être chargée comme au boot.
 

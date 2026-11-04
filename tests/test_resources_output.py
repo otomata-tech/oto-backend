@@ -248,18 +248,17 @@ def test_refus_unknown_user(monkeypatch):
     assert (e.value.status, e.value.code) == (404, "unknown_user")
 
 
-@pytest.mark.parametrize("kw", [{"cascade": True}, {"credentials": "inherit"}])
-def test_refus_pending_share_plain_only(monkeypatch, kw):
-    """Un partage EN ATTENTE ne porte que l'objet et son rôle : la cascade et le prêt
-    de clés se posent sur un compte, donc après l'inscription. Refusé avant d'écrire."""
+def test_refus_pending_share_plain_only(monkeypatch):
+    """Un partage EN ATTENTE ne porte que l'objet et son rôle : la cascade se pose sur
+    un compte, donc après l'inscription. Refusé avant d'écrire."""
     _wire(monkeypatch)
     monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [])
-    monkeypatch.setattr(R.heritage, "peut_accorder", lambda sub, pid: True)
     poses = []
     monkeypatch.setattr(R.partage_en_attente, "creer", lambda **k: poses.append(k))
     with pytest.raises(AuthzDenied) as e:
         R._resources(CTX, R.ResourceInput(op="share", resource_type="project",
-                                          resource_id="7", email="fantome@x.co", **kw))
+                                          resource_id="7", email="fantome@x.co",
+                                          cascade=True))
     assert (e.value.status, e.value.code) == (400, "pending_share_plain_only")
     assert not poses
 
@@ -313,41 +312,9 @@ def test_refus_transfer_failed(monkeypatch):
     assert (e.value.status, e.value.code) == (409, "transfer_failed")
 
 
-@pytest.mark.parametrize("kw", [
-    {"resource_type": "datastore_namespace"},          # pas un projet
-    {"resource_type": "project", "audience": "public"},  # une publication, pas un grant
-])
-def test_refus_credentials_project_share_only(monkeypatch, kw):
-    """`credentials` (#480) ne se déclare que sur le partage d'un PROJET à une
-    personne, une équipe ou une org — refusé avant tout grant."""
-    _wire(monkeypatch)
-    poses = []
-    monkeypatch.setattr(R.ownership, "grant", lambda *a, **k: poses.append(a))
-    with pytest.raises(AuthzDenied) as e:
-        R._resources(CTX, R.ResourceInput(op="share", resource_id="7", email="u2@x.co",
-                                          credentials="inherit", **kw))
-    assert (e.value.status, e.value.code) == (400, "credentials_project_share_only")
-    assert poses == []
-
-
-def test_refus_inherit_beyond_sharer_rights(monkeypatch):
-    """On ne prête que les clés qu'on atteint (#480) : le partageur hors de l'org
-    propriétaire du projet ne peut pas déclarer l'héritage — aucun grant posé."""
-    _wire(monkeypatch)
-    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [{"sub": "u2", "email": e}])
-    monkeypatch.setattr(R.heritage, "peut_accorder", lambda sub, pid: False)
-    poses = []
-    monkeypatch.setattr(R.ownership, "grant", lambda *a, **k: poses.append(a))
-    with pytest.raises(AuthzDenied) as e:
-        R._resources(CTX, _get("share", email="u2@x.co", credentials="inherit"))
-    assert (e.value.status, e.value.code) == (403, "inherit_beyond_sharer_rights")
-    assert poses == []
-
-
 _REJOUES = {
     "email_required", "doc_viewer_only", "publication_unsupported", "forbidden", "group_not_visible",
-    "group_outside_resource_org", "credentials_project_share_only",
-    "inherit_beyond_sharer_rights",
+    "group_outside_resource_org",
     # #1176 : rejoué sur base réelle, les deux surfaces, dans
     # `tests/test_publication_exige_appartenance_1176.py`.
     "publish_requires_membership",

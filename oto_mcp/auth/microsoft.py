@@ -23,8 +23,8 @@ Flow hosted by oto, on the common pattern (`connectors/flow` + `auth/flow`):
 ACTIVE team (`scope=group`) connects an account ON BEHALF of it (`scope_target`, checked at
 the start and again at the return). The row lives at the org or team tier, survives the
 departure of whoever connected it, and serves the members WITHOUT being named, after their
-own accounts: the cascade's team then org rungs (`byo_org`), where an account is never a
-loan (no `lent_by`). Two accounts at the same tier and no `_account` = the cascade's named
+own accounts: the cascade's team then org rungs (`byo_org`), each at the level its rules
+give the member (no `lent_by`). Two accounts at the same tier and no `_account` = the cascade's named
 ambiguity — no default is set by itself there, an admin picks one
 (`oto_identity op=set scope=org|group`). The token carries every consent this Microsoft
 account gave oto, the holder's personal ones included: the row keeps only what ITS
@@ -66,14 +66,12 @@ GENERIC mechanics of multi-account connectors (`cardinality="multi"`): choice vi
 accounts (`access.resolve_credential`), removal via
 `DELETE /api/settings/api-keys/microsoft?account=…`.
 
-**A LENT account serves only when the call names it** (`_account=`, or an explicit
-`_instance=`): never implicitly. A borrower with no account of her own was served a
-colleague's mailbox without knowing it, then switched to her own the moment she linked
-one, in the same conversation, with no signal. Without a name and without an own
-account, the call is refused (`account_required`) and names the lent accounts with
-their owner; every response says which account served and, for a loan, whose it is
+**Another person's account serves only when the call names it** (`_account=`, or an
+explicit `_instance=`), at the level its rules give, for the services the rule covers
+(#1499, `access/comptes.ChoixDuParcours.autrui_nomme`): never implicitly. Every response
+says which account served and, when it is another person's, whose
 (`_account` + `lent_by`, `middleware/call_context._echo_account`). The rule is the
-COMMON one (`access/prets.py`), Microsoft its first user.
+COMMON one, resolved by `access.resolve_credential` like every connector.
 
 **Administrator approval.** Many organizations forbid a person to consent alone:
 `admin_consent_url` builds the link that a client's administrator opens to approve
@@ -427,7 +425,7 @@ def reconnection_target(sub: str, account: str) -> tuple[str, Optional[str]]:
     with: the dialog is pre-filled with ITS address, on ITS directory (a guest connected
     on a client's directory must come back there, or Entra serves another account). The
     callback recognizes the account by its Microsoft `id` (`persist_grant`): its row,
-    default status and loans stay. Raises `LookupError` for an account she has not linked."""
+    default status and rules stay. Raises `LookupError` for an account she has not linked."""
     meta = next((c.get("meta") or {} for c in _comptes(_ctx_org(sub), sub)
                  if c["account"] == account), None)
     if meta is None:
@@ -700,6 +698,11 @@ def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None,
                            else not comptes and not partage)}
     if tenant:
         meta["tenant"] = tenant
+    if meta["is_default"] and not deja:
+        # Born default: its author and date (D3, `regles_de_comptes.marque_du_defaut`);
+        # a reconnected default keeps its own, carried by `ancien`.
+        from ..db import regles_de_comptes
+        meta.update(regles_de_comptes.marque_du_defaut(sub))
     credentials_store.set_credential(entity_type, entity_id, CONNECTOR,
                                      grant.refresh_token, set_by=sub, meta=meta,
                                      account=account)
@@ -724,50 +727,6 @@ def _ranger_rotation(ligne: tuple, lu: str, nouveau: str) -> None:
                                      account=account)
 
 
-def lent_accounts(sub: str) -> list[dict]:
-    """The Microsoft accounts a PEER lent to `sub` (`oto_instance op=lend`, ADR 0044):
-    the common reach of a loan (`access.prets_de`) — lent to the person (`user:<sub>`,
-    any org: the named loan is the consent), to a TEAM she belongs to or to the whole of
-    her context org (`group:<id>`/`org:<id>`: same org, lender still a member and awake).
-    Same shape as `_comptes` (no secret), plus `lent_by` (the lender's sub),
-    `lender_org` and `via_group`/`via_org` (`{id, name}`); never the person's default.
-    One entry per row: lent to her prevails over her team, her team over the org.
-
-    The cascade's team and org rungs leave this carrier's loans alone
-    (`prets.RESOLVEUR_PROPRE`): a loan to a team or to the org is served here, like a
-    personal loan — only when the call names it."""
-    from .. import access  # lazy
-    return [{**c, "meta": {**c["meta"], "is_default": False}, "set_at": c.get("set_at")}
-            for c in access.prets_de(sub, CONNECTOR)]
-
-
-def _lent_for_call(sub: str, service: str, account: Optional[str]):
-    """The resolution of a LENT account, when the person's own accounts resolve nothing
-    for this call — under the COMMON rule (`access.pret_a_servir`): a loan serves ONLY
-    when the call NAMES it (`account`, `_account=`), never the only loan by default;
-    no name and a loan that covers `service` = a refusal (`account_required`) that names
-    the lent accounts, their lender and team. The loan is re-guarded
-    (`guard_instance_access`: still lent, lender not paused) and the row read by the
-    instance path (`_instance=`), the one an explicit pin takes."""
-    from .. import access, instance_refs, session_org
-    nom = account or session_org.current_call_account()
-    pretes = lent_accounts(sub)
-    if not nom:   # the refusal only lists the loans that would serve THIS service
-        pretes = [c for c in pretes
-                  if service in services_granted((c.get("meta") or {}).get("scopes"))]
-    c = access.pret_a_servir(pretes, nom, quoi=SERVICE_LABELS[service])
-    if c is None:
-        return None
-    ref = instance_refs.parse_ref(instance_refs.make_member_ref(
-        c["lender_org"], c["lent_by"], CONNECTOR, c["account"]))
-    access.guard_instance_access(sub, ref)
-    jeton = session_org.set_call_instance(ref)
-    try:
-        return access.resolve_credential(service, want="byo", sub=sub)
-    finally:
-        session_org.reset_call_instance(jeton)
-
-
 def resolve_account(sub: str, service: str, account: Optional[str] = None):
     """`(ResolvedCredential, meta)` of the account a call to `service` designates.
 
@@ -777,20 +736,13 @@ def resolve_account(sub: str, service: str, account: Optional[str] = None):
     otherwise on the account's), otherwise the only linked account, otherwise the
     default account, otherwise a refusal that names the accounts (`McpError`).
     The person's OWN accounts first, then those of her active team, then of her org (the
-    cascade's rungs, unnamed); when they resolve nothing (none, or the named account is
-    none of theirs), an account LENT by a peer — only the one the call NAMES
-    (`_lent_for_call`), the single judge of Microsoft loans (`prets.RESOLVEUR_PROPRE`)."""
+    cascade's rungs, unnamed, each at the level the call requires); another person's
+    account only when the call NAMES it, at the level its rules give."""
     from .. import access  # lazy: avoids any import cycle at boot
 
     if service not in SERVICE_SCOPES:
         raise RuntimeError(f"\"{service}\" is not a known Microsoft service.")
-    try:
-        rc = access.resolve_credential(service, want="byo", sub=sub,
-                                       account=account or None)
-    except (access.CredentialUnavailable, access.CompteIntrouvable):
-        rc = _lent_for_call(sub, service, account)
-        if rc is None:
-            raise
+    rc = access.resolve_credential(service, want="byo", sub=sub, account=account or None)
     meta = next((a.get("meta") or {} for a in credentials_store.list_accounts(
         rc.entity_type, rc.entity_id, CONNECTOR) if a["account"] == (rc.account or "")),
         None)
@@ -845,7 +797,7 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
         message = (f"Microsoft no longer accepts the sign-in of `{rc.account}` "
                    f"(Entra: {cause}). Reconnect it with the « Reconnect » "
                    f"button on its line, card « {label} » of the connectors page: its "
-                   "default setting and its loans are kept.")
+                   "default setting and its rules are kept.")
         connector_health.mark_rejected(rc.entity_type, rc.entity_id, CONNECTOR,
                                        rc.account, message)
         raise MicrosoftReauthRequired(message) from e
@@ -870,17 +822,16 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
 # --- what the cards display --------------------------------------------------
 
 def shared_accounts(sub: str, org: Optional[int]) -> list[dict]:
-    """The accounts of the person's active team, of a team a shared project lends, then
-    of her org — the cascade's order (`heritage.paliers_partages`) — with `shared`
-    (`group`/`org`) and `shared_owner` (`{id}`, named by `avec_noms` where shown);
-    never her default."""
+    """The accounts of the person's ACTIVE team, then of her org — the cascade's order —
+    with `shared` (`group`/`org`) and `shared_owner` (`{id}`, named by `avec_noms` where
+    shown); never her default."""
     from .. import access  # lazy
-    from ..access import heritage
     if org is None:
         return []
+    equipe = access.current_group(sub)
+    paliers = ([("group", int(equipe))] if equipe is not None else []) + [("org", int(org))]
     out = []
-    for palier, cible in heritage.paliers_partages(org, access.current_group(sub),
-                                                   heritage.du_contexte(sub, org)):
+    for palier, cible in paliers:
         out += [{**c, "meta": {**(c.get("meta") or {}), "is_default": False},
                  "shared": palier, "shared_owner": {"id": cible}}
                 for c in credentials_store.comptes_du_palier(palier, str(cible), CONNECTOR)]
@@ -904,16 +855,16 @@ def avec_noms(comptes: list[dict]) -> list[dict]:
 
 def accounts_for(sub: str, service: Optional[str] = None) -> list[dict]:
     """The Microsoft accounts of the person in their context org, then those of her team
-    and org (`shared`, `shared_accounts`), then those LENT to her (`lent_by`,
-    `lent_accounts`) — ALL of them for the account, those that AUTHORIZED `service` for a
-    service's card. Vault rows (`account`, `meta`, `set_at`), no secret. A name appears
+    and org (`shared`, `shared_accounts`) — ALL of them for the account, those that
+    AUTHORIZED `service` for a service's card. Another person's account is not listed:
+    it serves only named. Vault rows (`account`, `meta`, `set_at`), no secret. A name appears
     once, at the nearest level: the one a call naming it resolves."""
     from .. import access  # lazy
 
     org = access.current_org(sub)
     comptes = _comptes(org, sub) if org is not None else []
     vus = {c["account"] for c in comptes}
-    for c in shared_accounts(sub, org) + lent_accounts(sub):
+    for c in shared_accounts(sub, org):
         if c["account"] not in vus:
             vus.add(c["account"])
             comptes.append(c)

@@ -23,7 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 from oto_mcp import access, db, session_org
-from oto_mcp.access import heritage, resolve_anon
+from oto_mcp.access import resolve_anon
 from oto_mcp.db import entitlements as E
 from oto_mcp.db._conn import _connect
 from oto_mcp.mcp_errors import McpError
@@ -138,19 +138,19 @@ def test_endpoint_anonyme_cle_d_org_servie_sans_droit(live, gagnant):
     assert rc.is_platform is False
 
 
-def test_le_beneficiaire_d_un_projet_partage_sans_pret_n_herite_pas_du_droit(
-        live, gagnant, monkeypatch):
-    """#480 : l'org d'un projet partagé ne couvre pas le bénéficiaire à qui rien n'est
-    prêté — son droit payant non plus."""
+def test_le_beneficiaire_d_un_projet_partage_d_une_autre_org_n_a_pas_son_droit(
+        live, gagnant):
+    """#1499, D1 : l'org d'un projet partagé dont le bénéficiaire n'est pas membre ne
+    le couvre pas — son droit payant non plus, et rien ne le lui prête."""
     gagnant["org"] = org = _org()
     E.grant(org, "unipile", "subscription", value=1, expires_at=DEMAIN)
-    monkeypatch.setattr(heritage, "du_contexte", lambda sub, o: SimpleNamespace(
-        sub=sub, org=o, membre=False, org_heritee=False))
-    with pytest.raises(McpError):
-        _resoudre()
-    monkeypatch.setattr(heritage, "du_contexte", lambda sub, o: SimpleNamespace(
-        sub=sub, org=o, membre=False, org_heritee=True))
-    assert _resoudre().is_platform is True
+    assert _resoudre().is_platform is True          # membre : le droit de l'org sert
+    jeton = session_org.set_call_hors_org("u-test", org)
+    try:
+        with pytest.raises(McpError):
+            _resoudre()
+    finally:
+        session_org.reset_call_hors_org(jeton)
 
 
 # ── le droit posé sur la personne (ADR 0070 §7, « ne fait qu'ajouter ») ─────────
@@ -166,19 +166,21 @@ def test_un_droit_personnel_sert_sa_personne_seule(live, gagnant, partout):
     assert "is active neither for this org nor for you" in str(e.value)
 
 
-def test_sans_org_servie_seule_la_personne_partout_ouvre(live, gagnant, monkeypatch):
-    """Bénéficiaire d'un projet partagé sans prêt : l'org ne le couvre pas, sa ligne
-    dans cette org non plus — sa ligne de personne partout, si."""
+def test_sans_org_servie_seule_la_personne_partout_ouvre(live, gagnant):
+    """Bénéficiaire d'un projet partagé d'une autre org : l'org ne le couvre pas, sa
+    ligne dans cette org non plus — sa ligne de personne partout, si."""
     gagnant["org"] = org = _org()
     sub = _sub()
     E.grant(org, "unipile", "offered", value=1, sub=sub)
-    monkeypatch.setattr(heritage, "du_contexte", lambda s, o: SimpleNamespace(
-        sub=s, org=o, membre=False, org_heritee=False))
-    with pytest.raises(McpError) as e:
-        _resoudre(sub=sub)
-    assert "is not open to you personally" in str(e.value)
-    E.grant(None, "unipile", "offered", value=1, sub=sub)
-    assert _resoudre(sub=sub).is_platform is True
+    jeton = session_org.set_call_hors_org(sub, org)
+    try:
+        with pytest.raises(McpError) as e:
+            _resoudre(sub=sub)
+        assert "is not open to you personally" in str(e.value)
+        E.grant(None, "unipile", "offered", value=1, sub=sub)
+        assert _resoudre(sub=sub).is_platform is True
+    finally:
+        session_org.reset_call_hors_org(jeton)
 
 
 def test_l_endpoint_anonyme_ne_lit_que_l_org(live, gagnant):

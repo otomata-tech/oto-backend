@@ -37,7 +37,7 @@ from ._authz import RESOURCE_GOVERN
 from ._types import Capability, RestBinding
 from .docs import partage as page
 from .registry import CAPABILITIES
-from .resources import (CREDENTIALS_DESCRIPTION, EXPIRY_DESCRIPTION,
+from .resources import (EXPIRY_DESCRIPTION,
                         APP_DESCRIPTION, PENDING_DESCRIPTION, PUBLICATION_DESCRIPTION, TRANSFER_PROCEDURE,
                         ResourceInput, _resources)
 from .resources_contract import REFUS, ResourceOut, ResourceType
@@ -110,16 +110,14 @@ CAPABILITIES += [
             "(write), `manager` (GOVERNANCE — re-share / delete / publish, grantable, but NOT "
             "ownership transfer); public/secret force viewer. " + PUBLICATION_DESCRIPTION
             + " Legacy `permission` read|write is "
-            "still accepted (mapped to viewer/editor). " + CREDENTIALS_DESCRIPTION
-            + " " + EXPIRY_DESCRIPTION + " " + PENDING_DESCRIPTION
+            "still accepted (mapped to viewer/editor). " + EXPIRY_DESCRIPTION + " " + PENDING_DESCRIPTION
             + " DELIVER A FULL PROJECT (#52): "
             "share/transfer a project with cascade=true to carry its linked entities in one "
             "gesture — linked tableaux get the same share/transfer, linked procedures are "
             "share-granted read (readable cross-org via oto_procedure op=get guide_id) or "
             "COPIED into the target org on transfer (link re-pointed, source untouched), "
             "connector links report `recipient_credential` (the recipient plugs their own key; "
-            "the project's pre-made identity/instructions overrides travel with it) or "
-            "`inherited_credential` under credentials=inherit; docs & "
+            "the project's pre-made identity/instructions overrides travel with it); docs & "
             "files follow automatically. Returns a per-entity cascade report. "
             "Owner OR org/platform admin governing it; never exposes row content."
         ),

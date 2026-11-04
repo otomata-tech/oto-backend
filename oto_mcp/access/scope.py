@@ -281,34 +281,6 @@ def current_user_sub_or_raise() -> str:
     return sub
 
 
-def _sub_matches_scopes(sub: str, scopes) -> bool:
-    """True if `sub` belongs to one of the listed scopes — vocabulary COMMON to the
-    `share_down` allowlists and the `share_side` loans (ADR 0044): `user:<sub>` | `group:<gid>` | `org:<id>` (real
-    membership) | `org` (everyone in the subtree). `org:<id>` (ADR 0044 §F) carries
-    the old org-level grant of a platform key. Fail-closed per entry (a malformed
-    ref is ignored, never an exception that would break resolution)."""
-    from .. import group_store, roles
-    for s in scopes or []:
-        if s == "org":
-            return True
-        kind, _, ident = str(s).partition(":")
-        if kind == "user" and ident == sub:
-            return True
-        if kind == "group":
-            try:
-                if group_store.is_group_member(sub, int(ident)):
-                    return True
-            except (ValueError, TypeError):
-                continue
-        if kind == "org":
-            try:
-                if roles.is_org_member(sub, int(ident)):
-                    return True
-            except (ValueError, TypeError):
-                continue
-    return False
-
-
 def project_pinned_identity(connector: str, project_id: Optional[int] = None) -> Optional[str]:
     """Identity (account) PINNED by the active project for `connector`, or None ⇒ resolution
     falls back to the user default. Reads the BINDING key `project_links.identity_ref`
@@ -467,3 +439,16 @@ def resolve_slot_tableau(name: str) -> str:
                      f"resolves (ref `{lien.get('target_ref')}`) — re-bind it to an "
                      "existing table (`oto_project op=link`).")))
     return str(int(ns_id))
+
+
+def org_d_appartenance(sub: Optional[str], org: Optional[int]) -> Optional[int]:
+    """The org of the call whose MEMBER `sub` is: the call's org, except when `_project=`
+    co-set the org of a shared project she is not a member of (`session_org.
+    current_call_hors_org`) — then None. What reads it: the org rung of the cascade and
+    the org's platform rights (#1499, D1: no account nor right of another org), the
+    scope seams of lists (`ownership.owner_de_portee`). Zero queries."""
+    hors = session_org.current_call_hors_org()
+    if hors is not None and sub is not None and org is not None and hors == (sub, int(org)):
+        return None
+    return org
+

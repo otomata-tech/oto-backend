@@ -91,7 +91,8 @@ def channel(name: str, *, hosted_channel: str, label: str, help: str,
     take for live — the exact shape of the all-users outage of #245.
     `personal_cross_org`, ON THE OTHER HAND, is copied: `call_axes` resolves by NAMESPACE, and
     it's this flag that makes the `_account=` axis exist on the channel's tools
-    — hence the granted accounts (#55). The two don't answer the same question.
+    — hence naming another member's account at its rules' level (#1499). The two
+    don't answer the same question.
 
     `href` is that of the channel's BRAND, never the provider's: what the
     person connects is their LinkedIn or their WhatsApp.

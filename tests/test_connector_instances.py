@@ -130,17 +130,7 @@ def seams(monkeypatch):
     instances: dict = {}
     monkeypatch.setattr(
         ci.db, "instances_for_vault_rows",
-        lambda keys: {k: {"id": instances[k], "visibility": visibilites.get(k, "inherited")}
-                      for k in keys if k in instances})
-    # Le partage de chaque ligne (R9) : `(share_mode, share_down, share_side)`. Défaut
-    # `open`/vide = la polarité du coffre pour un palier BYO. Stubbé ICI, comme les
-    # identifiants : laissé au fail-open, `visible_to` serait simplement absent et les
-    # tests passeraient sans exercer la dérivation.
-    visibilites: dict = {}
-    partages: dict = {}
-    monkeypatch.setattr(
-        ci.credentials_store, "sharing_for_vault_rows",
-        lambda keys: {k: partages.get(k, ("open", [], [])) for k in keys})
+        lambda keys: {k: {"id": instances[k]} for k in keys if k in instances})
     monkeypatch.setattr(ci.credentials_store, "list_credentials",
                         lambda et, eid: list(vault.get((et, eid), [])))
     monkeypatch.setattr(ci.group_store, "list_groups_for_user",
@@ -157,10 +147,9 @@ def seams(monkeypatch):
     # `connector=` filter shares with the loan.
     from oto_mcp import providers as vrais_providers
     monkeypatch.setattr(ci, "providers", SimpleNamespace(
-        REGISTRY=_FAKE_REGISTRY, PERSONAL_CROSS_ORG_PROVIDERS=frozenset(),
+        REGISTRY=_FAKE_REGISTRY,
         credential_provider=vrais_providers.credential_provider))
-    return SimpleNamespace(vault=vault, instances=instances, partages=partages,
-                           visibilites=visibilites, monkeypatch=monkeypatch)
+    return SimpleNamespace(vault=vault, instances=instances, monkeypatch=monkeypatch)
 
 
 def _run(connector=None, level=None, org_id=ORG, sub=SUB):
@@ -423,57 +412,16 @@ def test_sub_only_requires_auth():
     assert ei.value.status == 401 and ei.value.code == "auth_required"
 
 
-# ─── 6. Partagé avec moi (ADR 0044 share_side) ───────────────────────────────
+# ─── 6. Le compte d'autrui n'est pas listé (#1499) ───────────────────────────
 
-def test_shared_with_me_surfaces_lent_instance(seams):
-    # instance d'un AUTRE membre (org 9, usr_owner), prêtée à moi via share_side
-    shared_row = {"entity_type": "member", "entity_id": "9:usr_owner",
-                  "connector": "zoho", "account": "", "secret_kind": "api_key",
-                  "set_by": "usr_owner", "set_at": "2026-07-01 10:00:00", "meta": {}}
-    seams.monkeypatch.setattr(ci.credentials_store, "list_shared_with",
-                              lambda scopes: [shared_row])
-    out = _run()
-    assert out["count"] == 1
-    inst = out["instances"][0]
-    assert inst["via"] == "shared_with_me"
-    assert inst["ref"] == "member:9:usr_owner:zoho"      # pinnable
-    assert inst["owner"] == {"type": "user", "id": "usr_owner"}  # le PRÊTEUR
-    assert inst["level"] == "member"
-
-
-def test_shared_with_me_excludes_own_line(seams):
-    # défensif : une ligne à MOI ne réapparaît jamais via share_side
-    own = {"entity_type": credentials_store.MEMBER,
-           "entity_id": credentials_store.member_id(ORG, SUB),
-           "connector": "zoho", "account": "", "secret_kind": "api_key",
-           "set_by": SUB, "set_at": "2026-07-01 10:00:00", "meta": {}}
-    seams.monkeypatch.setattr(ci.credentials_store, "list_shared_with",
-                              lambda scopes: [own])
+def test_le_compte_d_une_autre_personne_n_est_pas_liste(seams):
+    """Le prêt (`share_side`) est retiré : le compte d'une autre personne sert seulement
+    NOMMÉ, au niveau de ses règles ; la liste ne le montre pas, et n'a plus de
+    provenance `shared_with_me` ni `personal_cross_org`."""
+    seams.vault[(credentials_store.MEMBER, credentials_store.member_id(ORG, "autre"))] = [
+        _row("zoho", account="pret")]
     assert _run()["count"] == 0
-
-
-def test_shared_with_me_scopes_include_my_groups(seams):
-    seams.monkeypatch.setattr(ci.group_store, "list_groups_for_user",
-                              lambda sub, org_id=None: [{"group_id": 2, "name": "Sales"}])
-    captured = {}
-    seams.monkeypatch.setattr(ci.credentials_store, "list_shared_with",
-                              lambda scopes: captured.setdefault("scopes", scopes) and [])
-    _run()
-    assert captured["scopes"] == [f"user:{SUB}", "group:2", f"org:{ORG}"]
-
-
-def test_shared_with_me_surfaces_a_loan_to_my_whole_org(seams):
-    """Un prêt à toute l'org (`org:<id>`, `to_org`) est listé à ses membres comme un
-    prêt reçu, la ligne de la prêteuse avec sa réf épinglable."""
-    lent = {"entity_type": "member", "entity_id": f"{ORG}:usr_owner",
-            "connector": "zoho", "account": "jane", "secret_kind": "api_key",
-            "set_by": "usr_owner", "set_at": "2026-07-01 10:00:00", "meta": {}}
-    seams.monkeypatch.setattr(ci.credentials_store, "list_shared_with",
-                              lambda scopes: [lent] if f"org:{ORG}" in scopes else [])
-    (inst,) = _run()["instances"]
-    assert inst["via"] == "shared_with_me"
-    assert inst["ref"] == f"member:{ORG}:usr_owner:zoho:jane"
-    assert inst["owner"] == {"type": "user", "id": "usr_owner"}
+    assert "visible_to" not in ci.ConnectorInstance.model_fields
 
 
 # ─── 6. Lot L6 — l'identifiant stable servi à côté du ref ────────────────────
@@ -527,86 +475,6 @@ def test_l6_l_indisponibilite_des_identifiants_ne_casse_pas_le_listing(seams, ca
         out = _run()
     assert out["count"] == 1 and "id" not in out["instances"][0]
     assert any("stable identifiers" in r.message for r in caplog.records)
-
-
-# ─── 7. R9 — l'audience DÉRIVÉE, servie à côté de l'identifiant ──────────────
-# Ce que la surface gagne : `visible_to`, les scopes qui DÉCOUVRENT l'instance,
-# calculé à chaque appel depuis la chaîne d'accès. La dérivation elle-même, et sa
-# confrontation au walker réel, vivent dans `test_instance_visibility.py` ; ici on ne
-# teste que le CÂBLAGE — que la surface l'appelle avec les bons arguments et sait s'en
-# passer.
-
-def test_r9_l_audience_est_servie_a_cote_de_l_identifiant(seams):
-    """Une clé de membre n'est vue que de son propriétaire. Le scope est celui de la
-    PERSONNE, pas du couple (org, sub) : c'est ce que le coffre porte en `entity_id`,
-    et ce que la dérivation doit défaire."""
-    seams.vault[_member_key()] = [_row("zoho")]
-    seams.instances[(credentials_store.MEMBER,
-                     credentials_store.member_id(ORG, SUB), "zoho", "")] = 1
-    assert _run()["instances"][0]["visible_to"] == [f"user:{SUB}"]
-
-
-def test_r9_le_pret_nominatif_elargit_l_audience_servie(seams):
-    """La surface passe bien `share_side` à la dérivation — un prêt (ADR 0044) est une
-    EXTENSION, et sans ce câblage il serait simplement invisible dans la réponse."""
-    seams.vault[_member_key()] = [_row("zoho")]
-    cle = (credentials_store.MEMBER, credentials_store.member_id(ORG, SUB), "zoho", "")
-    seams.instances[cle] = 1
-    seams.partages[cle] = ("open", [], ["user:usr_pair"])
-    assert _run()["instances"][0]["visible_to"] == ["user:usr_pair", f"user:{SUB}"]
-
-
-def test_r9_le_pret_a_toute_l_org_est_dans_l_audience_du_preteur(seams):
-    seams.vault[_member_key()] = [_row("zoho")]
-    cle = (credentials_store.MEMBER, credentials_store.member_id(ORG, SUB), "zoho", "")
-    seams.instances[cle] = 1
-    seams.partages[cle] = ("open", [], [f"org:{ORG}"])
-    assert _run()["instances"][0]["visible_to"] == [f"org:{ORG}", f"user:{SUB}"]
-
-
-def test_r9_la_surcharge_du_proprietaire_prime_sur_la_derivation(seams):
-    """La colonne `visibility` porte la SURCHARGE, pas l'audience. `hidden` ramène au
-    propriétaire seul — un cran d'ergonomie, jamais de sécurité : celui qui résout
-    continue de résoudre."""
-    seams.vault[_member_key()] = [_row("zoho")]
-    cle = (credentials_store.MEMBER, credentials_store.member_id(ORG, SUB), "zoho", "")
-    seams.instances[cle] = 1
-    seams.partages[cle] = ("open", [], ["user:usr_pair"])
-    seams.visibilites[cle] = "hidden"
-    assert _run()["instances"][0]["visible_to"] == [f"user:{SUB}"]
-
-
-def test_r9_une_audience_indisponible_n_empeche_pas_de_servir_l_identifiant(seams, caplog):
-    """Deux fail-open distincts, et c'est voulu : le partage peut tomber sans emporter
-    l'identifiant, qui vient d'une autre table. Une réponse amputée d'un champ
-    descriptif vaut mieux qu'un listing de clés qui ne sort pas."""
-    def _boom(keys):
-        raise RuntimeError("base indisponible")
-    seams.monkeypatch.setattr(ci.credentials_store, "sharing_for_vault_rows", _boom)
-    seams.vault[_member_key()] = [_row("zoho")]
-    seams.instances[(credentials_store.MEMBER,
-                     credentials_store.member_id(ORG, SUB), "zoho", "")] = 1
-    with caplog.at_level(logging.WARNING):
-        inst = _run()["instances"][0]
-    assert inst["id"] == "inst:1" and "visible_to" not in inst
-    assert any("sharing" in r.message for r in caplog.records)
-
-
-def test_r9_la_liste_n_est_ni_elargie_ni_restreinte_par_l_audience(seams):
-    """⚠️ LE test de R9 côté produit : `visible_to` est DESCRIPTIF. Une instance dont
-    l'audience ne contient pas l'appelant reste listée si elle l'était (ici : la clé
-    de l'org, que l'appelant voit par appartenance), et rien de nouveau n'apparaît.
-    La divulgation (« il existe un accès à demander, et chez qui ») reste une question
-    produit, rangée par R9 dans un réglage d'org opt-in."""
-    seams.vault[("org", str(ORG))] = [_row("hunter")]
-    avant = _run()
-    cle = ("org", str(ORG), "hunter", "")
-    seams.instances[cle] = 2
-    seams.partages[cle] = ("open", [], [])
-    apres = _run()
-    assert avant["count"] == apres["count"] == 1
-    assert [i["ref"] for i in avant["instances"]] == [i["ref"] for i in apres["instances"]]
-    assert apres["instances"][0]["visible_to"] == [f"org:{ORG}"]
 
 
 def test_l6_la_cle_privee_du_quadruplet_ne_part_jamais_sur_le_fil(seams):

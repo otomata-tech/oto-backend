@@ -11,3 +11,7 @@ LinkedIn search, scraping and messaging (and WhatsApp/Telegram/Instagram messagi
 - "send an invitation to this prospect with a note" then "reply in the thread when they accept"
 - "read my latest WhatsApp conversations and reply to the last one"
 - "show my recent LinkedIn home feed" or "comment on this post"
+
+## note — another member's account
+
+a messaging account is its owner's. another member of the org uses it only if its owner (or whoever manages it) set a rule on it — `oto_instance op=set_rule`, for a person, a team or the whole org, at a level: `read` reads its conversations, `sensitive` also sends. `oto_identity op=list` shows such an account with its `level` and `owner`; it is used only NAMED on each call, `_account=<its id>`, never as your default. without a rule it does not serve; below the level a call requires (a send needs `sensitive`), the call is refused `insufficient_level`, naming who manages it.

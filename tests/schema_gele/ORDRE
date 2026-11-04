@@ -19,7 +19,6 @@ guides.GUIDES
 nodes.NODES
 procedures.PROCEDURES
 orgs.GROUPS
-unipile.UNIPILE_GROUP_GRANTS
 connectors.CREDENTIALS
 connectors.INSTANCES
 billing.OPTION_COMPS

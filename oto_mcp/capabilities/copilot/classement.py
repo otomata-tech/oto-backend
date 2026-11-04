@@ -38,7 +38,7 @@ CORE_INLINE = ("oto_search", "oto_call", "oto_tool_schema", "data_rows", "feedba
 #: administration, raw access, session switches and wipes, the run bookkeeping (the
 #: server's job). Matched on the TARGET of an `oto_call` too.
 _INTERDITS = re.compile(
-    r"^(oto_admin_|oto_clear_|oto_use_|oto_shell$|oto_account_access$|oto_enable_tool$|"
+    r"^(oto_admin_|oto_clear_|oto_use_|oto_shell$|oto_enable_tool$|"
     r"oto_disable_tool$|run_start$|run_finish$|oto_run_thread$|oto_call$)")
 
 #: Tools that reach an outside URL or service the agent picks. Text planted in the

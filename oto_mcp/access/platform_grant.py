@@ -2,15 +2,13 @@
 
 Extracted from `cascade.py` (17/09, `status_for` N+1 batch): this seam — which, from a
 platform instance, designates the beneficiary, computes its quota, and arbitrates
-between the grants chain and the old path — depends only on `scope`
-(membership in a sharing scope) and on `grants_chain`. The walker
+between the grants chain and the old path — depends only on `grants_chain`. The walker
 (`walk_cascade`) calls it via the `platform` rung of a `CascadeProbe`,
 never directly.
 """
 from __future__ import annotations
 
 from .. import credentials_store, grants_chain
-from . import scope
 
 
 def _platform_grantee_scope(sub, active_org, scopes) -> "str | None":
@@ -47,7 +45,7 @@ def _platform_denied(sub, active_org, inst: dict) -> bool:
     with an empty `share_down` (open to all), that removed nothing, and the next call was
     served exactly as before: a credit block that did not block. The revoked scope is
     now remembered in `meta.share_denied`, and a denial wins over everything: the open
-    tier, a `share_down` grant of the other scope, a `share_side` loan. Any matching
+    tier, a `share_down` grant of the other scope. Any matching
     scope refuses — `user:<sub>`, the active team `group:<gid>` (#1239) or
     `org:<active org>` — because a block is aimed at one of them, and the others must
     not reopen it."""
@@ -65,15 +63,13 @@ def _platform_denied(sub, active_org, inst: dict) -> bool:
 
 def _platform_instance_usable(sub, active_org, inst: dict) -> bool:
     """Is the platform instance usable by `sub`? (ADR 0044 §F, mode-aware). A REVOKED
-    scope (`meta.share_denied`, F-046) refuses first, whatever follows. A `share_side`
-    loan authorizes (membership, like a BYO loan). Otherwise per `share_mode`:
+    scope (`meta.share_denied`, F-046) refuses first, whatever follows. Otherwise per
+    `share_mode`:
     'open' = empty `share_down` (free tier, open to all) OR `sub` is a grantee; 'closed' =
     `sub` is a grantee (closed by default)."""
     if _platform_denied(sub, active_org, inst):
         return False
-    down, side = inst.get("share_down") or [], inst.get("share_side") or []
-    if scope._sub_matches_scopes(sub, side):
-        return True
+    down = inst.get("share_down") or []
     granted = _platform_grantee_scope(sub, active_org, down) is not None
     if inst.get("share_mode") == "closed":
         return bool(down) and granted

@@ -163,7 +163,6 @@ def test_resolution_failure_plain_without_team(monkeypatch):
 def _wire_status(monkeypatch, *, member=False, group_secret=False, org_secret=False,
                  active_group=None):
     monkeypatch.setattr(access, "get_user_role", lambda sub: "member")
-    monkeypatch.setattr(access, "personal_instance_org", lambda *a, **k: None)
     monkeypatch.setattr(access.db, "has_member_api_key",
                         lambda sub, org, prov: member)
     monkeypatch.setattr(access.db, "get_usage_today", lambda sub, prov: 0)

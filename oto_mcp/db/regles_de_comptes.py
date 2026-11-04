@@ -1,5 +1,5 @@
-"""Les RÈGLES d'accès des comptes de connecteur : leur journal, leur garde, et la reprise
-des anciens partages (oto-backend#1499, étape 3, lot L1).
+"""Les RÈGLES d'accès des comptes de connecteur : leur journal, leur garde, leur lecture
+et leurs gestes (oto-backend#1499, étape 3).
 
 Le modèle est celui d'oto-core (`access_rules` sur un compte) : une règle par
 (compte, sujet), le sujet étant une personne, une équipe ou l'org, à un niveau
@@ -7,9 +7,10 @@ Le modèle est celui d'oto-core (`access_rules` sur un compte) : une règle par
 `db/schema/connectors.ACCOUNT_RULES` ; le modèle et ses écarts dans
 `docs/partage-de-compte.md` § Les règles de comptes.
 
-⚠️ **Rien ne lit encore les règles.** La résolution passe toujours par les anciens
-partages (`share_side`, prêts Unipile) ; la bascule est le lot L3, qui rappelle
-`reprendre_les_prets` juste avant de retirer les anciennes tables.
+Depuis la bascule (lot L3), la résolution d'un compte et la garde de niveau lisent les
+règles (`access/niveaux`, `access/comptes`) ; les anciens partages n'existent plus. Leur
+reprise vit, figée, dans la révision de la bascule (`20261105_1000_bascule_comptes`), la
+seule à lire encore les anciennes tables.
 
 **Deux déclencheurs**, posés par le démarrage (après `_SCHEMA`) et par la révision
 `20261105_0900_regles_de_comptes` :
@@ -27,16 +28,17 @@ les déclencheurs seulement s'ils manquent (même prix que `db/journal_revisions
 """
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime, timezone
+from typing import Optional
 
-from psycopg.rows import dict_row
-
-from . import sous_instances
+from ._conn import _connect
 
 logger = logging.getLogger(__name__)
 
-NIVEAU_REPRIS = "sensitive"
 ORIGINE_REPRISE = "reprise"
+ORIGINE_MANUELLE = "manuelle"
 
 _FONCTION_JOURNAL = """
 CREATE OR REPLACE FUNCTION connector_account_share_journal() RETURNS trigger
@@ -60,7 +62,7 @@ BEGIN
     END IF;
     INSERT INTO connector_account_share_events
         (org_id, instance_id, action, subject_kind, subject_id, level, previous_level,
-         services, actor_sub)
+         services, actor_sub, hors_org)
     VALUES (r.org_id, r.instance_id,
             CASE WHEN TG_OP = 'DELETE' THEN 'removed' ELSE 'set' END,
             CASE WHEN r.subject_org THEN 'org'
@@ -70,7 +72,10 @@ BEGIN
             CASE WHEN TG_OP = 'UPDATE' THEN OLD.level END,
             r.services,
             COALESCE(NULLIF(current_setting('oto.acteur', true), ''),
-                     CASE WHEN TG_OP = 'INSERT' THEN r.created_by END));
+                     CASE WHEN TG_OP = 'INSERT' THEN r.created_by END),
+            r.subject_user IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM org_members m
+                 WHERE m.org_id = r.org_id AND m.sub = r.subject_user));
     RETURN NULL;
 END $$"""
 
@@ -122,238 +127,195 @@ def poser_journal_des_partages(conn) -> list[str]:
     return poses
 
 
-# ── La reprise des anciens partages ──────────────────────────────────────────────
+# ── La lecture : les comptes d'un connecteur, avec leurs règles ──────────────────
 
-# `{instances}` : la relation des instances lue — la table, ou, pour la mesure de la
-# bascule (lot L2), la table complétée des sous-instances que la reprise poserait
-# (`sous_instances.INSTANCES_SIMULEES`), lue sans rien écrire.
-_PRETS_UNIPILE = """
-SELECT g.owner_sub, g.provider, g.grantee_sub AS cible, ua.org_id, si.id AS instance_id
-  FROM connector_account_grants g
-  LEFT JOIN unipile_accounts ua ON ua.sub = g.owner_sub AND ua.provider = g.provider
-  LEFT JOIN {instances} si ON """ + sous_instances.JOINTURE + """
- ORDER BY 1, 2, 3, 4
-"""
-
-_PRETS_UNIPILE_EQUIPE = """
-SELECT gg.owner_sub, gg.provider, gg.grantee_group_id AS cible, gr.org_id AS org_cible,
-       ua.org_id, si.id AS instance_id
-  FROM connector_account_group_grants gg
-  JOIN org_groups gr ON gr.id = gg.grantee_group_id
-  LEFT JOIN unipile_accounts ua ON ua.sub = gg.owner_sub AND ua.provider = gg.provider
-  LEFT JOIN {instances} si ON """ + sous_instances.JOINTURE + """
- ORDER BY 1, 2, 3, 5
-"""
-
-_PRETS_DU_COFFRE = """
-SELECT c.entity_type, c.entity_id, c.connector, c.account, t.cible,
-       c.share_services -> t.cible AS services, i.id AS instance_id
-  FROM connector_credentials c
- CROSS JOIN LATERAL jsonb_array_elements_text(
-       CASE WHEN jsonb_typeof(c.share_side) = 'array' THEN c.share_side
-            ELSE '[]'::jsonb END) AS t(cible)
-  LEFT JOIN {instances} i
-    ON i.owner_type = c.entity_type AND i.owner_id = c.entity_id
-   AND i.connector = c.connector AND i.account = c.account AND i.revoked_at IS NULL
- ORDER BY 1, 2, 3, 4, 5
-"""
-
-_COMPTES_D_ORG = """
-SELECT i.id AS instance_id, o.id AS org_id
-  FROM {instances} i JOIN orgs o ON o.id::text = i.owner_id
- WHERE i.owner_type = 'org' AND i.revoked_at IS NULL
- ORDER BY 1
+# Un compte vivant, son org (celle de l'équipe pour un compte d'équipe), son défaut
+# (`meta.is_default` de sa ligne de coffre) et ses règles, en UNE requête.
+_COMPTES = """
+SELECT i.id AS instance_id, i.owner_type, i.owner_id, i.connector, i.account, i.label,
+       CASE i.owner_type
+            WHEN 'org' THEN CASE WHEN i.owner_id ~ '^[0-9]+$' THEN i.owner_id::bigint END
+            WHEN 'member' THEN CASE WHEN i.owner_id ~ '^[0-9]+:'
+                                    THEN split_part(i.owner_id, ':', 1)::bigint END
+            WHEN 'group' THEN g.org_id END AS org_id,
+       COALESCE(c.meta->>'is_default', '') = 'true' AS is_default,
+       c.meta->>'default_set_by' AS default_par, c.meta->>'default_set_at' AS default_le,
+       o.name AS org_nom,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                     'user', r.subject_user, 'group', r.subject_group, 'org', r.subject_org,
+                     'level', r.level, 'services', r.services) ORDER BY r.id)
+                   FROM connector_account_rules r WHERE r.instance_id = i.id),
+                '[]'::jsonb) AS regles
+  FROM connector_instances i
+  LEFT JOIN org_groups g ON i.owner_type = 'group' AND i.owner_id = g.id::text
+  LEFT JOIN orgs o ON o.id = CASE i.owner_type
+            WHEN 'org' THEN CASE WHEN i.owner_id ~ '^[0-9]+$' THEN i.owner_id::bigint END
+            WHEN 'member' THEN CASE WHEN i.owner_id ~ '^[0-9]+:'
+                                    THEN split_part(i.owner_id, ':', 1)::bigint END
+            WHEN 'group' THEN g.org_id END
+  LEFT JOIN connector_credentials c
+    ON c.entity_type = i.owner_type AND c.entity_id = i.owner_id
+   AND c.connector = i.connector AND c.account = i.account
+ WHERE i.revoked_at IS NULL
+   AND (%(connector)s::text IS NULL OR i.connector = %(connector)s) AND ({filtre})
+ ORDER BY i.owner_type, i.owner_id, i.account
 """
 
 
-class _Voulues:
-    """Les règles que les anciens partages donnent, et ce qu'ils ne donnent pas."""
-
-    def __init__(self):
-        self.regles: dict[tuple, dict] = {}
-        self.non_reprises: list[dict] = []
-
-    def ajouter(self, instance_id: int, org_id: int, sujet: tuple, services):
-        cle = (instance_id, *sujet)
-        deja = self.regles.get(cle)
-        if deja is None:
-            self.regles[cle] = {"org_id": org_id, "services": services}
-            return
-        # Deux partages vers le même sujet : le plus large l'emporte (NULL = tout).
-        if deja["services"] is None or services is None:
-            deja["services"] = None
-        else:
-            deja["services"] = sorted(set(deja["services"]) | set(services))
-
-    def ecarter(self, source: str, cible: str, motif: str, **quoi):
-        self.non_reprises.append({"source": source, "cible": cible, "motif": motif, **quoi})
+def comptes_des_lignes(connector: str, lignes: list[tuple[str, str, str]]) -> list[dict]:
+    """Les comptes vivants (instances) de ces lignes de coffre
+    (`(entity_type, entity_id, account)` de `connector`), avec leurs règles."""
+    if not lignes:
+        return []
+    filtre = ("(i.owner_type, i.owner_id, i.account) IN (SELECT * FROM unnest("
+              "%(types)s::text[], %(ids)s::text[], %(comptes)s::text[]))")
+    with _connect() as conn:
+        return conn.execute(_COMPTES.format(filtre=filtre), {
+            "connector": connector, "types": [t for t, _, _ in lignes],
+            "ids": [str(i) for _, i, _ in lignes],
+            "comptes": [a or "" for _, _, a in lignes]}).fetchall()
 
 
-def _sujet(cible: str) -> tuple:
-    """`(subject_user, subject_group, subject_org)` d'une cible `user:`/`group:`/`org:`."""
-    genre, _, ident = cible.partition(":")
-    if genre == "user" and ident:
-        return (ident, None, False)
-    if genre == "group" and ident.isdigit():
-        return (None, int(ident), False)
-    if genre == "org" and ident.isdigit():
-        return (None, None, True)
-    raise ValueError(cible)
+def comptes_d_autrui(connector: str, org_id: int, sub: str, account: str) -> list[dict]:
+    """Les comptes PERSONNELS de `connector` nommés `account` que d'autres que `sub`
+    possèdent dans l'org `org_id` — ceux qu'un appel ne sert que nommés."""
+    filtre = ("i.owner_type = 'member' AND starts_with(i.owner_id, %(prefixe)s) "
+              "AND i.owner_id <> %(mien)s AND i.account = %(account)s")
+    with _connect() as conn:
+        return conn.execute(_COMPTES.format(filtre=filtre), {
+            "connector": connector, "prefixe": f"{org_id}:", "mien": f"{org_id}:{sub}",
+            "account": account}).fetchall()
 
 
-def _org_et_proprietaire(groupes: dict, entity_type: str, entity_id: str):
-    """L'org d'un compte du coffre et la personne qui le possède (None si collectif)."""
-    if entity_type == "member":
-        org, _, sub = entity_id.partition(":")
-        return (int(org) if org.isdigit() else None), sub
-    if entity_type == "org":
-        return (int(entity_id) if entity_id.isdigit() else None), None
-    if entity_type == "group" and entity_id.isdigit():
-        return groupes.get(int(entity_id)), None
-    return None, (entity_id if entity_type == "user" else None)
+def comptes_hors_org(connector: Optional[str], sub: str, org_id: int,
+                     account: Optional[str] = None) -> list[dict]:
+    """Les comptes de `connector` d'AUTRES orgs que `org_id` que `sub` peut NOMMER : les
+    siens (sa clé personnelle posée dans une autre org, #172) et ceux qu'une règle qui le
+    NOMME lui ouvre (D1, #1499). Un compte personnel n'y figure que si son propriétaire
+    est encore membre de son org. `connector` None : tous les connecteurs (la liste des
+    comptes). `account` : seulement ceux de ce nom. Ils ne servent
+    que nommés (`access/comptes`)."""
+    filtre = (
+        "(i.id IN (SELECT r.instance_id FROM connector_account_rules r "
+        "          WHERE r.subject_user = %(sub)s AND r.level <> 'none' "
+        "            AND r.org_id <> %(org)s) "
+        " OR (i.owner_type = 'member' AND NOT starts_with(i.owner_id, %(prefixe)s) "
+        "     AND substr(i.owner_id, strpos(i.owner_id, ':') + 1) = %(sub)s)) "
+        "AND (i.owner_type <> 'member' OR EXISTS (SELECT 1 FROM org_members m "
+        "     WHERE i.owner_id ~ '^[0-9]+:' "
+        "       AND m.org_id = split_part(i.owner_id, ':', 1)::bigint "
+        "       AND m.sub = substr(i.owner_id, strpos(i.owner_id, ':') + 1)))")
+    if account is not None:
+        filtre += " AND i.account = %(account)s"
+    with _connect() as conn:
+        return conn.execute(_COMPTES.format(filtre=filtre), {
+            "connector": connector, "sub": sub, "org": int(org_id),
+            "prefixe": f"{org_id}:", "account": account}).fetchall()
 
 
-def lire_les_partages(cur, instances: str = "connector_instances") -> dict:
-    """Tout ce que la reprise lit, en LECTURE seule : membres, équipes, prêts Unipile,
-    prêts du coffre, comptes d'org. `instances` : la relation des instances
-    (`sous_instances.INSTANCES_SIMULEES` pour mesurer sans poser les sous-instances)."""
-    return {
-        "membres": {(r["org_id"], r["sub"]) for r in cur.execute(
-            "SELECT m.org_id, m.sub FROM org_members m JOIN users u ON u.sub = m.sub")},
-        "groupes": {r["id"]: r["org_id"]
-                    for r in cur.execute("SELECT id, org_id FROM org_groups")},
-        "prets_unipile": cur.execute(_PRETS_UNIPILE.format(instances=instances)).fetchall(),
-        "prets_unipile_equipe": cur.execute(
-            _PRETS_UNIPILE_EQUIPE.format(instances=instances)).fetchall(),
-        "prets_du_coffre": cur.execute(
-            _PRETS_DU_COFFRE.format(instances=instances)).fetchall(),
-        "comptes_d_org": cur.execute(_COMPTES_D_ORG.format(instances=instances)).fetchall(),
-    }
+def defauts_des_etapes(org_id: int, group_id: Optional[int]) -> list[dict]:
+    """Les défauts multi-compte posés aux étapes de l'org et de l'équipe active : le
+    compte, son auteur et sa date (`meta.default_set_by`/`default_set_at`, NULL avant
+    #1499) — ce qu'`oto_context` montre (D3)."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT entity_type, entity_id, connector, account, "
+            "meta->>'default_set_by' AS default_par, meta->>'default_set_at' AS default_le "
+            "FROM connector_credentials WHERE meta->>'is_default' = 'true' "
+            "AND ((entity_type = 'org' AND entity_id = %s) "
+            "  OR (entity_type = 'group' AND entity_id = %s)) "
+            "ORDER BY entity_type DESC, connector, account",
+            (str(org_id), str(group_id) if group_id is not None else None)).fetchall()
 
 
-def _calculer(cur) -> _Voulues:
-    return calculer_les_regles(lire_les_partages(cur))
+def compte_par_id(instance_id: int) -> Optional[dict]:
+    """Un compte vivant par son identifiant, avec ses règles (même forme)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            _COMPTES.replace("i.connector = %(connector)s AND ", "").format(
+                filtre="i.id = %(id)s"), {"id": int(instance_id)}).fetchall()
+    return rows[0] if rows else None
 
 
-def calculer_les_regles(partages: dict) -> _Voulues:
-    """Les règles que les anciens partages donnent — PUR, sur ce que `lire_les_partages`
-    a lu. La reprise l'écrit ; la mesure de la bascule (`scripts/mesure_bascule_comptes_1499`)
-    le compte sans rien écrire."""
-    from ..access import PORTEURS_A_SERVICES  # paresseux : `access` importe `db`
+# ── Les gestes : poser, retirer une règle, lire le journal ───────────────────────
 
-    v = _Voulues()
-    membres, groupes = partages["membres"], partages["groupes"]
-
-    for r in partages["prets_unipile"]:
-        quoi = {"proprietaire": r["owner_sub"], "canal": r["provider"],
-                "org_id": r["org_id"], "instance_id": r["instance_id"]}
-        if r["instance_id"] is None:
-            v.ecarter("unipile_pret", f"user:{r['cible']}", "sans_compte", **quoi)
-        elif r["cible"] == r["owner_sub"]:
-            v.ecarter("unipile_pret", f"user:{r['cible']}", "proprietaire", **quoi)
-        elif (r["org_id"], r["cible"]) not in membres:
-            v.ecarter("unipile_pret", f"user:{r['cible']}", "hors_org", **quoi)
-        else:
-            v.ajouter(r["instance_id"], r["org_id"], (r["cible"], None, False), None)
-
-    for r in partages["prets_unipile_equipe"]:
-        quoi = {"proprietaire": r["owner_sub"], "canal": r["provider"],
-                "org_id": r["org_id"], "instance_id": r["instance_id"]}
-        if r["instance_id"] is None:
-            v.ecarter("unipile_pret_equipe", f"group:{r['cible']}", "sans_compte", **quoi)
-        elif r["org_cible"] != r["org_id"]:
-            v.ecarter("unipile_pret_equipe", f"group:{r['cible']}", "hors_org", **quoi)
-        else:
-            v.ajouter(r["instance_id"], r["org_id"], (None, r["cible"], False), None)
-
-    for r in partages["prets_du_coffre"]:
-        cible = r["cible"]
-        org, proprietaire = _org_et_proprietaire(groupes, r["entity_type"], r["entity_id"])
-        quoi = {"connecteur": r["connector"], "org_id": org, "instance_id": r["instance_id"]}
-        try:
-            sujet = _sujet(cible)
-        except ValueError:
-            v.ecarter("pret_du_coffre", cible, "cible_inconnue", **quoi)
-            continue
-        if r["instance_id"] is None or org is None:
-            v.ecarter("pret_du_coffre", cible,
-                      "sans_instance" if r["instance_id"] is None else "sans_org", **quoi)
-            continue
-        user, groupe, _ = sujet
-        dans_org = ((user is not None and (org, user) in membres)
-                    or (groupe is not None and groupes.get(groupe) == org)
-                    or (sujet[2] and cible == f"org:{org}"))
-        if user is not None and user == proprietaire:
-            v.ecarter("pret_du_coffre", cible, "proprietaire", **quoi)
-            continue
-        if not dans_org:
-            v.ecarter("pret_du_coffre", cible, "hors_org", **quoi)
-            continue
-        services = r["services"]
-        if isinstance(services, list):
-            services = sorted({str(s) for s in services})
-        elif r["connector"] in PORTEURS_A_SERVICES:
-            services = []          # porteur à services sans liste : rien de prêté
-        else:
-            services = None
-        v.ajouter(r["instance_id"], org, sujet, services)
-
-    # (a) Un compte d'org sert aujourd'hui à tout membre : une règle d'org le dit.
-    for r in partages["comptes_d_org"]:
-        v.ajouter(r["instance_id"], r["org_id"], (None, None, True), None)
-    return v
-
-
-def reprendre_les_prets(conn) -> dict:
-    """RECALCULE les règles issues des anciens partages, dans la transaction de
-    l'appelant. Idempotente : rejouée, elle ne change rien.
-
-    - une sous-instance par compte Unipile (`sous_instances.poser_toutes`) ;
-    - prêts Unipile (personne, équipe) et `share_side` du coffre → règles `sensitive`,
-      avec la liste de `share_services` pour un compte Google ou Microsoft ; une cible
-      `org:<id>` → règle d'org ;
-    - chaque compte d'org vivant → règle d'org `sensitive` (écart (a)) ;
-    - un prêt dont le bénéficiaire n'est pas de l'org du compte (prêt entre orgs), ou
-      que rien ne désigne, n'est PAS repris : il est rendu dans `non_reprises` et
-      journalisé (écart (d)).
-
-    Les règles reprises portent `origine = 'reprise'` : une règle reprise que plus aucun
-    partage ne donne est retirée, une règle `manuelle` n'est jamais touchée (elle gagne
-    sur la règle reprise du même sujet). Rend le bilan."""
-    cur = conn.cursor(row_factory=dict_row)
-    bilan = {"sous_instances": sous_instances.poser_toutes(cur)}
-    voulues = _calculer(cur)
-    existantes = {
-        (r["instance_id"], r["subject_user"], r["subject_group"], r["subject_org"]): r
-        for r in cur.execute(
-            "SELECT id, instance_id, subject_user, subject_group, subject_org, level, "
-            "services, origine FROM connector_account_rules").fetchall()}
-    posees = mises_a_jour = gardees = 0
-    for cle, regle in sorted(voulues.regles.items(), key=lambda kv: repr(kv[0])):
-        deja = existantes.get(cle)
-        if deja is None:
-            cur.execute(
+def poser_regle(org_id: int, instance_id: int, *, subject_user: Optional[str] = None,
+                subject_group: Optional[int] = None, subject_org: bool = False,
+                level: str, services: Optional[list] = None, acteur: str) -> dict:
+    """Pose (ou remplace) la règle MANUELLE du sujet sur le compte ; le journal l'écrit
+    par déclencheur, l'auteur étant `oto.acteur`. Une règle reprise du même sujet devient
+    manuelle : un geste l'emporte toujours sur la reprise."""
+    with _connect() as conn:
+        with conn.transaction():
+            conn.execute("SELECT set_config('oto.acteur', %s, true)", (acteur,))
+            return conn.execute(
                 "INSERT INTO connector_account_rules (org_id, instance_id, subject_user, "
-                "subject_group, subject_org, level, services, origine) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                (regle["org_id"], *cle, NIVEAU_REPRIS, regle["services"], ORIGINE_REPRISE))
-            posees += 1
-        elif deja["origine"] != ORIGINE_REPRISE:
-            gardees += 1
-        elif deja["level"] != NIVEAU_REPRIS or deja["services"] != regle["services"]:
-            cur.execute("UPDATE connector_account_rules SET level = %s, services = %s, "
-                        "updated_at = NOW() WHERE id = %s",
-                        (NIVEAU_REPRIS, regle["services"], deja["id"]))
-            mises_a_jour += 1
-    perimees = [r["id"] for cle, r in existantes.items()
-                if r["origine"] == ORIGINE_REPRISE and cle not in voulues.regles]
-    if perimees:
-        cur.execute("DELETE FROM connector_account_rules WHERE id = ANY(%s)", (perimees,))
-    bilan.update(posees=posees, mises_a_jour=mises_a_jour, retirees=len(perimees),
-                 manuelles_gardees=gardees, non_reprises=voulues.non_reprises)
-    for e in voulues.non_reprises:
-        logger.warning("reprise des prêts : NON repris (%s) %s", e["motif"], e)
-    logger.info("reprise des prêts : %s",
-                {k: v for k, v in bilan.items() if k != "non_reprises"}
-                | {"non_reprises": len(voulues.non_reprises)})
-    return bilan
+                "subject_group, subject_org, level, services, origine, created_by) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT ON CONSTRAINT connector_account_rules_instance_subject_key "
+                "DO UPDATE SET level = EXCLUDED.level, services = EXCLUDED.services, "
+                "origine = EXCLUDED.origine, updated_at = NOW() "
+                "RETURNING id, instance_id, subject_user, subject_group, subject_org, "
+                "level, services, origine, created_by, created_at, updated_at",
+                (org_id, instance_id, subject_user, subject_group, subject_org, level,
+                 services, ORIGINE_MANUELLE, acteur)).fetchone()
+
+
+def retirer_regle(instance_id: int, *, subject_user: Optional[str] = None,
+                  subject_group: Optional[int] = None, subject_org: bool = False,
+                  acteur: str) -> bool:
+    """Retire la règle du sujet sur le compte (reprise ou manuelle). False si aucune."""
+    with _connect() as conn:
+        with conn.transaction():
+            conn.execute("SELECT set_config('oto.acteur', %s, true)", (acteur,))
+            cur = conn.execute(
+                "DELETE FROM connector_account_rules WHERE instance_id = %s "
+                "AND subject_user IS NOT DISTINCT FROM %s "
+                "AND subject_group IS NOT DISTINCT FROM %s AND subject_org = %s",
+                (instance_id, subject_user, subject_group, subject_org))
+            return (cur.rowcount or 0) > 0
+
+
+def regles_du_compte(instance_id: int) -> list[dict]:
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT id, subject_user, subject_group, subject_org, level, services, origine, "
+            "created_by, created_at, updated_at FROM connector_account_rules "
+            "WHERE instance_id = %s ORDER BY id", (instance_id,)).fetchall()
+
+
+def journal_du_compte(instance_id: int, limit: int = 100) -> list[dict]:
+    """Le journal des partages d'un compte, le plus récent d'abord."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT id, action, subject_kind, subject_id, level, previous_level, services, "
+            "owner_before, hors_org, actor_sub, at FROM connector_account_share_events "
+            "WHERE instance_id = %s "
+            "ORDER BY at DESC, id DESC LIMIT %s", (instance_id, limit)).fetchall()
+
+
+# ── Le défaut multi-compte : son auteur et sa date (#1499, D3) ──────────────────
+#
+# `meta.is_default` d'une ligne de coffre désigne le compte qui sert sans nom à son
+# palier ; D3 (`access/niveaux.defaut_qui_tranche`) ne le croit que posé par qui gère le
+# compte. Chaque pose enregistre donc son auteur et sa date ; un défaut d'avant, sans
+# auteur, a été posé sous les mêmes gardes (voir `defaut_qui_tranche`).
+
+def marque_du_defaut(par: str) -> dict:
+    """Ce qu'une pose du défaut écrit dans `meta`, à côté de `is_default: true`."""
+    if not par:
+        raise ValueError("a default is always set by someone (`par`)")
+    return {"is_default": True, "default_set_by": par,
+            "default_set_at": datetime.now(timezone.utc).isoformat()}
+
+
+def poser_le_defaut(conn, entity_type: str, entity_id: str, connector: str, account: str,
+                    *, par: str) -> None:
+    """Le défaut UNIQUE du palier : `account` le devient (auteur, date), les autres
+    lignes du même palier et connecteur le perdent, avec leur marque."""
+    conn.execute(
+        "UPDATE connector_credentials SET meta = CASE WHEN account = %s "
+        "THEN meta || %s::jsonb "
+        "ELSE (meta - 'default_set_by' - 'default_set_at') || '{\"is_default\": false}' END "
+        "WHERE entity_type = %s AND entity_id = %s AND connector = %s",
+        (account, json.dumps(marque_du_defaut(par)), entity_type, str(entity_id), connector))

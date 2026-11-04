@@ -39,13 +39,12 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.projects.PROJECT_FILES,   # activité et fichiers d'un projet
     schema.grants.GRANTS,            # partages de ressources possédées
     schema.tokens.TOKENS,            # jetons d'API et d'upload
-    schema.unipile.UNIPILE,          # comptes messagerie hébergés et leurs prêts
+    schema.unipile.UNIPILE,          # comptes messagerie hébergés
     schema.orgs.MEMBERSHIP,          # appartenance et invitations
     schema.guides.GUIDES,            # instructions plateforme (#50) — les guides sont des nœuds
     schema.nodes.NODES,              # nœuds de contenu et blocs
     schema.procedures.PROCEDURES,    # procédures d'org, révisions, bibliothèque
     schema.orgs.GROUPS,              # équipes et leurs membres
-    schema.unipile.UNIPILE_GROUP_GRANTS,  # grant de compte connecteur cible groupe (#55)
     schema.connectors.CREDENTIALS,   # coffre des credentials (ADR 0002/0033)
     schema.connectors.INSTANCES,     # instances de connecteur (blueprint 0053-D9, L6)
     schema.billing.OPTION_COMPS,     # options offertes

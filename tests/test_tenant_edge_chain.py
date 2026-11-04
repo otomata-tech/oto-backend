@@ -64,7 +64,7 @@ def aretes(monkeypatch):
 
 def probe(*, tenant=True, platform=False):
     return access.CascadeProbe(
-        member=lambda s, o, p: None, member_cross=lambda s, o, p: None,
+        member=lambda s, o, p: None,
         legacy_user=lambda s, p: None,
         group=lambda g, p: None, org=lambda o, p: None,
         tenant=lambda t, p: ("TK" if tenant else None),

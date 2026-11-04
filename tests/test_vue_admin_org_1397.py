@@ -1,18 +1,15 @@
 """Ce qu'un admin d'org voit de son org, depuis un agent (signal 1397).
 
-`oto_group op=get` (membres + comptes partagés ou prêtés à l'équipe), `op=list_invites`
-sur `oto_org` et `oto_group`, et `oto_org op=list_loans` : les prêts actifs de l'org.
-Les deux premières branchent les handlers que sert déjà la console ; la troisième est
-neuve. Les autorisations restent celles du serveur. Toutes les valeurs sont fictives.
+`oto_group op=get` (membres + comptes de l'équipe) et `op=list_invites` sur `oto_org` et
+`oto_group` : elles branchent les handlers que sert déjà la console. `oto_org
+op=list_loans` est retirée par la bascule des comptes (#1499) : les règles d'un compte se
+lisent par `oto_instance op=rules`. Les autorisations restent celles du serveur. Toutes
+les valeurs sont fictives.
 """
-from datetime import datetime, timezone
-
 import pytest
 
-from oto_mcp import credentials_store
 from oto_mcp.capabilities import org_console
 from oto_mcp.capabilities._types import AuthzDenied, RawCtx, ResolvedCtx
-from oto_mcp.capabilities.connectors import sharing
 from oto_mcp.capabilities.registry import CAPABILITIES
 
 ORG = 7
@@ -24,14 +21,12 @@ def _cap(key):
 
 
 @pytest.mark.parametrize("cle,inp,seam", [
-    ("org.console", org_console.OrgInput(op="list_loans", org_id=ORG), "is_org_admin"),
     ("org.console", org_console.OrgInput(op="list_invites", org_id=ORG), "is_org_admin"),
-    ("org.loans.list", sharing.OrgLoansInput(org_id=ORG), "is_org_admin"),
     ("group.console", org_console.GroupInput(op="list_invites", group_id=3), "can_admin_group"),
     ("group.console", org_console.GroupInput(op="get", group_id=3), "can_read_group"),
 ])
 def test_les_ops_neuves_sont_gardees_cote_serveur(monkeypatch, cle, inp, seam):
-    """Les invitations et les prêts de l'org = l'administrer ; celles d'une équipe = la
+    """Les invitations de l'org = l'administrer ; celles d'une équipe = la
     mener ; lire une équipe = en être membre (un admin d'org y passe par l'escalade).
     Les mêmes règles que les capacités que la console appelle déjà."""
     from oto_mcp import roles
@@ -60,47 +55,6 @@ def test_group_get_et_list_invites_branchent_les_handlers_de_la_console(monkeypa
     assert vus == [("get", 3), ("g_inv", 3), ("o_inv", ORG)]
 
 
-@pytest.fixture
-def parc(monkeypatch):
-    lignes = [
-        {"entity_id": f"{ORG}:alice", "connector": "google", "account": "alice@exemple.test",
-         "share_side": ["user:bob", "group:3"],
-         "share_services": {"user:bob": ["google_ads"], "group:3": ["drive", "gmail"]}},
-        {"entity_id": f"{ORG}:carol", "connector": "zoho", "account": "",
-         "share_side": [f"org:{ORG}"], "share_services": {}},
-    ]
-    monkeypatch.setattr(credentials_store, "prets_de_l_org",
-                        lambda org: lignes if org == ORG else [])
-    pose = datetime(2026, 10, 15, 9, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(sharing.loan_events, "dernieres_poses", lambda ls: {
-        (credentials_store.MEMBER, f"{ORG}:alice", "google", "alice@exemple.test",
-         "user:bob"): pose})
-    monkeypatch.setattr(sharing.access, "libelles_preteurs",
-                        lambda subs: {s: f"{s}@exemple.test" for s in subs})
-    monkeypatch.setattr(sharing.group_store, "get_group",
-                        lambda gid: {"id": gid, "name": "Ventes"})
-    return pose
-
-
-def test_list_loans_dit_qui_prete_quoi_a_qui_et_depuis_quand(parc):
-    out = org_console._org(CTX, org_console.OrgInput(op="list_loans", org_id=ORG))
-    assert out["count"] == 3
-    a_bob, a_equipe, a_org = out["loans"]
-    assert (a_bob["lender"], a_bob["connector"], a_bob["account"], a_bob["to"],
-            a_bob["to_sub"], a_bob["to_label"]) == (
-        "alice@exemple.test", "google", "alice@exemple.test", "user", "bob",
-        "bob@exemple.test")
-    assert a_bob["since"] == parc.isoformat()
-    # Les services prêtés, par emprunteur ; une clé sans services se prête entière.
-    assert (a_bob["services"], a_equipe["services"], a_org["services"]) == (
-        ["google_ads"], ["drive", "gmail"], None)
-    assert (a_equipe["to"], a_equipe["to_group"], a_equipe["to_label"]) == ("group", 3, "Ventes")
-    # Prêté avant que le journal n'existe : la date n'est pas connue, et ça se dit.
-    assert a_equipe["since"] is None
-    assert (a_org["lender_sub"], a_org["to"], a_org["since"]) == ("carol", "org", None)
-    sharing.OrgLoans.model_validate(out)
-
-
-def test_list_loans_d_une_org_sans_pret_est_vide(parc):
-    out = sharing._list_org_loans(CTX, sharing.OrgLoansInput(org_id=99))
-    assert out == {"org_id": 99, "loans": [], "count": 0}
+def test_list_loans_est_retiree_sans_alias():
+    assert "list_loans" not in org_console.OrgInput.model_fields["op"].annotation.__args__
+    assert not any(c.key == "org.loans.list" for c in CAPABILITIES)

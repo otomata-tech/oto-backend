@@ -400,7 +400,7 @@ def test_partage_par_defaut_n_est_pas_compte(propre):
     code, sortie = _lancer(MULTI)
     assert code == 0, sortie
     assert "partage d'instance" not in sortie
-    _exec("UPDATE connector_credentials SET share_side = '[\"user:x\"]'::jsonb "
+    _exec("UPDATE connector_credentials SET share_down = '[\"user:x\"]'::jsonb "
           "WHERE entity_type = 'org' AND entity_id = %s AND connector = %s", (str(ORG), MULTI))
     code, sortie = _lancer(MULTI)
     assert "partage d'instance non repris sur 1 ligne(s)" in sortie

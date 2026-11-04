@@ -186,19 +186,17 @@ def test_le_role_se_lit_en_base_sur_le_sub_qualifie(cle_tenant, monkeypatch):
         rule(RawCtx(sub=SUB_T), _Inp())
 
 
-# ── 5. un bénéficiaire HORS de l'org (projet partagé, #480) ───────────────────
+# ── 5. un bénéficiaire HORS de l'org (projet partagé, #1499 D1) ───────────────
 # Trou relevé à la conception de l'accès invité : `tenant_rung` lisait l'org de
 # CONTEXTE, que `_project=` co-pose sans appartenance. Un bénéficiaire hors de l'org
 # puisait dans le budget de l'arête tenant→org de celle-ci (un droit de l'org, qu'on
 # ne lui a pas prêté) et perdait sa propre clé de tenant quand l'org en était
-# révoquée. L'arête se lit sur l'org des CLÉS bornée par #480 (`org_partagee`).
+# révoquée. L'arête se lit sur l'org dont l'appelant est MEMBRE
+# (`scope.org_d_appartenance`) ; rien ne la lui prête (l'héritage #480 est retiré).
 
-def _hors_org(herite: bool = False):
+def _hors_org():
     from oto_mcp import session_org
-    from oto_mcp.access.heritage import ClesDuProjet
-    return session_org.set_call_cles(ClesDuProjet(
-        sub=SUB_T, projet=1, org=ORG, membre=False, org_heritee=herite,
-        groupe_herite=None))
+    return session_org.set_call_hors_org(SUB_T, ORG)
 
 
 def _sous_verdict(jeton, fn):
@@ -206,7 +204,7 @@ def _sous_verdict(jeton, fn):
     try:
         return fn()
     finally:
-        session_org.reset_call_cles(jeton)
+        session_org.reset_call_hors_org(jeton)
 
 
 def test_hors_org_il_ne_puise_pas_dans_le_budget_de_l_org(cle_tenant, contexte):
@@ -223,17 +221,3 @@ def test_hors_org_la_revocation_de_l_org_ne_lui_retire_pas_sa_cle(cle_tenant, co
     grants_chain.tenant_revoke(PILOTE, CONN, ORG)
     rc = _sous_verdict(_hors_org(), lambda: access.resolve_credential(CONN, sub=SUB_T))
     assert (rc.key, rc.mode) == ("k-tenant", "tenant")
-
-
-def test_avec_l_heritage_il_puise_dans_le_budget_de_l_org(cle_tenant, contexte):
-    """Le prêt déclaré au partage (`credentials="inherit"`) ouvre les droits partagés
-    de l'org — son budget compris, et sa borne avec."""
-    grants_chain.tenant_grant(PILOTE, CONN, ORG, 1, created_by="operateur")
-
-    def _deux_appels():
-        assert access.resolve_credential(CONN, sub=SUB_T).mode == "tenant"
-        with pytest.raises(McpError):
-            access.resolve_credential(CONN, sub=SUB_T)
-    _sous_verdict(_hors_org(herite=True), _deux_appels)
-    assert db_grants.counter_sum_today(
-        grants_chain.tenant_ref(PILOTE, CONN), "org", str(ORG)) == 1

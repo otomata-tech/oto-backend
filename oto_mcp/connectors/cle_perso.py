@@ -18,10 +18,9 @@ ferme seulement la porte que la clé perso laissait ouverte à côté.
   côtés de la fenêtre L7 ; la résolution (`access.resolve`) en fait un refus NOMMÉ quand
   plus rien ne sert, et refuse l'instance perso désignée par `_instance=` ou le projet ;
 - à la CONNEXION (`connectors.activation_gate.exiger_connectable`) et à la POSE d'une clé
-  perso (`capabilities.me_credentials`) : on ne branche pas ce qui ne servirait pas ;
-- au PRÊT d'une clé perso (`capabilities.connectors.sharing`) ; un prêt à une équipe posé
-  avant la politique cesse de servir (`group_store.lent_instances`), un prêt nominatif
-  s'épingle, donc tombe sous le refus de l'instance désignée.
+  perso (`capabilities.me_credentials`) : on ne branche pas ce qui ne servirait pas.
+  Le compte perso d'un autre, nommé par l'appel, tombe sous le même refus (instance
+  désignée).
 
 **Stockage** : une ligne de `connector_settings` (scope `org`, clé `personal_key`, valeur
 `forbidden`), la table des propriétés de connecteur surchargeables par org — aucune
@@ -53,7 +52,6 @@ CODE = "personal_key_forbidden"
 A_L_APPEL = "and no team, organization or included key is reachable for you"
 A_L_INSTANCE = "so the personal instance named by this call is not served"
 A_LA_CONNEXION = "so no personal key can be connected for it"
-AU_PRET = "so no personal key can be lent in it"
 
 
 class ClePersoInterdite(McpError):

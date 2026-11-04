@@ -42,7 +42,6 @@ def test_get_project_with_grants(monkeypatch):
     monkeypatch.setattr(R.db, "get_project_by_id", lambda i: PROW if i == 7 else None)
     monkeypatch.setattr(R.ownership, "list_grants", lambda rt, rid: [])
     monkeypatch.setattr(R.partage_en_attente, "lister", lambda kind, rid: [])  # hors base
-    monkeypatch.setattr(R.heritage, "modes_du_projet", lambda pid: {})   # #480, hors base
     out = R._resources(CTX, R.ResourceInput(op="get", resource_type="project", resource_id="7"))
     assert out["name"] == "Proj" and out["grants"] == []
 

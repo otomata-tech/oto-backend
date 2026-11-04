@@ -27,8 +27,8 @@ Deux trous ferment ici, chacun à zéro :
    (`monkeypatch.setattr(access.scope, "current_org", …)`) — la doublure n'atteindrait
    pas les ~680 appels qui lisent la façade.
 
-Les sous-modules qu'une façade ne ré-exporte PAS (`access.heritage`,
-`access.chain_shadow`, …) n'ont pas d'autre adresse : ils se lisent et se patchent
+Les sous-modules qu'une façade ne ré-exporte PAS (`access.chain_shadow`,
+`access.chain_resolution`, …) n'ont pas d'autre adresse : ils se lisent et se patchent
 en direct. Ce qui est façadé, c'est ce que la façade elle-même déclare (`_OWNERS`),
 pas une liste recopiée ici.
 
@@ -193,7 +193,7 @@ def test_les_facades_declarent_des_sous_modules():
     noms = set(SOUS.values())
     assert {"oto_mcp.access.scope", "oto_mcp.access.quotas", "oto_mcp.access.resolve",
             "oto_mcp.org_store.orgs", "oto_mcp.org_store.vault"} <= noms
-    assert "oto_mcp.access.heritage" not in noms
+    assert "oto_mcp.access.chain_shadow" not in noms
 
 
 def test_aucun_lecteur_de_production_ne_contourne_la_facade():
@@ -222,12 +222,12 @@ from .access import quotas
 from .access.scope import current_org
 from .org_store.members import ORG_ROLES
 from .access import current_group
-from .access import ResolvedCredential, heritage
+from .access import ResolvedCredential, chain_shadow
 import oto_mcp.access.rbac as r
 
 def f():
     from .access import entitlements as e
-    return access.scope.current_org(), access.heritage.OWN, e.verifier_defauts()
+    return access.scope.current_org(), access.chain_shadow.ACCORD, e.verifier_defauts()
 '''
 
 _PLANTE_TEST = '''
@@ -238,7 +238,7 @@ import oto_mcp.org_store.vault as V
 
 def test_x(monkeypatch):
     monkeypatch.setattr(scope, "current_org", lambda s: 1)
-    monkeypatch.setattr(access.cascade, "personal_instance_org", lambda *a: None)
+    monkeypatch.setattr(access.cascade, "walk_cascade", lambda *a: None)
     monkeypatch.setattr(V, "get_org_secret", lambda *a: None)
     monkeypatch.setattr("oto_mcp.org_store.orgs.get_org", lambda *a: None)
     mock.patch.object(access.rbac, "current_user_sub_from_token")
@@ -257,13 +257,13 @@ def test_la_garde_de_production_mord_sur_un_cas_plante():
         assert any(a in x for x in fautes), (a, fautes)
     # Ce qui est permis ne crie pas : un type depuis la façade, un sous-module
     # que la façade ne ré-exporte pas.
-    assert not any("ResolvedCredential" in x or "heritage" in x for x in fautes), fautes
+    assert not any("ResolvedCredential" in x or "chain_shadow" in x for x in fautes), fautes
     assert len(fautes) == 8, fautes
 
 
 def test_la_garde_des_tests_mord_sur_un_cas_plante():
     fautes = patchs_fautifs(_PLANTE_TEST, TESTS / "test_plante.py")
-    attendues = ["access.scope.current_org", "access.cascade.personal_instance_org",
+    attendues = ["access.scope.current_org", "access.cascade.walk_cascade",
                  "org_store.vault.get_org_secret", "oto_mcp.org_store.orgs.get_org",
                  "access.rbac.current_user_sub_from_token"]
     for a in attendues:

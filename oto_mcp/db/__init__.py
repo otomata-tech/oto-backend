@@ -13,8 +13,7 @@ n'ont pas de dépendance circulaire : tout pointe vers `_conn` puis `users`.
 ⚠️ **Aucun module de ce package n'est importé par son nom ailleurs** — c'est
 précisément l'effet recherché : les appelants écrivent `db.<fn>`. Un inventaire
 qui cherche des IMPORTS STATIQUES les déclare donc tous orphelins, et c'est un
-faux positif systématique : 8 modules (`connector_grants`, `datastore_embed`,
-`emails`, `google`, `keys`, `tenants`, `tokens`, `visibility`) n'ont aucun
+faux positif systématique : 7 modules (`datastore_embed`, `emails`, `google`, `keys`, `tenants`, `tokens`, `visibility`) n'ont aucun
 importeur hors d'ici alors que chacune de leurs fonctions est appelée en prod.
 Pour juger qu'un module d'ici est mort, chercher ses SYMBOLES (`db.<fn>`, y
 compris posés par `monkeypatch.setattr`), jamais son nom de module — puis croiser
@@ -30,7 +29,6 @@ from . import (
     users,
     tenants,
     unipile,
-    connector_grants,
     connector_instances,
     grants,
     access_shadow,
@@ -114,7 +112,7 @@ from . import (
 # package. L'ordre place les bases (_conn, users) d'abord — sans incidence, les
 # noms sont disjoints entre modules.
 _MODULES = (
-    _conn, _schema, _init, users, tenants, unipile, connector_grants,
+    _conn, _schema, _init, users, tenants, unipile,
     connector_instances, grants, keys, usage,
     platform_instructions, visibility, emails, google, datastore, projects, doc_archivage,
     doc_grants,

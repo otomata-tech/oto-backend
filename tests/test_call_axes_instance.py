@@ -62,7 +62,19 @@ def test_pin_instance_rejects_connector_mismatch():
         asyncio.run(call_axes._pin_instance(ref, "hunter_domain_search"))
 
 
+def _niveau_sans_base(monkeypatch):
+    """Le niveau d'un compte épinglé se juge (#1499) dans l'org de l'appel (celle des
+    refs, 8), sans base : chaque titulaire est membre de son org et éveillé, l'org a un
+    nom."""
+    from oto_mcp import account_suspension, org_store
+    monkeypatch.setattr(access, "current_org", lambda sub: 8)
+    monkeypatch.setattr(account_suspension, "etat", lambda sub: None)
+    monkeypatch.setattr(org_store, "get_org", lambda oid: {"id": oid, "name": "Acme"})
+    monkeypatch.setattr(org_store, "get_org_role", lambda org, sub: "member")
+
+
 def test_pin_instance_rejects_other_members_instance(monkeypatch):
+    _niveau_sans_base(monkeypatch)
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
     ref = instance_refs.make_member_ref(8, "quelqu_un_d_autre", "zoho")
     with pytest.raises(McpError, match="another member"):
@@ -72,6 +84,12 @@ def test_pin_instance_rejects_other_members_instance(monkeypatch):
 
 def test_pin_instance_rejects_group_non_reader(monkeypatch):
     monkeypatch.setattr(roles, "can_read_group", lambda sub, gid: False)
+    # Non lectrice, et aucune règle ne lui ouvre le compte d'équipe (#1499).
+    monkeypatch.setattr(access, "current_org", lambda sub: 1)
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    from oto_mcp import group_store
+    monkeypatch.setattr(group_store, "is_group_member", lambda sub, gid: False)
+    monkeypatch.setattr(roles, "can_admin_group", lambda sub, gid: False)
     ref = instance_refs.make_group_ref(3, "zoho")
     with pytest.raises(McpError, match="group"):
         asyncio.run(call_axes._pin_instance(ref, "zoho_record"))
@@ -99,12 +117,32 @@ def test_pin_instance_none_is_inert():
 
 # ─── 2. Résolution (_resolve_credential_impl, instance épinglée) ─────────────
 
+class _Coffre(dict):
+    """(etype, eid, provider, account) -> secret ; `regles` : celles de chaque compte."""
+    regles: tuple = ()
+
+
 @pytest.fixture()
 def resolution(monkeypatch):
-    """Neutralise les à-côtés de la résolution ; le coffre est un dict contrôlé."""
-    vault: dict = {}   # (etype, eid, provider, account) -> secret
+    """Neutralise les à-côtés de la résolution ; le coffre est un dict contrôlé. Un
+    compte épinglé est jugé à son niveau (#1499) : l'appel se fait dans l'org de l'instance
+    épinglée (5 sans épinglage, celle du binding de projet), dont "u" est membre ; chaque
+    ligne du coffre a son instance, avec les règles `vault.regles`."""
+    vault = _Coffre()
     monkeypatch.setattr(credentials_store, "get_credential",
                         lambda et, eid, prov, acc="": vault.get((et, eid, prov, acc)))
+    _niveau_sans_base(monkeypatch)
+    monkeypatch.setattr(access, "current_org", lambda sub: getattr(
+        session_org.current_call_instance(), "org_id", None) or 5)
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+
+    def _comptes(porteur, cles):
+        return {(et, eid, acct): access.Compte(
+                    instance_id=7, owner_type=et, owner_id=eid, connector=porteur,
+                    account=acct, org_id=int(eid.split(":")[0]), regles=vault.regles)
+                for et, eid, acct in cles if (et, eid, porteur, acct) in vault}
+    monkeypatch.setattr(access, "comptes_des_lignes", _comptes)
     return vault
 
 
@@ -140,13 +178,19 @@ def test_resolution_member_instance_with_account(resolution):
     assert rc.account == "jane"
 
 
-def test_resolution_member_instance_lent_to_a_peer_reads_the_OWNERS_row(resolution):
-    """Régression (2026-09-02) : un ref `member` prêté (share_side, ADR 0044) porte
-    `ref.sub` = le PROPRIÉTAIRE (ici "boss"), le caller ("u", via la fixture `_sub`)
-    n'est que l'EMPRUNTEUR. La ligne à lire est celle du propriétaire, jamais celle
-    de l'emprunteur — confondre les deux faisait échouer TOUT prêt membre-à-membre
-    avec un « l'instance ne résout plus » trompeur (la ligne existait, cherchée sous
-    la mauvaise identité)."""
+def _regle_pour_u(resolution, niveau="read"):
+    """Le compte de "boss" donne `niveau` à "u" par une règle (#1499)."""
+    resolution.regles = (access.Regle(user="u", group=None, org=False, level=niveau),)
+
+
+def test_resolution_member_instance_of_a_peer_reads_the_OWNERS_row(resolution,
+                                                                     monkeypatch):
+    """Régression (2026-09-02) : un ref `member` d'une autre personne porte `ref.sub` = le
+    PROPRIÉTAIRE (ici "boss") ; le caller ("u") n'y a accès que par une règle (#1499). La
+    ligne à lire est celle du propriétaire, jamais celle du caller — confondre les deux
+    faisait échouer tout accès membre-à-membre avec un « l'instance ne résout plus »
+    trompeur (la ligne existait, cherchée sous la mauvaise identité)."""
+    _regle_pour_u(resolution)
     owner_eid = credentials_store.member_id(8, "boss")
     resolution[(credentials_store.MEMBER, owner_eid, "zoho", "")] = "SECRET-DU-BOSS"
     tok = _pin("member:8:boss:zoho")
@@ -311,6 +355,7 @@ def test_resolution_instance_microsoft_par_la_carte_ou_le_porteur(resolution, mo
                                                                    connecteur_du_ref):
     """La résolution compare les PORTEURS des deux côtés : la ligne `microsoft` est lue,
     jamais la cascade (le palier membre n'est pas consulté)."""
+    _regle_pour_u(resolution)
     from oto_mcp import db
     monkeypatch.setattr(db, "get_member_api_key",
                         lambda *a, **k: pytest.fail("cascade consultée"))
@@ -347,18 +392,13 @@ def test_la_trace_ecrit_la_ref_du_porteur(monkeypatch):
 
 
 @pytest.mark.parametrize("carte", ["google", "gmail"])
-def test_un_pret_google_epingle_par_la_carte_ou_le_porteur_designe_la_meme_ligne(
+def test_un_compte_google_d_autrui_epingle_par_la_carte_ou_le_porteur_designe_la_meme_ligne(
         resolution, monkeypatch, carte):
-    """Un prêt se désigne par sa réf : écrite sous la carte (`gmail`) ou sous le porteur
-    (`google`), c'est la MÊME ligne du coffre de la prêteuse, gardée puis lue."""
-    from oto_mcp import account_suspension
-    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
-    monkeypatch.setattr(account_suspension, "refus_preteur", lambda *a, **k: None)
-    monkeypatch.setattr(access, "current_org", lambda sub: 99)
+    """Le compte d'une autre personne se désigne par sa réf : écrite sous la carte
+    (`gmail`) ou sous le porteur (`google`), c'est la MÊME ligne du coffre de sa
+    titulaire, gardée (sa règle) puis lue."""
+    _regle_pour_u(resolution)
     eid = credentials_store.member_id(8, "boss")
-    monkeypatch.setattr(credentials_store, "get_instance_sharing",
-                        lambda et, e, con, acc="": (None, ["user:u"])
-                        if (e, con) == (eid, "google") else (None, []))
     resolution[(credentials_store.MEMBER, eid, "google", "jane@exemple.test")] = "RT"
 
     async def _scenario():

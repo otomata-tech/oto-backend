@@ -40,16 +40,18 @@ also the bottleneck of all connector work. The split is a **PURE MOVE**: no
 caller changes (see `tests/test_access_surface_frozen.py`).
 
 - `scope`   — who acts: platform role, org/team/project of the call, what the
-              project PINS, `_UNSET`. Depends on nothing.
-- `heritage` — the keys of a SHARED project (#480): what its beneficiary reaches
-              of the owner's keys (nothing, except inheritance declared at share
-              time). Verdict set by `_project=`, read by the walker; depends only
-              on `session_org` (and, lazily, on `roles`/`ownership`).
+              project PINS, `_UNSET`, and the org the caller is a MEMBER of in the
+              call (`org_d_appartenance`: none in a project shared from another org —
+              #1499, nothing of that org serves her). Depends on nothing.
 - `quotas`  — what is metered (daily quota, usage) and what is paid (paid
               option = declared entitlement of the org or the person, via `entitlements`).
-- `cascade` — the SINGLE walker `personal > cross-org > team > org > platform`,
-              its three probes, the platform tier.
-- `rbac`    — who is allowed: hidden tools, instance and loan
+- `cascade` — the SINGLE walker `personal > team > org > tenant > platform`,
+              its probes, the platform tier.
+- `niveaux` — the LEVEL an account's rules give a caller (none < read < write <
+              sensitive < manage), what a call requires, D1–D3 (#1499). Pure.
+- `comptes` — the accounts a resolution may choose at a step, read with their rules
+              (`ChoixDuParcours`), and the echo of the account that served.
+- `rbac`    — who is allowed: hidden tools, instance
               guard, in-scope instances, redaction filter.
 - `indices` — the TEXT of the "nothing resolves" refusals: key removed, in-scope
               instances, project that already pins (#499). Read-only, fail-soft.
@@ -73,14 +75,14 @@ The graph is a strict DAG — no cycle, every arrow goes downward:
 ```
                     scope                    (depends on nothing)
                    ↗  ↑  ↖
-            quotas   cascade                 (quotas → entitlements ; cascade → scope)
-                ↑     ↑  ↖
-                |    rbac                    (rbac → scope, cascade)
-                |   ↗   ↑  ↖
+            quotas   cascade   niveaux       (quotas → entitlements ; cascade → scope)
+                ↑     ↑  ↖       ↑
+                |    rbac      comptes       (rbac → scope, cascade ; comptes → niveaux)
+                |   ↗   ↑  ↖     ↑
                 |  |    |   indices          (indices → rbac)
-                |  |    |  ↗
-              resolve   |                    (resolve → scope, quotas, rbac, indices, cascade)
-                ↑       |
+                |  |    |  ↗     |
+              resolve ──────────┘            (resolve → scope, quotas, rbac, indices,
+                ↑       |                     cascade, comptes)
               views   status                 (status → scope, quotas, rbac, cascade)
 ```
 
@@ -115,12 +117,12 @@ import sys
 import types
 
 from . import (scope, quotas, cascade, platform_grant, rbac, indices, resolved_credential,
-               tenant_budget, resolve_anon, resolve, views, status, entitlements, prets,
-               reglement)
+               tenant_budget, resolve_anon, resolve, views, status, entitlements, niveaux,
+               comptes, reglement)
 
 _MODULES = (scope, quotas, cascade, platform_grant, rbac, indices, resolved_credential,
-            tenant_budget, resolve_anon, resolve, views, status, entitlements, prets,
-            reglement)
+            tenant_budget, resolve_anon, resolve, views, status, entitlements, niveaux,
+            comptes, reglement)
 
 # Flat re-export (public + single-underscore privates; dunders stay with the
 # package) + `name -> modules that define it` map, which serves the propagation

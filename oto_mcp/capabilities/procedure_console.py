@@ -178,17 +178,19 @@ async def _avec_le_graphe(ctx: ResolvedCtx, inp: ProcedureInput, lecture):
 
 def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
     oi, lib = orgs_instructions, guide_library
-    # Sous un jeton de délégation, la procédure du travail et rien d'autre (#1499) : lue
-    # au palier où elle se résout, jamais celui de l'équipe, que tout membre écrit.
+    # Sous un jeton de délégation, la procédure du travail et celles qu'elle nomme, rien
+    # d'autre (#1499) : chacune lue au palier où elle se résout, jamais celui de l'équipe,
+    # que tout membre écrit.
     borne = _procedure_du_travail.borner(ctx, inp)
     if borne is not None and inp.op == "list":
-        slug, palier = borne
-        if palier is None:
-            return _procedure_du_travail.liste_bornee(
-                {"org_id": ctx.org_id, "group_id": None, "guides": []}, slug)
-        return _procedure_du_travail.liste_bornee(oi._list_guides(ctx, oi.GuideListInput(
-            query=inp.query, scope=palier, verbose=inp.verbose,
-            include_archived=inp.include_archived)), slug)
+        # ⚠️ Une liste PAR palier présent, jamais `scope=None` : elle cumulerait l'équipe.
+        paliers = [p for p in ("user", "org")
+                   if p in borne.values() and inp.scope in (None, p)]
+        return _procedure_du_travail.liste_bornee(
+            [oi._list_guides(ctx, oi.GuideListInput(
+                query=inp.query, scope=p, verbose=inp.verbose,
+                include_archived=inp.include_archived)) for p in paliers],
+            borne, {"org_id": ctx.org_id, "group_id": None, "guides": []})
     if inp.op == "get":
         return _avec_le_graphe(ctx, inp, oi._get_guide(ctx, oi.GuideGetInput(
             slug=inp.slug, guide_id=inp.guide_id, doctrine_id=inp.doctrine_id,

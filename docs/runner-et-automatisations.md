@@ -587,6 +587,35 @@ Deux bornes (`capabilities/_procedure_du_travail.py`) :
   (celui sous qui il tourne, pas l'éditeur) est refusé : `unknown_procedure` (400). Les
   agents déjà posés sur un tel slug ne sont pas touchés ; leur run lit « introuvable ».
 
+**Les procédures que la sienne NOMME** (suite de #1502, 04/11/2026). Composer des
+procédures en se nommant est un usage établi : un orchestrateur cite ses étapes par
+leur slug, qui délèguent à leur tour. Servir la seule `payload.procedure` coupait ces
+chaînes au premier maillon — l'agent lisait l'orchestrateur, prenait
+`procedure_outside_job` sur la suite, faisait la première partie seule et rendait
+« fait ». Le travail lit donc aussi, **en lecture seule** (`get`/`list`), les procédures
+que la sienne nomme :
+
+- **référence** = un slug écrit seul entre accents graves (`` `un-slug` ``) dans le
+  corps, qui **se résout** comme la procédure du travail : copie personnelle en service
+  du porteur, puis l'org (`palier_servi`). Aucune convention antérieure (un `<slot:…>`
+  ne binde pas une procédure) ; un nom d'outil entre accents graves ne se résout pas et
+  tombe de lui-même ;
+- **fermeture** en largeur, ordre d'apparition, ≤ `PROFONDEUR_MAX` (3) sauts et
+  ≤ `PROCEDURES_MAX` (10) procédures, celle du travail comprise ; recalculée à chaque
+  requête depuis la base, sans cache, en lectures bornées : les slugs de chaque palier
+  lus une fois (trois lectures), puis ≤ 10 corps — un nom d'outil cité ne coûte rien ;
+- ⚠️ **l'équipe n'y entre toujours pas** : chaque slug cité se résout, et chaque corps
+  parcouru se lit, à ces deux paliers seulement. Un membre d'équipe n'ajoute rien à
+  l'ensemble — ni par une copie d'équipe d'un slug cité, ni par un corps d'équipe qui
+  cite. Écrire à l'org ou dans la copie du porteur, c'est déjà avoir la main sur l'agent ;
+- le refus d'un slug hors de l'ensemble nomme les slugs lisibles, pour que l'agent se
+  reprenne ; `op=list` rend l'ensemble, chacun à son palier. Écritures, bibliothèque,
+  lecture par id : toujours refusées.
+
+Un agent posé sur une ÉTAPE ne lit pas l'orchestrateur qui la nomme (la fermeture
+descend, elle ne remonte pas) : pour qu'il fasse la chaîne, on le pose sur
+l'orchestrateur.
+
 ### Le verrou du tick porte sur l'ÉLIGIBILITÉ, pas sur l'échéance relue (#839, 03/09/2026)
 
 Le compare-and-swap qui empêche deux environnements de jouer la même échéance

@@ -130,11 +130,8 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
         return g.get("org_id") if g else None
     if ref.level == "org":
         if not roles.is_org_member(sub, ref.org_id):
-            if scope.current_org(sub) == ref.org_id:
-                raise McpError(ErrorData(
-                    code=INVALID_PARAMS,
-                    message=f"Instance refused: you are not a member of org #{ref.org_id}."))
-            # Not a member: an org account a rule naming her opens (D1).
+            # Not a member: an org account a rule naming her opens (D1, or a shared
+            # project's inheritance taken over, #480) — also under `_project=` of that org.
             return _ouvert_par_une_regle(sub, ref, "org", str(ref.org_id),
                                          refus=f"you are not a member of org #{ref.org_id}")
         return ref.org_id

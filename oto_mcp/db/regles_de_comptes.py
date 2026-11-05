@@ -193,14 +193,17 @@ def comptes_des_lignes(connector: str, lignes: list[tuple[str, str, str]]) -> li
 
 
 def comptes_d_autrui(connector: str, org_id: int, sub: str, account: str) -> list[dict]:
-    """Les comptes PERSONNELS de `connector` nommés `account` que d'autres que `sub`
-    possèdent dans l'org `org_id` — ceux qu'un appel ne sert que nommés."""
-    filtre = ("i.owner_type = 'member' AND starts_with(i.owner_id, %(prefixe)s) "
-              "AND i.owner_id <> %(mien)s AND i.account = %(account)s")
+    """Les comptes de `connector` nommés `account` qu'aucune étape de l'org `org_id` ne
+    tient pour `sub` : les comptes PERSONNELS que d'autres y possèdent, et ceux de l'org
+    elle-même qu'une règle nommant `sub` lui ouvre quand elle n'en est pas membre
+    (`_ORG_A_UN_NON_MEMBRE`)."""
+    filtre = ("((i.owner_type = 'member' AND starts_with(i.owner_id, %(prefixe)s) "
+              f"AND i.owner_id <> %(mien)s) OR {_ORG_A_UN_NON_MEMBRE}) "
+              "AND i.account = %(account)s")
     with _connect() as conn:
         return conn.execute(_COMPTES_PRETES.format(filtre=filtre), {
             "connector": connector, "prefixe": f"{org_id}:", "mien": f"{org_id}:{sub}",
-            "account": account, "sub": sub}).fetchall()
+            "account": account, "sub": sub, "org": int(org_id)}).fetchall()
 
 
 # Accounts of OTHER orgs than `%(org)s` that `%(sub)s` may name: her own key there (#172)
@@ -220,11 +223,25 @@ _HORS_ORG = (
 # OPENS to `%(sub)s`, whatever the rule's origin (#1499). Their level is judged by the
 # resolver (a rule on a team counts only for her active team, `access/niveaux`).
 _PRETS_DE_L_ORG = (
-    f"i.id IN (SELECT r.instance_id FROM connector_account_rules r "
-    f"          WHERE r.org_id = %(org)s AND {_OUVRE_A_SUB}) "
-    "AND ((i.owner_type = 'member' AND starts_with(i.owner_id, %(prefixe)s) "
-    "      AND i.owner_id <> %(mien)s) "
-    "     OR (i.owner_type = 'group' AND g.org_id = %(org)s))")
+    f"(i.id IN (SELECT r.instance_id FROM connector_account_rules r "
+    f"           WHERE r.org_id = %(org)s AND {_OUVRE_A_SUB}) "
+    " AND ((i.owner_type = 'member' AND starts_with(i.owner_id, %(prefixe)s) "
+    "       AND i.owner_id <> %(mien)s) "
+    "      OR (i.owner_type = 'group' AND g.org_id = %(org)s))) "
+    "OR {org_a_un_non_membre}")
+
+# An account of the org `%(org)s` ITSELF that a rule NAMING `%(sub)s` opens to her while
+# she is not a member of that org (a person outside it, D1; a beneficiary of a shared
+# project, taken over from #480): the org's step is closed to her
+# (`scope.org_d_appartenance`), so it serves at step 5 or named. A member is served at the
+# org's step, never here.
+_ORG_A_UN_NON_MEMBRE = (
+    "(i.owner_type = 'org' AND i.owner_id = %(org)s::text "
+    " AND i.id IN (SELECT r.instance_id FROM connector_account_rules r "
+    "               WHERE r.subject_user = %(sub)s AND r.level <> 'none') "
+    " AND NOT EXISTS (SELECT 1 FROM org_members m "
+    "                  WHERE m.org_id = %(org)s AND m.sub = %(sub)s))")
+_PRETS_DE_L_ORG = _PRETS_DE_L_ORG.replace("{org_a_un_non_membre}", _ORG_A_UN_NON_MEMBRE)
 
 
 @lecture_d_appel

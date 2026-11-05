@@ -119,9 +119,11 @@ def provenance(compte: Compte, sub: str, org: Optional[int]) -> dict:
     """What a status or the context says of the account step 5 serves: `lent_by` (who
     lends it in the call's org), `your_account_in_org` (her own key there) or
     `lent_by_org` (the org that lends it) — one of the three."""
-    if compte.org_id is not None and compte.org_id == org:
-        return {"lent_by": niveaux.preteur(compte)}
     nom = compte.org_nom or f"#{compte.org_id}"
+    if compte.org_id is not None and compte.org_id == org:
+        # The org's own account, lent to someone outside it: the org lends it.
+        return ({"lent_by_org": nom} if compte.owner_type == "org"
+                else {"lent_by": niveaux.preteur(compte)})
     return ({"your_account_in_org": nom} if compte.proprietaire == sub
             else {"lent_by_org": nom})
 

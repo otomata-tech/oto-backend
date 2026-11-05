@@ -389,16 +389,29 @@ def _read(ctx: ResolvedCtx, inp: TokenInput) -> dict:
 
 
 def _org_cible(sub: str) -> int:
-    """L'org active si l'appelant peut y écrire une procédure, sinon son org perso."""
+    """Où poser la copie : l'org active si l'appelant peut y écrire une procédure,
+    sinon la plus ancienne de ses orgs où il est admin. Un compte sans aucune org en
+    reçoit une (`ensure_home_org`, org ordinaire dont il est admin). Plus d'org perso
+    de repli (05/11/2026) : membre sans droit d'écrire nulle part → refus nommé."""
     active = access.current_org(sub)
     if active and roles.is_org_admin(sub, active):
         return int(active)
-    u = db.get_user(sub) or {}
-    return int(org_store.ensure_personal_org(sub, u.get("email"), u.get("name")))
+    vivantes = org_store.list_orgs_for_user(sub)
+    for o in vivantes:
+        if roles.is_org_admin(sub, int(o["org_id"])):
+            return int(o["org_id"])
+    if not vivantes:
+        u = db.get_user(sub) or {}
+        return int(org_store.ensure_home_org(sub, u.get("email"), u.get("name")))
+    raise AuthzDenied(403, "no_writable_org",
+                      "Aucune de tes orgs ne te laisse y écrire une procédure : "
+                      "demande à un admin de la copier, ou crée ton org.")
 
 
 def _nouveau_compte(sub: str, org_id: int) -> bool:
-    if not org_store.is_personal_org(org_id):
+    """La copie atterrit dans l'org que l'inscription vient de poser, et le compte n'a
+    pas encore fait (ni passé) son accueil : le front l'y mène."""
+    if not org_store.is_auto_created(org_id):
         return False
     profil = (db.get_account_profile(sub) or {}).get("profile") or {}
     return not (profil.get("onboarded_at") or profil.get("onboarding_skipped_at"))

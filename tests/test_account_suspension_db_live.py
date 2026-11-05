@@ -250,13 +250,13 @@ def test_une_pause_ne_detruit_ni_ne_detache_rien(live):
     from oto_mcp import db, org_store
     sub = _neuf("membre")
     db.upsert_user(sub, email=f"{sub}@acme.test")
-    perso = org_store.get_personal_org(sub)
+    perso = org_store.home_org(sub)
     db.update_account_profile(sub, {"metier": "chef de projet"})
     assert perso
 
     db.suspend_account(sub, by="op-1", reason="parti chez le partenaire")
 
-    assert org_store.get_personal_org(sub) == perso
+    assert org_store.home_org(sub) == perso
     assert _sql("SELECT 1 FROM org_members WHERE sub=%s", (sub,)) != []
     assert db.get_account_profile(sub)["profile"]["metier"] == "chef de projet"
     # …et le compte est bien lisible comme membre, marqué en pause plutôt que retiré.

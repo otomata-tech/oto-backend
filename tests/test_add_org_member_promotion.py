@@ -1,8 +1,10 @@
 """Choix de l'org maison à l'adhésion + acceptation idempotente.
 
-`add_org_member` : une org RÉELLE l'emporte sur l'org perso silencieuse comme
-maison (`is_active`) — sinon un invité atterrit sur sa perso au lieu de sa boîte
-(ADR 0030/0033). `accept_invitation*` : idempotent si déjà accepté par le même sub
+`add_org_member` : une org d'équipe l'emporte comme maison (`is_active`) sur l'org
+que l'inscription a posée et où le compte est encore SEUL (`db.org_d_inscription.
+seule_d_inscription`, l'ex-org perso) — sinon un invité atterrit sur l'org de son
+inscription au lieu de sa boîte. Le critère sur une vraie base :
+`tests/test_org_d_inscription_seule_cede.py`. `accept_invitation*` : idempotent si déjà accepté par le même sub
 (le reconcile au signup consomme l'invite avant l'accept explicite → faux 410).
 
 Style test_ensure_home_org.py : on monkeypatche `_connect` avec un conn factice qui
@@ -47,7 +49,7 @@ class _MemberConn:
             row = self._existing
         elif "m.is_active" in s:
             row = self._active
-        elif "personal_of IS NOT NULL) AS p" in s and "FROM orgs WHERE id" in s:
+        elif " AS p," in s and "FROM orgs o WHERE o.id" in s:
             row = self._jp
         else:
             row = None
@@ -91,7 +93,7 @@ def test_brand_new_user_activates_real_org(monkeypatch):
 def test_personal_active_yields_to_real_org(monkeypatch):
     calls = _run_add(
         monkeypatch, existing=None,
-        active={"org_id": 9, "personal": True}, joining_personal=False,
+        active={"org_id": 9, "seule": True}, joining_personal=False,
     )
     assert _inserted_active(calls) is True      # l'org réelle devient maison
     assert _demoted(calls)                       # la perso est démarquée
@@ -100,7 +102,7 @@ def test_personal_active_yields_to_real_org(monkeypatch):
 def test_real_home_unchanged_on_second_real_org(monkeypatch):
     calls = _run_add(
         monkeypatch, existing=None,
-        active={"org_id": 5, "personal": False}, joining_personal=False,
+        active={"org_id": 5, "seule": False}, joining_personal=False,
     )
     assert _inserted_active(calls) is False      # on ne débarque pas d'une maison réelle
     assert not _demoted(calls)
@@ -111,7 +113,7 @@ def test_suspended_real_home_yields_to_active_org(monkeypatch):
     # sinon chaque connexion atterrit sur le mur au lieu de l'org qui paie.
     calls = _run_add(
         monkeypatch, existing=None,
-        active={"org_id": 5, "personal": False, "suspended": True}, joining_personal=False,
+        active={"org_id": 5, "seule": False, "suspended": True}, joining_personal=False,
     )
     assert _inserted_active(calls) is True
     assert _demoted(calls)
@@ -120,11 +122,23 @@ def test_suspended_real_home_yields_to_active_org(monkeypatch):
 def test_suspended_home_does_not_yield_to_a_suspended_org(monkeypatch):
     calls = _run_add(
         monkeypatch, existing=None,
-        active={"org_id": 5, "personal": False, "suspended": True},
+        active={"org_id": 5, "seule": False, "suspended": True},
         joining_personal=False, joining_suspended=True,
     )
     assert _inserted_active(calls) is False
     assert not _demoted(calls)
+
+
+def test_les_deux_lectures_portent_le_critere_unique(monkeypatch):
+    """L'active courante et l'org rejointe se jugent par LE même prédicat
+    (`seule_d_inscription`), lu dans la requête qui lit déjà la ligne : pas de
+    comptage de membres à part, pas de lecture par org."""
+    from oto_mcp.db.org_d_inscription import seule_d_inscription
+    critere = " ".join(seule_d_inscription("o", "%(sub)s").split())
+    calls = _run_add(monkeypatch, existing=None,
+                     active={"org_id": 9, "seule": True}, joining_personal=False)
+    lectures = [s for s, _ in calls if s.startswith("SELECT") and critere in s]
+    assert len(lectures) == 2, calls
 
 
 def test_readd_only_touches_role(monkeypatch):
@@ -137,7 +151,7 @@ def test_readd_only_touches_role(monkeypatch):
 
 
 def test_personal_bootstrap_activates_when_no_membership(monkeypatch):
-    # ensure_personal_org : 1er add sur la perso (encore vue non-perso) sans org active.
+    # ensure_home_org : 1er add sur la perso (encore vue non-perso) sans org active.
     calls = _run_add(monkeypatch, existing=None, active=None, joining_personal=True)
     assert _inserted_active(calls) is True
 
@@ -145,7 +159,7 @@ def test_personal_bootstrap_activates_when_no_membership(monkeypatch):
 def test_personal_does_not_steal_real_home(monkeypatch):
     calls = _run_add(
         monkeypatch, existing=None,
-        active={"org_id": 5, "personal": False}, joining_personal=True,
+        active={"org_id": 5, "seule": False}, joining_personal=True,
     )
     assert _inserted_active(calls) is False
 
@@ -162,7 +176,7 @@ def test_second_member_joining_a_personal_org_keeps_personal_of(monkeypatch):
 
 
 def test_first_member_bootstrap_does_not_clear_personal_of(monkeypatch):
-    # ensure_personal_org : à la création, jp lit encore False (personal_of pas
+    # ensure_home_org : à la création, jp lit encore False (personal_of pas
     # encore posé sur l'org perso à ce stade — cf. docstring add_org_member).
     calls = _run_add(monkeypatch, existing=None, active=None, joining_personal=False)
     assert not _personal_of_cleared(calls)

@@ -19,7 +19,7 @@ def _wire(monkeypatch, *, owner, grant=None, org_ids=(), group_ids=(),
     monkeypatch.setattr(ownership, "owner_of", lambda rt, rid: owner)
     # L'ancien propriétaire garde un partage nominatif : sa maison (org perso) existe
     # déjà — sans cette doublure, `ownership.maison_du_partage` la lirait en base.
-    monkeypatch.setattr(ownership.org_store, "get_personal_org", lambda sub: 1)
+    monkeypatch.setattr(ownership.org_store, "home_org", lambda sub: 1)
     # scope de l'acteur
     monkeypatch.setattr(ownership, "accessor_scope",
                         lambda sub: ownership.AccessorScope(sub, list(org_ids), list(group_ids)))
@@ -218,7 +218,7 @@ def _wire_project(monkeypatch, row, *, member_of=()):
     monkeypatch.setattr(ownership.db, "get_project_by_id", lambda pid: row)
     monkeypatch.setattr(ownership.roles, "is_org_member",
                         lambda sub, oid: oid in member_of)
-    monkeypatch.setattr(ownership.org_store, "ensure_personal_org", lambda sub: 999)
+    monkeypatch.setattr(ownership.org_store, "ensure_home_org", lambda sub: 999)
     seen = {}
     monkeypatch.setattr(ownership.db, "reparent_project",
                         lambda pid, nt, ni, context_org_id=None:
@@ -263,7 +263,7 @@ def _kind_stub(monkeypatch, owner, context_org=None):
     calls = []
     # L'ancien propriétaire garde un partage nominatif : sa maison (org perso) existe
     # déjà — sans cette doublure, `ownership.maison_du_partage` la lirait en base.
-    monkeypatch.setattr(ownership.org_store, "get_personal_org", lambda sub: 1)
+    monkeypatch.setattr(ownership.org_store, "home_org", lambda sub: 1)
     monkeypatch.setattr(ownership, "_kind", lambda rt: ownership.ResourceKind(
         owner_getter=lambda rid: owner,
         reparent=lambda rid, nt, ni: calls.append((rid, nt, ni)),

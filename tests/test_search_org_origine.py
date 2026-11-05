@@ -42,6 +42,9 @@ MOT = f"cle{_S}"
 def monde(live):
     for sub in (MOI, ADMIN, COLLEGUE, TIERS):
         db.upsert_user(sub, email=f"{sub}@exemple.test", name=sub)
+    # L'org d'inscription de MOI, avant qu'il rejoigne A et B : sa maison, rendue
+    # active plus bas (plus d'org perso depuis le 05/11/2026, la maison = l'active).
+    perso = org_store.ensure_home_org(MOI)
     a = org_store.create_org("Org auditée", created_by=ADMIN)
     b = org_store.create_org("Autre org", created_by=TIERS)
     org_store.add_org_member(a, ADMIN, "org_admin")
@@ -84,8 +87,8 @@ def monde(live):
     ownership.grant(ownership.TYPE_RESSOURCE_DATASTORE, str(t["org_b"]), "org", str(a),
                     "read", granted_by=TIERS)
     db.datastore_insert_row(t["perso"], "r1", {"nom": f"ligne {MOT}"})
-    return {"a": a, "b": b, "p": p, "t": t, "page_seule": page_seule,
-            "perso": org_store.ensure_personal_org(MOI)}
+    org_store.set_active_org(MOI, perso)
+    return {"a": a, "b": b, "p": p, "t": t, "page_seule": page_seule, "perso": perso}
 
 
 def _cherche(sub, org, **k) -> dict:

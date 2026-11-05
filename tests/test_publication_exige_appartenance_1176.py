@@ -77,7 +77,7 @@ def monde(live):
 
 
 def _perso(sub) -> int:
-    return org_store.ensure_personal_org(sub)
+    return org_store.ensure_home_org(sub)
 
 
 def _org_de(sub, m) -> int:

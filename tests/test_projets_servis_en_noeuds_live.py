@@ -72,7 +72,7 @@ def test_le_rail_range_le_projet_et_ses_pages_sans_la_copie(base):
     # (29/09 et 07/10/2026) : l'org perso ne rend plus celui créé dans une autre org.
     from oto_mcp import db, org_store
     db.upsert_user(MOI, email=f"{MOI}@t.invalid", name=MOI)
-    perso = org_store.ensure_personal_org(MOI)
+    perso = org_store.ensure_home_org(MOI)
     rail = _prive(S._compose(ResolvedCtx(sub=MOI, org_id=perso)))
     par_nom = {n["name"]: n for n in rail}
 

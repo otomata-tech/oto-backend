@@ -39,7 +39,7 @@ def test_personal_instance_org_ne_prefere_plus_l_org_perso(monkeypatch):
     # posée gagne, même quand l'org perso en porte une (elle gagnait avant).
     monkeypatch.setattr(credentials_store, "list_member_orgs_for",
                         lambda sub, con: [5, 2, 9])  # set_at DESC
-    monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: 2)
+    monkeypatch.setattr(access.org_store, "home_org", lambda sub: 2)
     assert access.personal_instance_org("u1", "unipile") == 5
 
 
@@ -47,7 +47,7 @@ def test_personal_instance_org_falls_back_to_most_recent(monkeypatch):
     # La plus récente (tête de liste DESC).
     monkeypatch.setattr(credentials_store, "list_member_orgs_for",
                         lambda sub, con: [5, 2, 9])
-    monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: 999)
+    monkeypatch.setattr(access.org_store, "home_org", lambda sub: 999)
     assert access.personal_instance_org("u1", "unipile") == 5
 
 
@@ -55,13 +55,13 @@ def test_personal_instance_org_excludes_context_org(monkeypatch):
     # L'org de contexte (déjà testée par le palier membre local) est écartée.
     monkeypatch.setattr(credentials_store, "list_member_orgs_for",
                         lambda sub, con: [2])
-    monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: None)
+    monkeypatch.setattr(access.org_store, "home_org", lambda sub: None)
     assert access.personal_instance_org("u1", "unipile", exclude_org=2) is None
 
 
 def test_personal_instance_org_none_when_no_member_key(monkeypatch):
     monkeypatch.setattr(credentials_store, "list_member_orgs_for", lambda sub, con: [])
-    monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: 2)
+    monkeypatch.setattr(access.org_store, "home_org", lambda sub: 2)
     assert access.personal_instance_org("u1", "unipile") is None
 
 
@@ -82,7 +82,7 @@ def _wire_resolution(monkeypatch, *, current, key_orgs, personal=None):
     monkeypatch.setattr(credentials_store, "list_accounts", lambda *a, **k: [])
     monkeypatch.setattr(credentials_store, "list_member_orgs_for",
                         lambda sub, con: sorted(key_orgs, reverse=True))
-    monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: personal)
+    monkeypatch.setattr(access.org_store, "home_org", lambda sub: personal)
 
 
 def test_resolve_uses_personal_instance_from_other_org(monkeypatch):
@@ -117,7 +117,7 @@ def test_mode_for_reports_user_via_cross_org_instance(monkeypatch):
     monkeypatch.setattr(access.db, "has_member_api_key",
                         lambda sub, org, prov: org == 2)  # locale absente, perso en 2
     monkeypatch.setattr(credentials_store, "list_member_orgs_for", lambda sub, con: [2])
-    monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: 2)
+    monkeypatch.setattr(access.org_store, "home_org", lambda sub: 2)
     assert access.credential_mode_for("u1", "unipile") == "user"
 
 

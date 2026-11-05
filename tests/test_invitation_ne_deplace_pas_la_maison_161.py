@@ -166,7 +166,7 @@ def test_lespace_perso_silencieux_cede_toujours_la_place(live, accepte):
     sub = f"u-161-perso-{accepte.__name__}"
     email = f"{sub}@x.tld"
     upsert_user(sub, email=email)   # naissance du compte, exactement comme au signup
-    perso = org_store.get_personal_org(sub)
+    perso = org_store.home_org(sub)
     assert perso and org_store.get_active_org(sub) == perso
     invitante = _org(f"Invitante 161 perso {sub}", "u-161-emetteur")
 

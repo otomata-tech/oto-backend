@@ -164,21 +164,21 @@ def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
         if present and ov == inp.org_id:
             session_org.set_override(sid, None)
             session_org.clear_group_override(sid)
-        # Plus aucune org pour un membre (le cas SOLO qui supprime son unique espace,
-        # ou l'org perso d'un autre archivée par un co-admin) : on rétablit l'invariant
-        # tout de suite. `ensure_personal_org` est celui du boot, avec son projet
-        # « Découverte » — donc exactement l'accueil d'un compte neuf, pas un état
-        # inventé pour l'occasion. Best-effort : la suppression, elle, a réussi, et le
+        # Plus aucune org pour un membre (le cas SOLO qui supprime son unique org,
+        # ou l'unique org d'un autre archivée par un co-admin) : on rétablit l'invariant
+        # tout de suite. `ensure_home_org` est celui du boot, avec son projet
+        # « Découverte » — donc exactement l'accueil d'un compte neuf (une org
+        # ordinaire, jamais d'org perso), pas un état inventé pour l'occasion. Best-effort : la suppression, elle, a réussi, et le
         # backfill du prochain boot reste le filet.
         for sub in membres:
             if org_store.list_orgs_for_user(sub):
                 continue
             try:
                 u = db_users.get_user(sub) or {}
-                org_store.ensure_personal_org(sub, email=u.get("email"),
-                                              name=u.get("name"))
+                org_store.ensure_home_org(sub, email=u.get("email"),
+                                          name=u.get("name"))
             except Exception:
-                _log.warning("archive_org: espace perso non recréé pour %s", sub,
+                _log.warning("archive_org: org maison non reposée pour %s", sub,
                              exc_info=True)
     return {"ok": True, "org_id": inp.org_id, "archived": archived,
             "already_archived": not archived}

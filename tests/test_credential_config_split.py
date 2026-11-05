@@ -60,7 +60,7 @@ def _wire(monkeypatch, *, user=None, group=None, org=None, meta=None,
     # #172 : pas d'instance perso cross-org ici (ces tests visent org/plateforme).
     monkeypatch.setattr(access.credentials_store, "list_member_orgs_for",
                         lambda sub, con: [])
-    monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: None)
+    monkeypatch.setattr(access.org_store, "home_org", lambda sub: None)
     monkeypatch.setattr(access.group_store, "get_group_secret", lambda gid, prov, account="": group)
     monkeypatch.setattr(access.org_store, "get_org_secret", lambda oid, prov, account="": org)
     monkeypatch.setattr(

@@ -123,7 +123,7 @@ def _items(client, sub: str, **params) -> list[dict]:
 
 
 def _items_perso(sub: str, **params) -> list[dict]:
-    """La même route, consultée dans l'org PERSO de `sub` (`X-Oto-Org`, lu par
+    """La même route, consultée dans la MAISON de `sub` — son org active (`X-Oto-Org`, lu par
     `ViewAsMiddleware` comme en production)."""
     from oto_mcp import org_store
     from oto_mcp.api import routes as api_routes
@@ -131,7 +131,7 @@ def _items_perso(sub: str, **params) -> list[dict]:
         Starlette(routes=api_routes.make_routes(_Verifier(), mcp_instance=None)),
         verifier=_Verifier()))
     r = vue.get("/api/me/recent-changes", params=params,
-                headers={**_h(sub), "X-Oto-Org": str(org_store.ensure_personal_org(sub))})
+                headers={**_h(sub), "X-Oto-Org": str(org_store.ensure_home_org(sub))})
     assert r.status_code == 200, r.text
     return r.json()["items"]
 
@@ -169,8 +169,9 @@ def test_le_membre_de_l_equipe_voit_la_sienne_et_celle_de_l_equipe(client, monde
     cles = _cles(_items(client, MEMBRE))
     assert ("procedure", "Procédure G") in cles
     assert ("procedure", "Procédure B") not in cles
-    # SA procédure personnelle : dans son org perso, pas dans l'org A (28/09/2026).
-    assert ("procedure", "Ma procédure") not in cles
+    # SA procédure personnelle : dans sa maison, qui est son org ACTIVE depuis qu'il
+    # n'y a plus d'org perso (05/11/2026) — ici A.
+    assert ("procedure", "Ma procédure") in cles
     assert ("procedure", "Ma procédure") in _cles(_items_perso(MEMBRE))
 
 
@@ -184,9 +185,10 @@ def test_NEGATIF_un_compte_ne_voit_pas_les_pages_d_un_projet_qu_il_ne_lit_pas(cl
     assert ("doc", "Gamma") not in cles
     assert ("procedure", "Procédure A") not in cles
     assert ("procedure", "Procédure G") not in cles
-    assert cles == {("doc", "Delta"), ("procedure", "Procédure B")}
-    # Le projet partagé à TIERS en personne se lit dans son org perso, et lui seul.
-    assert _cles(_items_perso(TIERS)) == {("doc", "Epsilon")}
+    # Le projet partagé à TIERS en personne se lit dans sa maison (son org active, B,
+    # depuis le 05/11/2026), et lui seul de A.
+    assert cles == {("doc", "Delta"), ("procedure", "Procédure B"), ("doc", "Epsilon")}
+    assert _cles(_items_perso(TIERS)) == cles
 
 
 def test_le_perimetre_est_celui_de_la_lecture_d_une_page(client, monde):

@@ -29,7 +29,7 @@ ALLOWED = {
     # L'entrée est REMPLACÉE par le seul module qui appelle vraiment la maison —
     # la découpe rétrécit donc l'allowlist au lieu de la reconduire en bloc
     # (`members.py` la DÉFINIT sans jamais l'appeler ; les 6 autres l'ignorent).
-    "org_store/personal.py": "le store qui la POSE : `ensure_personal_org` fait "
+    "org_store/personal.py": "le store qui la POSE : `ensure_home_org` fait "
                              "de l'org perso la maison quand le user n'en a aucune.",
     # `api/routes.py` → `api_routes_account.py` (découpe du 2026-08-27) →
     # `capabilities/me_account.py` (migration en capacité, le même jour). Même

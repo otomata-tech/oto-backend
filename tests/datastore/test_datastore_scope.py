@@ -32,7 +32,7 @@ def _wire(monkeypatch, rec, *, org=99, groups=({"group_id": 5, "org_id": 99, "na
     monkeypatch.setattr(access, "current_org", lambda sub: org)
     # L'org PERSO de l'appelant (décision du 28/09/2026) : par défaut l'org active —
     # les bancs d'org de TRAVAIL passent une autre valeur.
-    monkeypatch.setattr(D.ownership.org_store, "get_personal_org", lambda sub: perso)
+    monkeypatch.setattr(D.ownership.org_store, "home_org", lambda sub: perso)
     monkeypatch.setattr(D.db, "list_datastores_shared_to_user",
                         lambda sub: rec.setdefault("to_me", []).append(sub) or [])
 
@@ -316,7 +316,7 @@ def test_parite_recherche_liste(monkeypatch):
     # Et le jeu lui-même : trois paliers dans l'org perso, deux ailleurs.
     monkeypatch.setattr(ownership.group_store, "list_groups_for_user",
                         lambda sub, org: [{"group_id": 5}])
-    monkeypatch.setattr(ownership.org_store, "get_personal_org", lambda sub: 99)
+    monkeypatch.setattr(ownership.org_store, "home_org", lambda sub: 99)
     assert ownership.principaux_de_liste("u1", 99) == [
         ("org", "99"), ("user", "u1"), ("group", "5")]
     assert ownership.principaux_de_liste("u1", 42) == [("org", "42"), ("group", "5")]

@@ -1,7 +1,7 @@
 """Le rattrapage des espaces personnels ne relit plus TOUS les comptes à chaque boot
 (oto-backend#534).
 
-`backfill_personal_orgs` appelait `ensure_personal_org` pour chaque user — deux
+`backfill_personal_orgs` appelait `ensure_home_org` pour chaque user — deux
 allers-retours par compte, 1,4 s mesurés au boot de préproduction, croissant avec la
 base. Il ne retient désormais que les comptes à rattraper, par une seule requête : ceux
 sans org active VIVANTE. Un membre d'org sans org perso n'en est plus un.
@@ -22,10 +22,10 @@ QUATRIEME = "sub-test-4"
 
 @pytest.fixture()
 def rattrapes(store, monkeypatch):
-    """`backfill_personal_orgs` joué, `ensure_personal_org` remplacé par un témoin : le
-    banc juge QUI est retenu, pas ce qu'`ensure_personal_org` en fait (couvert ailleurs)."""
+    """`backfill_personal_orgs` joué, `ensure_home_org` remplacé par un témoin : le
+    banc juge QUI est retenu, pas ce qu'`ensure_home_org` en fait (couvert ailleurs)."""
     vus: list[str] = []
-    monkeypatch.setattr(store, "ensure_personal_org",
+    monkeypatch.setattr(store, "ensure_home_org",
                         lambda sub, email=None, name=None: vus.append(sub))
 
     def _jouer() -> tuple[list[str], dict]:
@@ -41,7 +41,7 @@ def test_un_compte_en_regle_n_est_pas_relu(store, rattrapes):
     assert rattrapes() == ([], {"users": 0})
 
 
-def test_sont_retenus_les_comptes_que_ensure_personal_org_reparerait(store, conn, rattrapes):
+def test_sont_retenus_les_comptes_que_ensure_home_org_reparerait(store, conn, rattrapes):
     _perso(store, SUB)                                     # en règle
     archivee = _perso(store, AUTRE)                         # perso ARCHIVÉE → à rattraper
     conn.execute("UPDATE orgs SET archived_at = now() WHERE id = %s", (archivee,))
@@ -50,10 +50,11 @@ def test_sont_retenus_les_comptes_que_ensure_personal_org_reparerait(store, conn
     quatrieme = _perso(store, QUATRIEME)                    # perso, mais AUCUNE active
     conn.execute("UPDATE org_members SET is_active = FALSE WHERE sub = %s", (QUATRIEME,))
     vus, compte = rattrapes()
-    # QUATRIÈME a une org vivante : elle redevient maison, sans `ensure_personal_org`.
-    assert vus == sorted([AUTRE, TROISIEME])
+    # QUATRIÈME a une org vivante : `ensure_home_org` la refait active (la plus
+    # ancienne, `test_ensure_home_org.py`) — le backfill lui confie les trois cas.
+    assert quatrieme
+    assert vus == sorted([AUTRE, TROISIEME, QUATRIEME])
     assert compte == {"users": 3}
-    assert store.get_active_org(QUATRIEME) == quatrieme
 
 
 def test_un_membre_sans_org_perso_n_est_pas_retenu(store, rattrapes):

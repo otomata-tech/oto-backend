@@ -309,12 +309,8 @@ def archive_org(org_id: int) -> bool:
                 "UPDATE user_api_tokens SET revoked_at = now(), revoked_reason = 'org "
                 "archivée' WHERE revoked_at IS NULL AND sub = (SELECT sub FROM "
                 "org_service_accounts WHERE org_id = %s)", (org_id,))
-            # Une org archivée est invisible à `get_personal_org` (filtre
-            # `archived_at IS NULL`) : elle doit AUSSI libérer le slot perso
-            # (`uq_orgs_personal_of`, partiel `personal_of IS NOT NULL` mais PAS
-            # sur l'archivage) — sinon elle occupe le slot d'un user sans être
-            # trouvable → `ensure_personal_org` recrée en boucle une org qui
-            # échoue sur l'UPDATE personal_of (UniqueViolation) à chaque boot.
+            # Une org archivée ne garde pas l'étiquette perso héritée (colonne sans
+            # écrivain depuis le 05/11/2026, l'index `uq_orgs_personal_of` reste).
             conn.execute(
                 "UPDATE orgs SET personal_of = NULL WHERE id = %s", (org_id,)
             )
@@ -481,11 +477,9 @@ def count_orgs_created_by(sub: str) -> int:
       **irréversible** : l'org disparaissait de tous les listings (`list_orgs_for_user`
       filtre déjà `archived_at IS NULL`) sans rendre sa place, donc le refus tombait
       sur un compte que rien ne pouvait plus faire baisser.
-    - `personal_of IS NULL` — l'espace personnel n'est pas un espace *choisi* : il est
-      posé d'office par `ensure_personal_org` et son archivage est refusé
-      (`is_personal_org`, il serait recréé au boot suivant). Le compter facturait donc
-      une place que son propriétaire n'a ni demandée ni le droit de libérer — le
-      plafond RÉEL valait un de moins que celui annoncé par le message d'erreur.
+    - `NOT auto_created` — l'org posée par l'inscription (`ensure_home_org`) n'est
+      pas un espace *choisi* : la compter facturait une place que son propriétaire
+      n'a pas demandée — le plafond RÉEL vaudrait un de moins que celui annoncé.
 
     L'axe `created_by` est inchangé : c'est bien « créés », pas « dont on est membre »
     — rejoindre l'org d'autrui n'a jamais consommé de place et ne doit pas commencer.
@@ -493,6 +487,6 @@ def count_orgs_created_by(sub: str) -> int:
     with _connect() as conn:
         return conn.execute(
             "SELECT COUNT(*) AS n FROM orgs "
-            " WHERE created_by = %s AND archived_at IS NULL AND personal_of IS NULL",
+            " WHERE created_by = %s AND archived_at IS NULL AND NOT auto_created",
             (sub,),
         ).fetchone()["n"]

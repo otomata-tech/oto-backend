@@ -1,8 +1,10 @@
 """Le périmètre d'un propriétaire : des orgs DÉCLARÉES, et ce qui s'en dérive.
 
 On déclare des orgs ; les équipes, les comptes, les orgs PERSONNELLES de ces comptes
-(`orgs.personal_of`, un espace privé mono-membre) et le TENANT qui les héberge s'en
-dérivent. Rien d'autre ne se devine, et chaque ambiguïté REFUSE en se nommant :
+(l'org que l'inscription d'un compte lui a posée et où il est encore seul,
+`db.org_d_inscription.seule_d_inscription` — l'ex-org perso, plus d'étiquette
+`personal_of` depuis le 05/11/2026) et le TENANT qui les héberge s'en dérivent. Rien
+d'autre ne se devine, et chaque ambiguïté REFUSE en se nommant :
 
 - un compte qui est AUSSI membre d'une org hors périmètre (`ComptesPartages`) : ses
   données personnelles ne s'attribuent ni à l'un ni à l'autre ;
@@ -28,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..db.org_d_inscription import seule_d_inscription
 from ..db.tenants import _ORG_TENANT_EXPR
 
 
@@ -110,12 +113,12 @@ def resoudre(conn, orgs: list[int]) -> Perimetre:
     groupes = _ids(conn, "SELECT id AS v FROM org_groups WHERE org_id = ANY(%s)",
                    (list(declarees),))
     subs = set(_ids(conn, "SELECT sub AS v FROM org_members WHERE org_id = ANY(%(o)s) "
-                          "UNION SELECT sub FROM org_group_members WHERE group_id = ANY(%(g)s) "
-                          "UNION SELECT personal_of FROM orgs WHERE id = ANY(%(o)s) "
-                          "AND personal_of IS NOT NULL",
+                          "UNION SELECT sub FROM org_group_members WHERE group_id = ANY(%(g)s)",
                     {"o": list(declarees), "g": list(groupes)}))
     toutes = tuple(sorted(set(declarees) | set(_ids(
-        conn, "SELECT id AS v FROM orgs WHERE personal_of = ANY(%s)", (list(subs),)))))
+        conn, "SELECT o.id AS v FROM org_members m JOIN orgs o ON o.id = m.org_id "
+              f"WHERE m.sub = ANY(%s) AND {seule_d_inscription('o', 'm.sub')}",
+        (list(subs),)))))
     partages = {r["sub"]: list(r["hors"]) for r in conn.execute(
         "SELECT sub, array_agg(org_id ORDER BY org_id) AS hors FROM org_members "
         "WHERE sub = ANY(%s) AND NOT (org_id = ANY(%s)) GROUP BY sub",

@@ -31,8 +31,8 @@ def monde(live):
     from oto_mcp import db, org_store
     for sub in (MOI, INVITE, VOISIN, ADMIN):
         db.upsert_user(sub, email=f"{sub}@t.invalid", name=sub)
-    perso = org_store.ensure_personal_org(MOI)
-    perso_invite = org_store.ensure_personal_org(INVITE)
+    perso = org_store.ensure_home_org(MOI)
+    perso_invite = org_store.ensure_home_org(INVITE)
     a = org_store.create_org("A ppv", created_by=ADMIN)
     org_store.add_org_member(a, ADMIN, "org_admin")
     org_store.add_org_member(a, MOI)
@@ -75,12 +75,14 @@ def _ids(client, sub: str, org: int) -> set[int]:
     return {int(x["id"]) for x in r.json()["projects"]}
 
 
-def test_mon_org_perso_reste_perso_quand_j_y_invite_quelqu_un(monde):
+def test_mon_org_d_inscription_reste_mienne_quand_j_y_invite_quelqu_un(monde):
+    """Plus d'org perso (05/11/2026) : aucune n'est étiquetée ; chacun garde son org
+    d'inscription, et l'invité y entre sans y être déplacé."""
     from oto_mcp import org_store
-    assert org_store.get_personal_org(MOI) == monde["perso"]
-    assert org_store.is_personal_org(monde["perso"]) is True
-    # Et l'invité garde la sienne.
-    assert org_store.get_personal_org(INVITE) == monde["perso_invite"]
+    assert org_store.is_personal_org(monde["perso"]) is False
+    mes_orgs = {int(o["org_id"]) for o in org_store.list_orgs_for_user(MOI)}
+    assert monde["perso"] in mes_orgs
+    assert monde["perso_invite"] in {int(o["org_id"]) for o in org_store.list_orgs_for_user(INVITE)}
 
 
 def test_je_vois_toujours_mes_projets_dans_mon_org_perso_apres_l_invitation(monde, client):

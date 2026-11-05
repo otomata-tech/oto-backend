@@ -14,5 +14,6 @@ suspended_reason TEXT,
 suspended_tenant_id BIGINT,
 trial_ends_at TIMESTAMPTZ,
 time_saved_minutes JSONB,
-default_sharing JSONB
+default_sharing JSONB,
+auto_created BOOLEAN NOT NULL DEFAULT FALSE
 );

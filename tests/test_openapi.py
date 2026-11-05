@@ -167,7 +167,7 @@ def test_the_error_envelope_is_a_component_every_refusal_references():
              for s, r in op["responses"].items() if s in ("404", "409")}
     # Les refus de `X-Oto-Run` (oto#227) entrent dans la MÊME fusion, après les déclarés.
     assert codes == {"404": ["unknown_org", "not_a_member", "run_not_found"],
-                     "409": ["personal_org", "last_org_admin", "run_closed"]}
+                     "409": ["last_org", "last_org_admin", "run_closed"]}
 
 
 # ── L'en-tête de run (oto#227) : déclaré là où il peut survenir, et nulle part ailleurs ─

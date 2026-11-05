@@ -1,4 +1,8 @@
-"""Dans une org, on ne voit QUE l'org ; le personnel se liste dans l'org perso.
+"""Dans une org, on ne voit QUE l'org ; le personnel se liste dans la maison.
+
+Plus d'org perso depuis le 05/11/2026 : la maison est l'org ACTIVE du compte
+(`org_store.home_org`). Ce banc la pose sur l'org que l'inscription lui a donnée, et
+« l'org perso » de ses noms se lit « la maison » ; le reste raconte l'histoire.
 
 Décision d'Alexis du 28/09/2026 (ADR 0030 §9). Elle remplace la règle d'oto#160 — un
 projet ou un tableau personnel listé dans l'org où il a été créé (`context_org_id`) :
@@ -55,7 +59,7 @@ def monde(live):
     from oto_mcp.capabilities.docs import common as _kind_doc  # noqa: F401 — enregistre `doc`
     for sub in (MOI, TIERS, VOISIN):
         db.upsert_user(sub, email=f"{sub}@t.invalid", name=sub)
-    perso = org_store.ensure_personal_org(MOI)
+    perso = org_store.ensure_home_org(MOI)
     a = org_store.create_org("A listes", created_by=TIERS)
     b = org_store.create_org("B listes", created_by=TIERS)
     org_store.add_org_member(a, TIERS, "org_admin")
@@ -106,6 +110,10 @@ def monde(live):
     t["lie_recu"] = db.create_datastore("org", str(b), _nom())
     ownership.grant(tds, str(t["lie_recu"]), "user", MOI, "read", granted_by=TIERS)
     db.add_project_link(p["org_a"], "tableau", str(t["lie_recu"]), label="vivier")
+    # Plus d'org perso (05/11/2026) : la maison de MOI est son org ACTIVE. Rejoindre A
+    # l'y avait fait passer (l'org d'inscription cède sa place) ; on l'y ramène, et
+    # « l'org perso » de ce banc se lit désormais « la maison ».
+    org_store.set_active_org(MOI, perso)
     return {"perso": perso, "a": a, "b": b, "equipe": equipe, "t": t, "p": p,
             "page_recue": page_recue}
 

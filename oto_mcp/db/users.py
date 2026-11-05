@@ -231,19 +231,19 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
                          exc_info=True)
             manques.append("partage_en_attente")
     if row and row.get("inserted"):
-        # Suppression du perso (otomata-private) : tout user a TOUJOURS une org maison.
-        # Si l'inscription ne l'a pas déjà rattaché à une org (invitation d'org
-        # ci-dessus), on lui crée son espace — et SEULEMENT dans ce cas : un invité
-        # recevait sinon une org perso à côté de celle qu'il venait de rejoindre.
-        # Idempotent, hors gate email.
+        # Tout user a TOUJOURS une org maison. Si l'inscription ne l'a pas déjà
+        # rattaché à une org (invitation d'org ci-dessus), on lui pose une org
+        # ORDINAIRE (`ensure_home_org` — plus jamais d'org perso, 05/11/2026), et
+        # SEULEMENT dans ce cas : un invité n'en reçoit pas à côté de celle qu'il vient
+        # de rejoindre. Idempotent, hors gate email.
         try:
             from .. import org_store
             if not org_store.list_orgs_for_user(sub):
-                org_store.ensure_personal_org(sub, email=email, name=name)
+                org_store.ensure_home_org(sub, email=email, name=name)
         except Exception:
             logger.error("upsert_user: org maison NON créée (sub=%s email=%s) — "
                          "le compte naîtrait sans espace", sub, email, exc_info=True)
-            manques.append("ensure_personal_org")
+            manques.append("ensure_home_org")
     if manques:
         raise OnboardingIncomplet(sub, manques)
     # ⚠️ Le RAPPROCHEMENT d'identités a été retiré de ce chemin le 2026-09-03. Il

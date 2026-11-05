@@ -62,7 +62,7 @@ def group_admin_hidden_tools(group: Optional[int]) -> set:
 
 
 def _ouvert_par_une_regle(sub: str, ref, entity_type: str, entity_id: str, *,
-                          refus: str) -> Optional[int]:
+                          refus: str, nominative: bool = False) -> Optional[int]:
     """An account the caller does not own nor reach by membership, NAMED by `_instance=`:
     it serves if its rules give her a level (#1499) — another person's account of her
     org, or an account of another org a rule naming her opens (D1), or her own key in
@@ -74,6 +74,9 @@ def _ouvert_par_une_regle(sub: str, ref, entity_type: str, entity_id: str, *,
     trouves = comptes.comptes_des_lignes(porteur, [(entity_type, entity_id, ref.account or "")])
     compte = trouves.get((entity_type, entity_id, ref.account or ""))
     appelant = niveaux.Appelant(sub, org_appel, lambda: scope.current_group(sub))
+    if nominative and compte is not None and not any(
+            r.user == sub and r.level != "none" for r in compte.regles):
+        compte = None   # only a rule NAMING her opens it, never a default
     if compte is None or niveaux.RANG[niveaux.niveau(appelant, compte, besoin="read")] == 0:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
@@ -130,10 +133,13 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
         return g.get("org_id") if g else None
     if ref.level == "org":
         if not roles.is_org_member(sub, ref.org_id):
-            # Not a member: an org account a rule naming her opens (D1, or a shared
-            # project's inheritance taken over, #480) — also under `_project=` of that org.
+            # Not a member: only an org account a rule NAMING her opens (D1, or a shared
+            # project's inheritance taken over, #480) — also under `_project=` of that org
+            # or a project binding, where the call's org is that org: the members' default
+            # never reaches her (`nominative`).
             return _ouvert_par_une_regle(sub, ref, "org", str(ref.org_id),
-                                         refus=f"you are not a member of org #{ref.org_id}")
+                                         refus=f"you are not a member of org #{ref.org_id}",
+                                         nominative=True)
         return ref.org_id
     if ref.level == "tenant":
         # L-keys PR 1: a tenant's key is pinned by its accounts and them alone — the

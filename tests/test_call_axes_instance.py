@@ -245,6 +245,19 @@ def test_resolution_project_binding_reguards_caller(resolution, monkeypatch):
         access._resolve_credential_impl("zoho", "auto", "u")
 
 
+def test_resolution_project_binding_serves_a_caller_a_rule_names(resolution, monkeypatch):
+    # Le cas symétrique : hors de l'org 5, une règle qui NOMME l'appelant lui ouvre le
+    # compte d'org (D1, ou un héritage repris, #1499) — le binding le sert.
+    resolution[("org", "5", "zoho", "")] = "SECRET-BOUND"
+    resolution.regles = (access.Regle(user="u", group=None, org=False, level="sensitive"),)
+    _bind_project(monkeypatch, 7, [
+        {"target_type": "connecteur", "target_ref": "zoho",
+         "config": {"instance_ref": "org:5:zoho"}}])
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: False)
+    rc = access._resolve_credential_impl("zoho", "auto", "u")
+    assert rc.secret == "SECRET-BOUND" and (rc.entity_type, rc.entity_id) == ("org", "5")
+
+
 def test_resolution_explicit_instance_beats_project_binding(resolution, monkeypatch):
     # `instance=` explicite (jeton le plus spécifique) prime sur le binding du projet.
     eid = credentials_store.member_id(8, "u")

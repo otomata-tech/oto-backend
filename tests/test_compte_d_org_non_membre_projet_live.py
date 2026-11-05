@@ -44,7 +44,7 @@ def monde(live, monkeypatch):
 
 
 def _resoudre(sub, **k):
-    from mcp.shared.exceptions import McpError
+    from oto_mcp.mcp_errors import McpError
     from oto_mcp import access
     try:
         return access.resolve_credential("zoho", sub=sub, emit_on_failure=False, **k)

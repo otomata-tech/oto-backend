@@ -169,8 +169,14 @@ class Appelant:
         from .. import roles
         return self._une_fois(("chef", gid), lambda: roles.can_admin_group(self.sub, gid))
 
+    def _hors_de_l_org_de_l_appel(self) -> bool:
+        """`_project=` set the org of a shared project she is NOT a member of as the
+        call's org (`session_org.current_call_hors_org`): there, she is not a member."""
+        from .. import session_org
+        return session_org.current_call_hors_org() == (self.sub, self.org)
+
     def membre_de_l_org(self, org: int) -> bool:
-        if org == self.org:
+        if org == self.org and not self._hors_de_l_org_de_l_appel():
             return True   # the call's org: membership is guarded where it is set
         from .. import roles
         return self._une_fois(("org", org), lambda: roles.is_org_member(self.sub, org))

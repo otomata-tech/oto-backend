@@ -51,6 +51,9 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.210.0 = nextmotion : les séances consommées d'un forfait, réduites à leurs
+    # compteurs (`list_appointment_billed_counts`, `consumed_by_billing`, connectors#148),
+    # servies par `nextmotion_package_usage` ;
     # v1.209.0 = microsoft/Teams : les images collées dans un message (`image_refs`,
     # `TeamsClient.get_hosted_content`, connectors#181), servies par `teams(op="image")` ;
     # v1.208.0 = crisp : client messagerie client en lecture seule (`oto.tools.crisp`,
@@ -495,7 +498,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.209.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.210.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

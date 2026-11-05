@@ -61,13 +61,14 @@ def _tool(name: str):
     return asyncio.run(_mcp().get_tool(name)).fn
 
 
-def test_the_surface_is_exactly_nineteen_tools(client):
+def test_the_surface_is_exactly_twenty_tools(client):
     assert sorted(t.name for t in asyncio.run(_mcp().list_tools())) == [
         "nextmotion_appointment", "nextmotion_availability", "nextmotion_calendar",
         "nextmotion_catalog", "nextmotion_clinic", "nextmotion_communication",
         "nextmotion_device_usage", "nextmotion_invoice", "nextmotion_journey",
-        "nextmotion_lead", "nextmotion_patient", "nextmotion_patient_demographics",
-        "nextmotion_patient_stats", "nextmotion_payment", "nextmotion_practitioner",
+        "nextmotion_lead", "nextmotion_package_usage", "nextmotion_patient",
+        "nextmotion_patient_demographics", "nextmotion_patient_stats", "nextmotion_payment",
+        "nextmotion_practitioner",
         "nextmotion_product", "nextmotion_quote", "nextmotion_setting",
         "nextmotion_statistics",
     ]

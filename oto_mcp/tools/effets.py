@@ -704,6 +704,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "nextmotion_lead": {"lire": "list get", "ecrire": "create update convert", "detruire": "delete"},
     "nextmotion_patient": {"lire": "list get", "ecrire": "create update"},
     "nextmotion_patient_demographics": "lire",
+    "nextmotion_package_usage": "lire",
     "nextmotion_patient_stats": "lire",
     "nextmotion_payment": {"lire": "list get", "ecrire": "update"},
     # create of a practitioner with an email may invite them to the clinic account.

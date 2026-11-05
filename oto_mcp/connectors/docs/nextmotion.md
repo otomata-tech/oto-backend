@@ -23,6 +23,7 @@ start with `nextmotion_clinic()`: every other tool asks for a `clinic_id`.
 - "who paid what, by which means?" → `nextmotion_payment(op="list", clinic_id=…)` or `invoice_id=…` for one invoice
 - "revenue by month, by treatment type" → `nextmotion_statistics(kind="appointment_income"|"treatment_types"|"treatment_types_income", clinic_id=…, period_type="month")`
 - "how much has this patient been invoiced, paid?" → `nextmotion_patient_stats(patient_id=…)` with the id served by an appointment, a quote or an invoice
+- "how many sessions of their package are used, how many remain?" → `nextmotion_package_usage(clinic_id=…, patient_id=…)`: the sessions consumed per quote or invoice and per treatment, next to the lines sold (name, quantity). Counters only — no note, zone or free text of a care ever comes out. ⚠️ Nextmotion does not say which line a session decrements: match a group to a line of the same document by its name
 - "the prospect pipeline" → `nextmotion_lead(op="list", clinic_id=…)`, and the source or status labels → `nextmotion_setting(kind="object_label", clinic_id=…, label_types=["lead_source"])`
 - "where do our patients come from, what age, what gender?" → `nextmotion_patient_demographics(clinic_id=…, by=["department","age_band"])` — headcounts only; a municipality's socio-demographic profile (population, income) is read in open data: `urba_socio(code_insee)`
 - "are our machines running?" → `nextmotion_device_usage(clinic_id=…, start_date=…, end_date=…, period_type="month")` — 93 days at most per call

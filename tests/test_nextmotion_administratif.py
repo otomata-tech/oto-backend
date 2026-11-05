@@ -361,7 +361,9 @@ def test_chaque_outil_est_couvert_par_le_poison():
     outils = {t.name for t in asyncio.run(_mcp().list_tools())}
     exemptes = {"nextmotion_practitioner",  # un praticien a un nom : il est servi
                 # agrégats : leur poison vit dans test_nextmotion_analyse.py
-                "nextmotion_patient_demographics", "nextmotion_device_usage"}
+                "nextmotion_patient_demographics", "nextmotion_device_usage",
+                # ses lignes de soin arrivent RÉDUITES par la lib : poison dédié plus bas
+                "nextmotion_package_usage"}
     assert outils - exemptes - {t for t, _, _ in _APPELS} == set()
 
 
@@ -443,3 +445,97 @@ def test_fields_sur_une_ressource_ajoutee(client):
         {"id": X, "card": "1.00", "cash": "2.00", "invoice": {"id": C, "patient": _patient()}}]}
     out = _tool("nextmotion_payment")(clinic_id=C, fields=["card"])
     assert out["payments"] == [{"id": X, "card": "1.00"}] and out["has_more"] is True
+
+
+
+# --- le décompte d'un forfait (#148) : compteurs administratifs seulement -----------
+
+F1 = "00000000-0000-4000-8000-0000000000f1"
+F2 = "00000000-0000-4000-8000-0000000000f2"
+T1 = "00000000-0000-4000-8000-0000000000a1"
+P1 = "00000000-0000-4000-8000-0000000000b1"
+
+
+def _forfait(client):
+    client.list_appointments.return_value = {"count": 3, "next": None, "data": [
+        {"id": "r1", "patient": {"id": X, "last_name": S}},
+        {"id": "r2"}, {"id": "r3"}]}
+    lignes = {"r1": [{"id": "s1", "invoice": F1, "quote": None, "treatment_type": T1,
+                      "treatment_pricing": P1, "quantity": 1,
+                      "treatment_time": "2026-09-01T09:00:00Z"}],
+              "r2": [{"id": "s2", "invoice": F1, "quote": None, "treatment_type": T1,
+                      "treatment_pricing": P1, "quantity": 1,
+                      "treatment_time": "2026-09-15T09:00:00Z"}],
+              "r3": [{"id": "s3", "invoice": F2, "quote": None, "treatment_type": T1,
+                      "treatment_pricing": P1, "quantity": 1,
+                      "treatment_time": "2026-09-20T09:00:00Z"}]}
+    client.list_appointment_billed_counts.side_effect = (
+        lambda i, limit, offset: {"count": 1, "next": None, "data": lignes[i]})
+    client.get_treatment_type.return_value = {"data": {"id": T1, "name": "Laser",
+                                                       "notes": S}}
+    client.get_invoice.side_effect = lambda i: {"data": {
+        "id": i, "number": f"FA-{i[-2:]}", "status": "paid", "issued_time": "2026-08-30",
+        "patient": {"id": X, "first_name": S},
+        "invoiced_treatments": [{"name": "Forfait laser 6 séances", "quantity": 6,
+                                 "details": S}]}}
+
+
+def test_le_decompte_d_un_forfait_par_facture(client):
+    from oto.tools.nextmotion import consumed_by_billing  # noqa: F401 — exige le pin
+
+    _forfait(client)
+    out = _tool("nextmotion_package_usage")(clinic_id=C, patient_id=X)
+    client.list_appointments.assert_called_once_with(C, patient_id=X, limit=100, offset=0)
+    assert out["appointments_read"] == 3 and out["truncated"] is False
+    assert [(g["invoice"], g["consumed"], g["treatment_type_name"])
+            for g in out["consumed"]] == [(F1, 2, "Laser"), (F2, 1, "Laser")]
+    assert out["sold"][F1] == {"kind": "invoice", "number": "FA-f1", "status": "paid",
+                               "issued_time": "2026-08-30",
+                               "lines": [{"name": "Forfait laser 6 séances",
+                                          "quantity": 6}]}
+    assert S not in json.dumps(out)
+    client.get_quote.assert_not_called()
+
+
+def test_le_decompte_dit_quand_il_s_arrete(client, monkeypatch):
+    from oto_mcp.tools import nextmotion_ventes as V
+
+    monkeypatch.setattr(V, "_USAGE_MAX_APPOINTMENTS", 2)
+    _forfait(client)
+    out = _tool("nextmotion_package_usage")(clinic_id=C, patient_id=X)
+    assert out["appointments_read"] == 2 and out["truncated"] is True
+
+
+@pytest.mark.parametrize("kwargs,motif", [
+    ({"clinic_id": C, "patient_id": ""}, "patient_id"),
+    ({"clinic_id": "pas-un-uuid", "patient_id": X}, "UUID"),
+])
+def test_le_decompte_refuse_avant_tout_appel(client, kwargs, motif):
+    with pytest.raises(McpError, match=motif):
+        _tool("nextmotion_package_usage")(**kwargs)
+    client.list_appointments.assert_not_called()
+
+
+
+class _EmpoisonneSaufDecompte(_Empoisonne):
+    """Le poison partout, sauf les lignes de soin : la lib les rend réduites à ses ids et
+    compteurs (`BILLED_COUNT_FIELDS`), et c'est ce contrat que l'outil consomme."""
+
+    def list_appointment_billed_counts(self, appointment_id, limit, offset):
+        self.appels.append("list_appointment_billed_counts")
+        return {"count": 1, "next": None, "data": [
+            {"id": C, "invoice": X, "quote": None, "treatment_type": C,
+             "treatment_pricing": C, "quantity": 1, "treatment_time": "t",
+             "notes": S, "zone": S, "text": S}]}
+
+
+def test_le_decompte_ne_laisse_sortir_aucune_sentinelle(monkeypatch):
+    faux = _EmpoisonneSaufDecompte()
+    monkeypatch.setattr("oto.tools.nextmotion.NextmotionClient", lambda **kw: faux)
+    monkeypatch.setattr("oto_mcp.access.resolve_api_key",
+                        lambda provider, account=None: ("nm-test", False))
+    out = _tool("nextmotion_package_usage")(clinic_id=C, patient_id=X)
+    assert {"list_appointments", "list_appointment_billed_counts", "get_invoice"} <= set(
+        faux.appels)
+    assert S not in json.dumps(out), json.dumps(out)[:600]
+    assert out["consumed"][0]["consumed"] == 1

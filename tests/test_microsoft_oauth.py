@@ -16,6 +16,7 @@ son retour (aucune écriture).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import sys
 import time
 import types
@@ -38,15 +39,25 @@ JANE = {"id": "id-jane", "displayName": "Jane Doe", "mail": "Jane@Contoso.exampl
 JOHN = {"id": "id-john", "displayName": "John Roe", "mail": None,
         "userPrincipalName": "john@fabrikam.example"}
 G = "https://graph.microsoft.com/"
+PBI = "https://analysis.windows.net/powerbi/api/"
+SCOPE_POWERBI = f"{PBI}Workspace.Read.All {PBI}Report.Read.All {PBI}Dataset.Read.All"
 # Ce qu'Entra rendait aux connexions SharePoint d'avant le porteur (`meta.scopes` en prod).
 SCOPE_FICHIERS = ("Files.ReadWrite.All Sites.ReadWrite.All User.Read profile openid "
                   "email offline_access")
 SCOPE_COURRIER = f"{G}Mail.ReadWrite {G}Mail.Send User.Read offline_access"
 
 
+@dataclasses.dataclass(frozen=True)
+class _Grant:
+    """`oto.tools.microsoft.auth.Grant`, au contrat : une dataclass figée."""
+    access_token: str
+    refresh_token: str
+    expires_in: int
+    scope: str
+
+
 def _grant(access="AT1", refresh="RT1", expires_in=3600, scope=SCOPE_FICHIERS):
-    return types.SimpleNamespace(access_token=access, refresh_token=refresh,
-                                 expires_in=expires_in, scope=scope)
+    return _Grant(access, refresh, expires_in, scope)
 
 
 def _faux_scopes():
@@ -65,9 +76,12 @@ def _faux_scopes():
                    G + "GroupMember.ReadWrite.All")
     s.TEAMS_ADMIN = (G + "ChannelMessage.Read.All",)
     s.REFRESH = (G + ".default", "offline_access")
+    s.OIDC = frozenset({"openid", "profile", "email", "offline_access"})
+    s.POWERBI = (PBI + "Workspace.Read.All", PBI + "Report.Read.All", PBI + "Dataset.Read.All")
+    s.POWERBI_REFRESH = (PBI + ".default", "offline_access")
     canon = {n.removeprefix(G).lower(): n.removeprefix(G)
              for t in (s.IDENTITY, s.FILES, s.MAIL, s.CALENDAR, s.TEAMS, s.NOTES, s.DIRECTORY,
-                       s.TEAMS_ADMIN)
+                       s.TEAMS_ADMIN, s.POWERBI)
              for n in t}
 
     def _court(n):
@@ -1417,3 +1431,81 @@ def test_preter_outlook_a_toute_l_org_est_servi_donc_accepte_et_journalise(pret_
 def test_la_cause_d_entra_est_lue_et_bornee(env, texte, code, attendu):
     assert env.auth._cause_entra(env.coeur.MicrosoftGrantExpired(texte, code=code)) == attendu
     assert len(env.auth._cause_entra(env.coeur.MicrosoftGrantExpired("x" * 900))) == 300
+
+
+
+# ── Power BI : une autre ressource Entra que Graph ───────────────────────────
+
+def test_power_bi_echange_graph_puis_demande_son_propre_jeton(env):
+    env.coeur.auth.refresh.return_value = _grant("AT-PBI", "RT-PBI", scope=SCOPE_POWERBI)
+    etat = env.auth.make_state(SUB, ORG, "", "powerbi")
+    resp = _callback({"code": "le-code", "state": etat})
+    assert resp.status_code == 302 and "connect=connected" in resp.headers["location"]
+    # L'échange du code ne nomme que Graph : une requête de jeton = UNE ressource.
+    assert env.coeur.auth.exchange_code.call_args.kwargs["scopes"] == env.coeur.scopes.IDENTITY
+    assert env.coeur.auth.refresh.call_args.args[2] == "RT1"
+    assert env.coeur.auth.refresh.call_args.kwargs["scopes"] == env.coeur.scopes.POWERBI_REFRESH
+    ligne = env.coffre.lignes[("member", MEMBRE, "jane@contoso.example")]
+    assert ligne["secret"] == "RT-PBI", "le dernier refresh token émis est rangé"
+    assert "powerbi" in env.auth.services_granted(ligne["meta"]["scopes"])
+    assert "sharepoint" in env.auth.services_granted(ligne["meta"]["scopes"])
+
+
+def test_un_jeton_power_bi_se_demande_a_part_et_se_cache_a_part(env):
+    env.coffre.poser("jane@contoso.example", "RT1",
+                     {"scopes": SCOPE_FICHIERS + " " + SCOPE_POWERBI})
+    env.coeur.auth.refresh.side_effect = [
+        _grant("AT-PBI", "RT1", scope=SCOPE_POWERBI),
+        _grant("AT-GRAPH", "RT1", scope=SCOPE_FICHIERS)]
+    assert env.auth.access_token_for(SUB, "powerbi") == "AT-PBI"
+    assert env.auth.access_token_for(SUB, SERVICE) == "AT-GRAPH", \
+        "le jeton Power BI en cache ne sert jamais Graph"
+    vus = [c.kwargs["scopes"] for c in env.coeur.auth.refresh.call_args_list]
+    assert vus == [env.coeur.scopes.POWERBI_REFRESH, env.coeur.scopes.REFRESH]
+    assert env.auth.access_token_for(SUB, "powerbi") == "AT-PBI"
+    assert env.coeur.auth.refresh.call_count == 2
+
+
+def test_un_renouvellement_n_oublie_pas_l_autre_ressource(env):
+    env.coffre.poser("jane@contoso.example", "RT1",
+                     {"scopes": SCOPE_FICHIERS + " " + SCOPE_POWERBI})
+    env.coeur.auth.refresh.return_value = _grant("AT2", "RT1", scope=SCOPE_FICHIERS)
+    env.auth.access_token_for(SUB, SERVICE)
+    meta = env.coffre.meta("jane@contoso.example")
+    assert {"powerbi", "sharepoint"} <= set(env.auth.services_granted(meta["scopes"]))
+    env.auth._JETONS.clear()
+    env.coeur.auth.refresh.return_value = _grant("AT3", "RT1", scope=SCOPE_POWERBI)
+    env.auth.access_token_for(SUB, "powerbi")
+    meta = env.coffre.meta("jane@contoso.example")
+    assert {"powerbi", "sharepoint"} <= set(env.auth.services_granted(meta["scopes"]))
+
+
+def test_un_renouvellement_qui_retire_un_scope_de_sa_ressource_le_retire(env):
+    env.coffre.poser("jane@contoso.example", "RT1",
+                     {"scopes": SCOPE_FICHIERS + " " + SCOPE_POWERBI})
+    env.coeur.auth.refresh.return_value = _grant(
+        "AT2", "RT1", scope=f"{PBI}Workspace.Read.All {PBI}Report.Read.All")
+    with pytest.raises(RuntimeError, match="has not yet authorized Power BI"):
+        env.auth.access_token_for(SUB, "powerbi")
+        env.auth._JETONS.clear()
+        env.auth.access_token_for(SUB, "powerbi")
+
+
+def test_power_bi_s_approuve_depuis_sa_carte_jamais_par_defaut(env):
+    defaut = env.auth.admin_approval(SUB)
+    assert "powerbi" not in defaut["services"]
+    sa_carte = env.auth.admin_approval(SUB, connector="powerbi")
+    assert "powerbi" in sa_carte["services"]
+    demandes = env.coeur.auth.admin_consent_url.call_args.kwargs["scopes"]
+    assert set(env.coeur.scopes.POWERBI) <= set(demandes)
+
+
+def test_un_compte_graph_seul_se_renouvelle_comme_avant(env):
+    """Sans Power BI, la réécriture de `meta.scopes` est celle d'avant : ce que dit le
+    renouvellement, rien de plus (OIDC compris)."""
+    env.coffre.poser("jane@contoso.example", "RT1", {"scopes": SCOPE_FICHIERS})
+    env.coeur.auth.refresh.return_value = _grant("AT2", "RT1",
+                                                 scope="Files.ReadWrite.All Sites.ReadWrite.All")
+    env.auth.access_token_for(SUB, SERVICE)
+    assert env.coffre.meta("jane@contoso.example")["scopes"] == \
+        "Files.ReadWrite.All Sites.ReadWrite.All"

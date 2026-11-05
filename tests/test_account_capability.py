@@ -80,7 +80,8 @@ def test_les_cles_de_api_me_sont_exactement_celles_servies(monkeypatch, socle):
     code, out = call("me.get")
     assert code == 200, out
     assert sorted(out) == sorted([
-        "sub", "email", "name", "avatar_url", "locale", "role", "claude_subscription",
+        "sub", "email", "email_verified", "name", "avatar_url", "locale", "role",
+        "claude_subscription",
         "active_org", "active_org_name", "active_org_logo_url", "org_role",
         "active_org_readonly", "view_as_read_only",
         "view_as_bound_org", "view_as_refused_prefixes",
@@ -133,6 +134,86 @@ def test_un_membre_n_est_jamais_en_lecture_seule(monkeypatch, socle):
     monkeypatch.setattr(ma.access, "is_platform_operator", lambda sub: False)
     _, out = call("me.get")
     assert out["active_org_readonly"] is False
+
+
+# --- `email_verified` : le claim du jeton Logto, `null` s'il est inconnu ----------
+
+class _Verifieur:
+    """Le jeton Logto vérifié, aux claims choisis par le banc."""
+
+    def __init__(self, claims: dict):
+        self.claims = claims
+
+    async def verify_token(self, token):
+        from types import SimpleNamespace
+        return SimpleNamespace(claims=self.claims)
+
+
+def _requete(scope_partage: dict | None = None):
+    from starlette.requests import Request
+    scope = {"type": "http", "method": "GET", "path": "/api/me", "query_string": b"",
+             "root_path": "", "scheme": "http", "server": ("test", 80),
+             "http_version": "1.1", "headers": [(b"authorization", b"Bearer eyJ-un-jwt")]}
+    return Request(scope if scope_partage is None else scope_partage)
+
+
+def _me_apres_authentification(monkeypatch, claims: dict, *, sub_servi=None,
+                               deux_fois=False):
+    """`_authenticate` (chemin JWT) puis `_me`, dans le MÊME contexte : ce que le
+    handler lit est ce que l'authentification de la requête a posé."""
+    import asyncio
+    from oto_mcp.api import base as api_base
+    monkeypatch.setattr(api_base.db, "upsert_user", lambda *a, **k: None)
+    monkeypatch.setattr(api_base.db, "get_suspension", lambda sub: None)
+
+    async def scenario():
+        requete = _requete()
+        sub, err = await api_base._authenticate(requete, verifier=_Verifieur(claims))
+        assert err is None, err
+        if deux_fois:
+            # Le second appel de la même requête (middleware puis route) : le porteur
+            # mémorisé, pas une nouvelle vérification.
+            api_base._EMAIL_VERIFIE.set((None, None))
+            sub, err = await api_base._authenticate(
+                _requete(requete.scope), verifier=_Verifieur({}))
+            assert err is None, err
+        from types import SimpleNamespace
+        return ma._me(SimpleNamespace(sub=sub_servi or sub), ma.MeInput())
+
+    return asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("claims,attendu", [
+    ({"email_verified": True}, True),
+    ({"email_verified": False}, False),
+    ({}, None),
+    ({"email_verified": None}, None),
+    ({"email_verified": "true"}, None),
+], ids=["vrai", "faux", "absent", "nul", "illisible"])
+def test_api_me_sert_email_verified_du_jeton(monkeypatch, socle, claims, attendu):
+    out = _me_apres_authentification(
+        monkeypatch, {"sub": "u-jwt", "email": "a@b.c", **claims})
+    assert out["email_verified"] is attendu
+
+
+def test_email_verified_survit_au_second_appel_de_la_requete(monkeypatch, socle):
+    out = _me_apres_authentification(
+        monkeypatch, {"sub": "u-jwt", "email_verified": True}, deux_fois=True)
+    assert out["email_verified"] is True
+
+
+def test_en_voir_en_tant_que_email_verified_est_inconnu(monkeypatch, socle):
+    """Le jeton est celui de l'opérateur : il ne dit rien de l'adresse de la cible."""
+    out = _me_apres_authentification(
+        monkeypatch, {"sub": "u-operateur", "email_verified": True}, sub_servi="u-cible")
+    assert out["email_verified"] is None
+
+
+def test_sans_authentification_jwt_email_verified_est_inconnu(monkeypatch, socle):
+    """Jeton API, worker, service : rien n'est posé — `null`, jamais un faux."""
+    stub_authz(monkeypatch)
+    _, out = call("me.get")
+    assert out["email_verified"] is None
 
 
 # --- « Voir en tant que » : la lecture seule que la cible ne porte pas (oto#212) ---

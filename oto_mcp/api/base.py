@@ -22,8 +22,10 @@ ce qui est servi.
 """
 from __future__ import annotations
 
+import contextvars
 import functools
-from typing import Awaitable, Callable
+import logging
+from typing import Awaitable, Callable, Optional
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.concurrency import run_in_threadpool
@@ -172,10 +174,41 @@ CLE_PORTEUR = "oto_porteur_authentifie"
 
 
 def _memoriser_porteur(request: Request, cle: tuple, sub: str, *, scopes=None,
-                       token_id=None, token_kind=None, verrou=None) -> None:
+                       token_id=None, token_kind=None, verrou=None,
+                       email_verified=None) -> None:
     request.scope[CLE_PORTEUR] = {"cle": cle, "sub": sub, "scopes": scopes,
                                   "token_id": token_id, "token_kind": token_kind,
-                                  "verrou": verrou}
+                                  "verrou": verrou, "email_verified": email_verified}
+
+
+_log = logging.getLogger(__name__)
+
+# `email_verified` du jeton Logto de la requête, avec le compte qui le porte : `(sub,
+# vrai|faux)`, ou `(None, None)` — jeton API, worker, service, claim absent. L'annuaire
+# le pose dans le jeton d'accès (vrai dès que `primaryEmail` est posé) : aucun appel
+# réseau pour le lire. Reposé à CHAQUE authentification, jamais hérité d'une requête.
+_EMAIL_VERIFIE: contextvars.ContextVar[tuple[Optional[str], Optional[bool]]] = \
+    contextvars.ContextVar("oto_email_verifie", default=(None, None))
+
+
+def _email_verifie_des_claims(claims: dict) -> Optional[bool]:
+    """Le claim OIDC `email_verified` tel que le jeton le porte : un booléen, sinon
+    None (absent, ou d'une forme que l'annuaire n'émet pas — journalisé, jamais
+    deviné)."""
+    v = claims.get("email_verified")
+    if v is None or isinstance(v, bool):
+        return v
+    _log.warning("jeton : claim `email_verified` illisible (%s) — servi inconnu",
+                 type(v).__name__)
+    return None
+
+
+def email_verifie_de(sub: str) -> Optional[bool]:
+    """`email_verified` du compte `sub` tel que le jeton de CETTE requête le dit ; None
+    s'il ne le dit pas — autre porteur (« voir en tant que »), jeton sans le claim,
+    jeton API."""
+    porteur, valeur = _EMAIL_VERIFIE.get()
+    return valeur if porteur == sub else None
 
 
 #: Le refus d'un jeton de DÉLÉGATION (`kind='delegation'`) sur la face REST (#1499).
@@ -239,6 +272,7 @@ async def _authenticate(
     cle = (allow_query_token, allow_api_token, allow_issuer_token, allow_service)
     deja = request.scope.get(CLE_PORTEUR)
     if deja is not None and deja["cle"] == cle:
+        _EMAIL_VERIFIE.set((deja["sub"], deja["email_verified"]))
         platform_worker.set_current(None)
         service_identity.set_current(None)
         token_scopes.set_current(deja["scopes"], deja["token_id"])
@@ -271,6 +305,7 @@ async def _authenticate(
     # survit jamais d'une requête à l'autre par oubli.
     platform_worker.set_current(None)
     service_identity.set_current(None)
+    _EMAIL_VERIFIE.set((None, None))
     # Le verrou d'org d'un jeton de délégation (`verrou_org.py`) : posé à None
     # d'abord, comme les deux variables ci-dessus — il ne survit à aucune requête.
     verrou_org.poser(None)
@@ -459,7 +494,9 @@ async def _authenticate(
         # la NAISSANCE d'un compte d'un tenant désactivé (#1165) — la garde ci-dessus la
         # précède déjà sur ce chemin ; celle-ci tient si un appelant l'omet.
         return None, _json_error(request, 403, refus.code, str(refus))
-    _memoriser_porteur(request, cle, sub)
+    email_verifie = _email_verifie_des_claims(access_token.claims)
+    _EMAIL_VERIFIE.set((sub, email_verifie))
+    _memoriser_porteur(request, cle, sub, email_verified=email_verifie)
     servi = _maybe_view_as(sub, apply_view_as)
     # Session interactive : pas de jeton nommé, le porteur suffit. Publié quand
     # même — sinon le journal continuerait de le RE-DÉDUIRE de l'en-tête, et une

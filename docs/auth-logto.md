@@ -327,6 +327,15 @@ Limite : la **récupération par magic-link email** reste un mono-facteur (backl
 `infra/docs/logto.md`). Le vrai **step-up par appel** (`acr_values`) n'existe pas dans
 Logto → non implémentable côté serveur ; l'enforcement est donc au **login**.
 
+## `email_verified` dans `GET /api/me`
+
+`GET /api/me` sert `email_verified`, lu dans le claim OIDC du **jeton d'accès** Logto de la
+requête (le script de claims du tenant le pose vrai dès que `primaryEmail` existe) : aucun
+appel à l'API de gestion, aucune colonne. `_authenticate` (`api/base.py`) le pose avec le
+compte qui le porte, `email_verifie_de(sub)` le rend. **`null` = inconnu, jamais un faux** :
+jeton API (`oto_`), jeton sans le claim ou d'une autre forme qu'un booléen (journalisé), et
+« voir en tant que » (le jeton est celui de l'opérateur, pas de la cible).
+
 ## CUTOVER ADR 0040 (2026-07-06) — `.ninja` ↔ `.cx` inversés
 
 > **⚠️ CUTOVER ADR 0040 (2026-07-06) — `.ninja`↔`.cx` inversés.** Désormais **PROD =

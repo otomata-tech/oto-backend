@@ -164,6 +164,9 @@ hébergé) ; il en est SORTI le 2026-10-19 : le jeton d'un travail porte désorm
 d'outils de son déclencheur (`outils_du_travail.py`), un agent hébergé lance une recette
 comme tout client (`docs/recettes.md`), et la page publique d'aide la présente comme
 ouverte à tous.
+`oto_apps` y était entré à sa naissance (objet neuf, population choisie) ; il en est
+SORTI le 2026-11-04, avec la porte `beta` des écritures d'app (`docs/apps.md` §Qui écrit
+une app) : le manifeste jugé contre la portée de l'auteur borne déjà ce qu'une app touche.
 
 ⚠️ **N'entrent dans `BETA_TOOLS` que des noms NEUFS.** Le bloc masque fail-closed : y
 poser le nom d'une surface vivante la retirerait d'un coup à tous les comptes sans

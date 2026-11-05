@@ -108,12 +108,11 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
 
 ## Qui écrit une app
 
-- **La population bêta seule** : `create`, `update`, `patch`, `archive`, `unarchive`,
-  `restore`, `file`, `unfile` exigent l'option `beta` (`access.has_option`, dans l'org de l'appel) — la
-  même population que `oto_apps` (`BETA_TOOLS`) et l'écran du front. Les autres :
-  403 `apps_beta_only`, sur les deux faces ; une panne du seam des options refuse
-  (fail-closed). Lire (`list`, `get`, `revisions`, `validate`) reste ouvert à qui
-  lit l'app.
+- **Toute org** depuis le 2026-11-04 : `create`, `update`, `patch`, `archive`,
+  `unarchive`, `restore`, `file`, `unfile` ne demandent plus l'option `beta` (le refus
+  403 `apps_beta_only` est retiré, `oto_apps` est sorti de `BETA_TOOLS`). Ce qui borne
+  une app reste le manifeste, jugé contre la portée de l'AUTEUR et l'org de l'app, et
+  les droits de chacun sur l'app (écriture pour la changer, lecture pour l'ouvrir).
 - **REST : session interactive seule** (`allow_api_token=False` sur `/api/me/apps`
   et sur l'appel) : un jeton `oto_`, délégation d'agent hébergé comprise, est refusé
   en 403 `api_token_forbidden`. Un agent écrit une app par `oto_apps`, en MCP.

@@ -6,6 +6,13 @@ sector-level law in full text (complete kali/dila stock, ~290k articles): minima
 - `ccn_article(op="get")(kali_id)` — full consolidated text of an article + verifiable légifrance link
 - company-side complement (sirene connector): `fr_accords_search(idcc=…)` — the sector's **company** agreements (who negotiated what, when), then `fr_accords_text(acco_id)` to read the agreement
 
+## usage — mutual termination check (rupture conventionnelle)
+
+check a rupture conventionnelle before it is filed: reference salary (12 or 3 months, bonuses prorated, leave months neutralised), length of service, legal and agreement severance floors, withdrawal period, filing and earliest termination dates. deterministic, nothing stored.
+- `ccn_rupture_conventionnelle(date_entree, date_signature, date_rupture_envisagee, indemnite_convenue, mois=[…], idcc=…)` — `verdict` + one line per check with its article
+- read the gross pay months and the idcc with the payroll tools; mark a month `neutralise` without giving its reason
+- `non_couvert` on the agreement floor = not coded yet: check it by hand with `ccn_article(op="search")(query="indemnité de licenciement", idcc=…)`
+
 ## usage — consolidated codes (legi)
 
 the 22 french codes with historical versions: cite the exact law, at the right date, with a légifrance link.

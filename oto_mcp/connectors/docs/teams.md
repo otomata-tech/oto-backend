@@ -19,6 +19,7 @@ Microsoft lets a person authorize alone everything above, **except reading the m
 - "my teams" → `teams()`; "the channels of Sales" → `teams(op="channels", team_id="…")`; "my chats" → `teams(op="chats")`
 - "the latest messages of my chat with Marc" → `teams(op="list", chat_id="…")`
 - "what was said in #general" → `teams(op="list", team_id="…", channel_id="…")` (administrator's approval needed), and a thread → `op="replies"` with `message_id`
+- "the screenshot in that message" → `teams(op="image", image="…")` with one of the message's `images`: you see the image itself
 - "post the summary in #general" → `teams_act(team_id="…", channel_id="…", body="…")`; "answer in that thread" → `teams_act(op="reply", …)` with `message_id`; in a chat → `teams_act` with `chat_id`
 - `body` is written in markdown and posted as formatted text; each message comes back as text (`full=true` for the complete Microsoft Graph object)
 
@@ -28,8 +29,9 @@ Microsoft lets a person authorize alone everything above, **except reading the m
 - ⚠️ **reading a channel needs the administrator's approval**, reading a chat does not: a refusal on a channel is not a problem with your account
 - a chat has no threads: reply in it with `teams_act(op="post")`
 - a channel's `list` returns its root messages only; the replies of one are `op="replies"`
+- an image pasted in a message is not in its `text`: the message lists it under `images`; on a channel, viewing it needs the same administrator's approval as reading the message
 - ids look like `19:…@thread.tacv2`: pass them exactly as returned
 
 ## note — scope
 
-teams, channels, chats: list them, read messages (channels with the administrator's approval), post, reply in a channel thread. Nothing creates a team or a channel, adds a member, edits or deletes a message, or reads files shared in Teams (those are in SharePoint: the "SharePoint & OneDrive" connector).
+teams, channels, chats: list them, read messages and the images pasted in them (channels with the administrator's approval), post, reply in a channel thread. Nothing creates a team or a channel, adds a member, edits or deletes a message, or reads files shared in Teams (those are in SharePoint: the "SharePoint & OneDrive" connector).

@@ -569,6 +569,26 @@ def test_create_link_recurring_price_needs_no_metadata():
     client.get_price.assert_not_called()
 
 
+def test_create_link_managed_payments_is_sent_only_when_asked():
+    """Omitted = the account's own default (nothing sent); `false` refuses
+    Stripe as merchant of record explicitly, `true` asks for it."""
+    body, _ = _link_body(ptype="recurring")
+    assert "managed_payments" not in body
+    body, _ = _link_body(ptype="recurring", managed_payments=False)
+    assert body["managed_payments"] == {"enabled": False}
+    body, _ = _link_body(ptype="recurring", managed_payments=True)
+    assert body["managed_payments"] == {"enabled": True}
+
+
+def test_managed_payments_is_refused_outside_create_link():
+    m, cls, patcher = _fn_with_mock_client()
+    try:
+        with pytest.raises(McpError, match="managed_payments"):
+            _tool(m, "stripe_checkout")(op="list_links", managed_payments=False)
+    finally:
+        patcher.stop()
+
+
 def test_create_link_refuses_an_unreadable_price_type():
     m, cls, patcher = _fn_with_mock_client()
     try:

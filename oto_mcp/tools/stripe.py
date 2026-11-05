@@ -900,6 +900,7 @@ def register(mcp: FastMCP) -> None:
         metadata: Optional[Dict[str, Any]] = None,
         created_metadata: Optional[Dict[str, Any]] = None,
         max_uses: Optional[int] = None,
+        managed_payments: Optional[bool] = None,
         limit: Optional[int] = None,
         starting_after: Optional[str] = None,
     ) -> object:
@@ -934,13 +935,19 @@ def register(mcp: FastMCP) -> None:
                 intent otherwise. Reads the price first (key needs Prices: Read).
             max_uses: "create_link" — the link deactivates itself after N
                 completed checkouts (1 = paid once, by whoever opens it first).
+            managed_payments: "create_link" — `false` refuses Stripe Managed
+                Payments (Stripe as merchant of record), `true` asks for it.
+                Omitted = the account's own default, and an account can turn
+                it ON for every new link without anyone noticing: pass `false`
+                when the business sells in its own name with Stripe Tax.
             limit, starting_after: as elsewhere.
 
         """
         if op != "create_link":
             _refuse_ignored(op, "these fields only apply to op='create_link'",
                             price_id=price_id, quantity=quantity,
-                            created_metadata=created_metadata, max_uses=max_uses)
+                            created_metadata=created_metadata, max_uses=max_uses,
+                            managed_payments=managed_payments)
         client = _client()
         if op == "list_links":
             return _run(lambda: client.list_payment_links(
@@ -987,6 +994,8 @@ def register(mcp: FastMCP) -> None:
                 body[target] = {"metadata": created_metadata}
             if max_uses is not None:
                 body["restrictions"] = {"completed_sessions": {"limit": max_uses}}
+            if managed_payments is not None:
+                body["managed_payments"] = {"enabled": bool(managed_payments)}
             return _run(lambda: client.create_payment_link(items, **body))
         if op == "update_link":
             if not payment_link_id:

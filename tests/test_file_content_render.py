@@ -90,3 +90,97 @@ def test_render_media_unavailable_raises(monkeypatch):
     monkeypatch.setattr(media_store, "upload_private", boom)
     with pytest.raises(file_content.MediaUnavailable):
         file_content.render_for_agent(b"\x00\x01", "x.bin", "application/octet-stream", sub="s", prefix="p")
+
+
+# --- pièce jointe d'e-mail : image et scan JPEG servis EN IMAGE (#1522) ---------
+# Une URL signée sur notre stockage est injoignable d'un bac à sable qui filtre sa
+# sortie : l'image ou le scan doit revenir en bloc image, et RIEN n'est déposé.
+
+def _aucun_depot(monkeypatch):
+    def interdit(*a, **k):
+        raise AssertionError("upload_private ne doit pas être appelé")
+    monkeypatch.setattr(media_store, "upload_private", interdit)
+
+
+def _depot_signe(monkeypatch):
+    monkeypatch.setattr(media_store, "upload_private", lambda *a, **k: "https://signed/z")
+    monkeypatch.setattr(media_store, "presign_expiry", lambda: 3600)
+
+
+def _blocs(res):
+    import base64
+
+    from fastmcp.tools.tool import ToolResult
+    from mcp.types import ImageContent, TextContent
+    assert isinstance(res, ToolResult)
+    texte, *images = res.content
+    assert isinstance(texte, TextContent) and "Nothing was stored" in texte.text
+    assert images and all(isinstance(i, ImageContent) for i in images)
+    assert res.structured_content is None
+    return texte.text, [(i.mimeType, base64.b64decode(i.data)) for i in images]
+
+
+def test_piece_jointe_image_revient_en_image_sans_depot(monkeypatch):
+    from _pdf_texte import jpeg_minimal
+    _aucun_depot(monkeypatch)
+    jpeg = jpeg_minimal()
+    # Le type annoncé ne compte pas : le format se lit dans les octets.
+    res = file_content.render_attachment_for_agent(
+        jpeg, "photo.jpg", "application/octet-stream", sub="s", prefix="p")
+    texte, images = _blocs(res)
+    assert "photo.jpg" in texte and str(len(jpeg)) in texte
+    assert images == [("image/jpeg", jpeg)]
+
+
+def test_piece_jointe_image_trop_grosse_part_en_url_et_dit_pourquoi(monkeypatch):
+    _depot_signe(monkeypatch)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * file_content.INLINE_IMAGE_CAP
+    out = file_content.render_attachment_for_agent(png, "grand.png", "image/png",
+                                                   sub="s", prefix="p")
+    assert out["encoding"] == "url" and out["url"] == "https://signed/z"
+    assert "over the 3 MB" in out["image_unavailable"]
+
+
+def test_piece_jointe_pdf_scanne_en_jpeg_revient_page_par_page(monkeypatch):
+    from _pdf_texte import jpeg_minimal, pdf_scanne
+    _aucun_depot(monkeypatch)
+    jpeg = jpeg_minimal()
+    res = file_content.render_attachment_for_agent(
+        pdf_scanne([("/DCTDecode", jpeg), ("/DCTDecode", jpeg)]), "scan.pdf",
+        "application/pdf", sub="s", prefix="p")
+    texte, images = _blocs(res)
+    assert "scanned PDF" in texte and "2 page(s)" in texte
+    assert images == [("image/jpeg", jpeg), ("image/jpeg", jpeg)]
+
+
+def test_piece_jointe_pdf_scanne_non_jpeg_garde_l_url_et_dit_pourquoi(monkeypatch):
+    from _pdf_texte import pdf_scanne
+    _depot_signe(monkeypatch)
+    out = file_content.render_attachment_for_agent(
+        pdf_scanne([("/CCITTFaxDecode", b"\x00\x01")]), "fax.pdf", "application/pdf",
+        sub="s", prefix="p")
+    assert out["encoding"] == "url" and out["text_unavailable"].startswith("empty")
+    assert "/CCITTFaxDecode" in out["image_unavailable"]
+
+
+def test_piece_jointe_pdf_scanne_trop_de_pages_garde_l_url(monkeypatch):
+    from _pdf_texte import jpeg_minimal, pdf_scanne
+    _depot_signe(monkeypatch)
+    n = file_content.SCAN_PAGES_CAP + 1
+    out = file_content.render_attachment_for_agent(
+        pdf_scanne([("/DCTDecode", jpeg_minimal())] * n), "long.pdf", "application/pdf",
+        sub="s", prefix="p")
+    assert out["encoding"] == "url" and f"{n} pages" in out["image_unavailable"]
+
+
+def test_piece_jointe_pdf_a_texte_et_texte_inchanges(monkeypatch):
+    from _pdf_texte import pdf_texte
+    _depot_signe(monkeypatch)
+    pdf = pdf_texte(["Ligne de test 1", "Ligne de test 2"])
+    for data, nom, mime in [(pdf, "f.pdf", "application/pdf"),
+                            (b"# hello", "a.md", "text/markdown"),
+                            (b"\x00\x01binaire", "x.bin", "application/octet-stream")]:
+        avant = file_content.render_for_agent(data, nom, mime, sub="s", prefix="p")
+        apres = file_content.render_attachment_for_agent(data, nom, mime, sub="s",
+                                                         prefix="p")
+        assert apres == avant and "image_unavailable" not in apres

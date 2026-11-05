@@ -39,6 +39,7 @@ import os
 from typing import Literal, Optional, Union
 
 from fastmcp import FastMCP
+from fastmcp.tools.tool import ToolResult
 
 from .. import access, file_content, file_source, output_projection
 from ._microsoft_graph import bad, markdown_html, need, raw, refuse_ignored, run, token
@@ -220,7 +221,10 @@ confirm.
   `name`, `contentType`, `size`).
 - **"attachment"**: the CONTENT of an attachment of `message_id`, by `attachment_id` or
   `filename` (from op="get"). Small text and PDF come back as text inline, a spreadsheet
-  as CSV per sheet (`sheet`, `max_rows`), anything else as a short-lived signed URL.
+  as CSV per sheet (`sheet`, `max_rows`). An image (png/jpeg/gif/webp, ≤3 MB) and a
+  scanned PDF whose pages are JPEG (≤5 pages, ≤3 MB) come back as IMAGE CONTENT you can
+  look at — nothing stored. Anything else, or over those caps, comes as a short-lived
+  signed URL (`image_unavailable` says why an image or scan was not served as image).
 - **"drafts"**: the drafts, most recent first — a draft `id` is what
   `outlook_act(op="send", draft_id=…)` sends.
 - **"folders"**: the top-level mail folders (`id`, `displayName`, counts) — a folder id
@@ -416,7 +420,7 @@ def register(mcp: FastMCP) -> None:
         reply_to: Optional[str] = None,
         reply_all: bool = False,
         attachments: Optional[list[dict]] = None,
-    ) -> dict:
+    ) -> Union[dict, ToolResult]:
         # Refusal BEFORE any credential resolution: an unknown op never reaches the client.
         if op not in _OPS:
             raise bad(_ops_error(_OPS))
@@ -499,7 +503,7 @@ def register(mcp: FastMCP) -> None:
             data = base64.b64decode(piece["contentBytes"])
             sub = access.current_user_sub_or_raise()
             try:
-                return file_content.render_for_agent(
+                return file_content.render_attachment_for_agent(
                     data, piece.get("name") or aid,
                     piece.get("contentType") or "application/octet-stream",
                     sub=sub, prefix="outlook-attachments", sheet=sheet, max_rows=max_rows)

@@ -11,6 +11,7 @@ Two tools, under the chosen account: `gmail(op=search|get|attachment|drafts|draf
 - "draft a reply to this email" → `gmail(op="draft", reply_to="…", body="…")`; "send it" → `gmail_act(op="send", draft_id="…")`, the draft as it stands
 - composing (`gmail` op=draft, or `gmail_act` op=send with a full message) appends the sending account's **Gmail signature** (after `--`), like the web client — the Gmail API never does it on its own. `sign=False` composes without it; the response reports `signature`: `appended`, `none_configured` or `disabled`
 - "read the `.xlsx` spreadsheet attached to this email, `devis` sheet" — an attachment (`op=attachment`) comes back as CSV per sheet, truncated
+- "look at the photo or the scan attached" — an image, or a scanned PDF with JPEG pages, comes back as an image you can look at (up to 3 MB and 5 pages; beyond, a signed URL)
 
 ## note — project scope (#605)
 

@@ -28,6 +28,7 @@ from typing import Literal, Optional, Union
 from urllib.parse import quote
 
 from fastmcp import FastMCP
+from fastmcp.tools.tool import ToolResult
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
@@ -219,8 +220,11 @@ archives or deletes: that is `gmail_act`, the tool your client asks you to confi
   extracted text plus `raw_url`, a short-lived signed URL to the original (a scanned or
   protected PDF has no text: `text_unavailable` says why); an .xlsx as CSV per sheet
   (`sheet`, `max_rows` — default 200, max 5000; if `truncated`, ask one sheet or raise
-  `max_rows`; `raw_url` always gives the original file); anything else as a short-lived signed
-  URL `{{encoding: "url", url, expires_in}}`.
+  `max_rows`; `raw_url` always gives the original file). An image (png/jpeg/gif/webp,
+  ≤3 MB) and a scanned PDF whose pages are JPEG (≤5 pages, ≤3 MB) come back as IMAGE
+  CONTENT you can look at — nothing stored. Anything else, or over those caps, as a
+  short-lived signed URL `{{encoding: "url", url, expires_in}}` (`image_unavailable` says
+  why an image or scan was not served as image).
 - **"drafts"**: the drafts. Returns {{drafts: [{{id, message_id, to, subject, date,
   snippet}}], count}} — a draft `id` is what `gmail_act(op="send", draft_id=…)` sends.
 - **"draft"**: WRITE A DRAFT — a new message (`to`, `subject`, `body`) or a threaded reply
@@ -400,7 +404,7 @@ def register(mcp: FastMCP) -> None:
         attachments: Optional[list[dict]] = None,
         sign: bool = True,
         account: Optional[str] = None,
-    ) -> dict:
+    ) -> Union[dict, ToolResult]:
         # Refusal BEFORE any credential resolution: an unknown op never reaches the client.
         if op not in _OPS:
             raise _bad(_ops_error(_OPS))
@@ -443,7 +447,7 @@ def register(mcp: FastMCP) -> None:
             sub = access.current_user_sub_or_raise()
             try:
                 return await asyncio.to_thread(
-                    file_content.render_for_agent, data, att_filename, mime,
+                    file_content.render_attachment_for_agent, data, att_filename, mime,
                     sub=sub, prefix="gmail-attachments", sheet=sheet, max_rows=max_rows)
             except (file_content.MediaUnavailable, file_content.SpreadsheetError) as e:
                 raise _bad(str(e))

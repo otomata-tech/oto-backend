@@ -420,11 +420,18 @@ _REGLAGES: tuple[Variable, ...] = (
              "toute fonction qui commence ainsi ; un nom exact l'emporte toujours sur "
              "un motif, et entre motifs le préfixe le plus long. Ex. "
              "`anthropic.messages:*=enforce` : les appels au modèle (agents hébergés, "
-             "agent intégré) refusent, le reste reste en `report` (#1376, E). Absente "
-             "ou vide : aucune. Illisible, nommée deux fois, ou qui ne nomme aucune "
-             "fonction tarifable (coût déclaré d'un connecteur, modèle du catalogue) : "
-             "LÈVE au boot.",
-             ("oto_mcp/access/credits_modes.py:39",)),
+             "agent intégré) refusent, le reste reste en `report` (#1376, E). Une "
+             "entrée préfixée d'une SURFACE, `runner/anthropic.<fonction>=<mode>` ou "
+             "`copilot/anthropic.<fonction>=<mode>`, ne vaut que pour les tours de "
+             "modèle de cette surface (agent hébergé, agent intégré) ; ordre : exacte "
+             "de la surface, motif de la surface, exacte, motif, `OTO_CREDITS_MODE`. "
+             "Ex. `runner/anthropic.messages:*=enforce` : le runner refuse, le copilot "
+             "garde son mode. Sans entrée de surface : les deux lisent le mode de la "
+             "fonction. Absente ou vide : aucune. Illisible, nommée deux fois, surface "
+             "inconnue ou posée hors `anthropic`, ou qui ne nomme aucune fonction "
+             "tarifable (coût déclaré d'un connecteur, modèle du catalogue) : LÈVE au "
+             "boot.",
+             ("oto_mcp/access/credits_modes.py:53",)),
     Variable("OTO_CREDITS_JOB_FLOOR", Classe.REGLAGE, None,
              "Budget d'unités : le solde disponible (solde − réservations ouvertes), "
              "en unités, qu'un travail d'agent hébergé sur une clé REFACTURÉE doit "
@@ -435,7 +442,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "solde est illisible (`spend_ledger_unavailable`, rejouable) ; `report` "
              "journalise. Absente ou 0 : aucun plancher. Illisible ou négative : LÈVE "
              "au boot.",
-             ("oto_mcp/access/credits_modes.py:119",)),
+             ("oto_mcp/access/credits_modes.py:137",)),
     Variable("OTO_CREDITS_HOLD_MAX_S", Classe.REGLAGE, None,
              "Durée maximale d'une réservation sans échéance connue (travail "
              "asynchrone sans `within_s`, tranche de fond `jev_rows`, appel synchrone "

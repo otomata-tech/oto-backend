@@ -902,7 +902,7 @@ def _regler_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, usage: dict) -> di
              **({"cache_non_declare": True} if cache_non_declare else {})},
             prise.get("model"))
     except Exception:
-        enforce = tours.mode_du_modele(prise.get("model")) == "enforce"
+        enforce = tours.mode_du_modele(prise.get("model"), "runner") == "enforce"
         logger.exception("travail %s : tour %s NON réglé (clé partagée `%s`) — %s", job_id,
                          tour, est.get("depot"), "refusé" if enforce else "le worker continue")
         if enforce:

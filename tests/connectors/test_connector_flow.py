@@ -70,7 +70,7 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
         # du compte, `sharepoint` devient son premier service — un flux par carte,
         # même retour, comme google et ses services. Outlook, Outlook Calendar et Teams
         # (2026-10-08) : les services suivants, même flux ; OneNote (2026-10-21) aussi, et l'annuaire `entra`.
-        "microsoft", "sharepoint", "outlook", "outlook_calendar", "teams", "onenote", "entra",
+        "microsoft", "sharepoint", "outlook", "outlook_calendar", "teams", "onenote", "entra", "powerbi",
         # `ubersuggest` (2026-10-08) : connexion Ubersuggest de la personne (client
         # OAuth public enregistré dynamiquement), même patron.
         "ubersuggest",

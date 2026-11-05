@@ -71,7 +71,7 @@ def test_le_perimetre_est_celui_quon_croit():
     # `onenote`, `entra` (2026-10-21) : services Microsoft suivants, même lecture.
     # `jefacture` (2026-10-22) : connexion jefacture.com par personne, même patron.
     assert _federated() == {"google", "instagram_meta", "meta_ads", "microsoft", "sharepoint",
-                            "outlook", "outlook_calendar", "teams", "onenote", "entra", "ubersuggest",
+                            "outlook", "outlook_calendar", "teams", "onenote", "entra", "powerbi", "ubersuggest",
                             "jefacture",
                             "gmail", "drive", "sheets", "calendar", "tasks", "chat",
                             "bigquery", "google_ads"}

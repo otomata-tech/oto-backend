@@ -88,6 +88,7 @@ connector `microsoft`, set by the operator.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 import re
@@ -118,11 +119,18 @@ SERVICE_SCOPES: dict[str, str] = {
     "teams": "TEAMS",
     "onenote": "NOTES",
     "entra": "DIRECTORY",
+    "powerbi": "POWERBI",
 }
 SERVICES: tuple[str, ...] = tuple(SERVICE_SCOPES)
 SERVICE_LABELS = {"sharepoint": "SharePoint & OneDrive", "outlook": "Outlook",
                   "outlook_calendar": "Outlook Calendar", "teams": "Teams",
-                  "onenote": "OneNote", "entra": "Microsoft 365 directory"}
+                  "onenote": "OneNote", "entra": "Microsoft 365 directory",
+                  "powerbi": "Power BI"}
+#: The services whose scopes belong to ANOTHER Entra resource than Graph (each named by
+#: the lib's scopes that ask a token for it). Entra gives one token per resource: a
+#: consent may name several, a token request only one — so such a service's token is
+#: asked apart, from the same refresh token, and never mixed with Graph scopes.
+SERVICE_RESOURCE: dict[str, str] = {"powerbi": "POWERBI_REFRESH"}
 #: The services whose OWN scopes need a tenant administrator (the organization's
 #: directory): an approval link covers them only when asked for by name, or from their
 #: card — never in the default « approve oto for the whole organization », which would
@@ -235,6 +243,41 @@ def admin_scopes(service: str) -> tuple[str, ...]:
 def _union(ancien, nouveau) -> str:
     """The normalized union of two `scope` strings, sorted — what `meta.scopes` stores."""
     return " ".join(sorted(_normalises(ancien) | _normalises(nouveau)))
+
+
+def _ressource(scope: str) -> Optional[str]:
+    """The Entra resource of a short scope name: `graph` for a Graph one (short),
+    its URI root for another resource's (`https://analysis.windows.net/powerbi/api`),
+    None for an OpenID Connect scope, which belongs to none."""
+    if scope in _scopes().OIDC:
+        return None
+    return scope.rsplit("/", 1)[0] if "://" in scope else "graph"
+
+
+def _par_ressource(ancien, nouveau) -> frozenset:
+    """What a renewal says replaces what was known FOR THE RESOURCES IT SPEAKS OF, and
+    only those: a Graph token lists Graph scopes only, a Power BI one Power BI scopes
+    only — replacing the whole set would forget the other resource at each renewal."""
+    neuf = _normalises(nouveau)
+    touchees = {_ressource(s) for s in neuf} - {None}
+    # An OpenID Connect scope follows the renewal, as before: only another RESOURCE's
+    # scopes are kept — an account on Graph alone is stored exactly as it always was.
+    return neuf | {s for s in _normalises(ancien)
+                   if _ressource(s) is not None and _ressource(s) not in touchees}
+
+
+def _jeton_scopes(service: Optional[str]) -> tuple[str, ...]:
+    """The scopes of a TOKEN request for `service`: its own resource's `.default` for a
+    service outside Graph, Graph's otherwise (everything already consented)."""
+    nom = SERVICE_RESOURCE.get(service or "", "REFRESH")
+    return tuple(getattr(_scopes(), nom))
+
+
+def _graph_seul(scopes: tuple[str, ...]) -> tuple[str, ...]:
+    """The scopes of a consent that a GRAPH token request may name (the code exchange):
+    the others' resource is asked apart (`_jeton_scopes`)."""
+    return tuple(s for s in scopes
+                 if _ressource(next(iter(_scopes().short((s,))))) in ("graph", None))
 
 
 # --- the directory -------------------------------------------------------------
@@ -498,12 +541,16 @@ def admin_approval(sub: str, services: Optional[list[str]] = None,
                    connector: str = "sharepoint") -> dict:
     """The administrator's approval link, as the card serves it: `{url, services,
     tenant, expires_at}`. `services` defaults to the Microsoft cards — those of
-    `ADMIN_ONLY_SERVICES` only when the link is asked from their own card; `tenant` is
+    `ADMIN_ONLY_SERVICES` and `SERVICE_RESOURCE` only when the link is asked from their
+    own card; `tenant` is
     what the person typed (domain, directory ID, SharePoint address — `normalize_tenant`),
     `organizations` when empty. Raises `ValueError` (unknown service, card or directory),
     `RuntimeError` (application not configured)."""
+    # A service on another resource (Power BI) is not in the default either: in a
+    # directory that has no subscription to it, Entra could refuse the whole approval.
     choisis = tuple(services) if services else tuple(
-        s for s in SERVICES if s not in ADMIN_ONLY_SERVICES or s == connector)
+        s for s in SERVICES
+        if (s not in ADMIN_ONLY_SERVICES and s not in SERVICE_RESOURCE) or s == connector)
     annuaire_choisi = normalize_tenant(tenant)
     url = admin_consent_url(sub, choisis, annuaire_choisi, return_app, connector)
     expire = datetime.fromtimestamp(time.time() + ADMIN_LINK_TTL, tz=timezone.utc)
@@ -627,10 +674,19 @@ def finish_connection(etat: EtatConnexion, code: str) -> dict:
     if etat.scope != "member":
         _exiger_admin(etat.sub, etat.org, etat.scope, etat.group)
     coordonnees = app()
-    grant = _coeur().auth.exchange_code(
+    coeur = _coeur()
+    grant = coeur.auth.exchange_code(
         coordonnees["client_id"], coordonnees["client_secret"], code,
         oauth_flow.redirect_uri(_CALLBACK_PATH),
-        scopes=scopes_for(etat.connector), tenant=annuaire(etat.tenant))
+        scopes=_graph_seul(scopes_for(etat.connector)), tenant=annuaire(etat.tenant))
+    if etat.connector in SERVICE_RESOURCE:
+        # The consent named the other resource; the exchange could only ask Graph. Its
+        # own token, from the refresh token just obtained, says what was granted there.
+        autre = coeur.auth.refresh(
+            coordonnees["client_id"], coordonnees["client_secret"], grant.refresh_token,
+            scopes=_jeton_scopes(etat.connector), tenant=annuaire(etat.tenant))
+        grant = dataclasses.replace(grant, refresh_token=autre.refresh_token,
+                                    scope=f"{grant.scope} {autre.scope}")
     return persist_grant(etat.sub, etat.org, grant, tenant=etat.tenant, scope=etat.scope,
                          group=etat.group, connector=etat.connector)
 
@@ -824,9 +880,12 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
             f"The Microsoft account {rc.account} has not yet authorized {label}: "
             f"connect {label} from its card on your connectors page. Nothing was done.")
     ligne = (rc.entity_type, rc.entity_id, rc.account)
+    # One cached token per row AND resource: a Graph token is refused by Power BI.
+    ligne_jeton = ligne + ((SERVICE_RESOURCE[service],) if service in SERVICE_RESOURCE
+                           else ())
     refresh_token = rc.key
     with _VERROU:
-        cached = _JETONS.get(_cle(ligne, refresh_token))
+        cached = _JETONS.get(_cle(ligne_jeton, refresh_token))
     if cached and cached[1] > time.time() + 60 and not renew:
         return cached[0]
 
@@ -834,7 +893,7 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
     coordonnees = app()
     try:
         grant = coeur.auth.refresh(coordonnees["client_id"], coordonnees["client_secret"],
-                                   refresh_token, scopes=tuple(coeur.scopes.REFRESH),
+                                   refresh_token, scopes=_jeton_scopes(service),
                                    tenant=annuaire(meta.get("tenant")))
     except coeur.MicrosoftGrantExpired as e:
         # Entra's own words name the cause (AADSTS50173 password changed or sessions
@@ -854,7 +913,7 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
     # `.default` returns everything consented TODAY: an administrator's approval given
     # since the connection appears here, with no reconnection.
     if grant.scope:
-        connus = _normalises(grant.scope)
+        connus = _par_ressource(meta.get("scopes"), grant.scope)
         if rc.entity_type != credentials_store.MEMBER:
             connus &= _borne_partagee(meta.get("scopes"))
         connus = " ".join(sorted(connus))
@@ -863,7 +922,7 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
                                           rc.account, {"scopes": connus})
     # A successful renewal clears THIS account's "needs reconnecting" mark.
     connector_health.record_health(CONNECTOR, ligne, True, None)
-    _garder(ligne, grant)
+    _garder(ligne_jeton, grant)
     return grant.access_token
 
 

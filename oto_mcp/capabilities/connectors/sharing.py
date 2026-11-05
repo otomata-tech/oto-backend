@@ -120,6 +120,11 @@ class ShareEvent(BaseModel):
     # The subject is a person outside the account's org (D1).
     outside_org: bool = False
     actor_sub: Optional[str] = None
+    # How a person reads the subject and the actor (an e-mail, a team name, "the whole
+    # org"): a member reads the journal without access to the members of another org,
+    # nor to a person who left.
+    subject_label: Optional[str] = None
+    actor_label: Optional[str] = None
     at: str
 
 
@@ -177,8 +182,21 @@ def _refuser_au_dessus(appelant, compte, level: str, geste: str) -> None:
     plafond = _plafond(appelant, compte)
     if access.suffit(plafond, level):
         return
-    qui = ("only an admin of the org grants `manage`" if level == "manage"
-           else f"as a team lead you grant at most `{plafond}`")
+    if level != "manage":
+        qui = f"as a team lead you grant at most `{plafond}`"
+    elif geste == "set":
+        qui = "only an admin of the org grants `manage`"
+    elif compte.proprietaire is not None:
+        # A `manage` rule is an org admin's act (`_plafond`), and no admin manages a
+        # personal account (`niveau`): on one — a rule kept when an org or team account
+        # was given to a person — nobody can lower or withdraw it. Said as it is.
+        qui = ("a `manage` rule is changed or removed only by an admin of the org, and "
+               "an admin does not manage a personal account — nobody can do it through "
+               "the rules today: report it to the platform")
+    else:
+        nom = compte.org_nom or (org_store.get_org(compte.org_id) or {}).get("name")
+        qui = (f"a `manage` rule is changed or removed only by an admin of the org "
+               f"{nom or '#' + str(compte.org_id)} — ask one")
     raise AuthzDenied(403, "level_not_grantable",
                       f"You cannot {geste} a rule at `{level}` on `{compte.libelle}`: {qui}. "
                       "Nothing was done.")
@@ -248,10 +266,12 @@ def personne_designable(org: int, to: str, *, regles=()) -> str:
     raise _sujet_introuvable()
 
 
-def _sujet(inp: RuleSubjectInput, compte, *, pour_retirer: bool) -> dict:
+def _sujet(inp: RuleSubjectInput, compte) -> dict:
     """`{subject_user|subject_group|subject_org}` from the input: a team or the org of
-    the account's org; a person of the org or outside it (`personne_designable`). To
-    remove a rule, the sub its rule names still names it."""
+    the account's org; a person of the org or outside it (`personne_designable`). An
+    EXISTING rule is named by the sub it names — to change its level as to remove it —
+    even when that person is outside the org or has left it; a NEW rule outside the org
+    still names its person by e-mail only."""
     un_seul_sujet(inp)
     org = compte.org_id
     if inp.to_org:
@@ -259,7 +279,7 @@ def _sujet(inp: RuleSubjectInput, compte, *, pour_retirer: bool) -> dict:
     if inp.to_group is not None:
         return {"subject_group": equipe_de_l_org(org, inp.to_group)}
     to = inp.to.strip()
-    sub = personne_designable(org, to, regles=compte.regles if pour_retirer else ())
+    sub = personne_designable(org, to, regles=compte.regles)
     if sub == compte.proprietaire:
         raise AuthzDenied(400, "invalid_arguments",
                           f"`{to}` owns the account `{compte.libelle}` and always manages "
@@ -351,7 +371,7 @@ def _list_rules(ctx: ResolvedCtx, inp: AccountInput) -> dict:
 
 def _set_rule(ctx: ResolvedCtx, inp: SetRuleInput) -> dict:
     appelant, compte = gere(ctx, inp.instance_id)
-    sujet = _sujet(inp, compte, pour_retirer=False)
+    sujet = _sujet(inp, compte)
     _refuser_au_dessus(appelant, compte, inp.level, "set")
     actuelle = _regle_du_sujet(compte, sujet)
     if actuelle is not None:
@@ -364,7 +384,7 @@ def _set_rule(ctx: ResolvedCtx, inp: SetRuleInput) -> dict:
 
 def _remove_rule(ctx: ResolvedCtx, inp: RuleSubjectInput) -> dict:
     appelant, compte = gere(ctx, inp.instance_id)
-    sujet = _sujet(inp, compte, pour_retirer=True)
+    sujet = _sujet(inp, compte)
     actuelle = _regle_du_sujet(compte, sujet)
     if actuelle is not None:
         _refuser_au_dessus(appelant, compte, actuelle.level, "remove")
@@ -374,16 +394,40 @@ def _remove_rule(ctx: ResolvedCtx, inp: RuleSubjectInput) -> dict:
     return _etat(appelant, compte)
 
 
+def _libelles_de_personnes(subs) -> dict:
+    """`{sub: label}` — the e-mails in ONE read; a sub without one is named as
+    `libelle_de_personne` names it (its name, else the sub)."""
+    subs = sorted({s for s in subs if s})
+    emails = db.emails_by_subs(subs) if subs else {}
+    return {s: emails.get(s) or access.libelle_de_personne(s) for s in subs}
+
+
 def _share_events(ctx: ResolvedCtx, inp: ShareEventsInput) -> dict:
     _, compte = gere(ctx, inp.instance_id)
+    journal = regles_de_comptes.journal_du_compte(compte.instance_id, inp.limit)
+    personnes = _libelles_de_personnes(
+        [e["actor_sub"] for e in journal]
+        + [e["subject_id"] for e in journal if e["subject_kind"] == "user"])
+    equipes: dict = {}
+
+    def _sujet_lu(e) -> Optional[str]:
+        if e["subject_kind"] == "user":
+            return personnes.get(e["subject_id"])
+        if e["subject_kind"] == "group":
+            gid = int(e["subject_id"])
+            if gid not in equipes:
+                equipes[gid] = (group_store.get_group(gid) or {}).get("name") or f"team #{gid}"
+            return equipes[gid]
+        return "the whole org"
     events = [{"action": e["action"], "subject": e["subject_kind"],
                "subject_id": e["subject_id"],
                "level": e["level"], "previous_level": e["previous_level"],
                "services": list(e["services"]) if e["services"] is not None else None,
                "owner_before": e.get("owner_before"),
                "outside_org": bool(e.get("hors_org")),
-               "actor_sub": e["actor_sub"], "at": _iso(e["at"])}
-              for e in regles_de_comptes.journal_du_compte(compte.instance_id, inp.limit)]
+               "actor_sub": e["actor_sub"], "subject_label": _sujet_lu(e),
+               "actor_label": personnes.get(e["actor_sub"]), "at": _iso(e["at"])}
+              for e in journal]
     return {"instance_id": compte.instance_id, "events": events, "count": len(events)}
 
 

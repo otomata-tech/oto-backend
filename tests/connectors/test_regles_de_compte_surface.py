@@ -57,6 +57,7 @@ def banc(monkeypatch):
     monkeypatch.setattr(access, "current_group", lambda sub: None)
     monkeypatch.setattr(access, "qui_gere", lambda compte, org=None: "its owner")
     monkeypatch.setattr(access, "libelle_de_personne", lambda sub: sub)
+    monkeypatch.setattr(db, "emails_by_subs", lambda subs: {})
     monkeypatch.setattr(regles_de_comptes, "regles_du_compte", lambda iid: [])
     monkeypatch.setattr(regles_de_comptes, "poser_regle",
                         lambda org, iid, **kw: env.poses.append(kw))
@@ -174,6 +175,81 @@ def test_la_regle_d_une_personne_hors_org_se_retire_par_son_sub(banc):
                                                level="read")])
     sharing._remove_rule(_ctx(TITULAIRE), sharing.RuleSubjectInput(instance_id=12, to=DEHORS))
     assert banc.retraits == [{"subject_user": DEHORS, "acteur": TITULAIRE}]
+
+
+@pytest.mark.parametrize("sujet", [DEHORS, "parti"])
+def test_la_regle_existante_change_de_niveau_par_son_sub(banc, sujet):
+    """A person outside the org, or a member who left: her rule is named by its sub to
+    change its level, as to remove it — no e-mail to look up."""
+    banc.compte = _compte(regles=[access.Regle(user=sujet, group=None, org=False,
+                                               level="read")])
+    _poser(TITULAIRE, to=sujet, level="write")
+    assert banc.poses == [{"subject_user": sujet, "level": "write", "services": None,
+                           "acteur": TITULAIRE}]
+
+
+def test_un_sub_hors_org_sans_regle_reste_refuse_sans_rien_dire(banc):
+    """A rule named by its sub opens ITS subject only: another sub outside the org, without
+    a rule of its own on the account, gets the neutral refusal of a new rule."""
+    banc.compte = _compte(regles=[access.Regle(user=DEHORS, group=None, org=False,
+                                               level="read")])
+    e = _refus(_poser, TITULAIRE, to="autre_dehors", level="read")
+    reference = _refus(_poser, TITULAIRE, to="inconnu@ailleurs.test", level="read")
+    assert (e.status, e.code, str(e)) == (404, "unknown_subject", str(reference))
+    assert banc.poses == []
+
+
+def test_le_titulaire_ne_retire_pas_la_regle_manage_et_le_refus_dit_pourquoi(banc):
+    """A `manage` rule kept on a personal account (the account was given to a person):
+    its owner, not an admin, neither removes nor lowers it, and no admin manages a
+    personal account — the refusal says so instead of sending to someone who cannot."""
+    banc.compte = _compte(regles=[access.Regle(user=MEMBRE, group=None, org=False,
+                                               level="manage")])
+    for geste, appel in (
+            ("remove", lambda: sharing._remove_rule(
+                _ctx(TITULAIRE), sharing.RuleSubjectInput(instance_id=12, to=MEMBRE))),
+            ("change", lambda: _poser(TITULAIRE, to=MEMBRE, level="read"))):
+        e = _refus(appel)
+        assert (e.status, e.code) == (403, "level_not_grantable")
+        assert f"cannot {geste} a rule at `manage`" in str(e)
+        assert "an admin does not manage a personal account" in str(e)
+    assert banc.retraits == [] and banc.poses == []
+
+
+def test_sur_un_compte_d_org_le_refus_manage_nomme_l_admin(banc, monkeypatch):
+    monkeypatch.setattr(org_store, "get_org", lambda org: {"id": org, "name": "Org Huit"})
+    banc.compte = _compte("org", str(ORG), regles=[
+        access.Regle(user=MEMBRE, group=None, org=False, level="manage"),
+        access.Regle(user=CHEF, group=None, org=False, level="manage")])
+    e = _refus(sharing._remove_rule, _ctx(CHEF),
+               sharing.RuleSubjectInput(instance_id=12, to=MEMBRE))
+    assert e.code == "level_not_grantable"
+    assert "only by an admin of the org Org Huit" in str(e)
+
+
+def test_le_journal_nomme_le_sujet_et_l_acteur(banc, monkeypatch):
+    """The journal reads its people in ONE e-mail read: a manager who cannot read another
+    org's members, nor a person who left, still reads who did what to whom."""
+    lus = []
+    monkeypatch.setattr(db, "emails_by_subs", lambda subs: lus.append(list(subs)) or {
+        DEHORS: "dehors@ailleurs.test", TITULAIRE: "titulaire@exemple.test"})
+    banc.journal = [
+        {"action": "set", "subject_kind": "user", "subject_id": DEHORS, "level": "read",
+         "previous_level": None, "services": None, "owner_before": None, "hors_org": True,
+         "actor_sub": TITULAIRE, "at": "2026-11-04T10:00:00+00:00"},
+        {"action": "set", "subject_kind": "group", "subject_id": str(EQUIPE),
+         "level": "read", "previous_level": None, "services": None, "owner_before": None,
+         "hors_org": False, "actor_sub": "parti", "at": "2026-11-03T11:00:00+00:00"},
+        {"action": "removed", "subject_kind": "org", "subject_id": None, "level": None,
+         "previous_level": "read", "services": None, "owner_before": None,
+         "hors_org": False, "actor_sub": TITULAIRE, "at": "2026-11-03T10:00:00+00:00"}]
+    out = sharing.ShareEvents.model_validate(sharing._share_events(
+        _ctx(TITULAIRE), sharing.ShareEventsInput(instance_id=12)))
+    assert [(e.subject_label, e.actor_label) for e in out.events] == [
+        ("dehors@ailleurs.test", "titulaire@exemple.test"),
+        ("Ventes", "parti"),        # no e-mail: named as `libelle_de_personne` names it
+        ("the whole org", "titulaire@exemple.test")]
+    assert lus == [[DEHORS, "parti", TITULAIRE]]
 
 
 def test_le_journal_dit_si_le_sujet_est_hors_org(banc):

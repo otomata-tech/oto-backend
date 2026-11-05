@@ -888,7 +888,7 @@ d'org, ou qui une règle met à `manage`) — sinon `403 insufficient_level`, qu
 | `GET …/{instance_id}/rules` | `connectors.instances.rules.list` | les règles, qui gère le compte, `your_level` |
 | `PUT …/{instance_id}/rules` | `connectors.instances.rules.set` | pose ou remplace la règle d'UN sujet (`to` : e-mail ou sub d'un membre, ou e-mail du compte oto d'une personne HORS de l'org ; `to_group` : une équipe de l'org du compte ; ou `to_org: true`) à `level` ; `services` sur un compte Google ou Microsoft seulement |
 | `DELETE …/{instance_id}/rules` | `connectors.instances.rules.remove` | retire la règle d'un sujet (corps JSON, même forme) |
-| `GET …/{instance_id}/share-events` | `connectors.instances.share_events` | le journal des règles, le plus récent d'abord (`limit`, 1 à 500) ; `outside_org` dit si le sujet est hors de l'org |
+| `GET …/{instance_id}/share-events` | `connectors.instances.share_events` | le journal des règles, le plus récent d'abord (`limit`, 1 à 500) ; `outside_org` dit si le sujet est hors de l'org ; `subject_label` et `actor_label` les nomment (e-mail, nom d'équipe, `the whole org`) |
 | `POST …/{instance_id}/transfer` | `connectors.instances.transfer` | change le propriétaire (`to`, `to_group` ou `to_org: true`, dans l'org du compte) ; le compte garde son id, son secret et ses règles, sauf la règle d'org et celle qui nommerait son nouveau titulaire s'il devient personnel |
 
 Transfert : l'appelant gère le compte avant ; vers une équipe ou l'org, il le gère encore
@@ -903,8 +903,13 @@ Bornes : seul un admin de l'org donne `manage` ; un chef d'équipe donne au plus
 (`403 level_not_grantable`). Une règle ne nomme jamais le titulaire d'un compte
 personnel (`400 invalid_arguments`, `details.reason = "owner_subject"`).
 
+Une règle `manage` ne se change ni ne se retire que par un admin de l'org
+(`403 level_not_grantable`, propriétaire compris) ; sur un compte personnel, qu'aucun admin
+ne gère, le refus le dit.
+
 Hors org (D1) : une règle peut nommer une PERSONNE hors de l'org du compte, désignée par
-l'e-mail d'un compte oto existant (jamais une équipe ni une org d'ailleurs) ; mêmes droits
+l'e-mail d'un compte oto existant (jamais une équipe ni une org d'ailleurs) ; une règle
+déjà posée se désigne aussi par son sub, pour en changer le niveau ou la retirer ; mêmes droits
 et mêmes bornes qu'une règle locale. Le refus d'une adresse est NEUTRE :
 `404 unknown_subject`, même message que l'adresse soit inconnue ou qu'elle ne porte aucun
 compte désignable (un compte de tenant tiers), pour ne rien dire de l'existence d'un

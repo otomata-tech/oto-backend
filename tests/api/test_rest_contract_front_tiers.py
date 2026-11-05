@@ -499,12 +499,15 @@ def test_quitter_une_org_dont_on_est_le_dernier_admin_rend_409(client, org):
     assert org_store.get_org_role(oid, admin) == "org_admin"
 
 
-def test_quitter_son_espace_personnel_rend_409(client, org):
-    from oto_mcp import org_store
-    admin = org["admin"]
-    perso = org_store.ensure_personal_org(admin, email=f"{admin}@front-tiers.invalid")
-    r = client.delete(f"/api/me/orgs/{perso}/membership", headers=_h(admin))
-    assert (r.status_code, r.json()["error"]) == (409, "personal_org"), r.text
+def test_quitter_sa_derniere_org_rend_409(client, org):
+    # Plus d'org perso (05/11/2026) : le refus porte sur la DERNIÈRE org du compte.
+    from oto_mcp import db, org_store
+    seul = f"seul-{org['id']}"
+    db.upsert_user(seul, email=f"{seul}@front-tiers.invalid")
+    unique = org_store.ensure_home_org(seul, email=f"{seul}@front-tiers.invalid")
+    assert [int(o["org_id"]) for o in org_store.list_orgs_for_user(seul)] == [unique]
+    r = client.delete(f"/api/me/orgs/{unique}/membership", headers=_h(seul))
+    assert (r.status_code, r.json()["error"]) == (409, "last_org"), r.text
 
 
 def test_quitter_une_org_dont_on_n_est_pas_membre_rend_404(client, org):

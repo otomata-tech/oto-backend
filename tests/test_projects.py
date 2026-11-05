@@ -30,7 +30,7 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW, id=pid) if pid in (7, 8) else None)
     # L'org PERSO de l'appelant (décision du 28/09/2026) : la 5. Les orgs 99 et 42 des
     # bancs sont des orgs de TRAVAIL — aucun objet perso ne s'y liste ni ne s'y crée.
-    monkeypatch.setattr(P.ownership.org_store, "get_personal_org", lambda sub: 5)
+    monkeypatch.setattr(P.ownership.org_store, "home_org", lambda sub: 5)
     rec["list_owners"], rec["createurs"] = [], []
     monkeypatch.setattr(P.db, "list_projects_for_owners",
                         lambda owners, templates_only=False, createur=None, **k: (

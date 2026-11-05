@@ -338,7 +338,7 @@ def test_hors_vue_le_membre_lit_comme_avant(client, monde):
     assert _noms(r) == {f"{MARQUE_P} partagé en propre"}
     from oto_mcp import org_store
     r = client.post("/api/me/projects", json={"op": "list", "scope": "me"},
-                    headers=_soi(MEMBRE, org_store.ensure_personal_org(MEMBRE)))
+                    headers=_soi(MEMBRE, org_store.ensure_home_org(MEMBRE)))
     assert _noms(r) == {f"{MARQUE_P} partagé en propre"}
     # Règle d'avant : ma ressource perso et mon partage personnel me suivent partout.
     for cle in ("perso_p", "partage_p"):

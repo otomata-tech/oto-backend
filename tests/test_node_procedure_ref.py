@@ -84,7 +84,7 @@ def test_le_rev_du_rail_couvre_la_reference(monkeypatch):
     monkeypatch.setattr(S.db_shell, "direct_grants", lambda sub: [])
     monkeypatch.setattr(S.db_shell, "nodes_by_public_id", lambda ids: [])
     monkeypatch.setattr(S.project_nodes, "lignes_pour_proprietaires", lambda o, createur=None: [])
-    monkeypatch.setattr(S.ownership.org_store, "get_personal_org", lambda sub: 2)
+    monkeypatch.setattr(S.ownership.org_store, "home_org", lambda sub: 2)
     monkeypatch.setattr(S.db_shell, "names_of", lambda subs: {})
     monkeypatch.setattr(S, "_connecteurs", lambda sub, oid: [])
     monkeypatch.setattr(S, "_compteurs", lambda ctx: {})

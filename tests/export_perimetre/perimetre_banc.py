@@ -162,9 +162,11 @@ def tenant(c, slug: str, nom: str) -> int:
                      (slug, nom)).fetchone()["id"]
 
 
-def org(c, nom: str, tenant_id: int, personal_of: str | None = None) -> int:
-    return c.execute("INSERT INTO orgs (name, personal_of, tenant_id) VALUES (%s, %s, %s) "
-                     "RETURNING id", (nom, personal_of, tenant_id)).fetchone()["id"]
+def org(c, nom: str, tenant_id: int, auto_created: bool = False) -> int:
+    """`auto_created` : l'org que l'inscription pose (l'ex-org perso, plus d'étiquette
+    `personal_of` depuis le 05/11/2026) — personnelle tant que son compte y est seul."""
+    return c.execute("INSERT INTO orgs (name, auto_created, tenant_id) VALUES (%s, %s, %s) "
+                     "RETURNING id", (nom, auto_created, tenant_id)).fetchone()["id"]
 
 
 def membre(c, org_id: int, sub: str) -> None:
@@ -203,7 +205,7 @@ def semer(c, m: str, *, cle: bytes | None = None) -> dict:
     cles = list(objets)
     c.execute("UPDATE users SET avatar_url = %s WHERE sub = %s", (url[cles[0]], alice))
     c.execute("UPDATE orgs SET logo_url = %s WHERE id = %s", (url[cles[1]], o))
-    membre(c, org(c, f"perso {m}", tid, personal_of=alice), alice)
+    membre(c, org(c, f"perso {m}", tid, auto_created=True), alice)
     c.execute("INSERT INTO tenant_admins (slug, sub, granted_by) VALUES (%s, %s, %s)",
               (slug, alice, f"admin {m}"))
     c.execute("INSERT INTO tenant_legal_docs (tenant_slug, doc_slug, version, label, url) "

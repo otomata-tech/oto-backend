@@ -34,10 +34,13 @@ def monde(live):
     from oto_mcp import db, org_store
     for sub in (MOI, COLLEGUE):
         db.upsert_user(sub, email=f"{sub}@t.invalid", name=sub)
-    perso = org_store.ensure_personal_org(MOI)
-    org_store.ensure_personal_org(COLLEGUE)
-    # Mon org perso accueille un collègue : elle garde son étiquette (ffbe1c64).
+    perso = org_store.ensure_home_org(MOI)
+    chez_lui = org_store.ensure_home_org(COLLEGUE)
+    # Mon org perso accueille un collègue : elle garde son étiquette (ffbe1c64). Son
+    # org d'inscription, où il était seul, lui cède la place d'org active
+    # (`seule_d_inscription`) ; il y revient, pour que sa maison soit ailleurs.
     org_store.add_org_member(perso, COLLEGUE, "org_member")
+    org_store.set_active_org(COLLEGUE, chez_lui)
     t = {
         "mien_ici": db.create_datastore("user", MOI, _nom(), context_org_id=perso),
         "sien_ici": db.create_datastore("user", COLLEGUE, _nom(), context_org_id=perso),
@@ -57,33 +60,31 @@ def test_mon_tableau_perso_se_liste_pour_moi_la_ou_je_l_ai_cree(monde, monkeypat
     t = monde["t"]
     # Pour le collègue, l'org où il a créé son tableau n'est pas son org perso : il l'y
     # voit quand même (la règle ne regarde pas l'étiquette), et jamais le mien.
-    assert org_store.get_personal_org(COLLEGUE) != monde["perso"]
+    assert org_store.home_org(COLLEGUE) != monde["perso"]
     vus = _tableaux(COLLEGUE, monde["perso"], monkeypatch)
     assert t["sien_ici"] in vus and t["mien_ici"] not in vus
     vus = _tableaux(MOI, monde["perso"], monkeypatch)
     assert t["mien_ici"] in vus and t["sien_ici"] not in vus
 
 
-def test_le_rattrapage_reclame_l_org_unique_meme_a_plusieurs(live):
-    """Sans étiquette (perdue avant ffbe1c64, quand un 2ᵉ membre entrait), un compte
-    membre d'UNE seule org qu'il a créée la récupère au rattrapage, même si d'autres y
-    sont entrés — il ne reçoit pas une org neuve à côté (le cas du 29/09)."""
+def test_le_rattrapage_ne_pose_pas_d_org_a_cote_de_l_unique(live):
+    """Un compte membre d'UNE seule org (même partagée) la garde au rattrapage — il ne
+    reçoit pas une org neuve à côté (le cas du 29/09). Plus d'étiquette perso
+    depuis le 05/11/2026 : il n'y a plus rien à « réclamer »."""
     from oto_mcp import db, org_store
     solo = "usr_opo_solo_" + uuid.uuid4().hex[:6]
     autre = "usr_opo_autre_" + uuid.uuid4().hex[:6]
     for sub in (solo, autre):
         db.upsert_user(sub, email=f"{sub}@t.invalid", name=sub)
-    oid = org_store.ensure_personal_org(solo)
+    oid = org_store.ensure_home_org(solo)
     org_store.add_org_member(oid, autre, "org_member")
-    with db._connect() as c:          # l'étiquette perdue, comme avant ffbe1c64
-        c.execute("UPDATE orgs SET personal_of = NULL WHERE id = %s", (oid,))
-    assert org_store.get_personal_org(solo) is None, "contrôle : aucune étiquette"
-    assert org_store.ensure_personal_org(solo) == oid
-    assert org_store.get_personal_org(solo) == oid
+    assert org_store.ensure_home_org(solo) == oid
+    assert [int(o["org_id"]) for o in org_store.list_orgs_for_user(solo)] == [oid]
+    assert org_store.home_org(solo) == oid
 
 
 def test_le_proprietaire_ne_peut_pas_quitter_son_org_perso(monde):
-    """Exception 2 : son propriétaire ne quitte pas son org perso ; un invité, si."""
+    """Plus d'org perso (05/11/2026) : on ne quitte pas sa DERNIÈRE org (409 `last_org`)."""
     from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
     from oto_mcp.capabilities.orgs import members as M
     with pytest.raises(AuthzDenied):

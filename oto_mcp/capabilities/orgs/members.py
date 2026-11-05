@@ -173,15 +173,15 @@ def _set_member_role(ctx: ResolvedCtx, inp: SetMemberRoleInput) -> dict:
 
 
 def _rendre_un_espace(sub: str) -> None:
-    """Un invité n'a pas d'org perso : sorti de sa dernière org, il retrouve tout de
-    suite un espace (même geste que l'archivage, `update._archive_org`) au lieu de
+    """Sorti de sa dernière org, un compte retrouve tout de suite une org
+    (`ensure_home_org`, une org ordinaire) (même geste que l'archivage, `update._archive_org`) au lieu de
     traverser le système sans org. Un échec LÈVE : le retrait est déjà fait, mais
     l'appelant doit l'apprendre plutôt que de croire le compte servi — le backfill du
     boot n'est pas une excuse pour taire la panne."""
     if org_store.list_orgs_for_user(sub):
         return
     u = db.get_user(sub) or {}
-    org_store.ensure_personal_org(sub, email=u.get("email"), name=u.get("name"))
+    org_store.ensure_home_org(sub, email=u.get("email"), name=u.get("name"))
 
 
 def _remove_member(ctx: ResolvedCtx, inp: RemoveMemberInput) -> dict:
@@ -198,21 +198,22 @@ def _remove_member(ctx: ResolvedCtx, inp: RemoveMemberInput) -> dict:
 def _leave_org(ctx: ResolvedCtx, inp: LeaveOrgInput) -> dict:
     """Auto-retrait : l'appelant quitte une org dont il est membre (SUB_ONLY). Distinct
     de `org.member.remove` (org_admin retire un TIERS). L'org active bascule côté store
-    (`remove_org_member` promeut la plus ancienne restante ; sans org restante, un
-    espace perso est rendu tout de suite, `_rendre_un_espace`).
+    (`remove_org_member` promeut la plus ancienne restante). On ne quitte pas sa
+    dernière org (409 `last_org`).
 
     Sous le jeton d'un agent hébergé, refusé d'emblée (`verrou_org.py`) : quitter une
     org déplace la maison de la personne, et le jeton ne porte que l'org de son travail."""
     refuser_maison_sous_verrou(ctx, "me.leave_org")
     _require_org_exists(inp.org_id)
-    # On ne quitte pas SON espace perso (c'est le repli d'identité, jamais supprimable).
-    # Celui d'un autre, où l'on a été invité, se quitte comme toute org (29/09/2026 :
-    # une org perso garde son étiquette quand d'autres membres la rejoignent).
-    if org_store.get_personal_org(ctx.sub) == inp.org_id:
-        raise AuthzDenied(409, "personal_org", "On ne peut pas quitter son espace personnel.")
     role = org_store.get_org_role(inp.org_id, ctx.sub)
     if role is None:
         raise AuthzDenied(404, "not_a_member", "Tu n'es pas membre de cette org.")
+    # Plus d'org perso (05/11/2026) : on ne quitte pas sa DERNIÈRE org — tout compte a
+    # une org active, et l'en sortir lui en ferait poser une neuve aussitôt.
+    if not [o for o in org_store.list_orgs_for_user(ctx.sub)
+            if int(o["org_id"]) != int(inp.org_id)]:
+        raise AuthzDenied(409, "last_org",
+                          "C'est ta seule org — rejoins-en ou crée-en une autre avant de la quitter.")
     # Anti-lockout : le dernier org_admin doit nommer un successeur avant de partir.
     if role == "org_admin" and _count_org_admins(inp.org_id) <= 1:
         raise AuthzDenied(409, "last_org_admin",
@@ -325,9 +326,9 @@ CAPABILITIES += [
                               "sous le jeton d'un agent hébergé : il ne fait pas quitter "
                               "une org à la personne"),
                 DeclaredError(404, "unknown_org", "l'org n'existe pas"),
-                DeclaredError(409, "personal_org",
-                              "on ne quitte pas son espace personnel"),
                 DeclaredError(404, "not_a_member", "tu n'es pas membre de cette org"),
+                DeclaredError(409, "last_org",
+                              "c'est ta seule org — rejoins-en ou crée-en une autre avant"),
                 DeclaredError(409, "last_org_admin",
                               "tu es le dernier admin — nomme un successeur avant")),
         description="Leave an org you belong to (self-removal). Refused for your personal org or if you are its last admin.",

@@ -122,8 +122,8 @@ def owner_de_portee(sub: Optional[str], org_id: Optional[int]) -> Optional[tuple
 def active_org_principals(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
     """Principals du CONTEXTE de l'org active sous lesquels une ressource est visible
     ici : l'org active, l'acteur, et ses groupes DANS cette org. Le plan de l'ACCÈS
-    par id (`visible_in_org`, ADR 0023) ; les LISTES en retirent l'acteur hors de son
-    org perso (`principaux_de_liste`, décision du 28/09/2026). Un bénéficiaire HORS de
+    par id (`visible_in_org`, ADR 0023) ; les LISTES en retirent l'acteur hors de sa
+    maison (`principaux_de_liste`, décision du 28/09/2026). Un bénéficiaire HORS de
     l'org (projet partagé) n'y a pas l'org pour principal (`owner_de_portee`)."""
     if org_id is None:
         return []
@@ -134,23 +134,16 @@ def active_org_principals(sub: str, org_id: Optional[int]) -> list[tuple[str, st
 
 
 def org_perso_de(sub: str, org_id: Optional[int]) -> bool:
-    """`org_id` porte-t-elle l'étiquette d'org PERSO de `sub` (l'org créée à son
-    inscription) ? Depuis le 29/09/2026, une org perso est fonctionnellement une org
-    comme une autre ; l'étiquette ne sert plus qu'à désigner la MAISON de ce qui n'a pas
-    d'org de création (`perso_de_la_liste`, le `sans_org` de `mes_objets_ici`) et à
-    interdire à son propriétaire de la quitter. Même source que
-    `me.active_org_is_personal` (`org_store`).
-
-    La maison est FIXE et EXPLICITE : l'org qui porte l'étiquette, et elle seule. Un
-    compte sans org perso (l'invité, qui n'en reçoit pas à l'inscription) n'a de maison
-    nulle part — jamais son org active, qui le ferait déborder dans l'org d'entreprise
-    et changer de maison à chaque bascule. Ce qui a besoin d'une maison la crée à la
-    demande (`maison_du_partage` pour un partage nominatif, `ensure_personal_org`)."""
-    return org_id is not None and org_store.get_personal_org(sub) == int(org_id)
+    """`org_id` est-elle la MAISON de `sub` — son org active (`org_store.home_org`) ?
+    Plus d'org perso depuis le 05/11/2026 : la maison de ce qui n'a
+    pas d'org de création (`perso_de_la_liste`, le `sans_org` de `mes_objets_ici`) et
+    des partages faits à la personne est l'org où elle travaille. Elle suit donc la
+    bascule d'org active — c'est voulu. Le nom est resté pour ses appelants."""
+    return org_id is not None and org_store.home_org(sub) == int(org_id)
 
 
 def perso_de_la_liste(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
-    """`[("user", sub)]` dans l'org perso de `sub`, `[]` partout ailleurs.
+    """`[("user", sub)]` dans la maison de `sub` (son org active), `[]` partout ailleurs.
 
     Le principal PERSONNEL d'une liste, dans la MAISON de ce qui n'a pas d'org de
     création — comme propriétaire (mes objets perso, dont ceux qui ne portent pas de
@@ -183,8 +176,8 @@ def proprietaires_collectifs_de_liste(sub: str, org_id: Optional[int]
     """Les propriétaires COLLECTIFS (l'org, mes équipes en elle) dont une liste rend les
     objets POSSÉDÉS. Jamais `("user", sub)` : mes objets perso passent par
     `mes_objets_ici`, qui les range dans leur org de création. Le principal personnel
-    de `principaux_de_liste` (org perso) ne sert qu'aux PARTAGES reçus — pris comme
-    propriétaire, il rendait dans l'org perso tous mes tableaux perso, d'où qu'ils
+    de `principaux_de_liste` (maison) ne sert qu'aux PARTAGES reçus — pris comme
+    propriétaire, il rendait dans la maison tous mes tableaux perso, d'où qu'ils
     viennent (règle retirée le 07/10/2026, cf. `mes_objets_ici`)."""
     return [p for p in principaux_de_liste(sub, org_id) if p[0] != "user"]
 
@@ -218,7 +211,7 @@ def mes_objets_ici(sub: Optional[str], org_id: Optional[int]
                    ) -> Optional[tuple[str, int, bool]]:
     """`(sub, org, sans_org)` : les objets PERSONNELS (`owner_type='user'`, projets et
     tableaux) que `sub` voit dans la liste de l'org `org_id` : ceux qu'il y a CRÉÉS
-    (`context_org_id = org`) et, dans son org perso (`sans_org`), ceux qui ne portent
+    (`context_org_id = org`) et, dans sa maison (`sans_org`), ceux qui ne portent
     AUCUNE org de création (`context_org_id` nul : legacy, ou créés hors de toute org).
     `None` : aucun.
 
@@ -229,7 +222,7 @@ def mes_objets_ici(sub: Optional[str], org_id: Optional[int]
     clause ne porte que sur `sub`.
 
     Décision d'Alexis du 07/10/2026 : « l'affichage s'en tient à l'org consultée, on
-    ne mélange pas ». L'org perso ne liste plus les objets perso créés AILLEURS (elle
+    ne mélange pas ». La maison ne liste plus les objets perso créés AILLEURS (elle
     les listait tous depuis le 28/09, et l'on croyait qu'ils y vivaient) : elle ne
     garde que ceux qui n'ont d'org de création nulle part, faute de quoi ils ne
     sortiraient dans aucune liste. En vue bornée (oto#270), seul le contexte O compte."""
@@ -241,7 +234,7 @@ def mes_objets_ici(sub: Optional[str], org_id: Optional[int]
 
 def mes_tableaux_ici(createur: Optional[tuple[str, int, bool]]) -> list[dict]:
     """Mes tableaux PERSONNELS que la liste de l'org rend, selon `mes_objets_ici` : ceux
-    créés dans cette org (`context_org_id`) et, dans mon org perso (`sans_org`), ceux
+    créés dans cette org (`context_org_id`) et, dans ma maison (`sans_org`), ceux
     qui n'ont pas d'org de création. Source unique de la liste des tableaux et de la
     recherche (parité « cherchable ⇔ lisible »). `[]` sans `createur`."""
     if createur is None:
@@ -307,7 +300,7 @@ def visible_in_org(sub: str, org_id: Optional[int],
     - une ressource PERSO du membre n'est visible que si elle DESCEND dans O : son
       kind la range dans une org (`context_org`, directement ou par son parent) et
       c'est O. Le projet et le tableau rangent (org de création ; un tableau sans
-      org de création se range dans l'org perso de son propriétaire) ; un kind qui ne
+      org de création se range dans la maison de son propriétaire) ; un kind qui ne
       range pas ses ressources perso (procédure personnelle) les fait suivre la
       personne partout, O compris ;
     - un partage PERSONNEL reçu (`principal = user`) ne compte pas : il n'appartient à
@@ -406,7 +399,7 @@ def owner_in_scope(sub: str, org_id: Optional[int],
         return True
     # 2. Scope MEMBRE (ADR 0030 amendé) : ma ressource perso m'est visible dans tout
     #    contexte où je suis — c'est la MIENNE. Le plan de LISTE, lui, ne la rend que
-    #    dans mon org perso (`perso_de_la_liste`, décision du 28/09/2026).
+    #    dans ma maison (`perso_de_la_liste`, décision du 28/09/2026).
     if otype == "user" and oid == sub:
         return True
     # 3. ADR 0049 : une ressource d'ÉQUIPE appartient au contexte de son org PARENTE —
@@ -771,16 +764,15 @@ def can_publish(sub: str, resource_type: str, resource_id: str) -> bool:
 
 #: Les kinds dont un partage nominatif se liste dans l'org de la ressource, pas dans la
 #: maison du destinataire : un agent se partage entre membres de l'org où il tourne
-#: (`capabilities/_acces_agent.lister`). Un tel partage ne crée pas d'org perso.
+#: (`capabilities/_acces_agent.lister`). Un tel partage ne pose pas de maison.
 _PARTAGES_LISTES_DANS_L_ORG = frozenset({"runner_trigger"})
 
 
 def maison_du_partage(resource_type: str, principal_type: str, principal_id: str
                       ) -> Optional[int]:
     """Garantit au destinataire PERSONNEL d'un partage la maison où il le retrouvera :
-    son org perso (`org_perso_de`), créée à la demande s'il n'en a pas — l'invité, qui
-    n'en reçoit pas à l'inscription. Sans elle, le partage ne sortirait dans aucune
-    liste. Rend l'org perso, ou None quand le partage n'en demande pas (équipe, org,
+    son org active (`maison_de`). Sans elle, le partage ne sortirait dans aucune
+    liste. Rend la maison, ou None quand le partage n'en demande pas (équipe, org,
     kind listé dans l'org de la ressource). Un échec LÈVE : le partage n'est pas posé
     sans sa maison."""
     if principal_type != "user" or resource_type in _PARTAGES_LISTES_DANS_L_ORG:
@@ -789,27 +781,25 @@ def maison_du_partage(resource_type: str, principal_type: str, principal_id: str
 
 
 def maison_de(sub: str) -> int:
-    """L'org perso de `sub` — sa MAISON (`org_perso_de`) —, créée à la demande s'il n'en
-    a pas : l'invité n'en reçoit pas à l'inscription. Le geste de ce qui ne se range que
-    là : un partage nominatif reçu (`maison_du_partage`) et un objet personnel créé sans
-    org de création — guide personnel, procédure personnelle, nœud hors projet. Sans
-    elle, l'objet ne sortirait dans aucune liste ni aucune recherche. Une lecture quand
-    la maison existe ; un échec LÈVE : l'objet n'est pas posé sans sa maison."""
-    pid = org_store.get_personal_org(sub)
+    """La MAISON de `sub` (`org_perso_de`) : son org active, posée s'il n'en a aucune
+    (`ensure_home_org`, une org ordinaire). Le geste de ce qui ne se range que là : un
+    partage nominatif reçu (`maison_du_partage`) et un objet personnel créé sans org de
+    création — guide personnel, procédure personnelle, nœud hors projet. Une lecture
+    quand la maison existe ; un échec LÈVE : l'objet n'est pas posé sans sa maison."""
+    pid = org_store.home_org(sub)
     if pid is not None:
         return pid
     u = db.get_user(sub)
     if u is None:
-        # Un compte sans sa ligne `users` naît D'ABORD : `ensure_personal_org` la ferait
+        # Un compte sans sa ligne `users` naît D'ABORD : `ensure_home_org` la ferait
         # naître au milieu de sa propre création (`add_org_member` → `upsert_user`),
-        # dont l'effet de naissance pose déjà une maison — deux maisons, et
-        # l'étiquette de la seconde casse `uq_orgs_personal_of`.
+        # dont l'effet de naissance pose déjà une maison — deux maisons.
         db.upsert_user(sub)
-        pid = org_store.get_personal_org(sub)
+        pid = org_store.home_org(sub)
         if pid is not None:
             return pid
         u = {}
-    return org_store.ensure_personal_org(sub, email=u.get("email"), name=u.get("name"))
+    return org_store.ensure_home_org(sub, email=u.get("email"), name=u.get("name"))
 
 
 def grant(
@@ -901,7 +891,7 @@ def _datastore_reparent(rid: str, new_owner_type: str, new_owner_id: str) -> Non
 
 def _datastore_context_org(rid: str) -> Optional[int]:
     """Org de RANGEMENT d'un tableau perso : celle où il a été créé (`context_org_id`,
-    oto#160). Sans org de création (legacy), sa maison est l'org perso de son
+    oto#160). Sans org de création (legacy), sa maison est l'org active de son
     propriétaire — le critère même de la liste (`mes_tableaux_ici`). Sans ce rangement,
     un tableau perso « suivait la personne partout » : en vue bornée à O, un tableau
     créé dans une autre org se lisait par son numéro."""
@@ -911,7 +901,7 @@ def _datastore_context_org(rid: str) -> Optional[int]:
     if row.get("context_org_id"):
         return int(row["context_org_id"])
     if row.get("owner_type") == "user" and row.get("owner_id"):
-        return org_store.get_personal_org(str(row["owner_id"]))
+        return org_store.home_org(str(row["owner_id"]))
     return None
 
 
@@ -937,7 +927,7 @@ def _project_context_org(row: dict, new_owner_id: str) -> Optional[int]:
     les clés que résout son axe `project=` (`access/heritage`) et l'org d'origine
     affichée (`org_origin`). On garde le projet là où il travaillait déjà (org
     détentrice, org du groupe détenteur, ou contexte courant) si le destinataire y est
-    membre ; sinon on retombe sur SON org perso — jamais NULL."""
+    membre ; sinon on retombe sur SA maison (org active) — jamais NULL."""
     prev_type, prev_id = row.get("owner_type"), row.get("owner_id")
     candidate: Optional[int] = None
     if prev_type == "org" and prev_id:
@@ -949,7 +939,7 @@ def _project_context_org(row: dict, new_owner_id: str) -> Optional[int]:
         candidate = int(row["context_org_id"])
     if candidate is not None and roles.is_org_member(new_owner_id, candidate):
         return candidate
-    return org_store.ensure_personal_org(new_owner_id)
+    return org_store.ensure_home_org(new_owner_id)
 
 
 def _project_reparent(rid: str, new_owner_type: str, new_owner_id: str) -> None:

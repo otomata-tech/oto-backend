@@ -220,7 +220,8 @@ def _set_home_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
 def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
     """Retour à l'espace par défaut. MCP = hint sans état (plus de bracelet à
     retirer, ADR 0038 B3 : sans jeton, chaque appel résout déjà la maison) ; REST
-    = bascule la maison sur l'**org perso** de l'user (jamais org-less)."""
+    = bascule la maison sur la plus ancienne org vivante de l'user (jamais org-less ;
+    plus d'org perso depuis le 05/11/2026)."""
     sid = session_org.current_session_id()
     if sid is not None:
         return {"session_state": None,
@@ -228,7 +229,9 @@ def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
                            "chaque appel résout ton org maison (elle ne se change que "
                            "dans le dashboard).")}
     refuser_maison_sous_verrou(ctx, "org.clear")
-    pid = org_store.ensure_personal_org(ctx.sub)     # REST : maison = org perso
+    vivantes = org_store.list_orgs_for_user(ctx.sub)
+    pid = (int(vivantes[0]["org_id"]) if vivantes
+           else org_store.ensure_home_org(ctx.sub))   # REST : maison = la plus ancienne
     org_store.set_active_org(ctx.sub, pid)
     return {"active_org": pid}
 

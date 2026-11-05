@@ -576,7 +576,7 @@ def _org_de_rangement(rid: str) -> Optional[int]:
 def _reparenter(rid: str, new_type: str, new_id: str) -> None:
     """Donner l'app à une PERSONNE la range dans une org où elle est : celle où l'app
     vivait si elle en est membre (ses tableaux et ses agents y restent lisibles), sinon
-    son org perso — la règle des projets (`ownership._project_context_org`). Sans elle,
+    sa maison (son org active) — la règle des projets (`ownership._project_context_org`). Sans elle,
     l'app resterait dans une org que son nouveau propriétaire ne voit pas."""
     from .. import org_store, roles
 
@@ -584,7 +584,7 @@ def _reparenter(rid: str, new_type: str, new_id: str) -> None:
     if new_type == "user":
         avant = org_de_l_app(db.apps.owner(int(rid)) or {})
         ctx = (avant if avant is not None and roles.is_org_member(new_id, int(avant))
-               else org_store.ensure_personal_org(new_id))
+               else org_store.ensure_home_org(new_id))
     db.apps.reparent(int(rid), new_type, new_id, context_org_id=ctx)
 
 

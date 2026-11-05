@@ -91,7 +91,7 @@ def contexte_du_projet(project_id: int) -> Optional[tuple[Optional[int], Optiona
     if owner_type == "user":
         row = db.get_project_by_id(int(project_id))
         ctx = row.get("context_org_id") if row else None
-        return (int(ctx) if ctx is not None else org_store.get_personal_org(owner_id)), None
+        return (int(ctx) if ctx is not None else org_store.home_org(owner_id)), None
     return None, None
 
 

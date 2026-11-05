@@ -70,7 +70,7 @@ async def test_pin_project_personal_owner_legacy_uses_owner_personal_org(monkeyp
     monkeypatch.setattr(ownership, "can_access", lambda *a, **k: True)
     monkeypatch.setattr(ownership, "owner_of", lambda rt, rid: ("user", "owner-sub"))
     monkeypatch.setattr(db, "get_project_by_id", lambda pid: {"id": pid, "context_org_id": None})
-    monkeypatch.setattr(org_store, "get_personal_org",
+    monkeypatch.setattr(org_store, "home_org",
                         lambda s: 77 if s == "owner-sub" else 999)
 
     undo = await _project_axis().pin(5)
@@ -92,8 +92,8 @@ async def test_pin_project_personal_uses_context_org(monkeypatch):
     monkeypatch.setattr(ownership, "can_access", lambda *a, **k: True)
     monkeypatch.setattr(ownership, "owner_of", lambda rt, rid: ("user", "owner-sub"))
     monkeypatch.setattr(db, "get_project_by_id", lambda pid: {"id": pid, "context_org_id": 35})
-    # get_personal_org NE doit PAS être consulté (contexte présent) → sentinelle qui casse.
-    monkeypatch.setattr(org_store, "get_personal_org",
+    # home_org NE doit PAS être consulté (contexte présent) → sentinelle qui casse.
+    monkeypatch.setattr(org_store, "home_org",
                         lambda s: pytest.fail("ne doit pas retomber sur l'org perso"))
 
     undo = await _project_axis().pin(5)

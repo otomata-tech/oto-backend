@@ -224,7 +224,7 @@ def _lien_d_app(dest_sub: Optional[str], rid: str) -> Optional[str]:
         return None
     org = org_de_l_app(row) if row else None
     if dest_sub and (org is None or not roles.is_org_member(dest_sub, int(org))):
-        org = org_store.get_personal_org(dest_sub)
+        org = org_store.home_org(dest_sub)
     return links.link_for("app", sub=dest_sub, org=org, id=rid) if org is not None else None
 
 

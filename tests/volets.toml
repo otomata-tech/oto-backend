@@ -312,6 +312,7 @@ chemins = [
   "oto_mcp/db/node_tables.py",
   "oto_mcp/db/node_view.py",
   "oto_mcp/db/nodes.py",
+  "oto_mcp/db/org_d_inscription.py",
   "oto_mcp/db/paths.py",
   "oto_mcp/db/platform_key_rate.py",
   "oto_mcp/db/platform_instructions.py",

@@ -155,6 +155,9 @@ EXPECTED_EDGES = {
 }
 
 # ── la surface d'avant la découpe, relevée sur `main` (commit 3a40ee0) ───────
+# Retirés le 05/11/2026 (plus d'org perso) avec leurs call-sites : `ensure_personal_org`,
+# `get_personal_org`, `_personal_label`, `_reclaim_or_create_personal` — remplacés par
+# `ensure_home_org` / `home_org` (`org_store/personal.py`).
 FROZEN = (
     'BASE_SLUG', 'LibrarySlugTaken', 'ORG_ROLES', 'Optional',
     '_DOMAIN_RE', '_EMAIL_CONNECTORS_ORDER', '_INV_LIST_SELECT', '_LIBRARY_COLS',
@@ -162,19 +165,19 @@ FROZEN = (
     '_accept_invitation_row', '_connect', '_email_connectors_in_order',
     '_free_instruction_slug', '_get_invitation', '_hash_token',
     '_idempotent_accept', '_list_invitations', '_log', '_mark_invitation_accepted',
-    '_personal_label', '_preview_from_row', '_reclaim_or_create_personal',
+    '_preview_from_row',
     '_scope_of', '_snippet', '_sync_mfa_mirror', 'accept_invitation',
     'add_org_member', 'annotations', 'archive_org',
     'backfill_org_front', 'backfill_personal_orgs', 'cancel_scheduled_email',
     'claim_kb_project', 'clear_kb_project', 'config',
     'count_orgs_created_by', 'create_invitation',
     'create_org', 'credentials_store', 'db', 'delete_instruction',
-    'delete_org_secret', 'effective_logo_url', 'ensure_personal_org',
+    'delete_org_secret', 'effective_logo_url',
     'fork_library_entry', 'get_active_org', 'get_instruction', 'get_instruction_by_id',
     'get_invitation_by_token', 'get_kb_project_id',
     'get_library_entry', 'get_org', 'get_org_default_connectors',
     'get_org_email_settings', 'get_org_field_filters', 'get_org_mfa',
-    'get_org_role', 'get_org_secret', 'get_personal_org', 'has_org_secret',
+    'get_org_role', 'get_org_secret', 'has_org_secret',
     'is_personal_org', 'json', 'list_all_instructions', 'list_all_orgs',
     'list_group_invitations', 'list_instruction_bodies',
     'list_instruction_versions', 'list_instructions',
@@ -205,9 +208,7 @@ FROZEN_SIGNATURES = {
     '_idempotent_accept': "(pred: 'str', val, sub: 'str') -> 'Optional[dict]'",
     '_list_invitations': "(pred: 'str', *args) -> 'list[dict]'",
     '_mark_invitation_accepted': "(inv_id: 'int', sub: 'str') -> 'None'",
-    '_personal_label': "(email: 'Optional[str]', name: 'Optional[str]') -> 'str'",
     '_preview_from_row': "(r: 'dict') -> 'dict'",
-    '_reclaim_or_create_personal': "(sub: 'str', email: 'Optional[str]', name: 'Optional[str]') -> 'int'",
     '_scope_of': "(r: 'dict') -> 'str'",
     '_snippet': "(body: 'str', query: 'str', width: 'int' = 200) -> 'str'",
     '_sync_mfa_mirror': "(org_id: 'int') -> 'None'",
@@ -225,7 +226,6 @@ FROZEN_SIGNATURES = {
     'delete_instruction': "(owner_type: 'str', owner_id: 'int | str', slug: 'str') -> 'bool'",
     'delete_org_secret': "(org_id: 'int', provider: 'str', account: 'str' = '') -> 'bool'",
     'effective_logo_url': "(org: 'dict') -> 'Optional[str]'",
-    'ensure_personal_org': "(sub: 'str', email: 'Optional[str]' = None, name: 'Optional[str]' = None) -> 'int'",
     'fork_library_entry': "(*, entry_id: 'int', owner_type: 'str', owner_id: 'int | str', new_slug: 'Optional[str]' = None, set_by: 'Optional[str]' = None) -> 'dict'",
     'get_active_org': "(sub: 'str') -> 'Optional[int]'",
     'get_instruction': "(owner_type: 'str', owner_id: 'int | str', slug: 'str', version: 'Optional[int]' = None) -> 'Optional[dict]'",
@@ -240,7 +240,6 @@ FROZEN_SIGNATURES = {
     'get_org_mfa': "(org_id: 'int') -> 'dict'",
     'get_org_role': "(org_id: 'int', sub: 'str') -> 'Optional[str]'",
     'get_org_secret': "(org_id: 'int', provider: 'str', account: 'str' = '') -> 'Optional[str]'",
-    'get_personal_org': "(sub: 'str') -> 'Optional[int]'",
     'has_org_secret': "(org_id: 'int', provider: 'str') -> 'bool'",
     'is_personal_org': "(org_id: 'int') -> 'bool'",
     'list_all_instructions': "() -> 'list[dict]'",

@@ -1,4 +1,9 @@
-"""Un invité ne reçoit pas d'org perso à côté de l'org qu'il rejoint.
+"""Un invité ne reçoit pas d'org à côté de l'org qu'il rejoint.
+
+Plus d'org perso depuis le 05/11/2026 : l'org que l'inscription pose (« perso » dans
+les noms de ce banc) est une org ordinaire marquée `auto_created`, et la maison d'un
+compte est son org ACTIVE (`org_store.home_org`). Le reste de ce docstring raconte
+l'état d'avant.
 
 Deux chemins y menaient : l'inscription (`upsert_user`) créait l'org perso même
 quand la réconciliation d'invitation venait de faire entrer le compte dans une org,
@@ -53,7 +58,7 @@ def test_la_perso_vierge_est_relachee_et_l_org_rejointe_reste_maison(banc):
     assert banc.liberer_perso_vierge(SUB, boite) == perso
     assert [o["org_id"] for o in banc.list_orgs_for_user(SUB)] == [boite]
     assert banc.get_active_org(SUB) == boite
-    assert banc.get_personal_org(SUB) is None
+    assert banc.home_org(SUB) == boite
 
 
 def test_une_perso_qui_a_servi_n_est_pas_relachee(banc):
@@ -62,7 +67,7 @@ def test_une_perso_qui_a_servi_n_est_pas_relachee(banc):
         c.execute("INSERT INTO projects (owner_type, owner_id, name) VALUES ('org', %s, 'Mon travail')",
                   (str(perso),))
     assert banc.liberer_perso_vierge(SUB, boite) is None
-    assert banc.get_personal_org(SUB) == perso
+    assert perso in [o["org_id"] for o in banc.list_orgs_for_user(SUB)]
 
 
 def test_une_perso_avec_un_tableau_n_est_pas_relachee(banc):
@@ -98,7 +103,7 @@ def test_une_perso_avec_une_cle_deposee_n_est_pas_relachee(banc, entity_type, en
                   "secret_enc) VALUES (%s, %s, 'serper', 'x')",
                   (entity_type, entity_id.format(perso=perso)))
     assert banc.liberer_perso_vierge(SUB, boite) is None
-    assert banc.get_personal_org(SUB) == perso
+    assert perso in [o["org_id"] for o in banc.list_orgs_for_user(SUB)]
 
 
 def test_la_cle_d_une_autre_org_ne_compte_pas(banc):
@@ -137,18 +142,18 @@ def test_rejoindre_sa_propre_perso_ne_la_relache_pas(banc):
 
 # ── sans org perso : une maison fixe et explicite, créée à la demande ────────
 
-def test_sans_org_perso_aucune_org_n_est_la_maison(monkeypatch):
-    """Pas de repli sur l'org active : sans org perso, aucune org n'est la maison —
-    ni l'org active (l'org d'entreprise), ni une autre quand l'active change."""
+def test_la_maison_est_l_org_active(monkeypatch):
+    """Plus d'org perso (05/11/2026) : la maison est l'org active
+    (`org_store.home_org`), et elle suit la bascule d'org active."""
     from oto_mcp import org_store, ownership
-    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: None)
-    monkeypatch.setattr(org_store, "get_active_org", lambda sub: 5)
+    monkeypatch.setattr(org_store, "home_org", lambda sub: None)
     assert ownership.org_perso_de("u", 5) is False
     assert ownership.perso_de_la_liste("u", 5) == []
     assert ownership.org_perso_de("u", None) is False
-    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: 9)
+    monkeypatch.setattr(org_store, "home_org", lambda sub: 9)
     assert ownership.org_perso_de("u", 5) is False
     assert ownership.org_perso_de("u", 9) is True
+    assert ownership.perso_de_la_liste("u", 9) == [("user", "u")]
 
 
 @pytest.fixture()
@@ -157,14 +162,14 @@ def maison(monkeypatch):
     from oto_mcp import db, org_store, ownership
     persos: dict[str, int] = {"a-une-perso": 9}
     journal: list = []
-    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: persos.get(sub))
+    monkeypatch.setattr(org_store, "home_org", lambda sub: persos.get(sub))
     monkeypatch.setattr(db, "get_user", lambda sub: {"email": f"{sub}@x.tld", "name": sub})
 
     def _ensure(sub, email=None, name=None):
         journal.append(("ensure", sub, email))
         persos[sub] = 42
         return 42
-    monkeypatch.setattr(org_store, "ensure_personal_org", _ensure)
+    monkeypatch.setattr(org_store, "ensure_home_org", _ensure)
     monkeypatch.setattr(db, "grant_resource",
                         lambda *a, **k: journal.append(("grant",) + a[:4]))
     return ownership, journal
@@ -172,7 +177,7 @@ def maison(monkeypatch):
 
 def test_un_compte_sans_ligne_nait_avant_sa_maison(maison, monkeypatch):
     """Un compte sans sa ligne `users` naît d'abord : sa naissance pose la maison, que
-    `maison_de` relit. `ensure_personal_org` directe l'aurait fait naître au milieu de
+    `maison_de` relit. `ensure_home_org` directe l'aurait fait naître au milieu de
     sa propre création, et deux maisons auraient cassé `uq_orgs_personal_of`."""
     ownership, journal = maison
     from oto_mcp import db, org_store
@@ -180,7 +185,7 @@ def test_un_compte_sans_ligne_nait_avant_sa_maison(maison, monkeypatch):
 
     def _naissance(sub, *a, **k):
         journal.append(("naissance", sub))
-        org_store.ensure_personal_org(sub)
+        org_store.ensure_home_org(sub)
     monkeypatch.setattr(db, "upsert_user", _naissance)
     assert ownership.maison_de("inconnu") == 42
     assert journal == [("naissance", "inconnu"), ("ensure", "inconnu", None)]
@@ -213,50 +218,61 @@ def test_sans_maison_le_partage_n_est_pas_pose(maison, monkeypatch):
 
     def _panne(*a, **k):
         raise RuntimeError("base indisponible")
-    monkeypatch.setattr(org_store, "ensure_personal_org", _panne)
+    monkeypatch.setattr(org_store, "ensure_home_org", _panne)
     with pytest.raises(RuntimeError):
         ownership.grant("project", "1", "user", "invite", role="viewer")
     assert journal == []
 
 
-@pytest.mark.parametrize("restantes, recree", [([], True), ([{"org_id": 3}], False)])
-def test_quitter_sa_derniere_org_rend_un_espace(monkeypatch, restantes, recree):
+def _sortie(monkeypatch, restantes):
     from oto_mcp import db, org_store
-    from oto_mcp.capabilities._types import ResolvedCtx
     from oto_mcp.capabilities.orgs import members as M
     monkeypatch.setattr(M, "refuser_maison_sous_verrou", lambda ctx, geste: None)
     monkeypatch.setattr(M, "_require_org_exists", lambda org_id: None)
-    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: None)
     monkeypatch.setattr(org_store, "get_org_role", lambda org_id, sub: "org_member")
     monkeypatch.setattr(org_store, "remove_org_member", lambda org_id, sub, actor=None: True)
     monkeypatch.setattr(org_store, "list_orgs_for_user", lambda sub: restantes)
     monkeypatch.setattr(db, "get_user", lambda sub: {"email": "a@b.c", "name": "A"})
     crees = []
-    monkeypatch.setattr(org_store, "ensure_personal_org",
+    monkeypatch.setattr(org_store, "ensure_home_org",
                         lambda sub, email=None, name=None: crees.append(sub))
-    M._leave_org(ResolvedCtx(sub="u", org_id=4), M.LeaveOrgInput(org_id=4))
+    return M, crees
+
+
+def test_quitter_sa_derniere_org_est_refuse(monkeypatch):
+    """Plus d'org perso (05/11/2026) : la dernière org ne se quitte pas — le compte
+    n'en reçoit pas une neuve dans la foulée, il reste dans la sienne."""
+    from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
+    M, crees = _sortie(monkeypatch, [{"org_id": 4}])
+    with pytest.raises(AuthzDenied) as e:
+        M._leave_org(ResolvedCtx(sub="u", org_id=4), M.LeaveOrgInput(org_id=4))
+    assert e.value.code == "last_org" and crees == []
+
+
+@pytest.mark.parametrize("restantes, recree", [([], True), ([{"org_id": 3}], False)])
+def test_retire_de_sa_derniere_org_le_compte_en_retrouve_une(monkeypatch, restantes, recree):
+    """Un admin retire un membre de sa dernière org : l'invariant « une org active »
+    est rétabli tout de suite (`_rendre_un_espace` → `ensure_home_org`)."""
+    from oto_mcp.capabilities._types import ResolvedCtx
+    M, crees = _sortie(monkeypatch, restantes)
+    M._remove_member(ResolvedCtx(sub="admin", org_id=4),
+                     M.RemoveMemberInput(org_id=4, target="u"))
     assert crees == (["u"] if recree else [])
 
 
-def test_quitter_sa_derniere_org_leve_si_l_espace_n_est_pas_rendu(monkeypatch):
+def test_retire_de_sa_derniere_org_leve_si_l_org_n_est_pas_rendue(monkeypatch):
     """Chemin de rattrapage (`docs/conventions.md`) : plus d'`except` qui masque — la
-    panne de `ensure_personal_org` remonte à l'appelant."""
-    from oto_mcp import db, org_store
+    panne de `ensure_home_org` remonte à l'appelant."""
+    from oto_mcp import org_store
     from oto_mcp.capabilities._types import ResolvedCtx
-    from oto_mcp.capabilities.orgs import members as M
-    monkeypatch.setattr(M, "refuser_maison_sous_verrou", lambda ctx, geste: None)
-    monkeypatch.setattr(M, "_require_org_exists", lambda org_id: None)
-    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: None)
-    monkeypatch.setattr(org_store, "get_org_role", lambda org_id, sub: "org_member")
-    monkeypatch.setattr(org_store, "remove_org_member", lambda org_id, sub, actor=None: True)
-    monkeypatch.setattr(org_store, "list_orgs_for_user", lambda sub: [])
-    monkeypatch.setattr(db, "get_user", lambda sub: {})
+    M, _ = _sortie(monkeypatch, [])
 
     def _panne(*a, **k):
         raise RuntimeError("base indisponible")
-    monkeypatch.setattr(org_store, "ensure_personal_org", _panne)
+    monkeypatch.setattr(org_store, "ensure_home_org", _panne)
     with pytest.raises(RuntimeError):
-        M._leave_org(ResolvedCtx(sub="u", org_id=4), M.LeaveOrgInput(org_id=4))
+        M._remove_member(ResolvedCtx(sub="admin", org_id=4),
+                         M.RemoveMemberInput(org_id=4, target="u"))
 
 
 def test_accepter_leve_si_la_perso_vierge_n_est_pas_relachee(monkeypatch):
@@ -366,7 +382,7 @@ def test_sans_maison_le_noeud_n_est_pas_cree(auteur, monkeypatch):
 
     def _panne(*a, **k):
         raise RuntimeError("base indisponible")
-    monkeypatch.setattr(org_store, "ensure_personal_org", _panne)
+    monkeypatch.setattr(org_store, "ensure_home_org", _panne)
     monkeypatch.setattr(E.db_nodes, "create_page", ecrire)
     with pytest.raises(RuntimeError):
         E._create(_ctx(), E.NodeEditInput(op="create", title="Note"))

@@ -98,7 +98,7 @@ def seams(monkeypatch):
     # L'org 2 de CTX est l'org PERSO de u1 (décision du 28/09/2026 : le personnel et
     # les partages directs ne se rangent que là) ; les bancs d'org de travail changent
     # cette valeur.
-    monkeypatch.setattr(S.ownership.org_store, "get_personal_org", lambda sub: 2)
+    monkeypatch.setattr(S.ownership.org_store, "home_org", lambda sub: 2)
     monkeypatch.setattr(S.org_store, "get_org",
                         lambda oid: {"name": "Acme", "logo_url": "https://l"})
     monkeypatch.setattr(S.group_store, "list_groups_for_user",
@@ -171,7 +171,7 @@ def test_dans_une_org_de_TRAVAIL_ni_personnel_ni_partage_direct(seams, monkeypat
     """Décision du 28/09/2026 : dans une org qui n'est pas l'org perso, le rail ne
     montre que l'org — ni mes nœuds et projets perso (le propriétaire `user` n'est même
     pas demandé), ni la section des partages faits à moi."""
-    monkeypatch.setattr(S.ownership.org_store, "get_personal_org", lambda sub: 5)
+    monkeypatch.setattr(S.ownership.org_store, "home_org", lambda sub: 5)
     monkeypatch.setattr(S, "_executions", lambda sub, oid: [])
     lus = []
     monkeypatch.setattr(S.db_shell, "direct_grants", lambda sub: lus.append(sub) or [

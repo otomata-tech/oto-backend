@@ -27,7 +27,7 @@ def _nom() -> str:
 def monde(live):
     from oto_mcp import db, org_store
     db.upsert_user(MOI, email=f"{MOI}@t.invalid", name=MOI)
-    perso = org_store.ensure_personal_org(MOI)
+    perso = org_store.ensure_home_org(MOI)
     a = org_store.create_org("A lso", created_by=MOI)
     org_store.add_org_member(a, MOI, "org_admin")
     p = {
@@ -42,6 +42,9 @@ def monde(live):
         "dans_perso": int(db.create_datastore("user", MOI, _nom(), context_org_id=perso)),
         "sans_org": int(db.create_datastore("user", MOI, _nom())),
     }
+    # Plus d'org perso (05/11/2026) : la maison est l'org ACTIVE ; on la pose sur l'org
+    # d'inscription, que « perso » désigne dans ce banc.
+    org_store.set_active_org(MOI, perso)
     return {"perso": perso, "a": a, "p": p, "t": t}
 
 

@@ -48,7 +48,12 @@ CREATE TABLE IF NOT EXISTS orgs (
     -- Ce qu'un objet NEUF de l'org reçoit d'office, par type (`{"agent": "lecture"}`,
     -- `capabilities/orgs/partage_par_defaut.py`). NULL = rien. Base existante :
     -- révision `20261024_1101_default_sharing`.
-    default_sharing JSONB
+    default_sharing JSONB,
+    -- L'org posée par l'INSCRIPTION d'un compte qui n'en avait aucune
+    -- (`org_store.ensure_home_org`) : une org ordinaire, la marque est permanente
+    -- (`db/org_d_inscription.py`). Base existante : révision
+    -- `20261105_1700_orgs_auto_created`.
+    auto_created BOOLEAN NOT NULL DEFAULT FALSE
 );
 """
 

@@ -73,7 +73,7 @@ def _recus(monkeypatch, sub, org) -> dict:
 
 
 def _perso(sub) -> int:
-    return org_store.ensure_personal_org(sub)
+    return org_store.ensure_home_org(sub)
 
 
 def _liste_de_l_org(monkeypatch, sub, org) -> set:

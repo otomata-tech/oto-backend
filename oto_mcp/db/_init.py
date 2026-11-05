@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import (_prerequis, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, regles_de_comptes,
+from . import (_prerequis, org_d_inscription, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, regles_de_comptes,
                projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
@@ -1462,6 +1462,13 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # privé mono-membre (NULL = org partagée). Unicité : 1 org perso par user.
     if _colonne_absente(conn, "orgs", "personal_of"):
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS personal_of TEXT")
+    # Plus d'org perso (05/11/2026) : `personal_of` n'a plus d'écrivain, il est vidé
+    # par `scripts/retirer_orgs_perso.py`. `auto_created` = l'org posée par
+    # l'inscription d'un compte qui n'en avait aucune (`db/org_d_inscription.py`) —
+    # la même que pose la révision `20261105_1700_orgs_auto_created` : ordre
+    # indifférent entre elles (la révision marque en plus les orgs perso d'avant).
+    if _colonne_absente(conn, "orgs", org_d_inscription.COLONNE):
+        conn.execute(org_d_inscription.DDL_COLONNE)
     # SUSPENSION d'une org (`org_suspension`) : l'org ne peut plus agir — outils,
     # capacités, travaux de fond — et rien de ce qui lui appartient n'est touché.
     # Même forme que `users.suspended_*`. NULL = active.

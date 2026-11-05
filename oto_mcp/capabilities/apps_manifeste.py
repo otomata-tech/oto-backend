@@ -138,7 +138,7 @@ def org_du_projet(project_id: int) -> Optional[int]:
         return org
     owner = ownership.owner_of("project", str(int(project_id)))
     if owner is not None and owner[0] == "user":
-        return org_store.get_personal_org(str(owner[1]))
+        return org_store.home_org(str(owner[1]))
     return None
 
 
@@ -157,7 +157,7 @@ def org_de_l_app(app: dict) -> Optional[int]:
         return int(g["org_id"]) if g else None
     if t == "user" and i is not None:
         return (int(app["context_org_id"]) if app.get("context_org_id")
-                else org_store.get_personal_org(str(i)))
+                else org_store.home_org(str(i)))
     return None
 
 

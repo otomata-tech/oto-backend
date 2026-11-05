@@ -109,7 +109,8 @@ def _attendus(source) -> set[int]:
     a = source[A]
     with psycopg.connect(source["dsn"], row_factory=dict_row) as c:
         orgs = [r["id"] for r in c.execute(
-            "SELECT id FROM orgs WHERE id = %s OR personal_of = %s", (a["org"], a["alice"]))]
+            "SELECT id FROM orgs WHERE id = %s OR (auto_created AND id IN "
+            "(SELECT org_id FROM org_members WHERE sub = %s))", (a["org"], a["alice"]))]
         return {r["id"] for r in c.execute(
             "SELECT id FROM tool_calls WHERE (org_id = ANY(%(o)s) OR (org_id IS NULL AND "
             "sub = ANY(%(s)s))) AND sub IS DISTINCT FROM %(orph)s AND created_at < %(gel)s "
@@ -215,7 +216,8 @@ def test_l_export_sans_journal_compte_ce_qu_il_laisse(source, principal):
         brut = c.execute(
             "SELECT count(*) AS n, min(created_at) AS premier, max(created_at) AS dernier, "
             "max(id) AS id FROM tool_calls WHERE org_id IN (SELECT id FROM orgs WHERE id = "
-            "%(o)s OR personal_of = %(a)s) OR (org_id IS NULL AND sub IN (%(a)s, %(b)s))",
+            "%(o)s OR (auto_created AND id IN (SELECT org_id FROM org_members WHERE sub = %(a)s))) "
+            "OR (org_id IS NULL AND sub IN (%(a)s, %(b)s))",
             {"o": a["org"], "a": a["alice"], "b": a["bob"]}).fetchone()
     laisse = manifeste["journal"]["tables"]["tool_calls"]
     assert manifeste["journal"]["inclus"] is False

@@ -311,7 +311,7 @@ def test_copier_va_dans_l_org_perso_et_est_idempotent(monde):
     token = _publier(m)["token"]
     lecteur = m["lecteurs"][0]
     a = _copier(m, lecteur, token)
-    perso = org_store.get_personal_org(lecteur)
+    perso = org_store.home_org(lecteur)
     assert a["org_id"] == perso and a["created"] is True and a["is_new_account"] is True
     copie = org_store.get_instruction("org", perso, a["slug"])
     assert copie["body_md"] == _CORPS and copie["version"] == 1

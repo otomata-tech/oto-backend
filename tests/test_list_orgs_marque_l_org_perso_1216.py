@@ -22,7 +22,7 @@ def compte(live):
     from oto_mcp import db, org_store
     sub = "usr_perso1216_" + uuid.uuid4().hex[:6]
     db.upsert_user(sub, email=f"{sub}@t.invalid", name=sub)
-    perso = org_store.ensure_personal_org(sub)
+    perso = org_store.ensure_home_org(sub)
     nommee = org_store.create_org("Perso", created_by=sub)
     org_store.add_org_member(nommee, sub, "org_admin")
     return {"sub": sub, "perso": perso, "nommee": nommee}
@@ -39,7 +39,8 @@ def test_l_org_nommee_perso_n_est_pas_l_org_perso(compte, monkeypatch):
     par_id = {o["id"]: o for o in out["orgs"]}
     assert par_id[compte["nommee"]]["name"] == "Perso"
     assert par_id[compte["nommee"]]["personal"] is False
-    assert par_id[compte["perso"]]["personal"] is True
+    # Plus d'org perso (05/11/2026) : le champ reste servi, toujours False.
+    assert par_id[compte["perso"]]["personal"] is False
     # Le contrat déclaré (OpenAPI dérivé) porte le champ, requis.
     assert R.MyOrgs(**out).orgs[0].personal in (True, False)
     assert R.MyOrgEntry.model_fields["personal"].is_required()

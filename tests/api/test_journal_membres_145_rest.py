@@ -87,7 +87,7 @@ def monde(live):
     org_store.create_invitation(o, f"{INSCRIT}@journal.invalid", "org_member",
                                 invited_by=ADMIN)
     assert org_store.reconcile_signup_with_invitation(INSCRIT, f"{INSCRIT}@journal.invalid")
-    perso = org_store.ensure_personal_org(PERSO, f"{PERSO}@journal.invalid", "Perso")
+    perso = org_store.ensure_home_org(PERSO, f"{PERSO}@journal.invalid", "Perso")
     yield {"o": o, "autre": autre, "perso": perso}
 
 

@@ -219,7 +219,9 @@ def test_le_compte_ne_recoit_pas_d_org_perso(base):
     sub = org_store.assurer_compte_de_service(org, by="admin-1")
     org_store.backfill_personal_orgs()
     db.create_api_token(sub, "k", scopes={"namespaces": {"1": "read"}}, kind="org")
-    assert org_store.get_personal_org(sub) is None
+    # Aucune org posée pour lui : sa seule org est la sienne (le compte de service).
+    assert [int(o["org_id"]) for o in org_store.list_orgs_for_user(sub)] == [org]
+    assert org_store.home_org(sub) == org
     assert org_store.get_active_org(sub) == org
 
 

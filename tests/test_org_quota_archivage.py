@@ -10,7 +10,7 @@ sans autre clause. Deux conséquences, qui se composent en cul-de-sac :
   compte peut redescendre sous le plafond : arrivé au plafond, il y restait, et le
   refus portait sur un nombre que plus rien ne pouvait faire baisser ;
 - **l'espace personnel occupait une place.** Il est posé d'office par
-  `ensure_personal_org` (avec `created_by = sub`, donc compté) et son archivage est
+  `ensure_home_org` (avec `created_by = sub`, donc compté) et son archivage est
   refusé — le plafond RÉEL valait donc un de moins que celui annoncé par le message.
 
 Banc : un PostgreSQL **réel**. Le défaut est un prédicat SQL — deux clauses `WHERE`
@@ -96,6 +96,7 @@ def _real_orgs_migrations() -> list[str]:
         and all(cible in _TABLES
                 for cible in re.findall(r"REFERENCES\s+(\w+)", node.value))
     ]
+    # `auto_created` naît dans `CREATE TABLE orgs` (`_real_ddl`), plus par migration.
     for col in ("archived_at", "personal_of"):
         assert any(col in s for s in out), f"migration de `orgs.{col}` introuvable"
     return out
@@ -140,7 +141,7 @@ def store(conn, monkeypatch):
     monkeypatch.setattr(db_users, "_connect", _connect_test)
     monkeypatch.setattr(db_tenants, "_connect", _connect_test)
     # Comptes déjà inscrits : `upsert_user` ne doit PAS rejouer ici ses effets de
-    # première inscription (réconciliation d'invitation, `ensure_personal_org`), qui
+    # première inscription (réconciliation d'invitation, `ensure_home_org`), qui
     # poseraient un espace personnel dans le dos du test — c'est ce test qui décide
     # quel compte en a un, et quand.
     for sub in (SUB, AUTRE):
@@ -156,11 +157,11 @@ def _espace(store, sub: str, name: str) -> int:
 
 
 def _perso(store, sub: str, name: str = "Mon espace") -> int:
-    """L'espace PERSONNEL de `sub` : `ensure_personal_org` le crée exactement ainsi
-    (créé par lui, puis marqué `personal_of`)."""
+    """L'org que l'inscription pose à `sub` (`ensure_home_org`) : créée par lui, marquée
+    `auto_created` — une org ordinaire, plus d'étiquette perso depuis le 05/11/2026."""
     oid = _espace(store, sub, name)
     with store._connect() as c:
-        c.execute("UPDATE orgs SET personal_of = %s WHERE id = %s", (sub, oid))
+        c.execute("UPDATE orgs SET auto_created = TRUE WHERE id = %s", (oid,))
     return oid
 
 
@@ -270,7 +271,7 @@ def test_le_refus_dit_le_compte_et_le_remede(store, plafond, monkeypatch):
 
 def test_le_solo_supprime_son_espace_personnel(store, monkeypatch):
     """Le geste que le compte solo n'avait pas : son unique espace s'archive, sort
-    des listings, et relâche le slot `personal_of` (sinon `ensure_personal_org`
+    des listings, et relâche le slot `personal_of` (sinon `ensure_home_org`
     boucle sur une UniqueViolation à chaque boot)."""
     monkeypatch.setattr(session_org, "current_session_id", lambda: None)
     perso = _perso(store, SUB)
@@ -294,7 +295,7 @@ def test_le_solo_ne_reste_pas_sans_aucune_org(store, monkeypatch):
 
     _archiver(SUB, perso)
 
-    repose = store.get_personal_org(SUB)
+    repose = store.home_org(SUB)
     assert repose is not None and repose != perso
     assert store.get_active_org(SUB) == repose
     assert [o["org_id"] for o in store.list_orgs_for_user(SUB)] == [repose]
@@ -309,8 +310,9 @@ def test_l_espace_repose_ne_l_est_que_si_le_compte_est_VIDE(store, monkeypatch):
 
     _archiver(SUB, a)
 
-    assert store.get_personal_org(SUB) is None
-    assert len(store.list_orgs_for_user(SUB)) == 1
+    restantes = store.list_orgs_for_user(SUB)
+    assert len(restantes) == 1, "aucune org reposée : il en restait une"
+    assert store.home_org(SUB) == restantes[0]["org_id"]
 
 
 def test_l_espace_personnel_d_autrui_suit_la_regle_commune(store, monkeypatch):
@@ -323,20 +325,20 @@ def test_l_espace_personnel_d_autrui_suit_la_regle_commune(store, monkeypatch):
     store.add_org_member(autrui, SUB, "org_admin")      # un co-admin de cet espace
 
     assert _archiver(SUB, autrui)["archived"] is True
-    neuf = store.get_personal_org(AUTRE)
+    neuf = store.home_org(AUTRE)
     assert neuf is not None and neuf != autrui
     assert store.list_orgs_for_user(AUTRE), "jamais sans org"
 
 
-def test_un_espace_perso_qui_gagne_un_membre_reste_perso(store, monkeypatch):
-    """Décision d'Alexis du 29/09/2026 : `personal_of` est une étiquette, pas un état —
-    un 2ᵉ membre ne la retire plus. Son propriétaire l'archive comme sa propre org."""
+def test_l_org_d_inscription_qui_gagne_un_membre_s_archive_comme_une_autre(store, monkeypatch):
+    """Plus d'org perso (05/11/2026) : l'org posée à l'inscription n'est jamais
+    « perso », et son propriétaire l'archive comme toute org."""
     monkeypatch.setattr(session_org, "current_session_id", lambda: None)
     perso = _perso(store, SUB)
     store.add_org_member(perso, AUTRE, "org_member")
 
-    assert store.is_personal_org(perso) is True
-    assert store.get_personal_org(SUB) == perso
+    assert store.is_personal_org(perso) is False
+    assert store.home_org(SUB) == perso
     assert _archiver(SUB, perso)["archived"] is True
 
 

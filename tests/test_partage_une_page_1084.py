@@ -114,7 +114,7 @@ def _doc(sub, org, **args):
 
 def _perso(sub) -> int:
     """L'org PERSO de `sub` — où `scope=org` compte aussi la personne."""
-    return org_store.ensure_personal_org(sub)
+    return org_store.ensure_home_org(sub)
 
 
 def _tous_les_chemins(m) -> dict:

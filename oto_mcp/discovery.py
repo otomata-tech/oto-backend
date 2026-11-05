@@ -1,5 +1,5 @@
 """Projet « Découverte » — l'onboarding EST un projet (ADR 0032 §7), pas un mode
-spécial. Quand l'org perso d'un utilisateur est créée (`org_store.ensure_personal_org`),
+spécial. Quand l'org d'inscription d'un utilisateur est posée (`org_store.ensure_home_org`),
 on y sème un projet d'accueil porteur d'un brief. Il remonte ensuite à l'agent comme
 n'importe quel projet (bloc C « Projets récents » du handshake) ; aucun tool, aucun
 gate, aucun état dédié. Best-effort : un échec de seed ne casse pas la création d'org.

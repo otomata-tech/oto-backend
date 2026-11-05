@@ -18,8 +18,8 @@ description: >-
 **Plus de mode d'accueil spécial** (retiré le 2026-07-01) : pas de booléen `onboarded`,
 pas de checklist dashboard, pas de tool d'onboarding scripté. L'onboarding est **un
 projet** comme un autre — un projet « Découverte » porteur d'un brief d'accueil, **semé
-à la création de l'org perso** (`discovery.seed_for_org`, appelé par
-`org_store.ensure_personal_org` sur la branche création, best-effort) — donc pas pour un
+à la création de l'org posée à l'inscription** (`discovery.seed_for_org`, appelé par
+`org_store.ensure_home_org` sur la branche création, best-effort ; plus d'org perso depuis le 05/11/2026) — donc pas pour un
 invité, qui n'en reçoit pas (`docs/ownership.md`) : il arrive dans l'org qui l'a invité. Il remonte à
 l'agent via la ligne « Projets récents » du bloc C des instructions (`instructions.py`) ;
 l'agent l'ouvre (`oto_use_project`) et déroule l'accueil depuis son brief.

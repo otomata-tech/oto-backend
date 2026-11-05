@@ -96,12 +96,11 @@ monotone** : l'équipe rétrécit ce que l'org expose, jamais l'inverse (ADR 001
 `ownership.py` = seam unique de la ressource possédée (`owner_type∈{user,group,org}` + `resource_grants`
 deny-by-default) ; **deux plans**, `can_access` (contenu) vs `can_govern` (gouvernance) ; le **projet** est le
 conteneur de travail possédé · ⚠️ une liste de contenu scope sur `active_owner(current_org)`, **jamais
-`owner_pairs()`** — fuite fail-open (ADR 0030/0032, `docs/ownership.md`, `docs/projects.md`) · ⚠️ **une org perso
-est une org comme une autre** (« perso » = une étiquette ; seules exceptions : créée à l'inscription, son propriétaire
-ne la quitte pas) · ⚠️ **dans une org, une liste rend l'org, ses équipes, et MES objets perso créés en elle**
-(`ownership.mes_objets_ici`), **et nulle part ailleurs, org perso comprise** (07/10/2026) — jamais ceux d'un autre
-membre sans partage ; l'org perso est la maison de ce qui n'a
-pas d'org de création et des partages faits à la personne ; les lentilles « moi » sont servies dans toute org
+`owner_pairs()`** — fuite fail-open (ADR 0030/0032, `docs/ownership.md`, `docs/projects.md`) · ⚠️ **plus d'org perso** (05/11/2026) : l'inscription
+sans invitation pose une org ORDINAIRE (`org_store.ensure_home_org`, marquée `auto_created`), on ne quitte pas
+sa dernière org · ⚠️ **dans une org, une liste rend l'org, ses équipes, et MES objets perso créés en elle**
+(`ownership.mes_objets_ici`) ; la **maison** — où se listent ce qui n'a pas d'org de création et les partages
+faits à la personne — est l'**org active** (`org_store.home_org`) ; les lentilles « moi » sont servies dans toute org
 (`docs/ownership.md`).
 
 ## Outils servis : visibilité, guides, journal

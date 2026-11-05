@@ -31,7 +31,7 @@ def calls(monkeypatch):
     # Org 7 = une org de TRAVAIL (l'org perso de u1 est la 5) : décision du 28/09/2026,
     # aucun objet personnel ni partage nominatif n'y entre. Les tests d'org perso
     # passent `org=5`.
-    monkeypatch.setattr(ownership.org_store, "get_personal_org", lambda sub: 5)
+    monkeypatch.setattr(ownership.org_store, "home_org", lambda sub: 5)
     monkeypatch.setattr(ownership.db, "list_projects_granted_to",
                         lambda principals: rec["principals"].append(list(principals)) or
                         [{"id": 20, "permission": "read"},

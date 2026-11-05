@@ -3,7 +3,7 @@
 - **B5** `resolve_sub` — pendant la fenêtre de bascule de tenant, un hoquet DB rendait
   le sub NON canonicalisé : le porteur d'un vieux jeton était servi **sous son compte
   d'AVANT migration** (coffre, org, projets), sans une ligne de trace.
-- **B8** `upsert_user` → `ensure_personal_org` — le compte naissait **sans org maison**.
+- **B8** `upsert_user` → `ensure_home_org` — le compte naissait **sans org maison**.
   Tout ce qui en dépend échouait plus tard, ailleurs, sans cause remontable.
 - **B9** `upsert_user` → `reconcile_signup_with_invitation` — l'invité d'une org
   s'inscrivait et **ne rejoignait jamais l'org**, avec une invitation orpheline.
@@ -178,7 +178,7 @@ def signup(monkeypatch):
     faits = []
     monkeypatch.setattr(org_store, "reconcile_signup_with_invitation",
                         lambda sub, email: faits.append("invitation"))
-    monkeypatch.setattr(org_store, "ensure_personal_org",
+    monkeypatch.setattr(org_store, "ensure_home_org",
                         lambda sub, email=None, name=None: faits.append("org_maison"))
     monkeypatch.setattr(org_store, "list_orgs_for_user", lambda sub: [])
     from oto_mcp import partage_en_attente
@@ -215,13 +215,13 @@ def test_partages_en_attente_non_honores_est_une_erreur_nommee(signup, monkeypat
 
 def test_org_maison_manquante_est_une_erreur_nommee(signup, monkeypatch, caplog):
     from oto_mcp import org_store
-    monkeypatch.setattr(org_store, "ensure_personal_org",
+    monkeypatch.setattr(org_store, "ensure_home_org",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("UniqueViolation")))
     caplog.set_level(logging.DEBUG, logger=db_users.logger.name)
 
     with pytest.raises(db_users.OnboardingIncomplet) as e:
         db_users.upsert_user("u-1", email="a@b.c", name="A")
-    assert "ensure_personal_org" in str(e.value)
+    assert "ensure_home_org" in str(e.value)
 
     erreurs = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert erreurs, "aucune trace de l'échec"
@@ -247,7 +247,7 @@ def test_un_login_ordinaire_ne_declenche_rien(monkeypatch):
     monkeypatch.setattr(db_users, "_connect",
                         _connect_factory(_Conn(row=_Row(inserted=False))))
     from oto_mcp import org_store
-    monkeypatch.setattr(org_store, "ensure_personal_org",
+    monkeypatch.setattr(org_store, "ensure_home_org",
                         lambda *a, **k: pytest.fail("ne doit pas être appelé"))
     monkeypatch.setattr(org_store, "reconcile_signup_with_invitation",
                         lambda *a, **k: pytest.fail("ne doit pas être appelé"))

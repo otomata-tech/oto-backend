@@ -102,7 +102,7 @@ def test_hors_de_l_org_de_l_app_le_lien_prend_son_org_perso(monde):
     chez_elle = org_store.create_org(f"b_{m['u']}", created_by=dehors)
     org_store.add_org_member(chez_elle, dehors, "org_admin")
     org_store.set_active_org(dehors, chez_elle)
-    perso = org_store.ensure_personal_org(dehors)
+    perso = org_store.ensure_home_org(dehors)
     _partager(m, email=f"{dehors}@example.test", role="viewer")
     assert m["envois"][0]["app_url"] == f"{config.dashboard_url()}/org/{perso}/apps/{m['app']}"
 

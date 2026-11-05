@@ -447,7 +447,7 @@ def test_org_du_projet_perso_sans_rangement_est_son_org_perso(monkeypatch):
     from oto_mcp import org_store
     monkeypatch.setattr(ownership, "org_ou_vit", lambda t, r: (None, False))
     monkeypatch.setattr(ownership, "owner_of", lambda t, r: ("user", "u9"))
-    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: 77 if sub == "u9" else None)
+    monkeypatch.setattr(org_store, "home_org", lambda sub: 77 if sub == "u9" else None)
     assert M.org_du_projet(7) == 77
     monkeypatch.setattr(ownership, "owner_of", lambda t, r: None)
     assert M.org_du_projet(7) is None
@@ -458,7 +458,7 @@ def test_org_du_projet_perso_sans_rangement_est_son_org_perso(monkeypatch):
 def test_org_de_l_app_suit_son_proprietaire(monkeypatch):
     from oto_mcp import group_store, org_store
     monkeypatch.setattr(group_store, "get_group", lambda g: {"org_id": 6} if g == 3 else None)
-    monkeypatch.setattr(org_store, "get_personal_org", lambda sub: 77 if sub == "u9" else None)
+    monkeypatch.setattr(org_store, "home_org", lambda sub: 77 if sub == "u9" else None)
     assert M.org_de_l_app({"owner_type": "org", "owner_id": "5"}) == 5
     assert M.org_de_l_app({"owner_type": "group", "owner_id": "3"}) == 6
     assert M.org_de_l_app({"owner_type": "group", "owner_id": "4"}) is None
@@ -487,7 +487,7 @@ def test_donner_l_app_a_une_personne_la_range_dans_une_org_ou_elle_est(monkeypat
     vus = []
     monkeypatch.setattr(db.apps, "owner", lambda i: {"owner_type": "org", "owner_id": "42"})
     monkeypatch.setattr(db.apps, "reparent", lambda i, t, o, context_org_id=None: vus.append((t, o, context_org_id)))
-    monkeypatch.setattr(org_store, "ensure_personal_org", lambda sub: 900)
+    monkeypatch.setattr(org_store, "ensure_home_org", lambda sub: 900)
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: sub == "membre" and org == 42)
     A._reparenter("5", "user", "membre")
     A._reparenter("5", "user", "dehors")

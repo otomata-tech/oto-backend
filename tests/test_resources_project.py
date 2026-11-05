@@ -122,7 +122,7 @@ def _wire_group_transfer(monkeypatch, row):
     _wire(monkeypatch)
     # L'ancien propriétaire garde un partage nominatif : sa maison (org perso) existe
     # déjà — sans cette doublure, `ownership.maison_du_partage` la lirait en base.
-    monkeypatch.setattr(ownership.org_store, "get_personal_org", lambda sub: 1)
+    monkeypatch.setattr(ownership.org_store, "home_org", lambda sub: 1)
     monkeypatch.setattr(R.roles, "can_read_group", lambda sub, gid: True)
     monkeypatch.setattr(R.roles, "can_admin_group", lambda sub, gid: True)  # garde le contrôle
     monkeypatch.setattr(R.group_store, "get_group",

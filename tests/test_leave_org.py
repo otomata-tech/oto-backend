@@ -1,7 +1,7 @@
 """Auto-retrait d'une org (`me.leave_org`, self-service SUB_ONLY).
 
-Gardes du handler `_leave_org` : org inconnue → 404, espace perso → 409, non-membre
-→ 404, dernier org_admin → 409, sinon retrait. On monkeypatche `org_store` (pas de PG).
+Gardes du handler `_leave_org` : org inconnue → 404, non-membre → 404, sa dernière
+org → 409 (plus d'org perso depuis le 05/11/2026), dernier org_admin → 409, sinon retrait. On monkeypatche `org_store` (pas de PG).
 """
 from types import SimpleNamespace
 
@@ -15,12 +15,9 @@ def _ctx(sub="u1"):
     return SimpleNamespace(sub=sub)
 
 
-def _patch(monkeypatch, *, org=True, personal=False, role="org_member",
+def _patch(monkeypatch, *, org=True, derniere=False, role="org_member",
            admins=2, removed=True):
     monkeypatch.setattr(om.org_store, "get_org", lambda oid: {"id": oid} if org else None)
-    # `personal` : l'org 7 est l'org perso de l'appelant. Celle d'un AUTRE (où il a été
-    # invité) se quitte (29/09/2026) : la garde lit l'org perso DE l'appelant.
-    monkeypatch.setattr(om.org_store, "get_personal_org", lambda sub: 7 if personal else 99)
     monkeypatch.setattr(om.org_store, "get_org_role", lambda oid, sub: role)
     monkeypatch.setattr(
         om.org_store, "list_org_members",
@@ -36,8 +33,10 @@ def _patch(monkeypatch, *, org=True, personal=False, role="org_member",
     # Après le retrait, `_rendre_un_espace` lit les orgs restantes : le compte en garde
     # une, aucun espace n'est à rendre (le cas « dernière org » est couvert par
     # `test_invite_sans_org_perso.py`). Sans cette doublure, la lecture part en base.
-    monkeypatch.setattr(om.org_store, "list_orgs_for_user", lambda sub: [{"org_id": 99}])
-    monkeypatch.setattr(om.org_store, "ensure_personal_org", _jamais)
+    # `derniere` : l'org 7 est la seule de l'appelant (garde `last_org`).
+    monkeypatch.setattr(om.org_store, "list_orgs_for_user",
+                        lambda sub: [{"org_id": 7}] + ([] if derniere else [{"org_id": 99}]))
+    monkeypatch.setattr(om.org_store, "ensure_home_org", _jamais)
     return calls
 
 
@@ -67,16 +66,18 @@ def test_leave_unknown_org(monkeypatch):
     assert e.value.code == "unknown_org"
 
 
-def test_leave_personal_refused(monkeypatch):
-    _patch(monkeypatch, personal=True)
+def test_leave_last_org_refused(monkeypatch):
+    # Plus d'org perso (05/11/2026) : on ne quitte pas sa DERNIÈRE org, quelle qu'elle soit.
+    calls = _patch(monkeypatch, derniere=True)
     with pytest.raises(AuthzDenied) as e:
         om._leave_org(_ctx(), om.LeaveOrgInput(org_id=7))
-    assert e.value.code == "personal_org"
+    assert e.value.code == "last_org"
+    assert "removed" not in calls
 
 
-def test_leave_someone_elses_personal_org_ok(monkeypatch):
-    # L'org perso d'un autre, où l'on a été invité : elle se quitte comme toute org.
-    _patch(monkeypatch, personal=False)
+def test_leave_the_org_created_at_signup_ok(monkeypatch):
+    # L'org posée par l'inscription n'a plus de règle à part : avec une autre org, elle se quitte.
+    _patch(monkeypatch, derniere=False)
     assert om._leave_org(_ctx(), om.LeaveOrgInput(org_id=7))["left"] is True
 
 

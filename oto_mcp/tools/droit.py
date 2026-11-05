@@ -154,6 +154,9 @@ def register(mcp: FastMCP) -> None:
         (`ok` | `ko` | `non_couvert` | `donnees_insuffisantes` | `info`) and the
         article it applies. `non_couvert` means the agreement's own floor is not
         coded yet: say it must be checked by hand, never report it as compliant.
+        `telerc` lists the fields of the online filing (TéléRC, mandatory since
+        April 2022 — no paper form to fill) in their order, for HR to copy as is;
+        a `null` field could not be established and is filled in by hand.
         The figures come from the employee's payroll: read them with the payroll
         tools, never estimate them.
 

@@ -142,7 +142,7 @@ def test_candidate_update_sans_changement_refuse(client):
 
 
 def test_candidate_op_inconnue_nomme_les_ops(client):
-    with pytest.raises(McpError, match="'list', 'get', 'create' or 'update'"):
+    with pytest.raises(McpError, match="'list', 'get', 'resume', 'create' or 'update'"):
         _tool("wttj_candidate")(op="delete")
     _no_write(client)
 
@@ -205,6 +205,102 @@ def test_candidate_list_ajoute_le_lien_aux_seules_lignes_qui_ont_un_cv(client, a
 def test_la_description_dit_quel_lien_donner_a_un_humain():
     doc = _tool("wttj_candidate").__doc__
     assert "resume_link" in doc and "30 min" in doc
+
+
+# --- CV : son texte, lu par le serveur sans rien garder ------------------------------
+
+class _Telechargement:
+    def __init__(self, data, status=200, mime="application/pdf"):
+        self.status_code, self._data = status, data
+        self.headers = {"Content-Type": mime}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def iter_content(self, n):
+        for i in range(0, len(self._data), n):
+            yield self._data[i:i + n]
+
+
+@pytest.fixture
+def cdn(monkeypatch):
+    """Le CDN de WTTJ (public) et l'extracteur : ce qui est téléchargé, ce qui est lu."""
+    from oto_mcp import egress, file_extract
+
+    vus = {"get": [], "extract": []}
+    monkeypatch.setattr(egress, "check_url", lambda url, **kw: vus.setdefault("egress", url))
+    vus["reponse"] = _Telechargement(b"%PDF-1.4 cv")
+    monkeypatch.setattr("requests.get", lambda url, **kw: vus["get"].append(url)
+                        or vus["reponse"])
+    vus["extraction"] = file_extract.Extraction(file_extract.OK, text="Infirmière, 8 ans",
+                                                pages=2)
+    monkeypatch.setattr(file_extract, "extract", lambda data, filename, mime: vus[
+        "extract"].append((data, filename, mime)) or vus["extraction"])
+    return vus
+
+
+def test_candidate_resume_rend_le_texte_du_cv(client, appelant, cdn):
+    url = "https://cdn.example.test/cv%20jane.pdf?Expires=1"
+    client.get_candidate.return_value = {"reference": "C1", "resume_url": url}
+    out = _tool("wttj_candidate")(op="resume", candidate_reference="C1")
+    assert out["resume"] == {"format": "pdf", "text": "Infirmière, 8 ans", "pages": 2,
+                             "truncated": False}
+    assert cdn["get"] == [url] and cdn["egress"] == url
+    assert cdn["extract"] == [(b"%PDF-1.4 cv", "cv jane.pdf", "application/pdf")]
+    assert out["resume_link"].startswith("https://oto.example.test/api/wttj/resume/")
+    _no_write(client)
+
+
+def test_un_cv_scanne_dit_qu_il_n_a_pas_de_texte(client, appelant, cdn):
+    from oto_mcp import file_extract
+
+    client.get_candidate.return_value = {"reference": "C1",
+                                         "resume_url": "https://cdn.example.test/cv.pdf"}
+    cdn["extraction"] = file_extract.Extraction(file_extract.EMPTY, detail="aucun texte")
+    out = _tool("wttj_candidate")(op="resume", candidate_reference="C1")
+    assert "text" not in out["resume"] and "aucun texte" in out["resume"]["text_unavailable"]
+    assert out["resume_link"]
+
+
+@pytest.mark.parametrize("candidat,motif", [
+    ({"reference": "C1", "resume_url": None}, "no resume"),
+    ({"reference": "C1", "resume_url": "http://cdn.example.test/cv.pdf"}, "unusable")])
+def test_candidate_resume_refuse_sans_cv_utilisable(client, cdn, candidat, motif):
+    client.get_candidate.return_value = candidat
+    with pytest.raises(McpError, match=motif):
+        _tool("wttj_candidate")(op="resume", candidate_reference="C1")
+    assert cdn["get"] == []
+
+
+def test_un_cv_trop_gros_n_est_pas_lu(client, appelant, cdn, monkeypatch):
+    from oto_mcp.tools import wttj_resume
+
+    monkeypatch.setattr(wttj_resume, "RESUME_MAX_BYTES", 4)
+    client.get_candidate.return_value = {"reference": "C1",
+                                         "resume_url": "https://cdn.example.test/cv.pdf"}
+    with pytest.raises(McpError, match="10 MB"):
+        _tool("wttj_candidate")(op="resume", candidate_reference="C1")
+    assert cdn["extract"] == []
+
+
+def test_candidate_resume_ne_prend_que_la_reference(client):
+    with pytest.raises(McpError, match="does not use job_reference"):
+        _tool("wttj_candidate")(op="resume", candidate_reference="C1", job_reference="J1")
+    client.get_candidate.assert_not_called()
+
+
+def test_une_liste_laisse_les_valeurs_vides(client):
+    client.list_candidates.return_value = [
+        {"reference": "C1", "stage_id": 3, "firstname": "Jane", "media_github": None,
+         "media_dribbble": "", "tags": [], "profile": {"city": "Lyon", "address": None}}]
+    rows = _tool("wttj_candidate")(job_reference="J1")["candidates"]
+    assert rows == [{"reference": "C1", "stage_id": 3, "firstname": "Jane",
+                     "profile": {"city": "Lyon"}, "cover_letter_length": 0}]
+    brut = _tool("wttj_candidate")(job_reference="J1", fields=["*"])["candidates"]
+    assert brut[0]["media_github"] is None, "fields=['*'] rend la ligne entière"
 
 
 # --- commentaire, mouvements ---------------------------------------------------

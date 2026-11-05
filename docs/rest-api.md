@@ -889,7 +889,7 @@ d'org, ou qui une règle met à `manage`) — sinon `403 insufficient_level`, qu
 | `PUT …/{instance_id}/rules` | `connectors.instances.rules.set` | pose ou remplace la règle d'UN sujet (`to` : e-mail ou sub d'un membre, ou e-mail du compte oto d'une personne HORS de l'org ; `to_group` : une équipe de l'org du compte ; ou `to_org: true`) à `level` ; `services` sur un compte Google ou Microsoft seulement |
 | `DELETE …/{instance_id}/rules` | `connectors.instances.rules.remove` | retire la règle d'un sujet (corps JSON, même forme) |
 | `GET …/{instance_id}/share-events` | `connectors.instances.share_events` | le journal des règles, le plus récent d'abord (`limit`, 1 à 500) ; `outside_org` dit si le sujet est hors de l'org ; `subject_label` et `actor_label` les nomment (e-mail, nom d'équipe, `the whole org`) |
-| `POST …/{instance_id}/transfer` | `connectors.instances.transfer` | change le propriétaire (`to`, `to_group` ou `to_org: true`, dans l'org du compte) ; le compte garde son id, son secret et ses règles, sauf la règle d'org et celle qui nommerait son nouveau titulaire s'il devient personnel |
+| `POST …/{instance_id}/transfer` | `connectors.instances.transfer` | change le propriétaire (`to`, `to_group` ou `to_org: true`, dans l'org du compte) ; le compte garde son id, son secret et ses règles, sauf, s'il devient personnel, la règle d'org, celle qui nommerait son nouveau titulaire et toute règle `manage` (chaque retrait journalisé) |
 
 Transfert : l'appelant gère le compte avant ; vers une équipe ou l'org, il le gère encore
 après (sinon `403 insufficient_level`) ; le donner à une personne de l'org est réservé à
@@ -903,9 +903,9 @@ Bornes : seul un admin de l'org donne `manage` ; un chef d'équipe donne au plus
 (`403 level_not_grantable`). Une règle ne nomme jamais le titulaire d'un compte
 personnel (`400 invalid_arguments`, `details.reason = "owner_subject"`).
 
-Une règle `manage` ne se change ni ne se retire que par un admin de l'org
-(`403 level_not_grantable`, propriétaire compris) ; sur un compte personnel, qu'aucun admin
-ne gère, le refus le dit.
+Une règle `manage` se pose et se change par un admin de l'org seulement ; elle se retire par
+un admin de l'org ou, sur un compte personnel (qu'aucun admin ne gère), par son
+propriétaire. Tout autre geste : `403 level_not_grantable`, le message dit qui peut.
 
 Hors org (D1) : une règle peut nommer une PERSONNE hors de l'org du compte, désignée par
 l'e-mail d'un compte oto existant (jamais une équipe ni une org d'ailleurs) ; une règle

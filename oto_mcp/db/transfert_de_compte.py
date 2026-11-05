@@ -5,9 +5,11 @@ Le compte reste le même objet : sa ligne de coffre change d'entité (`entity_ty
 `entity_id`) EN PLACE — le secret chiffré ne sort jamais du coffre, n'est ni lu ni copié —,
 son instance garde son identifiant, ses règles et son journal. Dans la même transaction :
 
-- les règles qui n'ont plus de sens tombent (journalisées `removed` par le déclencheur) :
-  sur un compte devenu personnel, la règle d'org et celle qui nommerait son nouveau
-  propriétaire (`owner_subject`) ;
+- les règles qui n'ont plus de sens tombent (journalisées `removed` par le déclencheur,
+  avec l'acteur du transfert) : sur un compte devenu personnel, la règle d'org, celle qui
+  nommerait son nouveau propriétaire (`owner_subject`) et toute règle `manage` — un
+  `manage` est l'acte d'un admin d'org, et aucun admin ne gère un compte personnel : la
+  laisser, c'était la rendre irrévocable par d'autres que son propriétaire ;
 - le défaut porté par la ligne tombe si le nouveau palier a déjà le sien ;
 - le journal des partages note le transfert (`action='transferred'`, le nouveau
   propriétaire en sujet, l'ancien en `owner_before`).
@@ -90,12 +92,12 @@ def transferer(instance_id: int, *, vers_type: str, vers_id: str, acteur: str) -
                     f"the new owner already has a `{inst['connector']}` account named "
                     f"“{inst['account'] or '(default)'}”: rename one of them first.")
             # Les règles qui n'ont plus de sens, avant de bouger l'instance (la garde
-            # `owner_subject` refuserait sinon le nouvel état).
+            # `owner_subject` refuserait sinon le nouvel état) ; les `manage` aussi.
             retirees = 0
             if vers_type == "member":
                 cur = conn.execute(
                     "DELETE FROM connector_account_rules WHERE instance_id = %s "
-                    "AND (subject_org OR subject_user = %s)",
+                    "AND (subject_org OR subject_user = %s OR level = 'manage')",
                     (inst["id"], _sujet(vers_type, vers_id)[1]))
                 retirees = cur.rowcount or 0
             conn.execute(

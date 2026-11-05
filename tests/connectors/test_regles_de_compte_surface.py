@@ -199,21 +199,45 @@ def test_un_sub_hors_org_sans_regle_reste_refuse_sans_rien_dire(banc):
     assert banc.poses == []
 
 
-def test_le_titulaire_ne_retire_pas_la_regle_manage_et_le_refus_dit_pourquoi(banc):
-    """A `manage` rule kept on a personal account (the account was given to a person):
-    its owner, not an admin, neither removes nor lowers it, and no admin manages a
-    personal account — the refusal says so instead of sending to someone who cannot."""
+def test_le_titulaire_d_un_compte_personnel_retire_une_regle_manage(banc):
+    """No admin manages a personal account: its owner removes a `manage` rule kept on
+    it — the one exception to `_plafond`, for the removal only."""
     banc.compte = _compte(regles=[access.Regle(user=MEMBRE, group=None, org=False,
                                                level="manage")])
-    for geste, appel in (
-            ("remove", lambda: sharing._remove_rule(
-                _ctx(TITULAIRE), sharing.RuleSubjectInput(instance_id=12, to=MEMBRE))),
-            ("change", lambda: _poser(TITULAIRE, to=MEMBRE, level="read"))):
-        e = _refus(appel)
-        assert (e.status, e.code) == (403, "level_not_grantable")
-        assert f"cannot {geste} a rule at `manage`" in str(e)
-        assert "an admin does not manage a personal account" in str(e)
-    assert banc.retraits == [] and banc.poses == []
+    sharing._remove_rule(_ctx(TITULAIRE), sharing.RuleSubjectInput(instance_id=12, to=MEMBRE))
+    assert banc.retraits == [{"subject_user": MEMBRE, "acteur": TITULAIRE}]
+
+
+def test_le_titulaire_ne_change_ni_ne_pose_une_regle_manage(banc):
+    banc.compte = _compte(regles=[access.Regle(user=MEMBRE, group=None, org=False,
+                                               level="manage")])
+    e = _refus(_poser, TITULAIRE, to=MEMBRE, level="read")
+    assert (e.status, e.code) == (403, "level_not_grantable")
+    assert "cannot change a rule at `manage`" in str(e)
+    assert "you can remove this rule, then set a new one" in str(e)
+    e = _refus(_poser, TITULAIRE, to=CHEF, level="manage")
+    assert e.code == "level_not_grantable"
+    assert "only an admin of the org grants `manage`" in str(e)
+    assert banc.poses == [] and banc.retraits == []
+
+
+def test_qui_n_est_pas_titulaire_ne_retire_pas_une_regle_manage(banc):
+    """At `sensitive`, a non-owner does not even manage the account; one a `manage` rule
+    empowers still cannot remove another `manage` rule — only the owner can."""
+    banc.compte = _compte(regles=[
+        access.Regle(user=MEMBRE, group=None, org=False, level="manage"),
+        access.Regle(user=CHEF, group=None, org=False, level="sensitive")])
+    e = _refus(sharing._remove_rule, _ctx(CHEF),
+               sharing.RuleSubjectInput(instance_id=12, to=MEMBRE))
+    assert (e.status, e.code) == (403, "insufficient_level")
+    banc.compte = _compte(regles=[
+        access.Regle(user=MEMBRE, group=None, org=False, level="manage"),
+        access.Regle(user=CHEF, group=None, org=False, level="manage")])
+    e = _refus(sharing._remove_rule, _ctx(CHEF),
+               sharing.RuleSubjectInput(instance_id=12, to=MEMBRE))
+    assert (e.status, e.code) == (403, "level_not_grantable")
+    assert "only its owner, titulaire, removes a `manage` rule" in str(e)
+    assert banc.retraits == []
 
 
 def test_sur_un_compte_d_org_le_refus_manage_nomme_l_admin(banc, monkeypatch):

@@ -100,6 +100,49 @@ def test_d_org_a_personne_garde_secret_et_id_et_nettoie_les_regles(monde):
     ]
 
 
+def test_vers_une_personne_la_regle_manage_tombe_et_se_journalise(monde):
+    """Given to a person, the account loses its `manage` rules: no admin manages a
+    personal account. Each removal is journaled under the transfer's actor."""
+    from oto_mcp.db import regles_de_comptes, transfert_de_compte
+    s = monde
+    inst = _poser("org", s["org"], "zoho")
+    regles_de_comptes.poser_regle(s["org"], inst, subject_user=s["pair"], level="manage",
+                                  acteur="admin")
+    vers = f"{s['org']}:{s['proprio']}"
+    res = transfert_de_compte.transferer(inst, vers_type="member", vers_id=vers,
+                                         acteur="admin")
+    assert res["rules_removed"] == 1
+    assert regles_de_comptes.regles_du_compte(inst) == []
+    assert _journal(inst)[-2:] == [
+        ("removed", "user", s["pair"], None, "admin"),
+        ("transferred", "user", s["proprio"], f"org:{s['org']}", "admin"),
+    ]
+
+
+def test_vers_une_equipe_la_regle_manage_reste(monde):
+    from oto_mcp.db import regles_de_comptes, transfert_de_compte
+    s = monde
+    inst = _poser("org", s["org"], "zoho")
+    regles_de_comptes.poser_regle(s["org"], inst, subject_user=s["pair"], level="manage",
+                                  acteur="admin")
+    res = transfert_de_compte.transferer(inst, vers_type="group", vers_id=str(s["eq"]),
+                                         acteur="admin")
+    assert res["rules_removed"] == 0
+    assert [(r["subject_user"], r["level"])
+            for r in regles_de_comptes.regles_du_compte(inst)] == [(s["pair"], "manage")]
+
+
+def test_le_retrait_d_une_regle_manage_par_le_titulaire_se_journalise(monde):
+    from oto_mcp.db import regles_de_comptes
+    s = monde
+    de = f"{s['org']}:{s['proprio']}"
+    inst = _poser("member", de, "attio")
+    regles_de_comptes.poser_regle(s["org"], inst, subject_user=s["pair"], level="manage",
+                                  acteur="admin")
+    assert regles_de_comptes.retirer_regle(inst, subject_user=s["pair"], acteur=s["proprio"])
+    assert _journal(inst)[-1] == ("removed", "user", s["pair"], None, s["proprio"])
+
+
 def test_de_personne_a_equipe_garde_les_regles(monde):
     from oto_mcp.db import regles_de_comptes, transfert_de_compte
     s = monde

@@ -126,7 +126,8 @@ CAPABILITIES += [
                      "must still manage it afterwards; giving it to a person is reserved to "
                      "an org admin (the person then manages it). The "
                      "account keeps its id, its secret and its rules — except, when it "
-                     "becomes personal, the org's rule and the rule naming its new owner. "
+                     "becomes personal, the org's rule, the rule naming its new owner and "
+                     "every `manage` rule (each removal journaled). "
                      "Journaled."),
         rest=RestBinding("POST", sharing._ROUTE + "/transfer"),
     ),

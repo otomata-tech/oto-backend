@@ -186,13 +186,14 @@ def _refuser_au_dessus(appelant, compte, level: str, geste: str) -> None:
         qui = f"as a team lead you grant at most `{plafond}`"
     elif geste == "set":
         qui = "only an admin of the org grants `manage`"
+    elif compte.proprietaire == appelant.sub:
+        # Only `change` reaches here: the owner REMOVES a `manage` rule (`_retirable`).
+        qui = ("only an admin of the org grants `manage`; as the account's owner you can "
+               "remove this rule, then set a new one at the level you want")
     elif compte.proprietaire is not None:
-        # A `manage` rule is an org admin's act (`_plafond`), and no admin manages a
-        # personal account (`niveau`): on one — a rule kept when an org or team account
-        # was given to a person — nobody can lower or withdraw it. Said as it is.
-        qui = ("a `manage` rule is changed or removed only by an admin of the org, and "
-               "an admin does not manage a personal account — nobody can do it through "
-               "the rules today: report it to the platform")
+        # No admin manages a personal account (`niveau`): its owner alone removes it.
+        qui = (f"on a personal account only its owner, "
+               f"{access.libelle_de_personne(compte.proprietaire)}, removes a `manage` rule")
     else:
         nom = compte.org_nom or (org_store.get_org(compte.org_id) or {}).get("name")
         qui = (f"a `manage` rule is changed or removed only by an admin of the org "
@@ -382,11 +383,21 @@ def _set_rule(ctx: ResolvedCtx, inp: SetRuleInput) -> dict:
     return _etat(appelant, compte)
 
 
+def _retirable_par_le_proprietaire(appelant, compte, regle) -> bool:
+    """The owner of a PERSONAL account removes a `manage` rule set on it — the one
+    exception to `_plafond`, for the removal only: no admin manages a personal account,
+    so nobody else could. Setting or changing a rule to or from `manage` stays an
+    admin's act."""
+    return (compte.owner_type == "member" and compte.proprietaire == appelant.sub
+            and regle.level == "manage")
+
+
 def _remove_rule(ctx: ResolvedCtx, inp: RuleSubjectInput) -> dict:
     appelant, compte = gere(ctx, inp.instance_id)
     sujet = _sujet(inp, compte)
     actuelle = _regle_du_sujet(compte, sujet)
-    if actuelle is not None:
+    if actuelle is not None and not _retirable_par_le_proprietaire(appelant, compte,
+                                                                   actuelle):
         _refuser_au_dessus(appelant, compte, actuelle.level, "remove")
     if not regles_de_comptes.retirer_regle(compte.instance_id, **sujet, acteur=ctx.sub):
         raise AuthzDenied(404, "no_rule",
@@ -445,8 +456,9 @@ _E_SUJET = (DeclaredError(400, "one_subject", "not exactly one of `to`, `to_grou
                           "the rule names the owner of the personal account "
                           "(`details.reason = owner_subject`)"),
             DeclaredError(403, "level_not_grantable",
-                          "`manage` granted by someone other than an org admin, or above "
-                          "`write` by a team lead"))
+                          "`manage` granted, changed or removed by someone other than an "
+                          "org admin (the owner of a personal account may remove one), or "
+                          "above `write` by a team lead"))
 
 CAPABILITIES += [
     Capability(
@@ -487,7 +499,9 @@ CAPABILITIES += [
             DeclaredError(404, "no_rule", "the subject has no rule on this account"),),
         description=("Remove the rule of ONE subject on an account you manage (`to`, "
                      "`to_group` or `to_org=true`): the subject falls back to the default "
-                     "level. Journaled. Returns the account's rules afterwards."),
+                     "level. A `manage` rule is removed by an org admin, or by the owner "
+                     "of a personal account. Journaled. Returns the account's rules "
+                     "afterwards."),
         rest=RestBinding("DELETE", _ROUTE + "/rules", reads_body=True),
     ),
     Capability(

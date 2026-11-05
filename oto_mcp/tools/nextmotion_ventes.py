@@ -1,7 +1,7 @@
 """Nextmotion — sales: quotes, invoices (and credit notes), payments, revenue
 statistics, and a patient's financial totals.
 
-Sibling module of `nextmotion.py` (cf. `Connector.modules`). Five tools, because their
+Sibling module of `nextmotion.py` (cf. `Connector.modules`). Six tools, because their
 parameters do not overlap (ADR 0047):
 
 - `nextmotion_quote` — list | get | update | delete | validate. A quote is only CREATED
@@ -17,6 +17,10 @@ parameters do not overlap (ADR 0047):
 - `nextmotion_statistics` — `kind` x a period: clinic aggregates, no
   patient. `meta` (free-form object, not described by the spec) and `label_field` (undocumented
   parameter, which could change what the labels name) are not served.
+- `nextmotion_package_usage` — the sessions of ONE patient's packages: how many were
+  consumed, counted against which quote or invoice, next to the quantities sold.
+  Administrative counters only (ids, quantities, dates, catalogue names): the care
+  rows are reduced by the client itself, no note, zone or free text ever leaves it.
 - `nextmotion_patient_stats` — the totals of ONE patient designated by their id: quotes,
   invoiced, paid, credit notes, refunds, first and last visit dates. Nothing that
   identifies them; neither the opening date of their file nor their photo activity (the life of the
@@ -42,6 +46,69 @@ from .nextmotion_socle import (_CHART, _CREDIT_NOTE, _PATIENT_STATS, _PAYMENT, _
 _payment = _shape(_PAYMENT)
 _chart = _shape(_CHART)
 _patient_stats = _shape(_PATIENT_STATS)
+
+#: The patient's appointments read to count package sessions: one call per
+#: appointment, so a bound — said in the answer when reached.
+_USAGE_MAX_APPOINTMENTS = 300
+_USAGE_NOTE = (
+    "consumed = sessions Nextmotion counted against this quote or invoice, by treatment "
+    "type and pricing. Nextmotion does not say which LINE a session decrements: compare "
+    "each group with the sold lines of the same document by their name. A group with "
+    "neither quote nor invoice was consumed outside any sale.")
+
+
+def _all_pages(fetch, cap: int) -> tuple:
+    """Every row of a paginated read, up to `cap`; (rows, truncated)."""
+    rows, offset = [], 0
+    while True:
+        env = _run(lambda: fetch(offset))
+        data = env.get("data") if isinstance(env, dict) else None
+        if not isinstance(data, list):
+            raise _bad("unexpected Nextmotion answer: no `data` list.")
+        rows += data
+        if len(rows) >= cap:
+            return rows[:cap], len(rows) > cap or env.get("next") is not None
+        if env.get("next") is None or not data:
+            return rows, False
+        offset += len(data)
+
+
+def _package_usage(c, clinic_id: str, patient_id: str) -> dict:
+    from oto.tools.nextmotion import BILLED_COUNT_FIELDS, consumed_by_billing
+
+    appointments, truncated = _all_pages(
+        lambda o: c.list_appointments(clinic_id, patient_id=patient_id, limit=100,
+                                      offset=o), _USAGE_MAX_APPOINTMENTS)
+    rows = []
+    for a in appointments:
+        got, _ = _all_pages(lambda o, i=a.get("id"): c.list_appointment_billed_counts(
+            i, limit=100, offset=o), 10_000)
+        # The client already cut each row down; cut again here, so that what this tool
+        # serves does not hang on a library promise alone.
+        rows += [{k: r.get(k) for k in BILLED_COUNT_FIELDS} for r in got
+                 if isinstance(r, dict)]
+    groups = _run(lambda: consumed_by_billing(rows))
+    names = {}
+    for t in {g["treatment_type"] for g in groups if g["treatment_type"]}:
+        env = _run(lambda t=t: c.get_treatment_type(t))
+        data = env.get("data") if isinstance(env, dict) else None
+        names[t] = data.get("name") if isinstance(data, dict) else None
+    sold = {}
+    for kind, key, read, shape, lines in (
+            ("invoice", "invoice", c.get_invoice, _invoice, "invoiced_treatments"),
+            ("quote", "quote", c.get_quote, _quote, "quoted_treatments")):
+        for doc_id in sorted({g[key] for g in groups if g[key]}):
+            doc = shape((_run(lambda d=doc_id: read(d)) or {}).get("data") or {})
+            sold[doc_id] = {
+                "kind": kind, "number": doc.get("number"), "status": doc.get("status"),
+                "issued_time": doc.get("issued_time"),
+                "lines": [{"name": li.get("name"), "quantity": li.get("quantity")}
+                          for li in doc.get(lines) or []]}
+    for g in groups:
+        g["treatment_type_name"] = names.get(g["treatment_type"])
+    return {"patient_id": patient_id, "appointments_read": len(appointments),
+            "truncated": truncated, "consumed": groups, "sold": sold,
+            "note": _USAGE_NOTE}
 
 def _invoice_of_credit_note(c, _, body):
     """The preview of a credit note: the invoice it points to, if it points to one."""
@@ -321,6 +388,33 @@ def register(mcp: FastMCP) -> None:
         data = env.get("data") if isinstance(env, dict) else None
         charts = data if isinstance(data, list) else [data] if data is not None else []
         return {"kind": kind, "charts": [_chart(ch) for ch in charts]}
+
+    @mcp.tool()
+    def nextmotion_package_usage(clinic_id: str, patient_id: str) -> dict:
+        """The sessions consumed from ONE patient's packages, next to what was sold.
+
+        Reads the patient's appointments (up to 300, `truncated` says when more exist)
+        and, for each, the sessions Nextmotion counted against a quote or an invoice;
+        adds them up by document, treatment type and pricing (`consumed`), and returns
+        the sold lines of each document (`sold`: number, status, lines with name and
+        quantity). Remaining = sold quantity of the matching line minus `consumed`.
+        To price a refund of a protocol started then abandoned.
+
+        Administrative counters only: ids, quantities, dates, catalogue names. The
+        care rows are cut down to them by the client — no practitioner's note, treated
+        zone, free text, consultation or consent ever leaves it.
+
+        ⚠️ Nextmotion does not say which line a session decrements: a group is
+        matched to a sold line of the same document by name (see `note`).
+
+        Args:
+            clinic_id: the clinic.
+            patient_id: the patient id, as served by appointments, quotes or invoices.
+        """
+        _need("get", clinic_id=clinic_id, patient_id=patient_id)
+        _uuid("get", "clinic_id", clinic_id)
+        _uuid("get", "patient_id", patient_id)
+        return _package_usage(_client(), clinic_id, patient_id)
 
     @mcp.tool()
     def nextmotion_patient_stats(patient_id: str) -> dict:

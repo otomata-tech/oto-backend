@@ -254,3 +254,63 @@ def test_les_ops_de_lieu_refusent_les_arguments_d_un_message(env):
         with pytest.raises(McpError, match="does not use"):
             _tool("teams")(op=op, **extra)
     assert env.jetons == []
+
+
+# --- images collées : listées par le message, vues par op=image ----------------------
+
+IMG_CHAT = "/chats/19:x@unq.gbl.spaces/messages/1700/hostedContents/aWQ9/$value"
+IMG_CANAL = "/teams/t1/channels/19:c@thread.tacv2/messages/1700/hostedContents/aWQ9/$value"
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+
+
+def test_un_message_nomme_ses_images_collees(env):
+    corps = {"contentType": "html",
+             "content": f'<p>Le blocage :</p><img src="https://graph.microsoft.com/v1.0{IMG_CHAT}">'}
+    env.client.list_chat_messages.return_value = [{**MSG, "body": corps}, MSG]
+    out = _tool("teams")(op="list", chat_id="19:x@unq.gbl.spaces")
+    assert out["messages"][0]["images"] == [IMG_CHAT]
+    assert out["messages"][0]["text"] == "Le blocage :"
+    assert "images" not in out["messages"][1]
+
+
+def test_une_image_de_conversation_se_voit(env):
+    from mcp.types import ImageContent
+
+    env.client.get_hosted_content.return_value = PNG
+    out = _tool("teams")(op="image", image=IMG_CHAT)
+    env.client.get_hosted_content.assert_called_once_with(IMG_CHAT)
+    texte, image = out.content
+    assert "png" in texte.text and isinstance(image, ImageContent)
+    assert image.mimeType == "image/png"
+
+
+def test_une_image_de_canal_passe_par_le_palier_admin(env):
+    env.client.get_hosted_content.return_value = PNG
+    with pytest.raises(McpError, match="admin's approval"):
+        _tool("teams")(op="image", image=IMG_CANAL)
+    env.client.get_hosted_content.assert_not_called()
+    env.meta = {"scopes": ADMIN}
+    _tool("teams")(op="image", image=IMG_CANAL)
+    env.client.get_hosted_content.assert_called_once_with(IMG_CANAL)
+
+
+def test_une_grosse_image_part_en_url(env, monkeypatch):
+    env.client.get_hosted_content.return_value = PNG + b"0" * (3 * 1024 * 1024)
+    vus = []
+    monkeypatch.setattr("oto_mcp.file_content.render_for_agent",
+                        lambda data, filename, mime, **kw: vus.append((filename, mime, kw))
+                        or {"encoding": "url", "url": "https://s3.example/x"})
+    out = _tool("teams")(op="image", image=IMG_CHAT)
+    assert out["image"]["url"] == "https://s3.example/x" and "3 MB" in out["note"]
+    assert vus[0][:2] == ("teams-image.png", "image/png") and vus[0][2]["prefix"] == "teams-images"
+
+
+@pytest.mark.parametrize("kw", [{"chat_id": "c"}, {"message_id": "m"}, {"full": True}])
+def test_op_image_refuse_le_reste(env, kw):
+    with pytest.raises(McpError):
+        _tool("teams")(op="image", image=IMG_CHAT, **kw)
+
+
+def test_image_hors_op_image_refusee(env):
+    with pytest.raises(McpError, match="image"):
+        _tool("teams")(op="chats", image=IMG_CHAT)

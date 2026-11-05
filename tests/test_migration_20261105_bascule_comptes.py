@@ -146,3 +146,81 @@ def test_une_regle_manuelle_n_est_pas_touchee_par_la_reprise(base):
                                   acteur="proprio")
     command.upgrade(_alembic(), _REVISION)
     assert ("attio", None, None, True, "read", None, "manuelle") in _regles(dsn)
+
+
+def _migration():
+    import importlib.util
+    chemin = (RACINE / "oto_mcp" / "db" / "migrations" / "versions"
+              / f"{_REVISION}.py")
+    spec = importlib.util.spec_from_file_location("bascule_comptes", chemin)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_l_usage_d_un_compte_d_equipe_par_un_non_membre_devient_une_regle(base):
+    """D2 : l'héritage d'équipe retiré, la reprise pose une règle `sensitive` (`reprise`)
+    à qui a appelé le compte d'équipe dans les 30 derniers jours sans en être membre —
+    pas à qui ne l'a pas appelé depuis, ni à qui est sorti de l'org, ni à un membre de
+    l'équipe. Rejouée, elle donne le même état."""
+    import psycopg
+    from alembic import command
+    from oto_mcp import db
+    dsn, org, equipe = base["dsn"], base["org"], base["equipe"]
+    command.downgrade(_alembic(), _PRECEDENTE)
+    for sub in ("appelant", "ancien", "parti", "coequipier"):
+        db.upsert_user(sub)
+    with psycopg.connect(dsn, autocommit=True) as c:
+        for sub in ("appelant", "ancien", "coequipier"):
+            c.execute("INSERT INTO org_members (org_id, sub) VALUES (%s, %s)", (org, sub))
+        c.execute("INSERT INTO org_member_events (org_id, sub, action) "
+                  "VALUES (%s, 'parti', 'removed')", (org,))
+        c.execute("INSERT INTO org_group_members (group_id, sub) VALUES (%s, 'coequipier')",
+                  (equipe,))
+        iid = c.execute("INSERT INTO connector_instances (connector, owner_type, owner_id, "
+                        "account) VALUES ('hubspot', 'group', %s, '') RETURNING id",
+                        (str(equipe),)).fetchone()[0]
+        appels = [("appelant", f"inst:{iid}", "1 day"),
+                  ("appelant", f"group:{equipe}:hubspot", "2 days"),
+                  ("ancien", f"inst:{iid}", "40 days"),
+                  ("parti", f"inst:{iid}", "1 day"),
+                  ("coequipier", f"inst:{iid}", "1 day")]
+        for sub, ref, age in appels:
+            c.execute("INSERT INTO tool_calls (sub, tool, args, org_id, created_at) "
+                      "VALUES (%s, 'hubspot_contact', %s, %s, NOW() - %s::interval)",
+                      (sub, json.dumps({"instance": ref}), org, age))
+
+    def _celles_du_compte():
+        return _un(dsn, "SELECT subject_user, subject_group, subject_org, level, origine "
+                        "FROM connector_account_rules WHERE instance_id = %s ORDER BY 1",
+                   (iid,))
+    attendues = [("appelant", None, False, "sensitive", "reprise")]
+    migration = _migration()
+    from psycopg.rows import dict_row
+    with psycopg.connect(dsn, row_factory=dict_row) as c:
+        premier = migration.reprendre_les_prets(c, retirer_perimees=False)
+        second = migration.reprendre_les_prets(c, retirer_perimees=False)
+        c.commit()
+    assert premier["usage_d_equipe"] == {"personne_x_compte": 1, "appels": 2}
+    assert second["posees"] == second["mises_a_jour"] == second["retirees"] == 0
+    assert _celles_du_compte() == attendues
+    command.upgrade(_alembic(), _REVISION)
+    assert _celles_du_compte() == attendues
+
+
+def test_la_reprise_pose_le_niveau_le_plus_haut_qu_un_appel_exerce(base):
+    """C : après la reprise, aucun couple personne × compte n'a un niveau inférieur à
+    celui qu'il exerçait — chaque règle reprise est au niveau le plus haut qu'une classe
+    d'effet exige, et chaque compte d'org vivant porte sa règle d'org."""
+    from oto_mcp.access.niveaux import NIVEAU_DE_LA_CLASSE, NIVEAUX
+    from oto_mcp.tools import effets
+    migration = _migration()
+    plus_haut = max((NIVEAU_DE_LA_CLASSE[c] for c in effets.CLASSES), key=NIVEAUX.index)
+    assert migration.NIVEAU_REPRIS == plus_haut == "sensitive"
+    dsn = base["dsn"]
+    assert {r[0] for r in _un(dsn, "SELECT DISTINCT level FROM connector_account_rules "
+                                   "WHERE origine = 'reprise'")} == {"sensitive"}
+    assert _un(dsn, "SELECT count(*) FROM connector_instances i WHERE i.owner_type = 'org' "
+                    "AND i.revoked_at IS NULL AND NOT EXISTS (SELECT 1 FROM "
+                    "connector_account_rules r WHERE r.instance_id = i.id "
+                    "AND r.subject_org)")[0][0] == 0

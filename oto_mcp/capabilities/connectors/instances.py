@@ -491,7 +491,8 @@ CAPABILITIES += [
             "person's account of your org is not listed: name it (`_account=`) to use it, "
             "at the level its rules give you. An account of ANOTHER org opened to you by a "
             "rule is listed with `lent_by_org` (that org's name) and `your_level`, your own "
-            "key in another org with `elsewhere_org`: both serve only named. Contrast with "
+            "key in another org with `elsewhere_org`: both serve when named, and unnamed "
+            "when no account of your org does. Contrast with "
             "oto_identity (operable accounts of ONE connector) and oto_connector op=list "
             "(catalog of TYPES)."),
         rest=RestBinding("GET", "/api/me/connector-instances"),

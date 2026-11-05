@@ -347,7 +347,8 @@ CAPABILITIES += [
             "`to_group` or `to_org=true` of its org; towards a team or the org you must "
             "still manage it afterwards, only an org admin gives it to a person; it keeps "
             "its id and secret). An account of another org opened to you is listed with "
-            "`lent_by_org` and `your_level`, and serves only named. "
+            "`lent_by_org` and `your_level`; it serves unnamed when no account of your "
+            "org does, and named always. "
             "Contrast with oto_identity (operable "
             "accounts of ONE connector) and oto_connector op=list (catalog of TYPES)."),
         mcp="oto_instance",

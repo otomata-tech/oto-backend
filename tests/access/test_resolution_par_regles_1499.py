@@ -37,10 +37,12 @@ class _Monde:
         self.admins: set = set()
         self.equipes_de: dict = {MOI: {EQUIPE}}
         self.defaut_par: dict = {}
+        self.pose_le: dict = {}
 
     def poser(self, etype, eid, connector, account="", *, regles=(), defaut=False,
-              defaut_par=None):
+              defaut_par=None, pose_le=None):
         self.coffre[(etype, str(eid), connector, account)] = f"K-{etype}-{eid}-{account}"
+        self.pose_le[(etype, str(eid), account)] = pose_le
         self.regles[(etype, str(eid), account)] = tuple(regles)
         if defaut:
             self.defauts.add((etype, str(eid), account))
@@ -58,7 +60,8 @@ class _Monde:
                 owner_id=eid, connector=porteur, account=account, org_id=org,
                 regles=self.regles.get((etype, eid, account), ()),
                 default_par=self.defaut_par.get((etype, eid, account)),
-                org_nom={ORG: "acme", AUTRE_ORG: "prêteuse"}.get(org))
+                org_nom={ORG: "acme", AUTRE_ORG: "prêteuse"}.get(org),
+                pose_le=self.pose_le.get((etype, eid, account)))
         return out
 
     def hors_org(self, connector, org, sub, account=None):
@@ -263,17 +266,85 @@ def test_d1_le_compte_prete_hors_org_sert_nomme_au_niveau_de_la_regle(monde, app
     assert d["managed_by"] == "whoever manages it in the org prêteuse"
 
 
-def test_d1_sans_nom_jamais_mais_liste_parmi_les_candidats(monde, appel):
+def test_etape5_le_compte_prete_hors_org_sert_sans_nom_faute_de_local(monde, appel):
+    """Étape 5 : rien de local aux étapes 2 à 4 — le compte qu'une règle d'une autre org
+    ouvre sert SANS NOM, et la trace de l'appel dit l'org qui le prête (l'écho de la
+    réponse : `lent_by_org`)."""
     monde.poser("member", f"{AUTRE_ORG}:{COLLEGUE}", "zoho", "sa-boite",
                 regles=[_regle(user=MOI, level="sensitive")])
     appel("lire")
+    toks = session_org.set_call_trace({})
+    try:
+        assert _servi() == ("member", f"{AUTRE_ORG}:{COLLEGUE}", "sa-boite")
+        assert session_org.current_call_trace()["compte_d_une_autre_org"] == {
+            "org": "prêteuse", "level": "sensitive", "own": False}
+    finally:
+        session_org.reset_call_trace(toks)
+
+
+def test_etape5_un_compte_local_passe_devant(monde, appel):
+    monde.poser("member", f"{AUTRE_ORG}:{COLLEGUE}", "zoho", "sa-boite",
+                regles=[_regle(user=MOI, level="sensitive")])
+    monde.poser("org", ORG, "zoho", "locale")
+    appel("lire")
+    assert _servi() == ("org", str(ORG), "locale")
+
+
+def test_etape5_sa_propre_cle_passe_devant_le_compte_prete(monde, appel):
+    """Plusieurs candidats d'ailleurs : pas d'ambiguïté. Sa propre clé d'abord, même
+    plus ancienne que le compte prêté."""
+    monde.poser("member", f"{AUTRE_ORG}:{COLLEGUE}", "zoho", "sa-boite",
+                regles=[_regle(user=MOI, level="sensitive")], pose_le="2026-11-04")
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle", pose_le="2026-01-01")
+    appel("lire")
+    toks = session_org.set_call_trace({})
+    try:
+        assert _servi() == ("member", f"{AUTRE_ORG}:{MOI}", "ma-cle")
+        assert session_org.current_call_trace()["compte_d_une_autre_org"]["own"] is True
+    finally:
+        session_org.reset_call_trace(toks)
+
+
+def test_etape5_de_deux_comptes_pretes_le_plus_recent_sert(monde, appel):
+    monde.poser("member", f"{AUTRE_ORG}:{COLLEGUE}", "zoho", "ancien",
+                regles=[_regle(user=MOI, level="sensitive")], pose_le="2026-03-01")
+    monde.poser("org", AUTRE_ORG, "zoho", "recent",
+                regles=[_regle(user=MOI, level="sensitive")], pose_le="2026-10-01")
+    appel("lire")
+    toks = session_org.set_call_trace({})
+    try:
+        assert _servi() == ("org", str(AUTRE_ORG), "recent")
+        assert session_org.current_call_trace()["compte_d_une_autre_org"] == {
+            "org": "prêteuse", "level": "sensitive", "own": False}
+    finally:
+        session_org.reset_call_trace(toks)
+
+
+def test_172_de_deux_cles_ailleurs_la_plus_recente_sert(monde, monkeypatch):
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "vieille", pose_le="2026-02-01")
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "neuve", pose_le="2026-09-01")
+    assert _servi() == ("member", f"{AUTRE_ORG}:{MOI}", "neuve")
+
+
+def test_etape5_sous_le_niveau_il_ne_sert_pas_et_reste_a_nommer(monde, appel):
+    monde.poser("member", f"{AUTRE_ORG}:{COLLEGUE}", "zoho", "sa-boite",
+                regles=[_regle(user=MOI, level="read")])
+    appel("ecrire")
     with pytest.raises(access.CredentialUnavailable) as e:
         _servi()
-    assert "`sa-boite` lent by prêteuse, level sensitive" in e.value.error.message
+    assert "Accounts of other orgs you can name: `sa-boite` lent by prêteuse, level " \
+        "read" in e.value.error.message
     assert e.value.error.data["to_name"][0]["lent_by_org"] == "prêteuse"
-    # Avec deux comptes d'org ambigus, le refus le liste aussi.
+
+
+def test_etape5_le_local_ambigu_ne_passe_pas_la_main_a_l_etape5(monde, appel):
+    """Deux comptes d'org sans défaut : refus d'ambiguïté qui liste le compte prêté —
+    l'étape 5 ne tranche pas une ambiguïté locale."""
+    monde.poser("member", f"{AUTRE_ORG}:{COLLEGUE}", "zoho", "sa-boite",
+                regles=[_regle(user=MOI, level="sensitive")])
     monde.poser("org", ORG, "zoho", "fr")
     monde.poser("org", ORG, "zoho", "us")
+    appel("lire")
     with pytest.raises(access.CompteAmbigu) as e:
         _servi()
     assert [c["label"] for c in e.value.error.data["to_name"]] == ["sa-boite"]
@@ -300,14 +371,28 @@ def test_172_sa_cle_d_une_autre_org_sert_nommee(monde):
     assert _servi(account="ma-cle") == ("member", f"{AUTRE_ORG}:{MOI}", "ma-cle")
 
 
-def test_172_sans_nom_refusee_avec_le_geste(monde):
+def test_172_sa_cle_d_une_autre_org_sert_sans_nom_faute_de_local(monde):
     monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle")
-    with pytest.raises(access.CredentialUnavailable) as e:
+    toks = session_org.set_call_trace({})
+    try:
+        assert _servi() == ("member", f"{AUTRE_ORG}:{MOI}", "ma-cle")
+        assert session_org.current_call_trace()["compte_d_une_autre_org"]["own"] is True
+    finally:
+        session_org.reset_call_trace(toks)
+
+
+def test_172_payfit_sa_cle_d_une_autre_org_sert_sans_nom(monde):
+    """Un connecteur mono-compte hors `personal_cross_org` (payfit) : couvert aussi."""
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "payfit", "")
+    assert _servi("payfit") == ("member", f"{AUTRE_ORG}:{MOI}", "")
+
+
+def test_172_la_politique_cle_perso_interdite_l_ecarte(monde, monkeypatch):
+    from oto_mcp.connectors import cle_perso
+    monkeypatch.setattr(cle_perso, "interdite", lambda org, connector: org == ORG)
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle")
+    with pytest.raises(cle_perso.ClePersoInterdite):
         _servi()
-    m = e.value.error.message
-    assert "your own account `ma-cle` in the org prêteuse" in m
-    assert "name it, or set the key in this org" in m
-    assert e.value.error.data["to_name"][0]["your_account_in_org"] == "prêteuse"
 
 
 def test_d2_un_compte_d_equipe_ne_sert_pas_a_un_non_membre(monde):
@@ -352,7 +437,8 @@ def test_d3_un_defaut_sous_le_niveau_ne_tranche_pas(monde, appel):
     """Le défaut ne départage que les comptes au niveau exigé : sous ce niveau, il ne
     sert pas, et l'autre compte (seul au niveau) sert."""
     monde.poser("org", ORG, "zoho", "fr", regles=[_regle(org=True, level="sensitive")])
-    monde.poser("org", ORG, "zoho", "us", defaut=True)
+    monde.poser("org", ORG, "zoho", "us", defaut=True,
+                regles=[_regle(org=True, level="read")])     # sous le niveau, explicite
     appel("envoyer")
     assert _servi() == ("org", str(ORG), "fr")
 
@@ -373,8 +459,12 @@ def test_oto_context_dit_les_comptes_a_nommer_et_les_defauts(monde, monkeypatch)
          "default_par": "l_admin", "default_le": "2026-11-04T10:00:00+00:00"}])
     vu = access.comptes_du_contexte(MOI, ORG, EQUIPE)
     assert sorted((c["label"], c.get("lent_by_org"), c.get("your_account_in_org"),
-                   c["level"]) for c in vu["to_name"]) == [
-        ("ma-cle", None, "prêteuse", "manage"), ("sa-boite", "prêteuse", None, "read")]
+                   c["level"], c["serves_unnamed"]) for c in vu["to_name"]) == [
+        ("ma-cle", None, "prêteuse", "manage", True),     # sa clé passe devant
+        ("sa-boite", "prêteuse", None, "read", False)]
+    monde.coffre.pop(("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle"))
+    assert [c["serves_unnamed"] for c in access.comptes_du_contexte(
+        MOI, ORG, EQUIPE)["to_name"]] == [True]
     assert vu["defaults"] == [{"step": "org", "connector": "zoho", "account": "us",
                                "set_by": "l_admin@x.test",
                                "set_at": "2026-11-04T10:00:00+00:00"}]
@@ -410,20 +500,34 @@ def test_la_regle_d_equipe_l_emporte_sur_celle_de_l_org(monde, appel):
         _servi()
 
 
-@pytest.mark.parametrize("classe,ok", [("lire", True), ("ecrire", False),
-                                       ("envoyer", False), ("detruire", False)])
-def test_compte_d_org_sans_regle_lecture_seule(monde, appel, classe, ok):
-    """Le défaut d'oto-core : un membre lit le compte d'org, l'admin le gère."""
+@pytest.mark.parametrize("classe", ["lire", "ecrire", "envoyer", "detruire"])
+def test_compte_d_org_sans_regle_sert_ses_membres_en_sensible(monde, appel, classe):
+    """Écart avec oto-core (`read`) : un compte d'org neuf, sans règle, sert un membre en
+    lecture, écriture, envoi et destruction (`DEFAUT_MEMBRE_ORG = sensitive`)."""
     monde.poser("org", ORG, "zoho", "o")
     appel(classe)
-    if ok:
-        assert _servi() == ("org", str(ORG), "o")
-    else:
-        with pytest.raises(access.NiveauInsuffisant) as e:
-            _servi()
-        assert e.value.error.data["managed_by"] == "an admin of the org acme"
-        monde.admins.add(MOI)
-        assert _servi() == ("org", str(ORG), "o")
+    assert _servi() == ("org", str(ORG), "o")
+
+
+def test_une_regle_d_org_read_restreint_le_defaut(monde, appel):
+    monde.poser("org", ORG, "zoho", "o", regles=[_regle(org=True, level="read")])
+    appel("lire")
+    assert _servi() == ("org", str(ORG), "o")
+    appel("ecrire")
+    with pytest.raises(access.NiveauInsuffisant) as e:
+        _servi()
+    assert e.value.error.data["level"] == "read"
+    assert e.value.error.data["managed_by"] == "an admin of the org acme"
+    monde.admins.add(MOI)
+    assert _servi() == ("org", str(ORG), "o")
+
+
+def test_une_regle_de_personne_none_coupe_cette_personne(monde, appel):
+    monde.poser("org", ORG, "zoho", "o", regles=[_regle(user=MOI, level="none")])
+    appel("lire")
+    with pytest.raises(access.NiveauInsuffisant) as e:
+        _servi()
+    assert e.value.error.data["level"] == "none"
 
 
 @pytest.mark.parametrize("classe,ok", [("lire", True), ("ecrire", True),
@@ -437,7 +541,7 @@ def test_compte_d_equipe_sensible_pour_ses_membres(monde, appel, classe, ok):
 def test_sous_le_niveau_jamais_la_cle_plateforme_a_sa_place(monde, appel):
     """Un compte d'org seulement lisible pour un envoi : refusé en le nommant, jamais la
     clé plateforme qui servirait derrière lui."""
-    monde.poser("org", ORG, "zoho", "o")
+    monde.poser("org", ORG, "zoho", "o", regles=[_regle(org=True, level="read")])
     appel("envoyer")
     with pytest.raises(access.NiveauInsuffisant) as e:
         _servi()
@@ -478,3 +582,34 @@ def test_une_op_sans_classe_declaree_leve(monde):
     finally:
         access.oublier_l_appel(tok)
     assert _code(e.value) == "effect_undeclared"
+
+
+# ── Le statut affiché voit l'étape 5 ─────────────────────────────────────────────
+
+def _sonde_vide():
+    return access.CascadeProbe(member=lambda s, o, p: None, legacy_user=lambda s, p: None,
+                               group=lambda g, p: None, org=lambda o, p: None,
+                               tenant=lambda t, p: None, platform=lambda s, p, o: None)
+
+
+def test_le_statut_d_un_connecteur_servi_par_un_compte_prete(monde):
+    monde.poser("member", f"{AUTRE_ORG}:{COLLEGUE}", "zoho", "sa-boite",
+                regles=[_regle(user=MOI, level="read")])
+    assert access.credential_mode_for(MOI, "zoho", org=ORG, group=EQUIPE,
+                                      probe=_sonde_vide()) == "elsewhere"
+    assert access.compte_d_ailleurs(MOI, "zoho", ORG) == {"org": "prêteuse", "own": False}
+
+
+def test_le_statut_d_un_connecteur_servi_par_sa_cle_ailleurs(monde):
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle")
+    assert access.credential_mode_for(MOI, "zoho", org=ORG, group=EQUIPE,
+                                      probe=_sonde_vide()) == "elsewhere"
+    assert access.compte_d_ailleurs(MOI, "zoho", ORG) == {"org": "prêteuse", "own": True}
+
+
+def test_le_statut_reste_local_quand_un_compte_local_sert(monde):
+    from dataclasses import replace
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle")
+    sonde = replace(_sonde_vide(), org=lambda o, p: True)
+    assert access.credential_mode_for(MOI, "zoho", org=ORG, group=EQUIPE,
+                                      probe=sonde) == "org"

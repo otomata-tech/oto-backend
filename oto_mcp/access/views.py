@@ -30,7 +30,9 @@ from . import cascade, chain_shadow, quotas, resolve, scope
 # The TENANT key is the tenant's BYO (L-keys PR 1): it manages its own instance
 # at the provider, no platform seat to protect — the layer-3 option is raised
 # by construction, as for an org key.
-BYO_MODES = ("user", "group", "org", "tenant")
+#: `elsewhere` (step 5, #1499): an account of another org serves — a key of its own at
+#: the provider, never the platform's (the resolution serves it in mode `user`).
+BYO_MODES = ("user", "group", "org", "tenant", "elsewhere")
 
 
 # (resolve_remote_credential removed — ADR 0034 B4: the universal `bridge`
@@ -79,12 +81,33 @@ def resolve_credential_fields(provider: str, account: Optional[str] = None) -> d
     return resolve.resolve_credential(provider, want="byo", account=account).fields
 
 
+#: The mode a status serves when only an account of ANOTHER org serves (step 5, #1499):
+#: `compte_d_ailleurs` says whose org and whether it is the caller's own key.
+ELSEWHERE = "elsewhere"
+
+
+def compte_d_ailleurs(sub: str, provider: str, org: Optional[int],
+                      probe: "Optional[CascadeProbe]" = None) -> Optional[dict]:
+    """`{org, own}` of the account of another org that step 5 would serve for
+    `provider`, or None. From the preloaded probe when it carries the inventory,
+    otherwise one read."""
+    porteur = providers.credential_provider(provider)
+    if probe is not None and probe.ailleurs is not None:
+        return probe.ailleurs(porteur)
+    if org is None:
+        return None
+    from . import comptes
+    return comptes.d_ailleurs_affiche(sub, org, porteur,
+                                      comptes.comptes_hors_org(porteur, org, sub))
+
+
 def credential_mode_for(sub: str, provider: str, *,
                         org: "int | None | object" = scope._UNSET,
                         group: "int | None | object" = scope._UNSET,
                         probe: "Optional[CascadeProbe]" = None) -> str:
     """Origin of the `provider` key for `sub` (EXPLICIT, outside MCP context):
-    `user|group|org|tenant|platform|over_quota|forbidden`. PRESENCE only (no
+    `user|group|org|tenant|platform|over_quota|forbidden`, or `elsewhere` (step 5:
+    only an account of another org serves, `compte_d_ailleurs` says which). PRESENCE only (no
     decryption → safe/light for a status). **Mirror** of the `resolve_credential`
     cascade (incl. org grant fallback) — a divergence would make the UI lie.
     "BYO" (own key, not the platform) = mode ∈ {user, group, org}.
@@ -108,6 +131,11 @@ def credential_mode_for(sub: str, provider: str, *,
     # the mirror is structural, it can no longer diverge from the resolution.
     win = next(chain_shadow.resolution_rungs(sub, provider, org=o, group=g,
                  probe=probe or cascade.PRESENCE_PROBE, want="auto"), None)
+    # STEP 5 (#1499): nothing local — an account of another org serves before the
+    # tenant's and the platform's key, as at resolution (`access/resolve`).
+    if (win is None or win.mode in ("tenant", "platform")) \
+            and compte_d_ailleurs(sub, provider, o, probe) is not None:
+        return ELSEWHERE
     if win is None:
         return "forbidden"
     if win.mode != "platform":

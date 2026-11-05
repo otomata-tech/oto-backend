@@ -913,7 +913,8 @@ déjà posée se désigne aussi par son sub, pour en changer le niveau ou la ret
 et mêmes bornes qu'une règle locale. Le refus d'une adresse est NEUTRE :
 `404 unknown_subject`, même message que l'adresse soit inconnue ou qu'elle ne porte aucun
 compte désignable (un compte de tenant tiers), pour ne rien dire de l'existence d'un
-compte. Ce compte sert la personne NOMMÉ seulement, au niveau de sa règle ;
+compte. Ce compte sert la personne au niveau de sa règle : nommé, ou sans nom quand
+aucun compte de son org ne sert l'appel (étape 5, la réponse dit `lent_by_org`) ;
 `GET /api/me/connector-instances` le lui montre avec `lent_by_org` (le nom de l'org
 prêteuse) et `your_level`, rien d'autre de cette org (ni titulaire, ni auteur, ni autre
 compte) ; sa propre clé posée dans une autre org y figure avec `elsewhere_org`. Les trois

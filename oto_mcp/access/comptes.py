@@ -22,6 +22,7 @@ from dataclasses import replace
 from typing import Optional
 
 from .. import credentials_store, providers
+from ..connectors.comptes_heberges import PREFIXE_CANAL
 from . import niveaux
 from .niveaux import Compte, Regle
 
@@ -38,7 +39,10 @@ def _compte(row: dict) -> Compte:
                   is_default=bool(row.get("is_default")), label=row.get("label"),
                   default_par=row.get("default_par"),
                   default_le=(str(row["default_le"]) if row.get("default_le") else None),
-                  org_nom=row.get("org_nom"))
+                  org_nom=row.get("org_nom"),
+                  pose_le=(row["pose_le"].isoformat() if hasattr(row.get("pose_le"),
+                                                                  "isoformat")
+                           else row.get("pose_le")))
 
 
 def comptes_des_lignes(porteur: str, lignes: list) -> dict:
@@ -82,6 +86,35 @@ def comptes_de_l_etape(porteur: str, entity_type: str, entity_id: str,
         out.append(replace(compte, is_default=bool(defaut)) if defaut is not None
                    else compte)
     return out
+
+
+def rang_a_l_etape5(compte: Compte, sub: str) -> tuple:
+    """The order of step 5 among accounts of other orgs: the caller's OWN key first,
+    then the most recently set (`pose_le`), as #172 did."""
+    return (compte.proprietaire == sub, compte.pose_le or "", compte.instance_id or 0)
+
+
+def sert_a_l_etape5(compte: Compte) -> bool:
+    """A hosted channel (`canal:`, no vault row) never serves at step 5."""
+    return not (compte.account or "").startswith(PREFIXE_CANAL)
+
+
+def d_ailleurs_affiche(sub: str, org: Optional[int], porteur: str,
+                       candidats: list) -> Optional[dict]:
+    """What the STATUS says of step 5 for `porteur` (`credential_mode_for`, the
+    connector lists): `{org, own}` — the org of the account of another org that would
+    serve unnamed, and whether it is the caller's own key — or None. `candidats`: the
+    accounts of other orgs open to her (`comptes_hors_org`, read once by the caller).
+    A status reads no call: any level above `none` counts."""
+    if org is None:
+        return None
+    appelant = niveaux.Appelant(sub, org, None)
+    ouverts = [c for c in candidats if c.connector == porteur and sert_a_l_etape5(c)
+               and niveaux.RANG[niveaux.niveau(appelant, c)] > 0]
+    if not ouverts:
+        return None
+    c = max(ouverts, key=lambda c: rang_a_l_etape5(c, sub))
+    return {"org": c.org_nom or f"#{c.org_id}", "own": c.proprietaire == sub}
 
 
 class ChoixDuParcours:
@@ -141,8 +174,8 @@ class ChoixDuParcours:
     def autrui_nomme(self, nom: str) -> Optional[Compte]:
         """An account the call NAMES that no step of the call's org holds: another
         person's account of that org first; else an account of ANOTHER org — the
-        caller's own key there (#172) or one a rule naming her opens (D1, #1499). Each
-        serves only named, at the level its rules give. Two of the same name at the same
+        caller's own key there (#172) or one a rule naming her opens (D1, #1499). Named,
+        each serves at the level its rules give. Two of the same name at the same
         place: `ambiguous_account` (name it by `_instance=`). None: nothing bears it."""
         org = self.appelant.org
         if org is None:
@@ -159,6 +192,43 @@ class ChoixDuParcours:
                 self.exiger(ouverts[0])
                 return self.servir(ouverts[0])
         return None
+
+    def d_ailleurs_sans_nom(self, cle_perso_interdite=lambda: False) -> Optional[Compte]:
+        """STEP 5 (#1499, D1 and #172): no local candidate served at steps 2 to 4 (named,
+        personal, team, org) — an account of ANOTHER org serves unnamed, at the level the
+        call requires: the caller's OWN key there first, else one a rule naming her opens;
+        of several, the most recently set (`pose_le`), as #172 did. Never before a local
+        account (the resolver calls it only once they all handed over); the response
+        says which served (`servir`). A hosted channel (no vault row) does not serve here. `cle_perso_interdite()`: the org forbids
+        personal keys (#1239) — no person's account serves; read only if one is a
+        candidate. None: nothing serves."""
+        org = self.appelant.org
+        if org is None:
+            return None
+        porteur = providers.credential_provider(self.service)
+        utilisables = [
+            c for c in comptes_hors_org(porteur, org, self.appelant.sub)
+            if sert_a_l_etape5(c) and niveaux.suffit(self.niveau(c), self.besoin)]
+        if any(c.owner_type == "member" for c in utilisables) and cle_perso_interdite():
+            utilisables = [c for c in utilisables if c.owner_type != "member"]
+        if not utilisables:
+            return None
+        return self.servir(max(utilisables,
+                               key=lambda c: rang_a_l_etape5(c, self.appelant.sub)))
+
+    def cle_d_ailleurs(self, cle_perso_interdite) -> Optional[tuple]:
+        """`(compte, key)` of step 5 (`d_ailleurs_sans_nom`), the key read from the vault;
+        None: nothing serves. The call's org still pays (mode `user`)."""
+        compte = self.d_ailleurs_sans_nom(cle_perso_interdite)
+        if compte is None:
+            return None
+        key = credentials_store.get_credential(
+            compte.owner_type, compte.owner_id,
+            providers.credential_provider(self.service), compte.account)
+        if not key:
+            raise RuntimeError(f"account inst:{compte.instance_id} has no vault row: it "
+                               "cannot serve")
+        return compte, key
 
     def a_nommer(self) -> list[dict]:
         """The accounts of other orgs the caller could NAME (her own key there, #172;
@@ -219,7 +289,18 @@ def comptes_du_contexte(sub: str, org: Optional[int], equipe: Optional[int]) -> 
         detenu = niveaux.niveau(appelant, c)
         if niveaux.RANG[detenu] > 0:
             a_nommer.append({"connector": c.connector, **niveaux.a_nommer(
-                c, detenu, propre=c.proprietaire == sub)})
+                c, detenu, propre=c.proprietaire == sub),
+                "_rang": rang_a_l_etape5(c, sub) if sert_a_l_etape5(c) else None})
+    # Step 5: of its connector, the one that serves unnamed when nothing local does —
+    # her own key first, then the most recently set (`d_ailleurs_sans_nom`).
+    elu: dict = {}
+    for e in a_nommer:
+        if e["_rang"] is not None and (e["connector"] not in elu
+                                       or e["_rang"] > elu[e["connector"]]):
+            elu[e["connector"]] = e["_rang"]
+    for e in a_nommer:
+        rang = e.pop("_rang")
+        e["serves_unnamed"] = rang is not None and rang == elu[e["connector"]]
     defauts = [{"step": "org" if d["entity_type"] == "org" else "team",
                 "connector": d["connector"], "account": d["account"],
                 "set_by": (niveaux.libelle_de_personne(d["default_par"]) if d["default_par"]

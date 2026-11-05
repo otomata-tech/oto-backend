@@ -468,8 +468,8 @@ CAPABILITIES += [
                      "team, the whole org) the level it gives (none < read < write < "
                      "sensitive < manage) and, on a Google or Microsoft account, the "
                      "services it covers; plus who manages it and your own level. Without "
-                     "a rule, a member of the account's team holds `sensitive` and a "
-                     "member of its org `read` on an org account."),
+                     "a rule, a member of the account's team holds `sensitive`, and so does "
+                     "a member of its org on an org account (an org rule restricts it)."),
         rest=RestBinding("GET", _ROUTE + "/rules"),
     ),
     Capability(
@@ -486,8 +486,8 @@ CAPABILITIES += [
                      "email of her oto account), `to_group` (a team of the account's org) "
                      "or `to_org=true` — at `level` (none|read|write|sensitive|manage); "
                      "`services` limits it to some services of a Google or Microsoft "
-                     "account. A person outside the org uses the account only by naming "
-                     "it. Only an org admin grants `manage`; a team lead grants at most "
+                     "account. A person outside the org is served it when she names it, "
+                     "or unnamed when no account of her own org serves the call. Only an org admin grants `manage`; a team lead grants at most "
                      "`write`. A rule never names the account's owner. "
                      "Journaled. Returns the account's rules afterwards."),
         rest=RestBinding("PUT", _ROUTE + "/rules"),

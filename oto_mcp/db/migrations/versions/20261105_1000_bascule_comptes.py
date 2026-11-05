@@ -7,8 +7,14 @@ Une seule transaction, dans cet ordre :
    par compte Unipile, puis prêts Unipile (personne, équipe) et `share_side` du coffre →
    règles `sensitive` (avec la liste de `share_services` pour un compte Google ou
    Microsoft), une cible `org:<id>` → règle d'org, une règle d'org `sensitive` sur chaque
-   compte d'org vivant. Un prêt entre orgs n'est PAS repris (décision D1 en attente,
-   recommandée : couper) : il est journalisé, un par ligne. Une règle `manuelle` n'est
+   compte d'org vivant. Un prêt à une PERSONNE hors de l'org est repris en règle hors
+   org (D1) ; un prêt à une équipe ou une org d'ailleurs ne l'est pas : il est
+   journalisé, un par ligne. Puis l'USAGE d'un compte d'équipe par qui n'en est pas
+   membre (l'héritage d'équipe retiré, #480, D2) : une règle `sensitive` par couple
+   personne × compte d'équipe réellement appelé dans les 30 derniers jours du journal
+   d'appels (`tool_calls`), que rien d'autre n'ouvre — l'identification même de la
+   mesure L2 (`journal.pertes_d_acces.equipe_hors_appartenance`), sauf la personne
+   sortie de l'org du compte. Une règle `manuelle` n'est
    jamais touchée. **La reprise est FIGÉE ici** : c'est la seule lecture des anciennes
    tables qui reste, et elle part avec elles — aucun code applicatif ne les lit plus ;
 2. retrait de `connector_account_grants`, `connector_account_group_grants`,
@@ -377,6 +383,82 @@ def calculer_les_regles(cur) -> tuple[dict, list]:
     return regles, ecartes
 
 
+#: La profondeur du journal d'appels lu pour l'usage des comptes d'équipe (D2) : celle de
+#: la mesure L2.
+JOURS_D_USAGE = 30
+
+# Les appels qui ont servi un compte nommé par son ref (`args.instance`, posé au
+# résolveur) — la lecture de la mesure L2 (`_JOURNAL`), réduite à ce que D2 regarde. Une
+# agrégation sur l'index `created_at`, comme la mesure l'a jouée sur la prod.
+_APPELS_PAR_REF = """
+SELECT sub, args->>'instance' AS ref, count(*) AS n
+  FROM tool_calls
+ WHERE created_at >= NOW() - make_interval(days => %s) AND kind = 'mcp'
+   AND sub IS NOT NULL AND args ? 'instance'
+ GROUP BY 1, 2
+"""
+
+
+def regles_d_usage_d_equipe(cur, voulues: dict, existantes: dict) -> tuple[dict, int]:
+    """`({cle: {org_id, services}}, appels)` — D2 : chaque couple personne × compte
+    d'ÉQUIPE vivant qu'elle a appelé dans les `JOURS_D_USAGE` derniers jours sans être
+    membre de l'équipe, et qu'aucune règle (voulue par la reprise ou déjà en base)
+    n'ouvre — exactement le motif `equipe_hors_appartenance` de la mesure L2. Écartée :
+    la personne sortie de l'org du compte (`org_member_events` `removed`, plus membre).
+    Une sortie de l'ÉQUIPE seule n'est pas journalisée : elle n'est pas distinguée."""
+    from oto_mcp import instance_refs
+
+    instances = {r["id"]: r for r in cur.execute(
+        "SELECT id, connector, owner_type, owner_id, account FROM connector_instances "
+        "WHERE revoked_at IS NULL").fetchall()}
+    par_cle = {(r["owner_type"], r["owner_id"], r["connector"], r["account"]): i
+               for i, r in instances.items()}
+    groupes = {r["id"]: r["org_id"] for r in cur.execute("SELECT id, org_id FROM org_groups")}
+    equipes_de: dict = {}
+    for r in cur.execute("SELECT group_id, sub FROM org_group_members"):
+        equipes_de.setdefault(r["sub"], set()).add(r["group_id"])
+    membres = {(r["org_id"], r["sub"]) for r in cur.execute(
+        "SELECT org_id, sub FROM org_members")}
+    sortis = {(r["org_id"], r["sub"]) for r in cur.execute(
+        "SELECT DISTINCT org_id, sub FROM org_member_events WHERE action = 'removed'")}
+    ouvertes: dict = {}
+    for (iid, user, groupe, org_entiere), v in list(voulues.items()) + [
+            (cle, {"org_id": r["org_id"]}) for cle, r in existantes.items()]:
+        ouvertes.setdefault(iid, []).append((user, groupe, org_entiere, v["org_id"]))
+
+    def _ouvre(iid: int, sub: str) -> bool:
+        return any((u is not None and u == sub)
+                   or (g is not None and g in equipes_de.get(sub, ()))
+                   or (o and (org_id, sub) in membres)
+                   for u, g, o, org_id in ouvertes.get(iid, ()))
+
+    regles: dict = {}
+    appels = 0
+    for r in cur.execute(_APPELS_PAR_REF, (JOURS_D_USAGE,)).fetchall():
+        try:
+            ref = instance_refs.parse_ref(r["ref"])
+        except ValueError:
+            continue
+        if ref.level == "inst":
+            iid = ref.instance_id if ref.instance_id in instances else None
+        elif ref.level == "group":
+            iid = par_cle.get(("group", str(ref.group_id), ref.connector, ref.account))
+        else:
+            continue
+        inst = instances.get(iid) if iid is not None else None
+        if inst is None or inst["owner_type"] != "group" or not inst["owner_id"].isdigit():
+            continue
+        gid, sub = int(inst["owner_id"]), r["sub"]
+        org = groupes.get(gid)
+        if org is None or gid in equipes_de.get(sub, ()) or _ouvre(iid, sub):
+            continue
+        if (org, sub) in sortis and (org, sub) not in membres:
+            continue
+        regles.setdefault((iid, sub, None, False), {"org_id": org, "services": None})
+        appels += r["n"]
+    return regles, appels
+
+
 def reprendre_les_prets(conn, *, retirer_perimees: bool = True) -> dict:
     """RECALCULE les règles reprises, dans la transaction de la révision. Idempotente.
     Une règle reprise que plus aucun partage ne donne est retirée (sauf
@@ -391,7 +473,12 @@ def reprendre_les_prets(conn, *, retirer_perimees: bool = True) -> dict:
         (r["instance_id"], r["subject_user"], r["subject_group"], r["subject_org"]): r
         for r in cur.execute(
             "SELECT id, instance_id, subject_user, subject_group, subject_org, level, "
-            "services, origine FROM connector_account_rules").fetchall()}
+            "services, origine, org_id FROM connector_account_rules").fetchall()}
+    usage, appels_d_usage = regles_d_usage_d_equipe(
+        cur, voulues, {c: r for c, r in existantes.items()
+                       if r["origine"] != ORIGINE_REPRISE})
+    for cle, regle in usage.items():
+        voulues.setdefault(cle, regle)
     posees = mises_a_jour = gardees = 0
     for cle, regle in sorted(voulues.items(), key=lambda kv: repr(kv[0])):
         deja = existantes.get(cle)
@@ -414,6 +501,7 @@ def reprendre_les_prets(conn, *, retirer_perimees: bool = True) -> dict:
                 and cle not in voulues]
     if perimees:
         cur.execute("DELETE FROM connector_account_rules WHERE id = ANY(%s)", (perimees,))
+    bilan.update(usage_d_equipe={"personne_x_compte": len(usage), "appels": appels_d_usage})
     bilan.update(posees=posees, mises_a_jour=mises_a_jour, retirees=len(perimees),
                  manuelles_gardees=gardees, non_reprises=non_reprises)
     return bilan

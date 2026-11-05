@@ -47,9 +47,12 @@ NIVEAU_DE_LA_CLASSE = {"lire": "read", "ecrire": "write", "envoyer": "sensitive"
                        "detruire": "sensitive"}
 #: Outside a tool call (a REST route that configures or tests an account): reading.
 NIVEAU_HORS_APPEL = "read"
-#: oto-core's defaults: a member of the owning team, a member of the owning org.
+#: The defaults: a member of the owning team, a member of the owning org. oto-core gives
+#: a member of the org `read`; here `sensitive` (decided 05/11/2026): an org account
+#: serves its members as it did before the rules, and a rule — of the org or of the
+#: person — restricts it, `none` included.
 DEFAUT_MEMBRE_EQUIPE = "sensitive"
-DEFAUT_MEMBRE_ORG = "read"
+DEFAUT_MEMBRE_ORG = "sensitive"
 
 #: The carriers whose account AUTHORIZES its services one by one: a rule on such an
 #: account may carry a LIST of services (`connector_account_rules.services`).
@@ -102,6 +105,9 @@ class Compte:
     #: The name of the account's org — how an account of ANOTHER org is introduced
     #: (« lent by <org> »), never anything else of that org.
     org_nom: Optional[str] = None
+    #: When its key was set (`connector_credentials.set_at`, ISO): the most recent of
+    #: several accounts of other orgs serves at step 5. None without a vault row.
+    pose_le: Optional[str] = None
     label: Optional[str] = None
 
     @property
@@ -256,7 +262,11 @@ def niveau(appelant: Appelant, compte: Compte, service: Optional[str] = None, *,
         detenu = _defaut(appelant, compte)
         if regle_org is not None and compte.org_id is not None \
                 and appelant.membre_de_l_org(compte.org_id):
-            detenu = _plus_haut(detenu, regle_org.niveau_pour(service, porteur))
+            # On an ORG account the org's rule REPLACES the members' default (it may
+            # restrict it); on a team's, it opens the account to the rest of the org.
+            par_regle = regle_org.niveau_pour(service, porteur)
+            detenu = (par_regle if compte.owner_type == "org"
+                      else _plus_haut(detenu, par_regle))
     if suffit(detenu, besoin) or proprietaire is not None:
         return detenu
     if compte.org_id is not None and appelant.admin_de_l_org(compte.org_id):
@@ -387,8 +397,10 @@ def refus_niveau(compte: Compte, detenu: str, exige: str, *,
 
 def a_nommer(compte: Compte, detenu: str, *, propre: bool) -> dict:
     """A candidate a refusal lists so the agent can NAME it: an account of another org —
-    the caller's own key there (`propre`, #172) or one a rule opens to her (D1) — serves
-    only named. Of the other org it says its name, nothing else."""
+    the caller's own key there (`propre`, #172) or one a rule opens to her (D1). It serves
+    unnamed only when nothing local does and it is the only one at the level required
+    (step 5); listed when it did not serve. Of the other org it says its name, nothing
+    else."""
     org = compte.org_nom or f"#{compte.org_id}"
     out = {"account": compte.account, "label": compte.libelle,
            "instance": f"inst:{compte.instance_id}", "level": detenu}
@@ -409,14 +421,14 @@ def phrase_des_candidats(candidats: list[dict]) -> str:
     """The sentence a refusal adds for the accounts to NAME (empty without any)."""
     if not candidats:
         return ""
-    return (" Accounts that serve only when you name them: "
+    return (" Accounts of other orgs you can name: "
             + "; ".join(_phrase_a_nommer(c) for c in candidats) + ".")
 
 
 def refus_ambigu(candidats: list, *, ou: str, a_nommer: Optional[list] = None):
     """`ambiguous_account`: several accounts usable at the same step, no default to
     settle it (D3). Names them by their label and says how to name one; `a_nommer`: the
-    accounts of other orgs that serve only named, listed too."""
+    accounts of other orgs the caller can name, listed too."""
     from .cascade import CompteAmbigu
     noms = ", ".join(f"`{c.libelle}`" for c in candidats)
     nommables = [c for c in candidats if c.account]

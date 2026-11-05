@@ -39,8 +39,9 @@ Dans l'ordre :
 4. sinon la règle de son équipe ACTIVE (ou, pour un compte d'équipe, de l'équipe
    propriétaire dont il est membre) ;
 5. sinon le défaut — compte d'équipe : `sensitive` pour ses membres, `none` pour les
-   autres (**D2**, tranchée) ; compte d'org : `read` pour ses membres (défaut d'oto-core) — relevé
-   par la règle d'org s'il y en a une ;
+   autres (**D2**, tranchée) ; compte d'org : `sensitive` pour ses membres (écart **(a)**,
+   oto-core dit `read`) — REMPLACÉ par la règle d'org s'il y en a une, qui peut le
+   restreindre (`none` compris) ;
 6. enfin, s'il manque encore : l'admin de l'org gère tout compte d'org ou d'équipe
    (`manage`), le responsable d'une équipe gère son compte, sauf règle nominative.
 
@@ -81,7 +82,8 @@ le palier du tenant, inchangés.
   clé plateforme à leur place.
 - Ce qui a disparu : le pointeur Unipile vers le compte d'autrui, le passage de la main
   d'une clé personnelle suspendue (la résolution lève `account_suspended`), la clé
-  personnelle d'une autre org servie en repli (#172 : elle ne sert plus que nommée),
+  personnelle d'une autre org servie AVANT l'équipe et l'org (#172 : elle sert
+  désormais à l'étape 5, après elles),
   l'équipe héritée par un projet partagé (#480), les prêts entre orgs hors des règles.
 
 ## La garde de niveau
@@ -143,14 +145,17 @@ jamais touchée.
 
 ## Écarts assumés avec oto-core
 
-- **(a)** les comptes d'org d'avant la bascule servaient tout membre : la reprise leur a
-  posé une règle d'org `sensitive`. Un compte d'org posé après suit le défaut d'oto-core
-  (`read` pour les membres) ;
+- **(a)** le défaut d'un membre sur un compte d'org est `sensitive` (oto-core : `read`),
+  tranché le 05/11/2026 : un compte d'org sert ses membres comme avant les règles, celui
+  posé après la bascule aussi ; une règle d'org ou de personne le restreint, `none`
+  compris (`DEFAUT_MEMBRE_ORG`, `access/niveaux.py`). La reprise a aussi posé une règle
+  d'org `sensitive` sur chaque compte d'org d'avant : redondante, gardée visible ;
 - **(b)** `services` sur une règle Google ou Microsoft, propre au backend ;
 - **(e)** une règle d'équipe vaut pour l'équipe ACTIVE seule (oto-core lit toutes les
   équipes de la personne) ;
 - **D1** le partage entre orgs : oto-core ne connaît qu'une org par compte ; ici une règle
-  peut nommer une personne hors de l'org du compte, qui ne s'en sert que nommé ;
+  peut nommer une personne hors de l'org du compte, servie nommée, ou sans nom à
+  l'étape 5 quand rien de local ne sert ;
 - **D3** le défaut encadré : oto-core refuse toute ambiguïté ; ici un défaut posé par qui
   gère le compte départage les comptes d'une même étape.
 
@@ -164,9 +169,19 @@ tests (`tests/access/test_resolution_par_regles_1499.py`).
   peut nommer une PERSONNE hors de l'org du compte (jamais une équipe ni une org
   extérieures), posée par qui gère le compte, aux mêmes conditions qu'une règle locale ;
   la surface désigne la personne par l'e-mail d'un compte oto existant et refuse
-  neutrement, sans dire si le compte existe. Le journal porte `hors_org`. Le compte ne
-  sert que nommé, au niveau de la règle. La clé personnelle posée dans une autre org
-  (#172) suit la même règle.
+  neutrement, sans dire si le compte existe. Le journal porte `hors_org`. Le compte sert
+  au niveau de la règle : nommé, ou SANS NOM à l'**étape 5** — quand aucun candidat
+  local n'existe aux étapes 2 à 4 (nommé, personnel, équipe, org), avant la clé du
+  tenant et celle de la plateforme, jamais devant un compte local ; deux candidats
+  d'ailleurs → `ambiguous_account`, qui les nomme. La réponse le dit (`lent_by_org`, ou
+  `your_account_in_org` pour sa propre clé), `oto_context` aussi ; l'org de l'appel paie.
+  La clé personnelle posée dans une autre org (#172) suit la même règle, pour tout
+  connecteur. Une politique « clé perso interdite » (#1239) de l'org de l'appel écarte à
+  l'étape 5 les comptes de personnes.
+- **D2 — reprise de l'usage** : la révision de bascule pose une règle `sensitive`
+  (origine `reprise`) par couple personne × compte d'équipe que la personne, non
+  membre, a appelé dans les 30 derniers jours (`tool_calls`), sauf si elle est sortie
+  de l'org du compte.
 - **D2 — compte d'équipe pour un non-membre** (`niveau_equipe_non_membre`) : **on
   coupe** (`none`) ; une règle nominative peut l'ouvrir.
 - **D3 — plusieurs comptes au même étage** (`defaut_qui_tranche`) : **le défaut encadré**.

@@ -1,8 +1,9 @@
 """Un compte prêté HORS ORG (#1499, D1), sur une vraie base : une règle nomme une personne
-qui n'est pas membre de l'org du compte. Le compte ne sert que NOMMÉ, au niveau de la
-règle ; le journal dit la règle hors org ; les travaux de la personne, sous un jeton de
-délégation verrouillé sur SON org, s'en servent encore — le verrou interdit d'agir dans
-une autre org, pas de nommer un compte qu'une règle lui ouvre.
+qui n'est pas membre de l'org du compte. Le compte sert au niveau de la règle, NOMMÉ, ou
+SANS NOM quand rien de local ne sert (étape 5) ; le journal dit la règle hors org ; les
+travaux de la personne, sous un jeton de délégation verrouillé sur SON org, s'en servent
+encore — le verrou interdit d'agir dans une autre org, pas d'être servi d'un compte
+qu'une règle lui ouvre.
 """
 from __future__ import annotations
 
@@ -53,14 +54,31 @@ def _dans_l_org(monkeypatch, monde):
     monkeypatch.setattr(access, "current_group", lambda sub: None)
 
 
-def test_nomme_il_sert_sans_nom_jamais(monde, monkeypatch):
-    from oto_mcp import access
+def test_nomme_ou_sans_nom_faute_de_local(monde, monkeypatch):
+    from oto_mcp import credentials_store
     _dans_l_org(monkeypatch, monde)
+    prete = ("member", f"{monde['y']}:{monde['preteur']}")
     rc = _resoudre(monde, account="sa-boite")
-    assert (rc.entity_type, rc.entity_id) == ("member", f"{monde['y']}:{monde['preteur']}")
-    with pytest.raises(access.CredentialUnavailable) as e:
-        _resoudre(monde)
-    assert e.value.error.data["to_name"][0]["lent_by_org"].startswith("Preteuse")
+    assert (rc.entity_type, rc.entity_id) == prete
+    rc = _resoudre(monde)
+    assert (rc.entity_type, rc.entity_id, rc.account) == (*prete, "sa-boite")
+    # Sa propre clé dans l'org de l'appel passe devant.
+    credentials_store.set_credential("member", f"{monde['x']}:{monde['moi']}", "zoho",
+                                     "locale", set_by=monde["moi"], meta={},
+                                     account="la-mienne")
+    rc = _resoudre(monde)
+    assert (rc.entity_type, rc.entity_id) == ("member", f"{monde['x']}:{monde['moi']}")
+
+
+def test_172_sa_cle_d_une_autre_org_sert_sans_nom(monde, monkeypatch):
+    from oto_mcp import access, credentials_store
+    _dans_l_org(monkeypatch, monde)
+    credentials_store.set_credential("member", f"{monde['y']}:{monde['moi']}", "payfit",
+                                     "sa-cle", set_by=monde["moi"], meta={})
+    from oto_mcp.org_store import members
+    members.add_org_member(monde["y"], monde["moi"], "org_member")
+    rc = access.resolve_credential("payfit", sub=monde["moi"], emit_on_failure=False)
+    assert (rc.entity_type, rc.entity_id) == ("member", f"{monde['y']}:{monde['moi']}")
 
 
 def test_sous_un_jeton_de_delegation_verrouille_sur_son_org(monde, monkeypatch):
@@ -78,8 +96,31 @@ def test_sous_un_jeton_de_delegation_verrouille_sur_son_org(monde, monkeypatch):
     try:
         rc = _resoudre(monde, account="sa-boite")
         assert rc.entity_id == f"{monde['y']}:{monde['preteur']}"
+        assert _resoudre(monde).entity_id == f"{monde['y']}:{monde['preteur']}"
         ref = instance_refs.parse_ref(instance_refs.make_member_ref(
             monde["y"], monde["preteur"], "zoho", "sa-boite"))
         assert access.guard_instance_access(monde["moi"], ref) == monde["x"]
     finally:
         verrou_org.lever(tok)
+
+
+def test_le_statut_affiche_dit_le_compte_prete_sans_requete_par_connecteur(monde,
+                                                                            monkeypatch):
+    """La sonde préchargée des listes lit les comptes d'ailleurs UNE fois : le mode
+    affiché de zoho est `elsewhere`, avec l'org prêteuse ; un connecteur sans compte
+    d'ailleurs reste ce qu'il était."""
+    from oto_mcp import access
+    from oto_mcp.access import comptes
+    _dans_l_org(monkeypatch, monde)
+    lus = []
+    reel = comptes.comptes_hors_org
+    monkeypatch.setattr(access, "comptes_hors_org",
+                        lambda *a, **k: lus.append(a) or reel(*a, **k))
+    sonde = access.preloaded_presence_probe(monde["moi"], org=monde["x"], groups=[])
+    assert len(lus) == 1
+    assert access.credential_mode_for(monde["moi"], "zoho", org=monde["x"], group=None,
+                                      probe=sonde) == "elsewhere"
+    vu = access.compte_d_ailleurs(monde["moi"], "zoho", monde["x"], sonde)
+    assert vu["own"] is False and vu["org"].startswith("Preteuse")
+    assert sonde.ailleurs("hubspot") is None
+    assert len(lus) == 1

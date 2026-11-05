@@ -36,7 +36,9 @@ class ProviderStatus(BaseModel):
         "How access resolves — the winning tier of the cascade, or its refusal. "
         "Values served as of 2026-09-01: `user` | `group` | `org` | `tenant` | "
         "`platform` (the tier that supplies the key), `over_quota` (a key resolves but "
-        "today's quota is exhausted), `forbidden` (no key resolves). Declared "
+        "today's quota is exhausted), `forbidden` (no key resolves), `elsewhere` "
+        "(nothing of this org serves: an account of ANOTHER org does — "
+        "`lent_by_org` or `your_account_in_org` says which). Declared "
         "`str` and not enumerated on purpose: the first five come from the cascade, "
         "which has its own home — an enum here would break a generated client the "
         "day it returns a sixth."))
@@ -56,6 +58,10 @@ class ProviderStatus(BaseModel):
     platform_key_label: Optional[str] = None
     # The team whose key would be REACHABLE for this connector, when there is one.
     team_key_group: Optional[int] = None
+    # `mode='elsewhere'` (#1499, step 5): the org of the account that serves — lent to
+    # you by a rule of that org, or your own key set there. Null otherwise.
+    lent_by_org: Optional[str] = None
+    your_account_in_org: Optional[str] = None
 
     # ── The quota, when the key that RESPONDS carries one ─────────────────────
     # Both are read on the WINNING tier, never on the mere presence of a platform tier

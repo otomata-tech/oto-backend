@@ -140,7 +140,7 @@ SELECT i.id AS instance_id, i.owner_type, i.owner_id, i.connector, i.account, i.
             WHEN 'group' THEN g.org_id END AS org_id,
        COALESCE(c.meta->>'is_default', '') = 'true' AS is_default,
        c.meta->>'default_set_by' AS default_par, c.meta->>'default_set_at' AS default_le,
-       o.name AS org_nom,
+       o.name AS org_nom, c.set_at AS pose_le,
        COALESCE((SELECT jsonb_agg(jsonb_build_object(
                      'user', r.subject_user, 'group', r.subject_group, 'org', r.subject_org,
                      'level', r.level, 'services', r.services) ORDER BY r.id)
@@ -193,8 +193,8 @@ def comptes_hors_org(connector: Optional[str], sub: str, org_id: int,
     siens (sa clé personnelle posée dans une autre org, #172) et ceux qu'une règle qui le
     NOMME lui ouvre (D1, #1499). Un compte personnel n'y figure que si son propriétaire
     est encore membre de son org. `connector` None : tous les connecteurs (la liste des
-    comptes). `account` : seulement ceux de ce nom. Ils ne servent
-    que nommés (`access/comptes`)."""
+    comptes). `account` : seulement ceux de ce nom. Ils servent nommés, et sans nom à
+    l'étape 5 quand rien de local ne sert (`access/comptes`)."""
     filtre = (
         "(i.id IN (SELECT r.instance_id FROM connector_account_rules r "
         "          WHERE r.subject_user = %(sub)s AND r.level <> 'none' "

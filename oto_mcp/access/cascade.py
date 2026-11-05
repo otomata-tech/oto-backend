@@ -160,6 +160,9 @@ class CascadeProbe:
     org: Callable[[int, str], Optional[object]]
     tenant: Callable[[str, str], Optional[object]]
     platform: Callable[[Optional[str], str, Optional[int]], Optional[dict]]
+    #: STEP 5, for a status (`views.compte_d_ailleurs`): `carrier → {org, own}` or
+    #: None, from the accounts of other orgs read ONCE. None = no preload, read live.
+    ailleurs: Optional[Callable[[str], Optional[dict]]] = None
 
 
 # A SUSPENDED personal key is PRESENT for the walk: since the switch to account rules
@@ -275,6 +278,11 @@ def preloaded_presence_probe(sub: str, *, org: Optional[int],
     # providers, the `_platform_grant_meta` computation does not move.
     instances_par_provider = cs.list_all_platform_instances()
 
+    # STEP 5 (#1499): the accounts of other orgs open to the person, one read for all
+    # connectors — the status says « lent by <org> » / « your key in <org> ».
+    from . import comptes
+    d_ailleurs = comptes.comptes_hors_org(None, org, sub) if org is not None else []
+
     return CascadeProbe(
         # The inventory only covers the CONTEXT org — the only one the walker reads.
         member=lambda s, o, p: (PRESENCE_PROBE.member(s, o, p) if o != org
@@ -285,6 +293,7 @@ def preloaded_presence_probe(sub: str, *, org: Optional[int],
         tenant=lambda t, p: (True if p in tenant_secrets else None),
         platform=lambda s, p, o: platform_grant._platform_grant_meta(
             s, p, o, instances=instances_par_provider.get(p, [])),
+        ailleurs=lambda p: comptes.d_ailleurs_affiche(sub, org, p, d_ailleurs),
     )
 
 

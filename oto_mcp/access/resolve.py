@@ -193,9 +193,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         return _resolve_pinned_instance(porteur, sub, bound, provider)
 
     # MEMBER scope (ADR 0033): "my key" exists ONLY in the context org —
-    # set in org A, it does not resolve from org B. The org is resolved via
-    # the `current_org` seam (MCP session ?? consultation ?? home, ADR 0023) BEFORE
-    # the first tier: no more org-agnostic per-user credentials.
+    # set in org A, it does not resolve from org B. The org (`current_org` seam, ADR
+    # 0023) is resolved BEFORE the first tier: no org-agnostic per-user credentials.
     active_org = scope.current_org(sub)
 
     # Account NAMED by the caller — explicit account (param) > call axis
@@ -323,28 +322,29 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         provider, sub, active_org, probe=probe, want=want,
         group=lambda: choix.appelant.equipe_active)
 
-    # A NAMED account no keyed step holds: another person's account of the org, else an
-    # account of another org (the caller's own key there, #172; one a rule naming her
-    # opens, D1) — served only named and at the level its rules give (#1499), never a
-    # platform key in its place.
+    # A NAMED account no keyed step holds: another person's of the org, else one of
+    # another org (#172, D1) — at the level its rules give, never a platform key instead.
     if named_account and (win is None or win.mode == "platform"):
         autrui = choix.autrui_nomme(named_account)
-        if autrui is not None:
-            key = credentials_store.get_credential(autrui.owner_type, autrui.owner_id,
-                                                   porteur, autrui.account)
-            if key:
-                return ResolvedCredential(provider, key, False, "user", autrui.owner_type,
-                                          autrui.owner_id, account=autrui.account,
-                                          instance_id=autrui.instance_id)
+        key = autrui and credentials_store.get_credential(
+            autrui.owner_type, autrui.owner_id, porteur, autrui.account)
+        if key:
+            return ResolvedCredential(provider, key, False, "user", autrui.owner_type,
+                                      autrui.owner_id, account=autrui.account,
+                                      instance_id=autrui.instance_id)
         raise _not_found(named_account, provider)
     choix.refuser_si_sous_le_niveau(win)
-    # The org forbids personal keys here (#1239) and nothing shared serves: say so.
-    if win is None:
+    # STEP 5 (#1499): nothing local served, nothing named — an account of another org,
+    # before the tenant's and the platform's key (`ChoixDuParcours.cle_d_ailleurs`).
+    servi = (choix.cle_d_ailleurs(lambda: cle_perso.interdite(active_org, porteur))
+             if not named_account and (win is None or win.mode in ("tenant", "platform"))
+             else None)
+    if servi is not None:
+        c, key = servi
+        return ResolvedCredential(provider, key, False, "user", c.owner_type, c.owner_id,
+                                  account=c.account, instance_id=c.instance_id)
+    if win is None:   # personal keys forbidden (#1239), else those she could NAME
         cle_perso.refuser_si_interdite(active_org, porteur, cle_perso.A_L_APPEL)
-
-    if win is None:
-        # The accounts of other orgs the caller could NAME (#172, D1): never a fallback,
-        # but listed so she can name one right away.
         a_nommer = choix.a_nommer()
         en_plus = niveaux.phrase_des_candidats(a_nommer)
         # byo-only: no platform tier (basic_auth mounts, multi-secrets).

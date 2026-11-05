@@ -12,9 +12,14 @@ Un PDF aussi : son TEXTE est rendu INLINE (`file_extract.extract`), le PDF origi
 joint en URL signée. Servi seulement en URL, il n'était lisible par aucun agent dont
 le bac à sable ne joint pas notre stockage — or c'est le cas par défaut d'un client
 qui filtre sa sortie réseau.
+
+Une PIÈCE JOINTE d'e-mail (outlook, gmail) passe par `render_attachment_for_agent` :
+une image, ou un PDF scanné dont les pages sont des JPEG, revient en BLOC IMAGE MCP
+(lu par le client sans réseau, rien n'est déposé) ; le reste suit `render_for_agent`.
 """
 from __future__ import annotations
 
+import io
 from typing import Optional, Union
 
 from . import file_extract
@@ -47,6 +52,31 @@ def as_text(data: bytes, mime: str) -> Optional[str]:
         return None
     if looks_text or "\x00" not in s:
         return s
+    return None
+
+
+# Plafond d'une image servie EN CONTENU (bloc image MCP) : celui de `web_image`. Au-delà,
+# le bloc base64 pèse trop dans le contexte du client ; l'image part en URL signée.
+INLINE_IMAGE_CAP = 3_000_000
+# Pages d'un PDF scanné rendues en image, au plus. Au-delà, le scan part en URL signée.
+SCAN_PAGES_CAP = 5
+
+
+def image_format(octets: bytes) -> Optional[str]:
+    """`png` | `jpeg` | `gif` | `webp` read from the MAGIC BYTES, else None.
+
+    The `Content-Type` header is not trusted: a server can label anything
+    `image/png`, and an HTML error page served 200 must not reach the model as an
+    image. SVG is deliberately absent: it is XML (scripts, external references),
+    and the MCP clients render only raster formats."""
+    if octets.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if octets.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if octets[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if octets[:4] == b"RIFF" and octets[8:12] == b"WEBP":
+        return "webp"
     return None
 
 
@@ -154,3 +184,119 @@ def _joindre_le_brut(out: dict, data: bytes, filename: str, mime: str, *, sub: s
             f"fichier brut non déposé : stockage temporaire indisponible ({e}) ; {suite}")
         return
     out["raw_expires_in"] = media_store.presign_expiry()
+
+
+def render_attachment_for_agent(data: bytes, filename: str, mime: str, *, sub: str,
+                                prefix: str, sheet: Optional[Union[int, str]] = None,
+                                max_rows: Optional[int] = None):
+    """Rendu d'une PIÈCE JOINTE d'e-mail (outlook, gmail) : `render_for_agent`, sauf
+    pour ce qu'un modèle lit en image.
+
+    Une URL signée sur notre stockage est injoignable d'un bac à sable qui filtre sa
+    sortie réseau (le cas par défaut d'un client) : une image, ou un scan sans texte,
+    servie ainsi n'était lisible par personne. D'où, SANS dépôt (rien n'est conservé) :
+
+    - une image png/jpeg/gif/webp (format lu dans les OCTETS) ≤ `INLINE_IMAGE_CAP` →
+      `ToolResult` : une ligne de texte (nom, type, taille) + le bloc image ;
+    - un PDF sans texte extractible (scan) dont chaque image de page est un JPEG
+      (`/DCTDecode` : le flux brut EST le fichier JPEG, aucun décodage), au plus
+      `SCAN_PAGES_CAP` pages et `INLINE_IMAGE_CAP` octets d'images → `ToolResult` :
+      une ligne + un bloc image par image de page.
+
+    Le reste suit `render_for_agent` (dict). Une image ou un scan qui n'a pas pu être
+    rendu en image le DIT (`image_unavailable` : trop gros, trop de pages, encodage
+    non convertible sans moteur de rendu) — jamais une URL seule sans raison.
+
+    La ligne de texte est du texte libre, pas du JSON : comme `web_image`, aucun
+    middleware ne réémet alors la réponse depuis un JSON qui perdrait le bloc image."""
+    raison = None
+    if sheet is None and max_rows is None and not is_spreadsheet(filename, mime):
+        fmt = image_format(data)
+        if fmt is not None:
+            if len(data) <= INLINE_IMAGE_CAP:
+                return _en_images(filename, mime, len(data), f"{fmt} image",
+                                  [(fmt, data)])
+            raison = (f"image of {len(data)} bytes, over the "
+                      f"{INLINE_IMAGE_CAP // 1_000_000} MB served as image content")
+        elif file_extract.is_pdf(filename, mime):
+            ex = file_extract.extract(data, filename, mime)
+            if ex.status == file_extract.EMPTY:
+                images, raison = _jpeg_des_pages(data)
+                if images is not None:
+                    return _en_images(
+                        filename, mime, len(data),
+                        f"scanned PDF without text, {ex.pages} page(s), "
+                        f"{len(images)} page image(s) in JPEG", images)
+    out = render_for_agent(data, filename, mime, sub=sub, prefix=prefix, sheet=sheet,
+                           max_rows=max_rows)
+    if raison is not None:
+        out["image_unavailable"] = f"{raison} — served as a signed URL instead."
+    return out
+
+
+def _en_images(filename: str, mime: str, size: int, quoi: str, images: list):
+    from fastmcp.tools.tool import ToolResult
+    from fastmcp.utilities.types import Image
+    from mcp.types import TextContent
+    ligne = (f"Attachment « {filename} » ({mime or 'unknown type'}, {size} bytes): "
+             f"{quoi}, below as image content. Nothing was stored.")
+    return ToolResult(content=[TextContent(type="text", text=ligne),
+                               *(Image(data=octets, format=fmt).to_image_content()
+                                 for fmt, octets in images)])
+
+
+def _filtres(x) -> list[str]:
+    f = x.get("/Filter")
+    if f is None:
+        return []
+    f = f.get_object()
+    return [str(v.get_object()) for v in f] if isinstance(f, list) else [str(f)]
+
+
+def _jpeg_des_pages(data: bytes) -> tuple[Optional[list], Optional[str]]:
+    """Les images de page d'un PDF scanné, en JPEG tels que le PDF les porte : `(images,
+    None)`, ou `(None, raison)` dès qu'une page ne se rend pas ainsi.
+
+    Pur pypdf, sans Pillow : seul un flux `/Filter /DCTDecode` (sans autre filtre) est
+    un fichier JPEG tel quel — on en lit les octets ENCODÉS (`_data`), jamais décodés.
+    CCITTFax, JBIG2, JPX ou des pixels bruts (Flate) demanderaient un moteur de rendu
+    que le paquet n'embarque pas : le scan reste alors en URL, raison dite."""
+    from pypdf import PdfReader
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        if getattr(reader, "is_encrypted", False):
+            reader.decrypt("")
+        n = len(reader.pages)
+        if n > SCAN_PAGES_CAP:
+            return None, (f"scanned PDF of {n} pages, over the {SCAN_PAGES_CAP} pages "
+                          "served as images")
+        images, total = [], 0
+        for i, page in enumerate(reader.pages, start=1):
+            ressources = (page.get("/Resources") or {})
+            ressources = ressources.get_object() if ressources else {}
+            xobjets = ressources.get("/XObject")
+            xobjets = xobjets.get_object() if xobjets is not None else {}
+            for ref in xobjets.values():
+                x = ref.get_object()
+                if x.get("/Subtype") != "/Image":
+                    continue
+                filtres = _filtres(x)
+                if filtres != ["/DCTDecode"]:
+                    return None, (f"page {i} image is encoded "
+                                  f"{'+'.join(filtres) or 'raw'}, not JPEG: it cannot "
+                                  "be rendered without an imaging engine")
+                octets = bytes(x._data)
+                if image_format(octets) != "jpeg":
+                    return None, f"page {i} image is not a readable JPEG stream"
+                total += len(octets)
+                if total > INLINE_IMAGE_CAP:
+                    return None, (f"page images over the "
+                                  f"{INLINE_IMAGE_CAP // 1_000_000} MB served as image "
+                                  "content")
+                images.append(("jpeg", octets))
+    # noqa: SILENT — PDF illisible : la raison nommée est rendue à l'appelant
+    except Exception as e:
+        return None, f"page images unreadable ({type(e).__name__})"
+    if not images:
+        return None, "no page image found in this PDF"
+    return images, None

@@ -14,7 +14,7 @@ import base64
 import pytest
 from mcp.types import ImageContent, TextContent
 
-from oto_mcp import redaction
+from oto_mcp import file_content, redaction
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.tools import web as W
 
@@ -61,7 +61,7 @@ def _lu(body: bytes, *, content_type="image/png", final_url="https://acme.fr/a.p
     (b"", None),
 ])
 def test_le_format_se_lit_dans_les_octets(octets, fmt):
-    assert W.image_format(octets) == fmt
+    assert file_content.image_format(octets) == fmt
 
 
 def test_l_image_revient_en_contenu_image_apres_une_ligne_de_texte(monkeypatch):

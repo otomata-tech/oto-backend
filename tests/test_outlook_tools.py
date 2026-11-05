@@ -170,6 +170,27 @@ def test_piece_jointe_par_nom_rendue_pour_l_agent(client, monkeypatch):
     assert kw["prefix"] == "outlook-attachments" and kw["sub"] == "sub-1"
 
 
+def test_piece_jointe_image_revient_en_image_sans_url(client, monkeypatch):
+    """#1522 — une image jointe revient en bloc image MCP, sans dépôt ni URL signée
+    (injoignable d'un bac à sable) ; les autres ops gardent leur dict."""
+    from _pdf_texte import jpeg_minimal
+    from fastmcp.tools.tool import ToolResult
+    from mcp.types import ImageContent
+
+    jpeg = jpeg_minimal()
+    client.get_attachment.return_value = {
+        "name": "photo.jpg", "contentType": "image/jpeg",
+        "contentBytes": base64.b64encode(jpeg).decode()}
+    monkeypatch.setattr("oto_mcp.media_store.upload_private",
+                        lambda *a, **k: pytest.fail("aucun dépôt attendu"))
+    out = _tool("outlook")(op="attachment", message_id="m1", attachment_id="a1")
+    assert isinstance(out, ToolResult)
+    texte, image = out.content
+    assert "photo.jpg" in texte.text
+    assert isinstance(image, ImageContent) and image.mimeType == "image/jpeg"
+    assert base64.b64decode(image.data) == jpeg
+
+
 def test_piece_jointe_ambigue_ou_non_fichier_refusee(client):
     client.list_attachments.return_value = [{"id": "a1", "name": "x"}, {"id": "a2",
                                                                         "name": "x"}]

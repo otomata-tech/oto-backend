@@ -48,6 +48,7 @@ from oto.tools.common.errors import UpstreamHTTPError
 from . import cesures
 
 from .. import access, browserbase, egress, session_org, url_perimeter
+from ..file_content import image_format
 from .lecture import LECTURE
 from ..connectors import health as connector_health
 
@@ -155,25 +156,6 @@ def check_url_public(url: str) -> None:
                          exceptions_declarees=False)
     except egress.EgressRefused as e:
         raise _bad(str(e)) from None
-
-
-# ── image recognition (web_image) ────────────────────────────────────────────
-def image_format(octets: bytes) -> Optional[str]:
-    """`png` | `jpeg` | `gif` | `webp` read from the MAGIC BYTES, else None.
-
-    The `Content-Type` header is not trusted: a server can label anything
-    `image/png`, and an HTML error page served 200 must not reach the model as an
-    image. SVG is deliberately absent: it is XML (scripts, external references),
-    and the MCP clients render only raster formats."""
-    if octets.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "png"
-    if octets.startswith(b"\xff\xd8\xff"):
-        return "jpeg"
-    if octets[:6] in (b"GIF87a", b"GIF89a"):
-        return "gif"
-    if octets[:4] == b"RIFF" and octets[8:12] == b"WEBP":
-        return "webp"
-    return None
 
 
 # ── text extraction (stdlib — no dependency needed to strip tags) ────────────

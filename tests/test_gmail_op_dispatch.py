@@ -130,6 +130,27 @@ def test_attachment_passes_filename_and_index_tiebreaker(client, monkeypatch):
     assert out["encoding"] == "url"
 
 
+def test_attachment_scanned_jpeg_pdf_comes_back_as_page_images(client, monkeypatch):
+    """#1522 — un PDF scanné aux pages JPEG revient en blocs image, sans dépôt ni URL
+    signée (injoignable d'un bac à sable)."""
+    import base64
+    from _pdf_texte import jpeg_minimal, pdf_scanne
+    from fastmcp.tools.tool import ToolResult
+    from mcp.types import ImageContent
+
+    jpeg = jpeg_minimal()
+    client.get_attachment.return_value = {
+        "data": pdf_scanne([("/DCTDecode", jpeg)]), "filename": "scan.pdf",
+        "mimeType": "application/pdf"}
+    monkeypatch.setattr("oto_mcp.media_store.upload_private",
+                        lambda *a, **k: pytest.fail("aucun dépôt attendu"))
+    out = _call("gmail", op="attachment", message_id="m1", filename="scan.pdf")
+    assert isinstance(out, ToolResult)
+    texte, image = out.content
+    assert "scanned PDF" in texte.text
+    assert isinstance(image, ImageContent) and base64.b64decode(image.data) == jpeg
+
+
 def test_attachment_media_unavailable_is_actionable(client, monkeypatch):
     """S3 absent → erreur de tool actionnable, jamais une 500 opaque."""
     from oto_mcp.tools import gmail as G

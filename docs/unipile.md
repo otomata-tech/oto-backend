@@ -60,7 +60,7 @@ le refus NOMME le porteur), n'est pas `org_shareable`, n'a pas de `secret_fields
 ne recopie **pas** `platform_key_open` (propriété de la clé — le recopier serait la
 configuration morte qui a produit la panne all-users de #245). `personal_cross_org`,
 lui, EST recopié : `call_axes` résout par namespace et c'est ce drapeau qui porte
-l'axe `_account=`, donc les comptes accordés (#55).
+l'axe `_account=`, donc le nommage du compte d'un autre membre (#1499).
 
 **Deux façons de connecter un canal, à dessein** : le flux multi-canal du compte
 (code de production) et le flux sans paramètre de chaque carte de canal — le canal y
@@ -68,8 +68,7 @@ est dérivé de `Connector.hosted_channel`, on ne peut pas démarrer une connexi
 WhatsApp depuis la carte Telegram.
 
 **Ce qui n'a PAS bougé** : les tables de comptes (`unipile_accounts`,
-`connector_account_grants`, `unipile_operated_accounts`, `unipile_pending`) étaient
-déjà keyées par CANAL (`provider` = `LINKEDIN`/`WHATSAPP`/…), jamais par connecteur.
+`unipile_pending`) étaient déjà keyées par CANAL (`provider` = `LINKEDIN`/`WHATSAPP`/…), jamais par connecteur.
 
 **Ce qui a dû migrer** (boot, `db/_init.py` — des fail-* qui penchent dans deux
 directions opposées et n'auraient rien levé) : `connector_availability` (pas de
@@ -143,27 +142,13 @@ membre ADR 0033 B4 : le binding vaut dans l'org de contexte, un canal se connect
 org). Même gate d'option par org que LinkedIn (comp admin `access.has_option` ; plus
 de paiement).
 
-> **Instance PERSONNELLE cross-org (issue #172, amende ADR 0033).** Un compte de
-> messagerie hébergé est intrinsèquement **par-personne** (le login LinkedIn/WhatsApp
-> EST l'humain, pas l'appartenance) → le connecteur `unipile` porte le flag registre
-> **`Connector.personal_cross_org=True`**. Conséquence : la clé membre d'un `sub` posée
-> dans UNE org **le suit dans TOUTES ses orgs** (résolution de proximité, pas seulement
-> le pin `instance=` d'ADR 0038). Mécanique — **même seam déterministe**
-> `access.personal_instance_org(sub, connector)` (org PERSO d'abord, sinon la clé la plus
-> récente ; exclut l'org de contexte) partagé par les points de résolution, pour que
-> **clé ET compte restent appariés** (jamais la clé d'ici + le compte de là-bas) :
-> 1. **clé** — `_resolve_credential_impl` : quand la clé membre LOCALE manque, un
->    connecteur `personal_cross_org` retombe sur ma clé membre d'une autre org (mode
->    `user`, `entity_id='{org_porteuse}:{sub}'`) AVANT les paliers partagés/plateforme.
->    Même `sub` ⟹ **zéro usurpation** ; ne mord qu'en l'absence de clé locale (nul impact
->    mono-org / déjà keyé). `credential_mode_for` et la résolution du connect **miroitent**
->    (sinon l'UI/le connect verrait « platform » là où la résolution trouve ma clé perso).
-> 2. **compte** — `connector_identities._own_unipile_account_id` (sous
->    `resolve_operated_account_id`) : l'`account_id` du canal manquant dans l'org de
->    contexte est cherché dans la MÊME org perso que la clé.
-> 3. **surface** — `oto_instance(op='list')` liste mes instances membre d'un connecteur
->    `personal_cross_org` posées ailleurs (`via='personal_cross_org'`), pinnables — sinon
->    « rien ne signale que j'ai déjà une instance perso ailleurs → je reconnecte → doublon ».
+> **Instance PERSONNELLE cross-org (#172) — retirée le 05/11/2026 (#1499).** Ni la
+> clé membre ni le compte ne suivent plus une personne d'une org à l'autre :
+> `access.personal_instance_org` n'existe plus, et
+> `connector_identities._own_unipile_account_id` ne lit que le compte lié à l'org de
+> contexte. Un compte lié dans une AUTRE org de la même personne est refusé nommément
+> (`account_in_other_org`, #1342) et se propose à l'ADOPTION (`unipile_connect_start`),
+> jamais servi en repli.
 >
 > **Garde-fou au connect (piste C)** : `unipile_connect.hosted_auth_url` refuse (409
 > `unipile_already_connected_elsewhere`) si `sub` a déjà connecté CE canal dans une AUTRE
@@ -226,41 +211,34 @@ de paiement).
 > d'avis, ce n'est **pas** « illimité ». Jusque-là, la souscription écrivait `NULL`, relu
 > comme le défaut (5) : un plafond posé à la main retombait à 5 au paiement.
 
-> **Compte partagé autorisé (otomata-private#55).** Le **propriétaire** d'un compte
-> Unipile accorde à un **user nommé, cross-org** (⚠️ corrigé le 2026-09-02 : ce
-> paragraphe disait « d'une org commune, anti-IDOR `users_share_org` » — faux depuis
-> l'origine, le code n'a jamais exigé de partager une org, `test_grant_allows_cross_org_grantee`
-> le prouve ; le seul garde-fou est l'existence de l'user) le droit d'**opérer son
-> compte** sur un canal — la **SEULE exception** au no-fallback anti-usurpation (#5).
-> Table `connector_account_grants` (PK `(owner_sub, provider, grantee_sub)`, patron
-> ADR 0025, `granted_by`/`granted_at` ; l'`account_id` stocké = snapshot d'audit, la
-> résolution relit le handle **LIVE** → owner déconnecté = grant inerte).
->
-> **Cible GROUPE (extension 2026-09-02)** : `grantee="group:<id>"` accorde à TOUS LES
-> MEMBRES ACTUELS d'un groupe, fan-out **dynamique** — table séparée
-> `connector_account_group_grants` (PK `(owner_sub, provider, grantee_group_id)`,
-> jamais un `grantee_sub` nullable : Postgres interdit un NULL en PK). La résolution
-> (`granted_accounts_for`/`list_account_grants_to`) rejoint `org_group_members` EN
-> LIVE à chaque appel — quitter le groupe retire l'accès aussi immédiatement qu'une
-> révocation explicite, sans rien à nettoyer côté grant. L'issue d'origine (#55)
-> demandait déjà « membres nommés OU un département » ; le groupe n'avait jamais été
-> livré (ADR 0051 avait laissé le grant de compte orthogonal au partage d'instance,
-> sans jamais trancher SA cible — gap de plomberie, pas une décision de sécu : seul
-> « qui peut accorder » [le propriétaire, jamais un org_admin] est une garantie
-> délibérée à garder).
->
-> Le grantee (nominatif ou de groupe) bascule via le **sélecteur d'identité** (le
-> compte accordé apparaît « compte de X » ; le select pose le **pointeur**
-> `unipile_operated_accounts`, il n'écrase JAMAIS sa ligne `unipile_accounts`) ou un
-> **pin projet** (garde étendue aux comptes accordés). Résolution :
-> `connector_identities.resolve_operated_account_id` — pointeur **revalidé contre les
-> grants vivants À CHAQUE appel** (révocation = effet immédiat) ; pointeur révoqué =
-> **erreur explicite, jamais de repli** sur le compte propre. Capacité
-> `capabilities/connectors/account_grants.py` (`oto_{list,grant,revoke}_account_*`,
-> REST `/api/me/connector-accounts/*` ; autz `SUB_ONLY`, owner := ctx.sub par
-> construction — pas d'escalade org_admin, y compris pour une cible groupe). ⚠️ La clé
-> du grantee doit joindre le compte (clé partagée org/plateforme OK ; owner sur une clé
-> BYO perso ≠ celle du grantee → 404 Unipile surfacé).
+> **Le compte d'autrui : par les règles, nommé, ou sans nom en dernier recours (#1499,
+> bascule du 05/11/2026).** Plus de prêt ni de pointeur : `connector_account_grants`,
+> `connector_account_group_grants` et `unipile_operated_accounts` sont retirées, avec
+> l'outil `oto_account_access` (il refuse en nommant le geste, `outils_retires`) et les
+> routes `/api/me/connector-accounts/*/grants`. Un compte hébergé a une
+> **sous-instance** (`db/sous_instances` : connecteur `unipile`, propriétaire `member`
+> `<org>:<sub>`, compte `canal:<PROVIDER>`) ; les règles posées sur elle
+> (`oto_instance op=set_rule`, une personne, une équipe ou l'org) donnent aux autres
+> membres un niveau (`read` < `write` < `sensitive` < `manage`), calculé par
+> `access.niveaux.niveau`. Le compte d'autrui sert **nommé** par l'appel
+> (`_account=<account_id>` ou `_instance=inst:<id>`), au niveau qu'exige l'op
+> (`tools/effets` : lire → `read`, envoyer → `sensitive`) : sans règle il ne sert pas
+> (refus comme un compte inconnu, il n'est pas révélé), sous le niveau il est refusé
+> `insufficient_level` en nommant qui le gère. Sans nom, un appel opère le compte propre
+> de l'org de contexte ; s'il n'y en a pas, l'étape 5 (`comptes_heberges.prete_sans_nom`) :
+> un compte de l'org qu'une règle ouvre au niveau exigé (le prêt le plus récent, date de
+> la règle), puis un compte d'une autre org (sa propre clé, puis un prêt) ; la réponse
+> dit `lent_by`. Les anciens pointeurs, repris en règles, retrouvent ainsi leur usage,
+> mais derrière le compte propre (avant : le pointeur passait devant). Un pin de projet ne
+> désigne que le compte propre. Un compte d'une autre org n'est ouvert que par une règle
+> nommant la personne (D1, dans `niveau`) ; celui d'un
+> propriétaire sorti de l'org ou en pause ne sert plus. Code :
+> `connectors/comptes_heberges.py` (préfixe `canal:` ↔ connecteur de canal, comptes
+> d'autrui du canal, nommage) sous `connector_identities.resolve_operated_account_id`.
+> `oto_identity op=list` montre ces comptes avec `level` et `owner` (plus de marques
+> `shared`/`granted`) ; `op=set` les refuse (jamais un défaut). ⚠️ La clé de
+> l'appelant doit joindre le compte (clé partagée org/plateforme OK ; propriétaire sur
+> une clé BYO perso ≠ celle de l'appelant → 404 Unipile surfacé).
 
 ## Lecture et envoi séparés (#1189, 09/10/2026)
 
@@ -368,10 +346,11 @@ panne :
   fallback anti-usurpation) : bâtir le statut dessus aurait remplacé un faux négatif par
   une erreur. `op="status"` court-circuite donc AVANT `unipile_client()`.
 - **Ça résout comme un vrai appel** — `connector_identities.resolve_operated_account_id`,
-  exactement ce que `unipile_client()` emprunte (pin `_account=`, compte accordé #55,
-  compte propre de l'org). « status dit connecté » implique donc « un appel trouvera un
-  compte ». Un pointeur orphelin est **rapporté** au lieu d'être levé : c'est justement
-  l'état qu'on vient lui demander.
+  exactement ce que `unipile_client()` emprunte (`_account=`/`_instance=` nommant son
+  compte ou celui d'un autre membre au niveau de ses règles, sinon le compte propre de
+  l'org). « status dit connecté » implique donc « un appel trouvera un compte ». Un nom
+  qui ne sert pas est **rapporté** au lieu d'être levé : c'est justement l'état qu'on
+  vient lui demander.
 
 ⚠️ **`connected` ≠ `alive`.** Un compte reste LIÉ en base alors que sa session est morte
 côté fournisseur (checkpoint, cookie tourné — #236), et c'est précisément l'état où une
@@ -445,21 +424,13 @@ dur dans un client partagé par six. Ce qui vaut pour LinkedIn seul est une prop
 
 ## Détail accumulé (migré de la carte)
 
-**Instance PERSONNELLE cross-org (#172, amende ADR 0033).** Un compte de messagerie
-hébergé est **par-personne** → flag registre `Connector.personal_cross_org=True`
-(unipile). La clé membre d'un `sub` posée dans UNE org **le suit dans toutes ses orgs**
-(résolution de proximité, pas seulement le pin `instance=` d'ADR 0038) : seam unique
-déterministe `access.personal_instance_org` (org perso > plus récente) partagé par la
-clé (`_resolve_credential_impl`, retombe cross-org AVANT groupe/org/plateforme quand la
-clé LOCALE manque — même sub = zéro usurpation), le miroir de statut (`credential_mode_for`/
-la résolution du connect) ET le compte (`connector_identities._own_unipile_account_id`, MÊME
-org que la clé → appariés). Surfacé pinnable par `oto_instance(op='list')`
-(`via='personal_cross_org'`). **Garde-fou** : `unipile_connect_start`/`POST /api/unipile/connect`
+**Instance PERSONNELLE cross-org (#172) — retirée le 05/11/2026 (#1499)** : voir plus
+haut. Reste le **garde-fou** : `unipile_connect_start`/`POST /api/unipile/connect`
 refusent (409 `unipile_already_connected_elsewhere`, override `force=true`) une 2e
 connexion du même canal déjà lié dans une AUTRE org (anti-doublon `account_id`).
 
 **Siège plateforme cross-org (#221, 2026-07-16, LIVE PROD).** Le cross-org #172 ci-dessus
-était accroché à la **clé MEMBRE** (`personal_instance_org` → `list_member_orgs_for`) →
+était accroché à la **clé MEMBRE** (fonctions retirées par #1499) →
 un user sur la **clé PLATEFORME partagée** (donc SANS clé membre) tombait à travers : son
 siège hébergé, pourtant par-personne, ne le suivait QUE dans les orgs où une ligne
 `unipile_accounts` existait → « je connecte mais ça reste sur Connect » ailleurs. Fix :

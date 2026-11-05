@@ -282,11 +282,11 @@ chemins = [
   "oto_mcp/db/alertes_credential.py",
   "oto_mcp/db/backlinks.py",
   "oto_mcp/db/blocks.py",
-  "oto_mcp/db/connector_grants.py",
   "oto_mcp/db/connector_instances.py",
   # Les règles de comptes et les sous-instances Unipile (#1499) : lues par la révision
   # 20261105_0900 et par le démarrage, comme `connector_instances`.
   "oto_mcp/db/regles_de_comptes.py",
+  "oto_mcp/db/transfert_de_compte.py",
   "oto_mcp/db/sous_instances.py",
   "oto_mcp/db/connector_settings.py",
   # Les contraintes du CREATE TABLE remises à une base servie (#786) : lues par la révision

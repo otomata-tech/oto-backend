@@ -52,10 +52,6 @@ def wired(monkeypatch):
                         lambda sub, org, prov: next(
                             (a["account_id"] for a in state["accounts"]
                              if a["provider"] == prov and a["org_id"] == org), None))
-    monkeypatch.setattr(db, "get_operated_account", lambda sub, prov: None)
-    monkeypatch.setattr(db, "granted_accounts_for", lambda sub, prov: {})
-    monkeypatch.setattr(access, "personal_instance_org",
-                        lambda sub, name, exclude_org=None: None)
     monkeypatch.setattr(access, "resolve_credential",
                         lambda prov, want="auto", sub=None, **k: ResolvedCredential(
                             "unipile", "KEY", True, "platform", None, None))

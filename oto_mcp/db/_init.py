@@ -1299,21 +1299,17 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # ADR 0044 (B0) : l'entrée du coffre devient une INSTANCE de connecteur (config
     # possédée). Colonnes DORMANTES — non lues par la résolution avant B2/B3 (canari
     # additif). `version` = verrou optimiste (B1) ; `share_down` = ouverture au
-    # sous-arbre, mono-scope ; `share_side` = prêts nominatifs à des pairs.
+    # sous-arbre, mono-scope (clés plateforme). `share_side`, les prêts, est retiré
+    # par la révision 20261105_1000_bascule_comptes (#1499).
     conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1")
     # share_down = ALLOWLIST deny-by-default ([] = ouvert au sous-arbre ; restreint aux
-    # scopes listés) ; share_side = EXTENSION (prêts nominatifs à des pairs). Dormantes
-    # jusqu'à l'enforcement (deny-check cascade + garde pin).
+    # scopes listés).
     conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_down JSONB NOT NULL DEFAULT '[]'::jsonb")
-    conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_side JSONB NOT NULL DEFAULT '[]'::jsonb")
     # ADR 0044 §F : polarité de partage explicite. 'open' = share_down vide → ouvert au
     # sous-arbre (comportement historique, défaut inchangé pour tous les scopes BYO) ;
     # 'closed' = share_down vide → personne (allow-list stricte, requise par le scope
     # plateforme dont le « sous-arbre » = tout le monde). Additif, no-op tant que 'open'.
     conn.execute("ALTER TABLE connector_credentials ADD COLUMN IF NOT EXISTS share_mode TEXT NOT NULL DEFAULT 'open'")
-    # GIN sur share_side pour la projection « partagé avec moi » (jsonb_exists_any /
-    # `?|` = scan indexé au lieu d'un seq scan de tout le coffre).
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_conn_cred_share_side ON connector_credentials USING gin (share_side)")
     # Retrait du rôle `guest` (2026-06-15) : défaut → member + migration des
     # lignes existantes (guest était un alias sans effet, cf. access/scope.py).
     conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'member'")
@@ -1657,8 +1653,7 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `unipile`, qui survit comme compte fournisseur — c'est ce qui distingue un
     # split d'un renommage, et pourquoi `rename_selection` ne convenait pas.
     #
-    # Les tables de COMPTES (`unipile_accounts`, `connector_account_grants`,
-    # `unipile_operated_accounts`, `unipile_pending`) ne bougent PAS : leur
+    # Les tables de COMPTES (`unipile_accounts`, `unipile_pending`) ne bougent PAS : leur
     # colonne `provider` a toujours porté le CANAL (LINKEDIN/WHATSAPP/…), jamais
     # le connecteur. Le split les rejoint, il ne les migre pas.
     #

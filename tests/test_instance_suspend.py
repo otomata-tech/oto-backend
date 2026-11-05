@@ -1,7 +1,10 @@
 """Suspension d'instance (lot 2 / ADR 0044 §KeyStack).
 
 Une clé membre `suspended` est SAUTÉE par la résolution de credential (le barreau
-du dessous prend le relais) mais reste listée et réactivable. Trois plans testés :
+du dessous prend le relais) mais reste listée et réactivable — décision de #1499 : comme
+avant la bascule sur les règles. La réponse dit quel barreau a servi. NOMMÉE, elle est
+refusée par son nom : on ne sert pas un autre compte que celui qu'on nomme. Trois plans
+testés :
 - la cascade (`walk_cascade`) saute le barreau membre suspendu ;
 - la RÉSOLUTION RÉELLE (`resolve_credential` → `_member_fetch`, #401) rend le même
   verdict que les sondes — c'est le trou vécu : la sonde honorait la suspension,
@@ -106,6 +109,40 @@ def test_resolution_multi_account_skips_suspended_account(monkeypatch):
                         lambda s, o, p, account="", *a, **k: account == "a1")
     rc = access.resolve_credential("zoho", sub="u1")
     assert rc.mode == "org" and rc.key == "OK"
+
+
+def test_la_reponse_dit_que_la_cle_suspendue_a_ete_sautee(monkeypatch):
+    """L'écho de la réponse dit quel barreau a servi, et que sa clé suspendue a été
+    sautée (`served_by`, `suspended_key_skipped`)."""
+    import asyncio
+
+    from oto_mcp import session_org
+    from oto_mcp.middleware import call_context
+    _wire_real_resolution(monkeypatch, suspended=True)
+    trace: dict = {}
+    tok = session_org.set_call_trace(trace)
+    try:
+        access.resolve_credential("serper", sub="u1")
+        assert asyncio.run(call_context._rappel_de_l_appel()) == {
+            "_account": "", "served_by": "org", "suspended_key_skipped": True}
+    finally:
+        session_org.reset_call_trace(tok)
+
+
+def test_une_cle_nommee_suspendue_reste_refusee(monkeypatch):
+    """Nommée (`_account=`), la clé suspendue est refusée par son nom — jamais un autre
+    compte à sa place (avant la bascule aussi, elle ne servait pas : refus « introuvable »
+    faute d'un compte du même nom plus bas)."""
+    from oto_mcp.mcp_errors import McpError
+    _wire_real_resolution(monkeypatch, suspended=False)
+    monkeypatch.setattr(access.credentials_store, "list_accounts",
+                        lambda et, eid, p: [{"account": "a1", "meta": {}}])
+    monkeypatch.setattr(access.db, "member_instance_suspended",
+                        lambda s, o, p, account="", *a, **k: account == "a1")
+    with pytest.raises(McpError) as e:
+        access.resolve_credential("zoho", sub="u1", account="a1", emit_on_failure=False)
+    assert e.value.error.data["code"] == access.niveaux.CODE_COMPTE_SUSPENDU
+    assert "`zoho` key `a1`" in e.value.error.message
 
 
 # --- capacité d'écriture -----------------------------------------------------

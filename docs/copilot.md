@@ -206,7 +206,7 @@ pire.
 
 - **La boîte de la personne** : ce que la poignée de main lui montre pour (sub, org)
   (`session_visibility.compute_hidden_tools`), moins ce que l'agent intégré n'appelle
-  jamais (`oto_admin_*`, `oto_clear_*`, `oto_use_*`, `oto_shell`, `oto_account_access`,
+  jamais (`oto_admin_*`, `oto_clear_*`, `oto_use_*`, `oto_shell`,
   `oto_enable_tool`/`oto_disable_tool`, `run_start`/`run_finish`, `oto_run_thread`,
   `oto_call` imbriqué). Un socle est offert au modèle (en partie à la demande, §Quel
   modèle répond) ; le reste se joint par `oto_call`.

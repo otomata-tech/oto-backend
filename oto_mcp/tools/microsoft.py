@@ -29,21 +29,14 @@ def register(mcp: FastMCP) -> None:
         `shared` (present only then) = "group" or "org": an account an admin connected on
         behalf of your team or your whole organization, `shared_owner` ({id, name}) that
         team or org — not yours to revoke.
-        `lent_by` (present only then) = the e-mail (or name) of the colleague who LENT you
-        that account: not yours to revoke; `lent_via_group` ({id, name}) when it is lent to
-        a team of yours rather than to you, `lent_via_org` ({id, name}) when it is lent to
-        your whole organization.
         Pass `account` as `_account` to the service tools; omitted, the project's
         pinned account, else your only one, else your default one, else your team's
         account, else your organization's (several at one of these levels and no default:
-        refused, naming them). A lent account is used ONLY when `_account` names it: with
-        no account of your own, your team's or your organization's, a call without
-        `_account` is refused and lists the lent accounts.
+        refused, naming them). A colleague's account is not listed: it is used ONLY when
+        `_account` names it, at the level its rules give you (oto_identity op=list).
         """
         sub = access.current_user_sub_or_raise()
         comptes = ms_auth.avec_noms(ms_auth.accounts_for(sub))
-        preteurs = access.libelles_preteurs(c["lent_by"] for c in comptes
-                                            if c.get("lent_by"))
         return {
             "accounts": [
                 {"account": c["account"],
@@ -52,12 +45,7 @@ def register(mcp: FastMCP) -> None:
                  "services": ms_auth.services_granted((c.get("meta") or {}).get("scopes")),
                  "directory": (c.get("meta") or {}).get("tenant"),
                  **({"shared": c["shared"], "shared_owner": c["shared_owner"]}
-                    if c.get("shared") else {}),
-                 # Lent by a peer (`oto_instance op=lend`): used only when `_account`
-                 # names it, not yours to revoke.
-                 **({"lent_by": preteurs[c["lent_by"]]} if c.get("lent_by") else {}),
-                 **({"lent_via_group": c["via_group"]} if c.get("via_group") else {}),
-                 **({"lent_via_org": c["via_org"]} if c.get("via_org") else {})}
+                    if c.get("shared") else {})}
                 for c in comptes
             ]
         }

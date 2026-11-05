@@ -29,9 +29,7 @@ def socle(monkeypatch):
                      "set_by": "operateur", "set_at": None, "meta": {}}]
         return []
     monkeypatch.setattr(credentials_store, "list_credentials", _list)
-    monkeypatch.setattr(credentials_store, "list_shared_with", lambda scopes: [])
     monkeypatch.setattr(credentials_store, "list_platform_credentials", lambda: [])
-    monkeypatch.setattr(credentials_store, "list_member_orgs_for", lambda s, p: [])
     monkeypatch.setattr(group_store, "list_groups_for_user", lambda s, o=None: [])
     monkeypatch.setattr(db, "list_grants_for_user", lambda s: [])
     monkeypatch.setattr(db, "list_org_grants", lambda o: [])

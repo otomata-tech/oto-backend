@@ -541,8 +541,11 @@ UNIPILE_CHANNELS = {
 }
 
 
-def _channels_from(accts_by_provider: dict) -> dict:
-    """Build the channels dict from the accounts indexed by DB provider."""
+def _channels_from(accts_by_provider: dict, instance_ids: dict) -> dict:
+    """Build the channels dict from the accounts indexed by DB provider. `instance_ids`
+    = `db.unipile_channel_instance_ids(sub)`, read ONCE by the caller: each connected
+    channel carries the id of its sub-instance (`inst:<n>` without the prefix), the one
+    its owner names to set rules on it (#1499); null when not connected."""
     def _ch(provider: str) -> dict:
         a = accts_by_provider.get(provider)
         return {
@@ -550,6 +553,7 @@ def _channels_from(accts_by_provider: dict) -> dict:
             "account_id": a["account_id"] if a else None,
             "account_name": a.get("account_name") if a else None,
             "connected_at": str(a["connected_at"]) if a else None,
+            "instance_id": (instance_ids.get((a.get("org_id"), provider)) if a else None),
         }
     return {front: _ch(prov) for front, prov in UNIPILE_CHANNELS.items()}
 
@@ -588,7 +592,7 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
         "subscribed": subscribed,   # option unlocked (BYO or admin comp) — gates "connect"
         "mode": mode,  # user|group|org|platform|over_quota|forbidden (origin of the key)
         "byo": byo,
-        "channels": _channels_from(accts),
+        "channels": _channels_from(accts, db.unipile_channel_instance_ids(sub)),
         # per front channel: the sub's account connected ELSEWHERE, adoptable here in one click
         # (the Connect button adopts on the backend side — the UI can announce it).
         "elsewhere": {front_by_provider[p]: v for p, v in elsewhere.items()
@@ -613,8 +617,9 @@ def account_status(provider: str = "LINKEDIN",
       an McpError: building the status on it would have replaced a false negative with an
       error, i.e. changed nothing. Here, "not connected" is an ANSWER.
     - **It resolves like a real call.** `resolve_operated_account_id` is
-      exactly what `unipile_client()` goes through (pin `_account=`, granted account #55,
-      the org's own account) — so "status says connected" implies
+      exactly what `unipile_client()` goes through (`_account=`/`_instance=` naming the
+      caller's or another member's account at its rules' level, else the caller's own
+      account of the org) — so "status says connected" implies
       "a call will find an account". Any other reading would recreate the card that
       reassures while the calls fail.
 
@@ -637,6 +642,7 @@ def account_status(provider: str = "LINKEDIN",
     connected in the same window on the shared key (`ambiguous_candidates`).
     """
     from .. import unipile_connect
+    from ..connectors import comptes_heberges
     from ..connectors import identities as connector_identities
     from ..connectors import readiness as connector_readiness
 
@@ -653,21 +659,22 @@ def account_status(provider: str = "LINKEDIN",
 
     try:
         account_id = connector_identities.resolve_operated_account_id(sub, provider)
-        pointer_error = None
-    except ValueError as e:
-        # Orphaned "operated identity" pointer (revoked grant, account disconnected by
-        # its owner): a real call RAISES here. The status REPORTS it instead —
-        # it is exactly the kind of state one comes to ask it about.
-        account_id, pointer_error = None, str(e)
+        refus_du_nom = None
+    except (ValueError, McpError) as e:
+        # A NAMED account that does not serve (unknown, closed to the caller, below the
+        # level): a real call RAISES here. The status REPORTS it instead — it is
+        # exactly the kind of state one comes to ask it about.
+        account_id = None
+        refus_du_nom = e.error.message if isinstance(e, McpError) else str(e)
 
     label = None
     if account_id:
         label = next((a.get("account_name") for a in db.list_unipile_accounts(sub)
                       if a.get("account_id") == account_id), None)
         if label is None:
-            granted = db.granted_accounts_for(sub, provider) or {}
-            g = granted.get(account_id)
-            label = (g or {}).get("account_name") if isinstance(g, dict) else None
+            label = next((a["account_name"] for a in
+                          comptes_heberges.comptes_d_autrui_du_canal(sub, provider)
+                          if a["account_id"] == account_id), None)
 
     alive = None
     if account_id:
@@ -706,7 +713,7 @@ def account_status(provider: str = "LINKEDIN",
         nom = canal_con.name if canal_con else "unipile"
         # #1342: an own account linked in another org is named, with its gesture —
         # never « connect your account » for an account that exists.
-        ailleurs = ([] if pointer_error
+        ailleurs = ([] if refus_du_nom
                     else connector_identities.comptes_dans_une_autre_org(sub, provider))
         if ailleurs:
             out["elsewhere"] = ailleurs[0]
@@ -714,7 +721,7 @@ def account_status(provider: str = "LINKEDIN",
             return out
         diag = connector_readiness.diagnose(
             sub, nom, org=org, group=access.current_group(sub))
-        out["next_step"] = pointer_error or (
+        out["next_step"] = refus_du_nom or (
             diag.next_step if diag is not None
             else connector_readiness.no_identity_step(sub, nom, "account"))
     elif alive is False:
@@ -795,6 +802,7 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
     (`unipile_accounts.org_id`). Accounts attached to an org outside their list fall
     into an "(outside their orgs)" block."""
     accts = db.list_unipile_accounts(sub)
+    ids = db.unipile_channel_instance_ids(sub)
     out = []
     for o in orgs:
         oid = o["org_id"]
@@ -805,7 +813,7 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
             "org_id": oid, "org_name": o.get("name"), "is_active": bool(o.get("is_active")),
             "subscribed": access.option_open(sub, "unipile", org=oid),  # single source
             "mode": mode, "byo": byo,
-            "channels": _channels_from(by),
+            "channels": _channels_from(by, ids),
             # Through the seam, never through the sources. `org_comp` = the org's declared
             # right (any source). `user_comp` = the person's account mark,
             # shown for the record — it opens nothing. `subscribed` also counts a
@@ -821,7 +829,7 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
         out.append({
             "org_id": None, "org_name": "(outside their orgs)", "is_active": False,
             "subscribed": None, "mode": None, "byo": None,
-            "channels": _channels_from(orphans), "option_source": None,
+            "channels": _channels_from(orphans, ids), "option_source": None,
         })
     return out
 
@@ -908,9 +916,9 @@ def _project_operated_account(anon, provider: str) -> str:
 
 
 def _refus_identite(e: ValueError):
-    """The protocol error of an identity that cannot be operated. A loan held back by
-    its lender's pause (#898) carries its code there (`lender_suspended`), so that an
-    agent can tell it from a revocation without reading the sentence."""
+    """The protocol error of an identity that cannot be operated. A refusal that names
+    itself (`account_in_other_org`, #1342) carries its code there, so that an agent can
+    tell it apart without reading the sentence."""
     code = getattr(e, "code", None)
     return ErrorData(code=INVALID_PARAMS, message=str(e),
                      **({"data": {"code": code, "retryable": False}} if code else {}))
@@ -925,10 +933,12 @@ def unipile_client(provider: str = "LINKEDIN"):
     1st account → **cross-user impersonation** (security audit 2026-06-18). We require the
     per-user credential, otherwise an actionable McpError. Reused by tools/whatsapp.py.
 
-    ONLY exception (#55): an account GRANTED by its owner
-    (`connector_account_grants`, revalidated on EVERY call — immediate revocation),
-    resolved by `connector_identities.resolve_operated_account_id`. Limitation: if
-    the owner is on a DIFFERENT Unipile key than the grantee (personal BYO ≠ shared
+    ONLY exception (#1499): another person's account a rule opens to the caller, NAMED by
+    the call (`_account=`/`_instance=`), or unnamed when she has no account of her own on
+    the channel (step 5), served at the level the rules of its sub-instance give the
+    caller (refused `insufficient_level` below it when named) — resolved by
+    `connector_identities.resolve_operated_account_id`, on every call. Limitation: if
+    the owner is on a DIFFERENT Unipile key than the caller (personal BYO ≠ shared
     key), the Unipile API will answer 404 on the account_id — error surfaced as
     is (the resolved key is independent of the account).
     """
@@ -951,12 +961,13 @@ def unipile_client(provider: str = "LINKEDIN"):
     sub = access.current_user_sub_or_raise()
     try:
         account_id = connector_identities.resolve_operated_account_id(sub, provider)
-    except ValueError as e:  # operated pointer revoked/disconnected → explicit error
+    except ValueError as e:  # a named account that does not serve → explicit error
         raise McpError(_refus_identite(e))
-    # Project pin (#57): if the active project pins an unipile account, it takes precedence over the
-    # per-channel default — BUT only if it belongs to THIS user IN THIS org
-    # (anti-impersonation + member scope ADR 0033) OR is granted to them by its owner
-    # (#55, live grant re-checked at this call), AND to the requested channel. Otherwise default (fail-soft).
+    # Project pin (#57): if the active project pins an unipile account, it takes precedence
+    # over the per-channel default — BUT only if it belongs to THIS user IN THIS org
+    # (anti-impersonation + member scope ADR 0033), AND to the requested channel. Another
+    # member's account is never served by a project pin: named by the call, or step 5.
+    # Otherwise default (fail-soft).
     org = access.current_org(sub)
     # Same name duality as on the anonymous path (see `_project_operated_account`):
     # the channel first — a link set from ITS card is the most specific —, the
@@ -964,21 +975,10 @@ def unipile_client(provider: str = "LINKEDIN"):
     canal_con = providers.connector_for_hosted_channel(provider)
     pinned = ((access.project_pinned_identity(canal_con.name) if canal_con else None)
               or access.project_pinned_identity("unipile"))
-    if pinned and (
-        any(a.get("account_id") == pinned and a.get("provider") == provider
-            and a.get("org_id") == org
-            for a in db.list_unipile_accounts(sub))
-        or pinned in db.granted_accounts_for(sub, provider)
-    ):
+    if pinned and any(a.get("account_id") == pinned and a.get("provider") == provider
+                      and a.get("org_id") == org
+                      for a in db.list_unipile_accounts(sub)):
         account_id = pinned
-    elif pinned:
-        # The project pins an account LENT by a paused account (#898): neither the
-        # fallback to the default (we would act under a different identity than the one the
-        # project declares), nor a mute refusal — the named refusal.
-        try:
-            connector_identities.refuser_si_preteur_en_pause(sub, provider, pinned)
-        except ValueError as e:
-            raise McpError(_refus_identite(e))
     if not account_id:
         # #1342 (option C of 27/10/2026): the caller's OWN account of this channel is
         # linked in another of their orgs and adoptable here → say so, with the gesture.

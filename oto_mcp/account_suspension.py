@@ -26,13 +26,12 @@ vérifiée à la connexion ne protégerait de rien pendant tout ce temps ; ce se
 bouton qui rassure sans agir. Le coût est une lecture sur clé primaire par requête, à
 côté d'un `upsert_user` que la face REST fait déjà à chaque appel.
 
-**Ce qu'il a prêté s'arrête avec lui** (oto-backend#898, arbitrage du 23/09/2026,
-option A). Un compte de connecteur prêté (`connector_account_grants`, nominatif ou de
-groupe) et une clé prêtée à un pair (`share_side`, ADR 0044) cessent de servir leurs
-bénéficiaires pendant la pause, et reprennent au réveil sans rien reconfigurer : rien
-n'est détaché, c'est la résolution qui lit l'état du prêteur à chaque appel. Le
-bénéficiaire, lui, n'est pas en pause — il reçoit un refus qui le DIT
-(`PreteurEnPause`, code `lender_suspended`), pas « révoqué » ni « introuvable ».
+**Ce qu'il partage s'arrête avec lui** (oto-backend#898, arbitrage du 23/09/2026,
+option A). Un compte personnel dont le titulaire est en pause ne donne plus aucun niveau
+aux autres (`access/niveaux._proprietaire_present`, #1499), et le retrouve au réveil
+sans rien reconfigurer : rien n'est détaché, ses règles restent, c'est la résolution
+qui lit l'état du titulaire à chaque appel. Celui qui le nomme reçoit le refus de niveau
+(`insufficient_level`), qui dit qui gère le compte.
 
 Ce que ce module ne fait PAS : décider QUI peut mettre en pause (c'est l'autorisation
 de la capacité `admin.account`), ni empêcher un compte en pause de disparaître d'un
@@ -50,25 +49,6 @@ logger = logging.getLogger(__name__)
 # Le code servi aux DEUX faces, sans traduction : un signal remonté par un agent se
 # retrouve tel quel dans le journal, et un intégrateur n'a qu'une chaîne à connaître.
 CODE = "account_suspended"
-# Le refus servi au BÉNÉFICIAIRE d'un prêt dont le prêteur est en pause (#898). Code
-# distinct : celui qui le reçoit n'est pas en pause, et confondre les deux l'enverrait
-# demander le réveil d'un compte qui n'est pas le sien.
-CODE_PRETEUR = "lender_suspended"
-
-
-class PreteurEnPause(ValueError):
-    """Le connecteur visé est PRÊTÉ par un compte mis en pause (#898, option A).
-
-    `ValueError` parce que c'est la famille que les chemins de résolution d'identité
-    lèvent déjà pour « ce compte n'est pas opérable » (et que leurs appelants
-    convertissent en refus) ; la sous-classe porte le code qui le NOMME, pour qu'une
-    surface qui veut distinguer la pause d'une révocation le puisse."""
-
-    code = CODE_PRETEUR
-
-    def __init__(self, preteur: str, quoi: str):
-        self.preteur = preteur
-        super().__init__(message_preteur(preteur, quoi))
 
 
 def etat(sub: str) -> Optional[dict]:
@@ -97,32 +77,6 @@ def message(pause: dict) -> str:
             "appartient n'a été supprimé." + fin +
             " Le réveil est un acte d'administration — demandez-le à l'administrateur "
             "de votre espace.")
-
-
-def message_preteur(preteur: str, quoi: str) -> str:
-    """La phrase servie au bénéficiaire d'un prêt retenu par la pause du prêteur.
-
-    Elle dit ce qui s'arrête et pourquoi, que ce n'est ni une révocation ni une panne,
-    que le prêt reviendra tel quel, et ce qu'on peut faire d'ici là. Elle ne donne PAS
-    le motif de la pause : il appartient à l'exploitant et au compte visé, pas à ceux
-    à qui ce compte prêtait."""
-    return (f"{quoi} t'est prêté par {preteur}, dont le compte est en pause : le "
-            "prêt est suspendu avec lui — ni révoqué, ni supprimé. Il reprendra tel "
-            "quel à son réveil, sans rien reconfigurer de ton côté. D'ici là, agis "
-            "sous une autre identité (oto_identity(op='list'), oto_instance(op='list')) "
-            "ou demande le réveil à l'administrateur de son espace.")
-
-
-def refus_preteur(sub: str, quoi: str) -> Optional[PreteurEnPause]:
-    """Le refus à lever si `sub`, qui PRÊTE `quoi`, est en pause — `None` sinon.
-
-    Même source unique que la garde d'entrée (`etat`), et même règle : un hoquet de
-    base remonte. Le prêteur est nommé par son email (c'est ainsi que le bénéficiaire
-    le connaît), par son sub à défaut."""
-    if etat(sub) is None:
-        return None
-    user = db.get_user(sub) or {}
-    return PreteurEnPause(user.get("email") or sub, quoi)
 
 
 def refus(sub: str) -> Optional[tuple[str, dict]]:

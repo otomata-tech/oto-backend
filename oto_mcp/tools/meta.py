@@ -27,6 +27,7 @@ from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
 from ..connectors import health as connector_health
 from ..tool_visibility import namespace_of
+from . import lecture
 
 # Meta/spine tools not dispatchable via `oto_call` (ADR 0036 §4): already always visible,
 # no point going through dispatch, and anti-loop (`oto_call` on itself).
@@ -275,6 +276,9 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
     # envelope's), a recipe runs several targets, each its own call.
     cible_uid = geste.nouvel_identifiant()
     budget.ouvrir_appel(name, args, call_uid=cible_uid)
+    # What the TARGET does: the level its account must give, judged at resolution
+    # (`access/niveaux`, #1499) — same note, same place, as the context middleware.
+    appel_tok = access.noter_l_appel(name, args, lecture.en_lecture(tool))
     started = time.monotonic()
     ok, err = True, None
     echec: Optional[BaseException] = None
@@ -337,6 +341,7 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
         elif echec is not None:
             await run_in_threadpool(access.regler_echec, sub, name, target_trace, echec)
         session_org.reset_call_trace(trace_tok)
+        access.oublier_l_appel(appel_tok)
         # The echo returned to the agent (`resolved_account`/`resolved_connector`, read by
         # `CallContextMiddleware` in the ENVELOPE record) must survive; only
         # the keys that bill stay on the target's row, and the keys of the settlement

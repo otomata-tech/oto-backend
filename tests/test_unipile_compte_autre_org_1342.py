@@ -16,7 +16,7 @@ import asyncio
 
 import pytest
 
-from oto_mcp import access, db, providers, session_org
+from oto_mcp import access, db, session_org
 from oto_mcp.access import ResolvedCredential
 from oto_mcp.capabilities._types import ResolvedCtx
 from oto_mcp.capabilities.connectors import identities as CI
@@ -40,11 +40,9 @@ class _FakeClient:
 def monde(monkeypatch):
     """Le compte WhatsApp du sub vit dans l'org 2 ; le contexte est l'org 3, où
     l'option est ouverte (donc le compte y est adoptable)."""
-    etat = {"comptes": [dict(COMPTE)], "ailleurs": dict(AILLEURS), "prets": {}}
+    etat = {"comptes": [dict(COMPTE)], "ailleurs": dict(AILLEURS)}
     monkeypatch.setattr(access, "current_org", lambda sub: ICI)
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "u1")
-    monkeypatch.setattr(access, "personal_instance_org",
-                        lambda sub, con, exclude_org=None: None)
     monkeypatch.setattr(access, "project_pinned_identity", lambda c: None)
     monkeypatch.setattr(access, "resolve_credential",
                         lambda p, want="auto", **k: ResolvedCredential(
@@ -54,9 +52,6 @@ def monde(monkeypatch):
                         lambda sub, org, prov: next(
                             (a["account_id"] for a in etat["comptes"]
                              if a["org_id"] == org and a["provider"] == prov), None))
-    monkeypatch.setattr(db, "get_operated_account", lambda sub, prov: None)
-    monkeypatch.setattr(db, "granted_accounts_for", lambda sub, prov: dict(etat["prets"]))
-    monkeypatch.setattr(db, "suspended_lenders_for", lambda sub, prov: {})
     monkeypatch.setattr(unipile_tool, "status_for",
                         lambda sub, **k: {"elsewhere": dict(etat["ailleurs"])})
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeClient)
@@ -130,25 +125,13 @@ def test_epingle_sur_un_compte_adopte_ici_ET_lie_ailleurs_passe(monde):
         session_org.reset_call_account(tok)
 
 
-def test_epingle_sur_un_pret_passe_toujours(monde):
-    """Les prêts (#55) ne sont pas touchés par le cloisonnement."""
-    monde["prets"] = {"acc_pret": {"owner_sub": "owner"}}
-    tok = _epingle("acc_pret")
-    try:
-        assert ci.resolve_operated_account_id("u1", "WHATSAPP") == "acc_pret"
-    finally:
-        session_org.reset_call_account(tok)
-
-
-def test_epingle_sur_le_compte_byo_qui_suit_la_personne_passe(monde, monkeypatch):
-    """#172 : la clé BYO personnelle suit la personne, son compte apparié avec elle —
-    c'est ce que la résolution sans épingle sert déjà ; l'épingler reste permis."""
-    monkeypatch.setattr(providers, "is_personal_cross_org", lambda name: True)
-    monkeypatch.setattr(access, "personal_instance_org",
-                        lambda sub, con, exclude_org=None: LA_BAS)
+def test_epingle_le_compte_byo_d_une_autre_org_ne_suit_plus_la_personne(monde):
+    """#172 retiré (#1499) : ni la clé ni le compte ne suivent une personne d'une org à
+    l'autre — son compte d'une autre org épinglé reçoit le refus NOMMÉ, jamais servi."""
     tok = _epingle("acc_wa")
     try:
-        assert ci.resolve_operated_account_id("u1", "WHATSAPP") == "acc_wa"
+        with pytest.raises(ci.CompteDansUneAutreOrg):
+            ci.resolve_operated_account_id("u1", "WHATSAPP")
     finally:
         session_org.reset_call_account(tok)
 

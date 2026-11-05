@@ -160,13 +160,12 @@ def test_un_partage_caduc_ne_donne_rien(monde):
     assert not ownership.can_access(sub, "project", str(m["pid"]))
 
 
-@pytest.mark.parametrize("kw", [{"cascade": True}, {"credentials": "inherit"}])
-def test_cascade_et_pret_de_cles_attendent_l_inscription(monde, kw):
+def test_la_cascade_attend_l_inscription(monde):
     from oto_mcp.capabilities._types import AuthzDenied
     m = monde
     with pytest.raises(AuthzDenied) as e:
-        _geste(m, "share", email=m["invitee"], role="viewer", **kw)
-    assert e.value.code in ("pending_share_plain_only", "inherit_beyond_sharer_rights")
+        _geste(m, "share", email=m["invitee"], role="viewer", cascade=True)
+    assert e.value.code == "pending_share_plain_only"
     assert not _lignes(m)
 
 

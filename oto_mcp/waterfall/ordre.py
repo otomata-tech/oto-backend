@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 #: key is a SHARED key — the instance's operator pays it, and on the primary tenant it is
 #: rebilled like the platform's (`credits.rang_refacture`). A step that the shared key must
 #: not serve (`Step.own_key_only`) never runs on it, and the default order puts it behind.
-_OWN_KEY = ("user", "group", "org")
+#: `elsewhere` (step 5, #1499): an account of another org — a key of its own, which the
+#: operator does not pay.
+_OWN_KEY = ("user", "group", "org", "elsewhere")
 #: …and those that mean "no usable key": the step is skipped without a call.
 _NO_KEY = ("forbidden", "over_quota")
 

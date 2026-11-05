@@ -34,8 +34,8 @@ def _project_axis():
 
 @pytest.fixture(autouse=True)
 def _appelant_membre(monkeypatch):
-    """Depuis #480, la pose lit l'appartenance de l'appelant à l'org du projet (le
-    verdict des clés). Ces tests portent sur la co-pose : appelant membre par défaut ;
+    """La pose lit l'appartenance de l'appelant à l'org du projet (la marque « hors de
+    l'org », #1499 D1). Ces tests portent sur la co-pose : appelant membre par défaut ;
     le cas du bénéficiaire hors org se pose explicitement."""
     from oto_mcp import roles
     monkeypatch.setattr(roles, "is_org_member", lambda sub, oid: True)
@@ -138,23 +138,21 @@ async def test_pin_project_team_owner_skips_group_for_non_member(monkeypatch):
     monkeypatch.setattr(ownership, "owner_of", lambda rt, rid: ("group", "7"))
     monkeypatch.setattr(group_store, "get_group", lambda gid: {"id": 7, "org_id": 35})
     monkeypatch.setattr(roles, "can_read_group", lambda sub, gid: False)
-    # #480 : hors de l'org aussi, et aucun héritage déclaré.
+    # Hors de l'org aussi (#1499, D1).
     monkeypatch.setattr(roles, "is_org_member", lambda sub, oid: False)
-    monkeypatch.setattr(ownership, "accessor_scope",
-                        lambda sub: ownership.AccessorScope(sub=sub, org_ids=[], group_ids=[]))
-    from oto_mcp.db import grants as db_grants
-    monkeypatch.setattr(db_grants, "edges_for", lambda ref, grantees: [])
 
     undo = await _project_axis().pin(5)
     try:
         assert session_org.current_call_org() == 35       # org parente quand même co-posée
         assert session_org.current_call_group() is None    # mais pas l'équipe (hors garde)
-        # …ni ses clés d'org : le verdict dit « hors org, rien de prêté » (#480).
-        cles = session_org.current_call_cles()
-        assert cles is not None and not cles.membre and not cles.org_heritee
+        # …ni ses comptes d'org : la marque « hors de l'org » est posée (#1499, D1).
+        assert session_org.current_call_hors_org() == ("outsider", 35)
+        assert access.org_d_appartenance("outsider", 35) is None
+        assert access.org_d_appartenance("autre", 35) == 35
     finally:
         for reset, tok in reversed(undo):
             reset(tok)
+    assert session_org.current_call_hors_org() is None    # reset LIFO
 
 
 @pytest.mark.asyncio

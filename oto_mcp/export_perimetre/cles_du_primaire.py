@@ -87,7 +87,7 @@ def _refus(conn, lignes: list[dict], labels: dict[str, str],
     if mauvais:
         refus.append(f"labels plateforme invalides : {mauvais}")
     for r in lignes:
-        if r["share_side"] or r["share_down"] or r["share_mode"] != "open":
+        if r["share_down"] or r["share_mode"] != "open":
             refus.append(f"{r['connector']} : la ligne tenant porte un partage")
     for r in conn.execute("SELECT connector, entity_id FROM connector_credentials "
                           "WHERE entity_type = %s AND connector = ANY(%s)",
@@ -113,12 +113,12 @@ def _refus(conn, lignes: list[dict], labels: dict[str, str],
 
 def _relire(conn, connecteur: str, label: str, empreinte: str) -> None:
     ligne = conn.execute(
-        "SELECT secret_enc, share_mode, share_down, share_side FROM connector_credentials "
+        "SELECT secret_enc, share_mode, share_down FROM connector_credentials "
         "WHERE entity_type = %s AND entity_id = %s AND connector = %s AND account = ''",
         (cs.PLATFORM, label, connecteur)).fetchone()
     if ligne is None:
         raise ConversionRefusee(f"{connecteur} : ligne plateforme absente après la pose")
-    if ligne["share_mode"] != "open" or ligne["share_down"] or ligne["share_side"]:
+    if ligne["share_mode"] != "open" or ligne["share_down"]:
         raise ConversionRefusee(f"{connecteur} : l'instance plateforme n'est pas ouverte à tous")
     try:
         relu = _empreinte(cs._reveal(ligne, cs.PLATFORM, label, connecteur, ""))
@@ -141,8 +141,8 @@ def convertir(conn, slug: str) -> dict[str, str]:
         raise ConversionRefusee(f"{slug!r} n'est pas le tenant primaire de cette base "
                                 f"({primaire and primaire['slug']!r})")
     lignes = conn.execute(
-        "SELECT connector, account, secret_enc, meta, set_by, share_mode, share_down, "
-        "share_side FROM connector_credentials WHERE entity_type = %s AND entity_id = %s "
+        "SELECT connector, account, secret_enc, meta, set_by, share_mode, share_down "
+        "FROM connector_credentials WHERE entity_type = %s AND entity_id = %s "
         "ORDER BY connector, account FOR UPDATE", (cs.TENANT, slug)).fetchall()
     if not lignes:
         return {}

@@ -4,7 +4,7 @@ Le lot ajoute un barreau entre l'org et la plateforme : une clé posée sur un t
 sert à toutes les orgs de ce tenant qui n'en ont pas de plus proche. Ce fichier garde
 les quatre choses qui, si elles cédaient, feraient mentir une surface :
 
-1. **L'ordre.** `user > cross-org > groupe > org > TENANT > plateforme`, dans le walker
+1. **L'ordre.** `user > groupe > org > TENANT > plateforme`, dans le walker
    unique et nulle part ailleurs — sondes injectées, aucun stub de base.
 2. **L'inertie sans clé tenant.** Le tenant d'un appelant se lit sur son sub qualifié
    (jamais sur le rattachement d'org — lot L1) ; un sub NU relève du tenant primaire,
@@ -47,7 +47,7 @@ def registre(monkeypatch):
         raising=False)
 
 
-def probe(*, member=False, cross=False, group=False, org=False, tenant=False,
+def probe(*, member=False, group=False, org=False, tenant=False,
           platform=False, vu: list | None = None):
     """Sonde à six barreaux ; `vu` note les barreaux effectivement SONDÉS (un barreau
     sauté ne coûte rien — c'est ce que la mesure mono-loop demande)."""
@@ -57,7 +57,6 @@ def probe(*, member=False, cross=False, group=False, org=False, tenant=False,
         return val
     return access.CascadeProbe(
         member=lambda s, o, p: _note("member", ("MK", "") if member else None),
-        member_cross=lambda s, o, p: _note("cross", "XK" if cross else None),
         legacy_user=lambda s, p: None,
         group=lambda g, p: _note("group", "GK" if group else None),
         org=lambda o, p: _note("org", "OK" if org else None),

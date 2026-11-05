@@ -3,8 +3,8 @@
 Three families, all GUARDS or ENUMERATIONS, never a resolution:
 
 - **tool visibility** hidden by the org_admin or the team lead (0031);
-- **instance sharing**: the level guard of a pinned instance (0038 B6)
-  and the named loans `share_side` (0044);
+- **instance sharing**: the guard of a pinned instance (0038 B6), another person's
+  account only where its rules open it (#1499);
 - **instances within reach**: what a call token could legitimately reach, so
   that the "nothing resolves" error surfaces the choices instead of a bare refusal.
 
@@ -61,45 +61,30 @@ def group_admin_hidden_tools(group: Optional[int]) -> set:
     return set(db.list_group_disabled_tools(group))
 
 
-def _instance_side_shares_safe(entity_type: str, entity_id: str, provider: str,
-                               account: str = "") -> list:
-    """`share_side` (named loans) of an instance, RESILIENT: on a DB hiccup →
-    `[]` + warning = **fail-CLOSED** (no loan granted without proof). In prod this
-    path is only reached after a successful key read (same DB) — the fail-safe
-    therefore only bites in unit tests without a DB. (The BYO `share_down` notch was
-    removed: a BYO instance is usable by the whole subtree of its owner,
-    restricting = placing it at the right level. `share_down` now only lives on
-    PLATFORM instances, as a list of grantees — `_platform_instance_usable`.)"""
-    try:
-        _, side = credentials_store.get_instance_sharing(entity_type, entity_id, provider, account)
-        return side
-    except Exception as e:
-        logger.warning("instance_sharing fail-safe %s:%s/%s: %s", entity_type, entity_id, provider, e)
-        return []
-
-
-def _refuser_si_preteur_en_pause(ref) -> None:
-    """A `share_side` loan stops with its lender's pause, and comes back when they
-    wake (#898, option A of 2026-09-23): refusal named `lender_suspended`."""
-    from .. import account_suspension
-    refus = account_suspension.refus_preteur(ref.sub, f"The `{ref.connector}` key")
-    if refus is not None:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message=str(refus),
-                                 data={"code": refus.code, "retryable": False}))
-
-
-def _refuser_si_preteur_parti(ref) -> None:
-    """A loan stops when its lender leaves the org it was made in — to a person as to a
-    team; nothing is detached, the row and its `share_side` stay (ADR 0062-D4)."""
-    from .. import roles
-    if not roles.is_org_member(ref.sub, ref.org_id):
+def _ouvert_par_une_regle(sub: str, ref, entity_type: str, entity_id: str, *,
+                          refus: str, nominative: bool = False) -> Optional[int]:
+    """An account the caller does not own nor reach by membership, NAMED by `_instance=`:
+    it serves if its rules give her a level (#1499) — another person's account of her
+    org, or an account of another org a rule naming her opens (D1), or her own key in
+    another org (#172). The caller keeps her org. A refusal says nothing of the account
+    beyond what the caller already named."""
+    from . import comptes, niveaux
+    org_appel = scope.current_org(sub)
+    porteur = providers.credential_provider(ref.connector)
+    trouves = comptes.comptes_des_lignes(porteur, [(entity_type, entity_id, ref.account or "")])
+    compte = trouves.get((entity_type, entity_id, ref.account or ""))
+    appelant = niveaux.Appelant(sub, org_appel, lambda: scope.current_group(sub))
+    if nominative and compte is not None and not any(
+            r.user == sub and r.level != "none" for r in compte.regles):
+        compte = None   # only a rule NAMING her opens it, never a default
+    if compte is None or niveaux.RANG[niveaux.niveau(appelant, compte, besoin="read")] == 0:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
-            message=(f"Instance refused: the member who lent this `{ref.connector}` key is "
-                     f"no longer a member of org #{ref.org_id}, where the loan was made — "
-                     "it no longer serves. Use an account of your own, or ask them to lend "
-                     "one again from an org they belong to. Nothing was done."),
-            data={"code": "lender_left_org", "retryable": False}))
+            message=(f"Instance refused: {refus} "
+                     "(oto_instance op='rules' on an account you manage; "
+                     "oto_identity op='list' for those you can name)."),
+            data={"code": niveaux.CODE_NIVEAU_INSUFFISANT, "retryable": False}))
+    return org_appel
 
 
 def guard_instance_access(sub: str, ref) -> Optional[int]:
@@ -123,42 +108,38 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
             message=("The `inst:` instance identifier cannot be pinned yet: "
                      "pass back the `ref` returned by oto_instance(op='list').")))
     if ref.level == "member":
-        if ref.sub == sub:                       # owner: my own instance
-            if not roles.is_org_member(sub, ref.org_id):
-                raise McpError(ErrorData(
-                    code=INVALID_PARAMS,
-                    message=f"Instance refused: you are no longer a member of org #{ref.org_id}."))
-            return ref.org_id
-        # Loan to a peer (share_side, ADR 0044): instance of ANOTHER member, allowed
-        # iff `sub` is named in its share_side. We BORROW the key but keep the
-        # CALLER's context → co-set THEIR org (not the owner's; cross-org OK,
-        # the named loan IS the consent). Explicit pin → HARD refusal if not lent.
-        side = _instance_side_shares_safe(
-            credentials_store.MEMBER, credentials_store.member_id(ref.org_id, ref.sub),
-            ref.connector, ref.account)
-        if scope._sub_matches_scopes(sub, side):
-            _refuser_si_preteur_parti(ref)
-            _refuser_si_preteur_en_pause(ref)
-            return scope.current_org(sub)
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=("Instance refused: it belongs to another member and is not "
-                     "lent to you (share_side).")))
+        if ref.sub == sub and roles.is_org_member(sub, ref.org_id):
+            return ref.org_id                    # owner: my own instance, in its org
+        # ANOTHER person's account, or the caller's own key in an org she cannot act in
+        # (a delegated job locked to its org, #172), or an account of another org a rule
+        # naming her opens (D1, #1499): pinned, it serves to someone its rules open
+        # it to — the exact level the call requires is judged at resolution
+        # (`resolve._resolve_pinned_instance`). The caller KEEPS her org.
+        return _ouvert_par_une_regle(
+            sub, ref, credentials_store.MEMBER,
+            credentials_store.member_id(ref.org_id, ref.sub),
+            refus=("you are no longer a member of its org" if ref.sub == sub
+                   else "it belongs to another member and no rule opens it to you"))
     if ref.level == "group":
         # Group reader = member OR org admin (escalation `can_read_group`,
         # roles.py) — this is the path by which an org_admin uses the instance
         # of a team in their org (pin `_instance=` / project binding).
         if not roles.can_read_group(sub, ref.group_id):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=f"Instance refused: you are not a member of group #{ref.group_id}."))
+            # Not a reader: a team account of ANOTHER org a rule naming her opens (D1).
+            return _ouvert_par_une_regle(sub, ref, "group", str(ref.group_id),
+                                         refus=f"you are not a member of group "
+                                               f"#{ref.group_id}")
         g = group_store.get_group(ref.group_id)
         return g.get("org_id") if g else None
     if ref.level == "org":
         if not roles.is_org_member(sub, ref.org_id):
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=f"Instance refused: you are not a member of org #{ref.org_id}."))
+            # Not a member: only an org account a rule NAMING her opens (D1, or a shared
+            # project's inheritance taken over, #480) — also under `_project=` of that org
+            # or a project binding, where the call's org is that org: the members' default
+            # never reaches her (`nominative`).
+            return _ouvert_par_une_regle(sub, ref, "org", str(ref.org_id),
+                                         refus=f"you are not a member of org #{ref.org_id}",
+                                         nominative=True)
         return ref.org_id
     if ref.level == "tenant":
         # L-keys PR 1: a tenant's key is pinned by its accounts and them alone — the

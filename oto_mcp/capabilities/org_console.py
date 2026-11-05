@@ -18,7 +18,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel
 
 from . import scheduled_emails
-from .connectors import apify_charge_cap as connectors_apify_charge_cap, sharing as connectors_sharing
+from .connectors import apify_charge_cap as connectors_apify_charge_cap
 from .groups import core as groups, guide as groups_guide, invites as groups_invites, members as groups_members
 from .orgs import core as orgs, email_settings as orgs_email_settings, field_filters as orgs_field_filters, invites as orgs_invites, mfa as orgs_mfa, model_subscriptions as orgs_model_subscriptions, partage_par_defaut as orgs_partage_par_defaut, update as orgs_update
 from ._authz import (
@@ -43,8 +43,8 @@ def _need(val, code: str, msg: str):
 # ── oto_org : create / update / archive / invite / accept_invite / reject_invite ─
 class OrgInput(BaseModel):
     op: Literal["create", "update", "archive", "invite",
-                "accept_invite", "reject_invite", "list_invites", "list_loans"]
-    org_id: Optional[int] = None           # update/archive/invite/list_invites/list_loans
+                "accept_invite", "reject_invite", "list_invites"]
+    org_id: Optional[int] = None           # update/archive/invite/list_invites
     name: Optional[str] = None             # create/update
     description: Optional[str] = None      # update
     domain: Optional[str] = None           # update : domaine de marque (logo dérivé)
@@ -78,9 +78,6 @@ def _org(ctx: ResolvedCtx, inp: OrgInput) -> dict:
         return orgs_update._archive_org(ctx, orgs_update.OrgIdInput(org_id=oid))
     if inp.op == "list_invites":
         return orgs_invites._invite_list(ctx, orgs_invites.InviteListInput(org_id=oid))
-    if inp.op == "list_loans":
-        return connectors_sharing._list_org_loans(
-            ctx, connectors_sharing.OrgLoansInput(org_id=oid))
     return orgs_invites._invite_create(ctx, orgs_invites.InviteCreateInput(
         org_id=oid, email=inp.email, role=inp.role or "org_member",
         send_email=inp.send_email))
@@ -359,7 +356,7 @@ CAPABILITIES += [
             "reject_invite": SUB_ONLY,
             "update": ORG_ADMIN_OF("org_id"), "archive": ORG_ADMIN_OF("org_id"),
             "invite": ORG_ADMIN_OF("org_id"),
-            "list_invites": ORG_ADMIN_OF("org_id"), "list_loans": ORG_ADMIN_OF("org_id"),
+            "list_invites": ORG_ADMIN_OF("org_id"),
         }),
         refresh_visibility=True,   # create/archive changent l'org effective → toolbox
         description=(
@@ -369,8 +366,7 @@ CAPABILITIES += [
             "`role` org_member|org_admin, send_email=false returns the link only) / "
             "accept_invite (`token`) / reject_invite (`token` — declines it without "
             "joining; only the invited address may decline). Org admin, on `org_id`: "
-            "list_invites (pending invitations) / list_loans (accounts members lend: "
-            "who, which account and services, to whom, since when). "
+            "list_invites (pending invitations). "
             "To switch org, use oto_use_org."),
         mcp="oto_org",
     ),
@@ -438,7 +434,7 @@ CAPABILITIES += [
         description=(
             "Teams (departments) of an org. op=create (`org_id`, `name`; org admin) / list "
             "(the teams of your active org + your role in each) / get (`group_id`: its "
-            "members and the accounts shared or lent to the team; a member, or an org "
+            "members and the team's own accounts; a member, or an org "
             "admin) / list_invites (`group_id`, pending invitations; team lead) / add_member (`group_id`, `target` sub|email, optional "
             "`role` group_member|group_admin; team lead — target must already be in the org) / "
             "invite (`group_id`, optional `email` + `role` group_member|group_admin, "

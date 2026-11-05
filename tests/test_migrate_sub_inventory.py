@@ -392,9 +392,8 @@ def _colonnes_jsonb() -> set[tuple[str, str]]:
 def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
     """Le tripwire des subs DANS un JSONB (#1251). `test_migrate_sub_sub_bearing_columns
     _are_triaged` lit les NOMS de colonnes TEXT : une liste de principaux en JSONB
-    (`share_side` = `["user:<sub>", "group:3"]`) lui échappait — et la fusion la laissait
-    sur l'ancien sub : le compte prêté par son nom cessait de servir l'emprunteur
-    fusionné, sans refus qui l'explique.
+    (feu `share_side` = `["user:<sub>", "group:3"]`, retiré par #1499) lui échappait — et
+    la fusion la laissait sur l'ancien sub, sans refus qui l'explique.
 
     Le nom d'une colonne JSONB ne dit pas ce qu'elle contient : TOUTE colonne JSONB du
     DDL est donc triée — suivie par la fusion (`_JSONB_SUB_COLUMNS`), ou rangée ci-dessous
@@ -406,8 +405,8 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
     from oto_mcp.db.users import _JSONB_SUB_COLUMNS
 
     jsonb = _colonnes_jsonb()
-    assert ("connector_credentials", "share_side") in jsonb, (
-        "le parse du DDL ne trouve plus `share_side` — test à réparer")
+    assert ("connector_credentials", "share_down") in jsonb, (
+        "le parse du DDL ne trouve plus `share_down` — test à réparer")
 
     # Ne nomme personne : configuration, structure, contenu opaque des utilisateurs ou
     # d'un tiers. Le code n'y lit aucune référence de principal.
@@ -489,14 +488,13 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
     doubles = allow & set(_JSONB_SUB_COLUMNS)
     assert not doubles, f"suivies ET allowlistées : {sorted(doubles)}"
     # Déclarer une colonne suivie ne suffit pas : une étape qui la réécrit doit la nommer.
-    etapes = (credentials_store.suivre_les_prets_recus,
-              credentials_store.suivre_les_accords_recus)
+    etapes = (credentials_store.suivre_les_accords_recus,)
     non_ecrites = [f"{t}.{c}" for t, c in _JSONB_SUB_COLUMNS
                    if not any(re.search(rf"\bUPDATE {t} SET\b.*\b{c} = ",
                                         inspect.getsource(e), re.S) for e in etapes)]
     assert not non_ecrites, (
         f"déclarées suivies mais jamais réécrites par l'étape 3 quater "
-        f"(`suivre_les_prets_recus`, `suivre_les_accords_recus`) : {non_ecrites}")
+        f"(`suivre_les_accords_recus`) : {non_ecrites}")
     # Et chaque étape doit être APPELÉE par la fusion.
     fusion = inspect.getsource(users.repointer_patrimoine)
     absentes = [e.__name__ for e in etapes if f"credentials_store.{e.__name__}(" not in fusion]

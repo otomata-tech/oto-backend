@@ -212,6 +212,9 @@ def _fields_config_scope(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict
         # refusal, not an exception that would come out as a bare 500 (without CORS — the browser
         # only read "Failed to fetch" there, even though the key was properly set).
         raise AuthzDenied(400, "account_required", e.error.message) from e
+    except access.NiveauInsuffisant as e:
+        # The account's rules give the caller less than reading it (#1499).
+        raise AuthzDenied(403, "insufficient_level", e.error.message) from e
     etype, eid = getattr(rc, "entity_type", None), getattr(rc, "entity_id", None)
     scope = ((etype, eid, getattr(rc, "account", "") or "")
              if etype in connector_health.FLAGGABLE_SCOPES and eid else None)
@@ -375,7 +378,11 @@ CAPABILITIES += [
                 DeclaredError(400, "account_required",
                               "several accounts of this connector at the "
                               "resolved tier, with no single default: pass `account` "
-                              "(the name of the account to test)"),),
+                              "(the name of the account to test)"),
+                DeclaredError(403, "insufficient_level",
+                              "the account's rules do not let you read it: names the "
+                              "account, your level, the level required and who manages "
+                              "it"),),
         rest=RestBinding("POST", "/api/me/connectors/{provider}/verify"),
     ),
     Capability(

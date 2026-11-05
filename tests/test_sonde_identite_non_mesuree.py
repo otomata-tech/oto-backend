@@ -28,13 +28,12 @@ def revente(monkeypatch):
     monkeypatch.setattr(I, "_unipile_client", lambda sub: None)
     # `db` est importé DANS la fonction (`from .. import db`) : c'est le module
     # source qu'il faut patcher, pas un attribut du module de test.
-    monkeypatch.setattr(_db, "list_account_grants_to", lambda sub: [])
     monkeypatch.setattr(_db, "list_unipile_accounts", lambda sub: [
         {"account_id": "acc-1", "account_name": "Un compte", "provider": "LINKEDIN",
          "org_id": 7}])
     from oto_mcp import access
     monkeypatch.setattr(access, "current_org", lambda sub: 7)
-    monkeypatch.setattr(I, "_unipile_chosen", lambda sub, ch: None)
+    monkeypatch.setattr(I, "_own_unipile_account_id", lambda sub, ch: None)
 
 
 def test_sonde_en_panne_le_statut_est_dit_NON_mesure(revente, monkeypatch):

@@ -3,9 +3,8 @@
 A Google or Microsoft account authorizes its services one by one (incremental consent):
 the scopes it granted live in the row's `meta.scopes`, and each auth module says which
 services they cover (`auth/google.services_granted`, `auth/microsoft.services_granted`).
-Read in two places that must agree: the loan, which lends a list of services frozen at
-the lend (`capabilities/connectors/sharing`), and the revision that froze the loans made
-before that list existed (`db/migrations/versions/…_0060_services_pretes`).
+Read by the account rules: a rule on a Google or Microsoft account may cover a list of
+services, each one a service the account authorized (`capabilities/connectors/sharing`).
 """
 from __future__ import annotations
 

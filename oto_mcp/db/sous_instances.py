@@ -20,13 +20,12 @@ instances, sans résolution :
 - clé du client : celle de la personne dans l'org (`member`), sinon celle de l'org, si
   elle est unique à son palier.
 Sinon `parent_id` reste NULL : la sous-instance existe quand même, pour que la règle ait
-une cible. Le parent n'est lu par rien avant la bascule (étape 3, lot L3), qui
-désignera de toute façon la clé par la résolution ; une clé d'équipe n'est pas cherchée
-(laquelle, sans l'équipe active ?). Chaque passe recalcule le parent.
+une cible. La clé qui sert un appel reste désignée par la résolution ; une clé d'équipe
+n'est pas cherchée (laquelle, sans l'équipe active ?). Chaque passe recalcule le parent.
 
 Deux écrivains : la connexion d'un compte (`db.unipile.set_unipile_account`, dans sa
-transaction) et la reprise des prêts (`regles_de_comptes.reprendre_les_prets`), qui les
-pose toutes. La fusion de deux comptes les fait suivre (`suivre`).
+transaction) et les révisions des règles (`20261105_0900_regles_de_comptes`, puis la
+reprise figée de `20261105_1000_bascule_comptes`), qui les posent toutes. La fusion de deux comptes les fait suivre (`suivre`).
 """
 from __future__ import annotations
 
@@ -65,26 +64,6 @@ ARCHIVER_TOUTES = ("UPDATE connector_instances SET revoked_at = NOW(), "
                    "revoked_reason = 'regles_de_comptes_retirees' "
                    "WHERE owner_type = 'member' AND connector = 'unipile' "
                    "AND starts_with(account, 'canal:') AND revoked_at IS NULL")
-
-# La sous-instance d'une ligne `ua` (jointure de la reprise).
-JOINTURE = ("si.owner_type = 'member' AND si.owner_id = ua.org_id::text || ':' || ua.sub "
-            "AND si.connector = 'unipile' AND si.account = 'canal:' || ua.provider "
-            "AND si.revoked_at IS NULL")
-
-# Les instances TELLES QUE `poser_toutes` les laisserait, sans rien écrire : la table,
-# plus une sous-instance SIMULÉE (identifiant négatif, propre à la lecture) pour chaque
-# compte Unipile qui n'en a pas encore. Lue par la mesure de la bascule
-# (`scripts/mesure_bascule_comptes_1499`), qui tourne en transaction en lecture seule.
-INSTANCES_SIMULEES = (
-    "(SELECT id, connector, owner_type, owner_id, account, revoked_at "
-    "FROM connector_instances "
-    "UNION ALL "
-    "SELECT -row_number() OVER (ORDER BY ua.org_id, ua.sub, ua.provider), 'unipile', "
-    "'member', ua.org_id::text || ':' || ua.sub, 'canal:' || ua.provider, "
-    "NULL::timestamptz "
-    "FROM unipile_accounts ua "
-    f"WHERE NOT EXISTS (SELECT 1 FROM connector_instances si WHERE {JOINTURE}))")
-
 
 def _compter(cur) -> dict:
     lignes = cur.fetchall()

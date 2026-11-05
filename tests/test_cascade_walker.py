@@ -1,15 +1,15 @@
 """Walker de cascade (access.walk_cascade) — le contrat DORÉ de la cascade.
 
-La cascade `perso > cross-org > équipe active > org > plateforme` vit à UN seul
+La cascade `perso > équipe active > org > tenant > plateforme` vit à UN seul
 endroit (walker paramétré par sonde) ; ce fichier fige l'ordre des barreaux et
-les gates (byo_user, ORG_SHAREABLE, personal_cross_org, éligibilité plateforme,
-want='byo'). Les sondes sont injectées : aucun stub de DB nécessaire.
+les gates (byo_user, ORG_SHAREABLE, éligibilité plateforme, want='byo', org dont
+l'appelant est membre). Depuis #1499 (D1), aucun barreau ne lit une autre org. Les sondes sont injectées : aucun stub de DB nécessaire.
 
 Providers réels du registre utilisés comme fixtures de gates :
 - serper        : byo_user + byo_org + platform (tous barreaux)
 - zoho          : byo_user + byo_org, PAS de plateforme (want='byo' vivant)
 - silae         : byo_user seul (non partageable → barreaux groupe/org inertes)
-- unipile       : personal_cross_org (barreau cross-org)
+- unipile       : clé personnelle (aucune clé d'une autre org ne sert)
 - http          : byo_org seul (pas de barreau membre par construction)
 """
 import pytest
@@ -17,10 +17,9 @@ import pytest
 from oto_mcp import access
 
 
-def probe(*, member=False, cross=False, group=False, org=False, platform=False):
+def probe(*, member=False, group=False, org=False, platform=False):
     return access.CascadeProbe(
         member=lambda s, o, p: (("MK", "") if member else None),
-        member_cross=lambda s, o, p: ("XK" if cross else None),
         legacy_user=lambda s, p: None,
         group=lambda g, p: ("GK" if group else None),
         org=lambda o, p: ("OK" if org else None),
@@ -85,15 +84,39 @@ def test_no_group_skips_group_rung():
     assert win.mode == "org"
 
 
-def test_cross_org_rung_for_personal_provider(monkeypatch):
-    monkeypatch.setattr(access, "personal_instance_org", lambda *a, **k: 99)
-    win = access.cascade_winner("u1", "unipile", org=1, group=None,
-                                probe=probe(cross=True))
-    assert win.mode == "user" and win.via == "cross_org"
-    # la clé locale prime sur la cross-org
-    win2 = access.cascade_winner("u1", "unipile", org=1, group=None,
-                                 probe=probe(member=True, cross=True))
-    assert win2.via == "local"
+def test_personal_provider_reads_only_the_call_org():
+    """#172 retiré : la sonde membre est interrogée pour l'org de l'APPEL, jamais une
+    autre ; sans clé dans cette org, rien ne résout (aucun barreau cross-org)."""
+    vues = []
+    pr = access.CascadeProbe(
+        member=lambda s, o, p: vues.append(o),
+        legacy_user=lambda s, p: None, group=lambda g, p: None,
+        org=lambda o, p: None, tenant=lambda t, p: None, platform=lambda s, p, o: None)
+    assert access.cascade_winner("u1", "unipile", org=1, group=None, probe=pr) is None
+    assert set(vues) <= {1}
+
+
+def test_shared_project_of_another_org_skips_org_rung():
+    """#1499, D1 : `_project=` d'une org dont l'appelant n'est pas membre — l'org du
+    projet est l'org de l'appel, mais ni son compte, ni son accès plateforme ne lui
+    servent."""
+    from oto_mcp import session_org
+    vues = []
+    pr = access.CascadeProbe(
+        member=lambda s, o, p: None, legacy_user=lambda s, p: None,
+        group=lambda g, p: None, org=lambda o, p: ("OK", ""),
+        tenant=lambda t, p: None,
+        platform=lambda s, p, o: vues.append(o))
+    jeton = session_org.set_call_hors_org("u1", 7)
+    try:
+        assert access.cascade_winner("u1", "serper", org=7, group=None, probe=pr) is None
+        assert vues == [None]   # l'accès plateforme est lu SANS l'org du projet
+        # Un autre appelant, ou une autre org : la marque ne s'applique pas.
+        assert access.cascade_winner("u2", "serper", org=7, group=None,
+                                     probe=pr).mode == "org"
+    finally:
+        session_org.reset_call_hors_org(jeton)
+    assert access.cascade_winner("u1", "serper", org=7, group=None, probe=pr).mode == "org"
 
 
 def test_walk_all_exposes_losing_rungs():

@@ -102,14 +102,13 @@ C'est la raison d'être du geste : le départ d'un membre laisse à l'org un pat
 qu'elle arbitre objet par objet, et **l'inaction ne doit pas détruire** (ADR 0062-D4).
 La pause est l'état dans lequel cet arbitrage peut prendre le temps qu'il prend.
 
-⚠️ **Sauf ce qu'il prêtait : ses prêts s'arrêtent avec lui** (oto-backend#898,
-arbitrage du 23/09/2026, option A). Un compte de connecteur prêté
-(`connector_account_grants`, nominatif ou de groupe) et une clé prêtée à un pair
-(`share_side`, ADR 0044) cessent de servir leurs bénéficiaires pendant la pause. Rien
-n'est détaché pour autant : le grant, le `share_side` et le pointeur « identité
-opérée » du bénéficiaire restent écrits, c'est la **résolution** qui lit l'état du
-prêteur à chaque appel. Au réveil, le prêt revient tel quel, **sans rien
-reconfigurer**.
+⚠️ **Sauf ce qu'il ouvrait aux autres : ses comptes personnels s'arrêtent avec lui**
+(oto-backend#898, arbitrage du 23/09/2026, option A). Un compte personnel qu'une règle
+ouvre à d'autres (`connector_account_rules`, #1499) cesse de les servir pendant la pause :
+son niveau pour autrui vaut `none` (`access/niveaux.niveau`, le propriétaire en pause).
+Rien n'est détaché pour autant : les règles restent écrites, c'est la **résolution** qui
+lit l'état du propriétaire à chaque appel. Au réveil, l'accès revient tel quel, **sans
+rien reconfigurer**.
 
 Le bénéficiaire, lui, n'est pas en pause — il reçoit un **refus nommé**, code
 `lender_suspended`, qui dit que le prêteur est en pause, que le prêt n'est ni révoqué
@@ -118,13 +117,11 @@ ni supprimé et qu'il reprendra à son réveil. Pas le motif de la pause : il ap
 
 | face | porte | refus |
 |---|---|---|
-| compte prêté, pointeur ou `_account=` | `connectors.identities.resolve_operated_account_id` | `PreteurEnPause` → `McpError`, `data.code=lender_suspended` |
-| compte prêté, épinglé par le projet | `tools.unipile.unipile_client` | idem |
-| compte prêté, choisi comme identité | `_unipile_select` → capacité `connectors.set_default_identity` | `403 lender_suspended` |
-| clé prêtée (`share_side`), `_instance=` ou binding | `access.rbac.guard_instance_access` | `McpError`, `data.code=lender_suspended` |
+| compte d'autrui nommé (`_account=`) | `access/comptes.ChoixDuParcours.exiger` | `insufficient_level` (niveau `none`) |
+| compte d'autrui épinglé (`_instance=` ou binding) | `access.rbac.guard_instance_access` | `McpError`, `data.code=insufficient_level` |
+| compte de messagerie hébergée d'autrui | `connectors/comptes_heberges` | `insufficient_level` |
 
-À la lecture, `oto_account_access` (`granted_to_me`) marque le prêt retenu
-`active=false, owner_suspended=true` — distinct d'un canal déconnecté.
+À la lecture, `oto_identity op=list` ne liste plus ce compte (niveau `none`).
 
 ### ④ Ce que voient les autres — et les sièges
 

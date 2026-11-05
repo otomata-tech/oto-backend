@@ -187,8 +187,17 @@ def _status_for_projection(sub: str, *, org: "int | None | object" = scope._UNSE
         # confusion can arise. Hence this NAMED boolean rather than a condition
         # rewritten for each field: an effect field added later reads it, and
         # `test_quota_affiche_le_barreau_qui_repond` fails if it does not.
-        plateforme_repond = winner is not None and winner.mode == "platform"
-        if winner is None:
+        # STEP 5 (#1499): nothing local — an account lent to her (in her org, then
+        # elsewhere) or her key in another org serves before the tenant's and the
+        # platform's key; the status says which.
+        from .views import ELSEWHERE, compte_d_ailleurs
+        ailleurs = (compte_d_ailleurs(sub, provider, active_org, sonde)
+                    if winner is None or winner.mode in ("tenant", "platform") else None)
+        plateforme_repond = (winner is not None and winner.mode == "platform"
+                             and ailleurs is None)
+        if ailleurs is not None:
+            mode = ELSEWHERE
+        elif winner is None:
             mode = "forbidden"
         elif plateforme_repond and limit and used >= limit:
             mode = "over_quota"
@@ -197,6 +206,10 @@ def _status_for_projection(sub: str, *, org: "int | None | object" = scope._UNSE
 
         out["providers"][provider] = {
             "mode": mode,
+            # Step 5: who lends the account that serves (in her org), or which org.
+            "lent_by": (ailleurs or {}).get("lent_by"),
+            "lent_by_org": (ailleurs or {}).get("lent_by_org"),
+            "your_account_in_org": (ailleurs or {}).get("your_account_in_org"),
             "user_key_configured": user_has,
             "group_secret_configured": group_has,
             "org_secret_configured": org_has,

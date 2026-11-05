@@ -41,11 +41,10 @@ _SURFACE = """
     aggregate_tool_feedback annotations archive_project aux_embed
     backfill_unipile_member_scope backlinks billing bkey_index_expr
     bound_unipile_account_ids bump_counter cancel_scheduled_email
-    claim_due_scheduled_emails clear_account_grant clear_aux_dirty
+    claim_due_scheduled_emails clear_aux_dirty
     clear_embed_dirty
-    clear_member_api_key clear_operated_account clear_operated_pointers_to
-    clear_option_comp clear_row_dirty clear_unipile_account
-    connector_failure_stats connector_grants consume_upload_token
+    clear_member_api_key     clear_option_comp clear_row_dirty clear_unipile_account
+    connector_failure_stats consume_upload_token
     contextmanager count_datastore_rows_for_ns count_renewal_attempts
     count_unipile_accounts_for_org counter_sum_today create_api_token
     create_datastore create_doc create_project
@@ -74,19 +73,18 @@ _SURFACE = """
     get_datastore_by_id get_doc_by_id get_doc_by_public_token
     get_doc_embedding_sha get_extracted_text
     get_google_oauth get_guide_db get_init_guide_db get_legal_acceptances
-    get_member_api_key get_operated_account get_org_subscription
+    get_member_api_key get_org_subscription
     get_org_unipile_limit get_platform_instruction get_project_by_id
     get_project_by_mcp_slug get_project_file get_resource_grant
     get_row_embedding_sha get_run get_tool_call get_unipile_account
     get_unipile_account_id get_usage_today get_user
-    get_user_by_email get_users_by_email google grant_resource granted_accounts_for grants
+    get_user_by_email get_users_by_email google grant_resource grants
     group_key
     guides has_member_api_key has_option_comp hashlib increment_usage
     index_ddl init_db insert_billing_payment insert_grant insert_run
     insert_tool_call insert_usage_signal instruction_usage
     is_comp_subscription is_tool_disabled_for json keys leaf_read_sql legal
-    list_account_grants_by_owner list_account_grants_to
-    list_all_datastores list_all_projects list_api_tokens
+        list_all_datastores list_all_projects list_api_tokens
     list_billing_payments
     list_datastores_for_owners list_datastores_granted_to
     list_dirty_aux list_dirty_docs list_dirty_rows
@@ -126,18 +124,18 @@ _SURFACE = """
     search_files_meta search_guides_fts search_guides_semantic
     search_procedures_fts search_project_briefs seat_binding_elsewhere secrets
     seed_guide_db seed_init_guide_db seed_platform_instruction
-    set_account_grant set_avatar_url set_comp_subscription
+    set_avatar_url set_comp_subscription
     set_datastore_schema set_datastore_semantic
     set_default_google_account set_doc_public set_google_oauth
     set_guide_db set_init_guide_db
-    set_member_api_key set_operated_account set_option_comp
+    set_member_api_key set_option_comp
     set_org_unipile_limit set_platform_instruction set_project_file_public
     set_project_mcp_instructions set_project_mcp_publication
     set_subscription_status set_unipile_account set_user_locale set_user_role
     split_layer split_list_path stamp_rank_vector subscription_plan_for_org
     sweep_grace_expired sweep_period_end_cancellations tenants time timezone
     tokens tool_call_stats unipile
-    unipile_account_owners update_account_profile update_billing_payment
+    unipile_account_owners unipile_channel_instance_ids update_account_profile update_billing_payment
     update_doc update_project
     update_project_link_ref upload_tokens upsert_aux_embedding
     upsert_connector_schema upsert_doc_embedding upsert_org_subscription

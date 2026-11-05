@@ -51,13 +51,17 @@ def test_keyed_select_sets_unique_default(monkeypatch):
     monkeypatch.setattr(credentials_store, "member_id", lambda org, sub: "1:u1")
     monkeypatch.setattr(credentials_store, "list_accounts", lambda et, eid, con: [
         {"account": "zoho-fr", "meta": {}}, {"account": "zoho-us", "meta": {}}])
+    import contextlib
+    from oto_mcp.db import _conn, regles_de_comptes
     writes = []
-    monkeypatch.setattr(
-        credentials_store, "update_meta",
-        lambda et, eid, con, acct, patch: writes.append((acct, patch["is_default"])))
+    monkeypatch.setattr(_conn, "_connect", lambda: contextlib.nullcontext("conn"))
+    monkeypatch.setattr(regles_de_comptes, "poser_le_defaut",
+                        lambda conn, et, eid, con, acct, *, par:
+                        writes.append((conn, et, eid, con, acct, par)))
     res = ci.select_identity("u1", "zoho", "zoho-us")
     assert res["id"] == "zoho-us" and res["is_default"] is True
-    assert set(writes) == {("zoho-fr", False), ("zoho-us", True)}
+    # Défaut UNIQUE du palier, posé avec son auteur (D3, #1499) — en une écriture.
+    assert writes == [("conn", "member", "1:u1", "zoho", "zoho-us", "u1")]
 
 
 def test_keyed_select_unknown_raises(monkeypatch):

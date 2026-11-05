@@ -483,7 +483,7 @@ def cle_partagee(monkeypatch, client, trace, sans_droit_declare):
     monkeypatch.setattr(access, "current_org", lambda sub: None)
     monkeypatch.setattr(access.credentials_store, "list_platform_instances", lambda p: [{
         "label": "shared", "share_mode": "closed", "share_down": list(etat["share_down"]),
-        "share_side": [], "meta": {"rate_limit_by": dict(etat["rate_limit_by"])}}])
+        "meta": {"rate_limit_by": dict(etat["rate_limit_by"])}}])
     monkeypatch.setattr(access.credentials_store, "get_credential",
                         lambda et, eid, p, account="": "PLAT")
     monkeypatch.setattr(access.db, "get_usage_today", lambda sub, p: etat["used"])

@@ -65,6 +65,13 @@ def upgrade() -> None:
         # prêts en place, il ne s'imprime pas — il se lit au journal de la vraie montée.
         return
     conn = op.get_bind()
+    if not conn.exec_driver_sql(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = 'connector_credentials' AND column_name = 'share_side'"
+            ).first():
+        # Une base née après la bascule des comptes (#1499, `20261105_1000`) n'a plus de
+        # prêts : son schéma de démarrage ne porte pas `share_side`, rien à figer.
+        return
     lignes = conn.exec_driver_sql(
         "SELECT entity_type, entity_id, connector, account, meta, share_side "
         "FROM connector_credentials WHERE entity_type = 'member' "

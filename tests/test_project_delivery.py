@@ -70,9 +70,6 @@ def _wire(monkeypatch, *, governed=("11", "77")):
                             "org_id": None if otype == "user" else int(oid)})
     monkeypatch.setattr(R.db, "update_project_link_ref",
                         lambda pid, t, old, new: calls["repoints"].append((pid, t, old, new)) or 1)
-    # #480 : le prêt des clés d'un projet vit dans la chaîne de grants — hors base ici.
-    monkeypatch.setattr(R.heritage, "declarer", lambda *a: None)
-    monkeypatch.setattr(R.heritage, "mode_de", lambda pid, pt, pi: R.heritage.OWN)
     return calls
 
 

@@ -102,13 +102,17 @@ def test_identities_select_scoped_to_group(monkeypatch):
     calls = []
     monkeypatch.setattr(credentials_store, "list_accounts",
                         lambda et, eid, con: [{"account": "a", "meta": {}}, {"account": "b", "meta": {}}])
-    monkeypatch.setattr(credentials_store, "update_meta",
-                        lambda et, eid, con, acct, patch: calls.append((et, eid, acct, patch["is_default"])))
+    import contextlib
+    from oto_mcp.db import _conn, regles_de_comptes
+    monkeypatch.setattr(_conn, "_connect", lambda: contextlib.nullcontext("conn"))
+    monkeypatch.setattr(regles_de_comptes, "poser_le_defaut",
+                        lambda conn, et, eid, con, acct, *, par:
+                        calls.append((et, eid, acct, par)))
     monkeypatch.setattr(access, "current_org", lambda sub: 7)
     monkeypatch.setattr(access, "current_group", lambda sub: 42)
     res = connector_identities.select_identity("u1", "serper", "b", scope="group")
     assert res["id"] == "b" and res["is_default"] is True
-    assert calls == [("group", "42", "a", False), ("group", "42", "b", True)]
+    assert calls == [("group", "42", "b", "u1")]
 
 
 def test_identities_bespoke_backend_is_member_only():

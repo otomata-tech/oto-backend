@@ -84,7 +84,13 @@ def test_instance_ref_group_guard_refuses_non_reader(monkeypatch):
     # partagée pose + binding).
     from oto_mcp.mcp_errors import McpError
     from oto_mcp import roles
+    from oto_mcp import group_store
     monkeypatch.setattr(roles, "can_read_group", lambda sub, gid: False)
+    # … et aucune règle ne lui ouvre le compte de l'équipe (#1499).
+    monkeypatch.setattr(access, "current_org", lambda sub: 99)
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(group_store, "is_group_member", lambda sub, gid: False)
+    monkeypatch.setattr(roles, "can_admin_group", lambda sub, gid: False)
     ref = instance_refs.parse_ref(instance_refs.make_group_ref(FINANCE, "http"))
     with pytest.raises(McpError, match="group"):
         access.guard_instance_access("intrus", ref)

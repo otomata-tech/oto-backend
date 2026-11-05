@@ -511,7 +511,7 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # projet. `run_start` la pose lui-même : l'agent passe `guide=` (le nom documenté), et
 # le journal, qui garde les arguments tels que passés, n'écrivait jamais la clé lue —
 # la procédure passait pour « jamais déroulée ». Même clé que la face REST.
-_TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
+_TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "instance_id", "readonly_forced",
                 "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones",
                 "apify_run_id", "higgsfield_request_id", "guide_scope",
                 db.usage._ARG_PROCEDURE)

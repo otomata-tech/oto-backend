@@ -39,8 +39,10 @@ level TEXT NOT NULL,
 previous_level TEXT,
 services TEXT[],
 actor_sub TEXT,
+owner_before TEXT,
+hors_org BOOLEAN NOT NULL DEFAULT false,
 CONSTRAINT connector_account_share_events_action_check
-CHECK (action IN ('set', 'removed')),
+CHECK (action IN ('set', 'removed', 'transferred')),
 CONSTRAINT connector_account_share_events_subject_kind_check
 CHECK (subject_kind IN ('user', 'group', 'org'))
 );

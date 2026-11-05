@@ -137,7 +137,7 @@ def test_anon_resolver_platform_open_key(monkeypatch):
     # ADR 0044 §F R3 : instance plateforme 'open' (free-tier) servie à l'anon.
     monkeypatch.setattr(access.credentials_store, "list_platform_instances",
                         lambda p: [{"label": "plat", "share_mode": "open", "share_down": [],
-                                    "share_side": [], "meta": {}}])
+                                    "meta": {}}])
     monkeypatch.setattr(access.credentials_store, "get_credential",
                         lambda et, eid, p, account="": "PLATKEY")
     # serper est platform_key_open dans le registre → clé plateforme ouverte servie

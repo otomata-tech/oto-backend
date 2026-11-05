@@ -217,6 +217,7 @@ def test_member_rung_ambiguity_message_is_unchanged(monkeypatch):
     """Le palier MEMBRE garde son message historique (scope member = défaut du
     tool, rien à préciser)."""
     monkeypatch.setattr(access.db, "get_member_api_key", lambda *a, **k: None)
+    monkeypatch.setattr(access.db, "member_instance_suspended", lambda *a, **k: False)
     rows = [{"account": "a", "meta": {}}, {"account": "b", "meta": {}}]
     monkeypatch.setattr(access.credentials_store, "list_accounts",
                         lambda et, eid, con: rows if et == access.credentials_store.MEMBER else [])

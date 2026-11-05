@@ -23,7 +23,6 @@ def vault(monkeypatch):
     monkeypatch.setattr(access, "project_pinned_identity", lambda p: None)
     monkeypatch.setattr(session_org, "current_call_instance", lambda: None)
     monkeypatch.setattr(access, "_is_multi_account", lambda *a: False)
-    monkeypatch.setattr(access, "personal_instance_org", lambda *a, **k: None)
     monkeypatch.setattr(credentials_store, "has_credential",
                         lambda et, eid, p, account=None: (et, eid) in rows)
     monkeypatch.setattr(credentials_store, "get_credential",
@@ -34,6 +33,8 @@ def vault(monkeypatch):
     monkeypatch.setattr(credentials_store, "credential_health", lambda *a: None)
     monkeypatch.setattr(group_store, "list_groups_for_user",
                         lambda sub, org: [{"group_id": 3}])
+    # The level of a team account is read on membership (#1499): `u` is in team 3.
+    monkeypatch.setattr(group_store, "is_group_member", lambda sub, gid: int(gid) == 3)
     monkeypatch.setattr(group_store, "has_group_secret",
                         lambda gid, p: ("group", str(gid)) in rows)
     monkeypatch.setattr(group_store, "get_group_secret",
@@ -148,6 +149,8 @@ def test_channel_config_reads_credential_owner_not_channel(monkeypatch):
 
 @pytest.mark.parametrize("authority", ["legacy", "chain"])
 def test_suspended_member_never_beats_team(vault, monkeypatch, authority):
+    """Une clé personnelle SUSPENDUE est sautée : la clé d'équipe sert, sous les deux
+    autorités (décision de #1499 : comme avant la bascule)."""
     monkeypatch.setenv("OTO_L7_DECIDE", authority)
     monkeypatch.setattr(access, "current_group", lambda sub: 3)
     vault[("member", "7:u")] = "SUSPENDED_KEY"
@@ -162,9 +165,18 @@ def test_named_account_crosses_missing_rung_but_never_changes_name(vault, monkey
     monkeypatch.setattr(access, "current_group", lambda sub: 3)
     monkeypatch.setattr(access, "_is_multi_account", lambda *a: True)
     vault[("member", "7:u")] = "OTHER_ACCOUNT"
+    comptes = {("member", "7:u"): ["other"], ("group", "3"): ["target"]}
+    monkeypatch.setattr(credentials_store, "list_accounts",
+                        lambda et, eid, p: [{"account": a, "meta": {}}
+                                            for a in comptes.get((et, str(eid)), [])])
     monkeypatch.setattr(db, "get_member_api_key", lambda *a: None)
     monkeypatch.setattr(group_store, "get_group_secret",
                         lambda gid, p, account="": "NAMED_KEY" if account == "target" else None)
+    # The vault read of a team step is by account (#1499): only `target` holds a key.
+    monkeypatch.setattr(credentials_store, "get_credential",
+                        lambda et, eid, p, account="": (
+                            "NAMED_KEY" if (et, str(eid), account) == ("group", "3", "target")
+                            else None if account else vault.get((et, str(eid)))))
     rc = access.resolve_credential("serper", sub="u", account="target")
     assert (rc.key, rc.mode, rc.account) == ("NAMED_KEY", "group", "target")
     with pytest.raises(McpError):

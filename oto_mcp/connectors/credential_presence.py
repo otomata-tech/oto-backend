@@ -12,7 +12,7 @@ Nothing on the row said an account existed. Twice, for two users.
   VISIBILITY of tools, nothing else — a `not_selected` connector is still callable
   through `oto_call` (ADR 0036);
 - **credential available**: THIS module. A key or account exists for the person
-  at some level of the cascade (personal, team, org, tenant, platform);
+  at some level of the cascade (personal, team, org, tenant, platform), or by an account of another org (`elsewhere`, step 5);
 - **verified alive**: never computed here. A session can be dead at the provider
   while the account stays linked; only a probe says so, and it costs a network
   round trip. `next_step` NAMES the tool that verifies it.
@@ -52,8 +52,10 @@ PENDING_STEP = "pending_step"
 
 # `over_quota` is a PLATFORM level whose day is over: the key exists (that's the axis
 # here), exhaustion belongs to readiness (`readiness`, targeted read).
+# `elsewhere` (#1499): only an account of ANOTHER org serves (step 5) — the list says
+# so instead of showing nothing connected while the call is served.
 _PALIER = {"user": "user", "group": "group", "org": "org", "tenant": "tenant",
-           "platform": "platform", "over_quota": "platform"}
+           "platform": "platform", "over_quota": "platform", "elsewhere": "elsewhere"}
 
 # Nature of a hosted channel's credential: an ACCOUNT of the person (their LinkedIn,
 # WhatsApp session…), not the key of the provider that carries it.
@@ -68,8 +70,9 @@ class CredentialPresence(BaseModel):
     bring), never "not computed" — the envelope says that (`credentials`)."""
     status: Literal["connected", "pending_step"]
     # The cascade level that ANSWERS — the key, not the account: a LinkedIn linked on
-    # the org's Unipile key is `level=org`, `nature=hosted_account`.
-    level: Literal["user", "group", "org", "tenant", "platform"]
+    # the org's Unipile key is `level=org`, `nature=hosted_account`. `elsewhere`: an
+    # account of another org serves (step 5, #1499; `status_for` names the org).
+    level: Literal["user", "group", "org", "tenant", "platform", "elsewhere"]
     # api_key|basic_auth|fields|oauth|cookie|… (`secret_kind`), or `hosted_account`
     # for a hosted channel. Never a value: the NATURE, without the secret.
     nature: Optional[str] = None

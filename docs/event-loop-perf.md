@@ -1312,7 +1312,7 @@ vers la base managée, ~0,77 s de requêtes à elles seules.
   (`conn=`) lit toujours la base. Décorées : `get_active_org`, `get_org_role`,
   `get_active_group`, `get_group`, `list_groups_for_user`, `get_user`,
   `get_suspension`, `list_connector_settings`, `list_shared_with`, `list_accounts`,
-  `list_credentials`, `has_credential`, `list_member_orgs_for`.
+  `list_credentials`, `has_credential`.
 - **Sessions navigateur** dans `status_for` : lues dans l'inventaire de chaque palier
   (`credentials_store.statuts_mono_compte`, la lecture déjà faite par la sonde) au lieu
   d'une requête par connecteur et par palier.

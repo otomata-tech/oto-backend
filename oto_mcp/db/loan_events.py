@@ -1,32 +1,12 @@
-"""Le journal des prêts de compte : `connector_loan_events` (docs/partage-de-compte.md).
+"""Le journal des prêts de compte d'AVANT la bascule : `connector_loan_events`.
 
-La pose et le retrait d'un prêt (`capabilities/connectors/sharing`) y laissent une ligne,
-écrite dans la MÊME transaction que le `share_side` qu'ils changent : un prêt posé sans
-trace n'existe pas. Le journal générique des appels ne suffit pas — il ne voit pas le
-corps d'un appel REST. Jamais de secret : le compte est nommé par sa ligne du coffre.
+Les prêts (`share_side`) sont retirés par la bascule des comptes (#1499, révision
+`20261105_1000_bascule_comptes`) : plus rien n'y écrit. La table reste, en LECTURE —
+l'historique des prêts d'avant ; le journal des partages d'aujourd'hui est
+`connector_account_share_events` (`db/regles_de_comptes`). Une fusion de comptes y fait
+encore suivre sa ligne du coffre (`suivre_la_ligne`).
 """
 from __future__ import annotations
-
-LEND, REVOKE = "lend", "revoke"
-
-_NOTER = """
-INSERT INTO connector_loan_events (actor_sub, org_id, entity_type, entity_id, connector,
-                                   account, target, action)
-VALUES (%(actor_sub)s, %(org_id)s, %(entity_type)s, %(entity_id)s, %(connector)s,
-        %(account)s, %(target)s, %(action)s)
-"""
-
-
-def noter(conn, *, actor_sub: str, org_id: int, entity_type: str, entity_id: str,
-          connector: str, account: str, target: str, action: str) -> None:
-    """Une ligne, sur la connexion (donc la transaction) de l'écriture du partage."""
-    if action not in (LEND, REVOKE):
-        raise ValueError(f"loan event: unknown action {action!r}")
-    conn.execute(_NOTER, {"actor_sub": actor_sub, "org_id": int(org_id),
-                          "entity_type": entity_type, "entity_id": entity_id,
-                          "connector": connector, "account": account or "",
-                          "target": target, "action": action})
-
 
 def suivre_la_ligne(conn, entity_type: str, ancien: str, nouveau: str, connector: str,
                     account: str) -> None:
@@ -50,25 +30,3 @@ def pour_la_ligne(entity_type: str, entity_id: str, connector: str,
             "AND entity_id = %s AND connector = %s AND account = %s "
             "ORDER BY id DESC LIMIT %s",
             (entity_type, entity_id, connector, account or "", int(limit))).fetchall()
-
-
-def dernieres_poses(lignes: list[tuple[str, str, str, str]]) -> dict[tuple, object]:
-    """`{(entity_type, entity_id, connector, account, target): at}` — la date de la
-    DERNIÈRE pose de chaque cible, pour un lot de lignes du coffre, en une requête (index
-    `idx_loan_events_ligne`). Une cible absente n'a pas de pose journalisée : le journal
-    est né après elle, sa date n'est pas connue."""
-    uniques = sorted({(t, str(i), c, a or "") for t, i, c, a in lignes})
-    if not uniques:
-        return {}
-    from ._conn import _connect
-    clause = ", ".join(["(%s, %s, %s, %s)"] * len(uniques))
-    params: list = [v for ligne in uniques for v in ligne]
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT entity_type, entity_id, connector, account, target, MAX(at) AS at "
-            "FROM connector_loan_events WHERE action = 'lend' AND "
-            f"(entity_type, entity_id, connector, account) IN ({clause}) "
-            "GROUP BY entity_type, entity_id, connector, account, target",
-            params).fetchall()
-    return {(r["entity_type"], r["entity_id"], r["connector"], r["account"], r["target"]):
-            r["at"] for r in rows}

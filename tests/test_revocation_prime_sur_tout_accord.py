@@ -19,8 +19,7 @@ from oto_mcp.db import grants as db_grants
 
 pytestmark = pytest.mark.usefixtures("sans_droit_declare")
 
-ANCIENNE = {"label": "env", "share_mode": "open", "share_down": [], "share_side": [],
-            "meta": {"rate_limit": 200}}
+ANCIENNE = {"label": "env", "share_mode": "open", "share_down": [], "meta": {"rate_limit": 200}}
 NEUVE = {**ANCIENNE, "label": "neuve"}
 
 

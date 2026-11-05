@@ -20,7 +20,7 @@ def _sonde_muette() -> access.CascadeProbe:
     de credentials : leur faire marcher la vraie cascade les ferait dépendre d'une base.
     """
     return access.CascadeProbe(
-        member=lambda s, o, p: None, member_cross=lambda s, o, p: None,
+        member=lambda s, o, p: None,
         legacy_user=lambda s, p: None,
         group=lambda g, p: None, org=lambda o, p: None, tenant=lambda t, p: None,
         platform=lambda s, p, o: {"label": "plat", "daily_quota": 100})
@@ -226,7 +226,7 @@ def test_la_carte_en_panne_laisse_la_sonde_prechargee_intacte(monkeypatch):
     Avant #522, le même `try` unique aurait aussi jeté la sonde préchargée — payant
     à nouveau les ~180 sondes unitaires (member/org) que #518 avait retirées."""
     sonde_ok = access.CascadeProbe(
-        member=lambda s, o, p: None, member_cross=lambda s, o, p: None,
+        member=lambda s, o, p: None,
         legacy_user=lambda s, p: None,
         group=lambda g, p: None, org=lambda o, p: None, tenant=lambda t, p: None,
         platform=lambda s, p, o: None)

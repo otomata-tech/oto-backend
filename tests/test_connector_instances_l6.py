@@ -107,10 +107,16 @@ _LECTEURS_ADMIS = {
     # connexion et par la reprise, suivie à la fusion. Écrit des instances sans ligne
     # de coffre ; ne résout rien.
     "db/sous_instances.py",
-    # #1499 — les règles d'accès des comptes et la reprise des anciens partages : lit
-    # les instances pour désigner le compte d'un partage. Rien ne lit encore les règles
-    # (la bascule est le lot L3, qui retirera la ligne de L7 avec sa revue).
+    # #1499 — les règles d'accès des comptes : lit les instances pour désigner le compte
+    # d'une règle. Depuis la bascule (L3, revue du lot), la résolution lit le NIVEAU
+    # d'un compte par elles (`access/comptes`) ; la clé servie reste celle du coffre.
     "db/regles_de_comptes.py",
+    # #1499 (L3) — changer le propriétaire d'un compte : l'instance suit sa ligne de
+    # coffre EN PLACE (même identifiant, mêmes règles). Ne résout rien.
+    "db/transfert_de_compte.py",
+    # #1499 (L3) — la migration de la bascule : reprise des anciens partages en règles,
+    # retrait de `visibility`. Figée, jouée une fois ; ne résout rien.
+    "db/migrations/versions/20261105_1000_bascule_comptes.py",
 }
 
 # Dans le coffre, les SEULES fonctions admises à nommer une instance. Ce sont les
@@ -285,18 +291,12 @@ def test_le_vocabulaire_de_proprietaire_est_ferme_et_prevoit_le_tenant():
         "survit que pour les mounts OAuth (ADR 0033).")
 
 
-def test_la_visibilite_est_une_propriete_de_l_instance_r9():
-    """R9, tranché le 27/08 : la visibilité est une propriété de l'INSTANCE, dérivée
-    de la chaîne, avec surcharge explicite par le propriétaire. La colonne porte la
-    SURCHARGE ; `inherited` dit « laisse la dérivation décider ». **La dérivation
-    n'est pas écrite** — c'est un lot, et ce test ne prétend pas le contraire."""
-    m = re.search(r"CHECK \(visibility IN \(([^)]*)\)\)", _SCHEMA_SRC)
-    assert m, "le CHECK de fermeture de la visibilité a disparu"
-    assert {v.strip().strip("'") for v in m.group(1).split(",")} == \
-        {"inherited", "hidden", "org"}
-    assert "visibility TEXT NOT NULL DEFAULT 'inherited'" in _SCHEMA_SRC, (
-        "le défaut doit rester `inherited` : une instance existante ne change pas de "
-        "visibilité parce qu'on lui a posé une colonne.")
+def test_la_visibilite_n_est_plus_une_propriete_de_l_instance():
+    """R9 (27/08) faisait de la visibilité une propriété de l'instance ; la bascule des
+    comptes (#1499) la retire : qui voit un compte, ce sont ses règles."""
+    assert not re.search(r"CHECK \(visibility IN", _SCHEMA_SRC)
+    assert "connector_instances_visibility" not in _SCHEMA_SRC
+    assert "visibility TEXT NOT NULL DEFAULT 'inherited'" not in _SCHEMA_SRC
 
 
 def test_le_compte_suit_la_convention_du_coffre_et_n_est_pas_nullable():

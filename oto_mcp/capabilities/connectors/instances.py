@@ -15,18 +15,16 @@ these instances yet (neither the cascade nor the resolution); `ref` remains the
 reference to pass back (the pin guards refuse `inst:` by name, see `access.rbac`).
 PIECE 2 (28/08): the instance is now born at SET time, in the vault transaction —
 this projection did not change by a single byte, but its `id` is no longer missing
-because of key freshness, only because of fail-open. It also serves `visible_to` (R9,
-settled on 27/08): the scopes that DISCOVER the instance, derived from the access
-chain by `connectors.instance_visibility`. ⚠️ **Descriptive, not filtering** — the
-list is neither widened nor narrowed, and a non-member still sees "no key configured".
+because of key freshness, only because of fail-open.
+
+Another person's account is NOT listed: since the account rules (#1499) it serves only
+when the call names it, at the level its rules give (`access/comptes`); its rules are
+read by `oto_instance op=rules` (`connectors.instances.rules.list`).
 
 EXCLUSIONS (deliberate, documented):
 - `entity_type='user'` residues (legacy scope of the former atlassian/folkmcp
   federations, removed on 2026-09-09 — the rows themselves still sleep in the database)
   — outside the working cascade by design (ADR 0033);
-- account grants #55 (`connector_account_grants` = satellite identity
-  pointers, already served by `oto_account_access`) — folded into
-  "shared instances" at B5;
 - remote Unipile identities (`connector_identities`: enumerating them decrypts
   the key and calls the remote API) — the BYO key itself IS listed as a
   member instance.
@@ -58,7 +56,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from ... import access, credentials_store, db, group_store, instance_refs, providers
 from . import custom_api, instances_tenant
 from ._level_doc import DOC_LEVEL as _DOC_LEVEL, DOC_OWNER_TYPE as _DOC_OWNER_TYPE
-from ...connectors import instance_visibility
 from .._authz import SUB_ONLY
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
 from ..registry import CAPABILITIES
@@ -81,9 +78,7 @@ class InstanceOwner(BaseModel):
     label, ADR 0044 §F) — hence three optional fields rather than a fixed pair."""
     type: Literal["user", "group", "org", "tenant", "platform"] = Field(
         description=_DOC_OWNER_TYPE)
-    # sub (user) or group/org id — an INTEGER when it comes from the context, a STRING
-    # when rebuilt from a shared row (`entity_id`). Absent on
-    # platform.
+    # sub (user) or group/org id (an INTEGER), or the tenant slug. Absent on platform.
     id: Optional[Union[int, str]] = None
     label: Optional[str] = None             # group name, or platform key label
 
@@ -137,7 +132,7 @@ class ConnectorInstance(BaseModel):
     config: Optional[dict] = None
     set_by: Optional[str] = None
     set_at: Optional[str] = None
-    # WHERE the instance comes from. CLOSED set, and the seven values are hard-coded in this
+    # WHERE the instance comes from. CLOSED set, and the five values are hard-coded in this
     # module — none is derived from data, so the contract can name them:
     #
     # | `credential`         | a vault row within my reach (member, team, org) |
@@ -145,50 +140,37 @@ class ConnectorInstance(BaseModel):
     # | `user_grant`         | platform level granted to ME |
     # | `org_grant`          | platform level granted to my ORG |
     # | `free_tier`          | open platform key, no grant (ADR 0031) |
-    # | `shared_with_me`     | NAMED loan from a peer (ADR 0044 `share_side`) — cross-org possible, the loan is consent |
-    # | `personal_cross_org` | MY own key, set in ANOTHER org (#172) |
-    #
-    # ⚠️ **Loan and cross-org are told apart here, and nowhere else**: both
-    # are instances seen from an org that does not carry them. `shared_with_me`
-    # belongs to someone else, `personal_cross_org` is mine — `owner` confirms
-    # it, but `via` is what SAYS it.
     #
     # ⚠️ Deliberate gap with `AuthDescriptor.method`, which stays a `str` for fear
     # that an enum would break a generated client the day one more value is added. Two
     # reasons to decide otherwise here: `method` is DERIVED (a function computes it
-    # per connector), `via` is a literal set in seven places of a single module; and
+    # per connector), `via` is a literal set in five places of a single module; and
     # `level`, its immediate neighbour in this same model, is already a `Literal`. The
     # ratchet `tests/test_instance_via_declare.py` reads the module's AST and goes red at the
-    # eighth value — it is THAT which makes the enum tenable, not discipline.
-    via: Literal["credential", "tenant_key", "user_grant", "org_grant", "free_tier",
-                 "shared_with_me", "personal_cross_org"] = Field(
+    # sixth value — it is THAT which makes the enum tenable, not discipline.
+    via: Literal["credential", "tenant_key", "user_grant", "org_grant", "free_tier"] = Field(
         description=(
             "Where the instance comes from. `credential`: a vault row within my reach "
             "(member, team, org). `tenant_key`: the caller's tenant key. "
             "`user_grant` / `org_grant` / `free_tier`: platform levels (granted to "
-            "me, to my org, or open without a grant). `shared_with_me`: named loan "
-            "from a peer, cross-org possible — the instance belongs to SOMEONE "
-            "ELSE. `personal_cross_org`: MY own key, set in another org. "
-            "The last two are the only ones that look alike, and this field "
-            "tells them apart."))
+            "me, to my org, or open without a grant)."))
     is_default: Optional[bool] = None       # present (true) only if marked default
     # Present (true) only if the instance is set aside: the cascade SKIPS it,
     # but it stays listed and reactivable — a `suspended` is not an absence.
     suspended: Optional[bool] = None
     daily_quota: Optional[int] = None       # granted platform levels only
-    # WHO SEES this instance (R9, settled on 27/08) — scopes `user:<sub>` /
-    # `group:<id>` / `org:<id>` / `platform` (everyone: a free-tier platform key).
-    # DERIVED from the access chain, never stored: whoever can resolve it
-    # sees it, and the instance's `visibility` column only carries the owner's
-    # OVERRIDE (`inherited` by default, so nothing to override today).
-    # ⚠️ **Descriptive, not filtering**: this field neither widens nor narrows this list,
-    # and a non-member still sees "no key configured". Disclosure
-    # ("there is an access to request, and from whom") remains a product question,
-    # filed by R9 under an opt-in org setting.
-    # ⚠️ **May be absent** — same fail-open as `id`.
-    visible_to: Optional[list[str]] = None
     # `http` instances only: the custom connector's card (`custom_api.py`). May be absent.
     custom_api: Optional[dict] = None
+    # An account of ANOTHER org (D1, #1499) — it serves named (`_account=`), or unnamed
+    # when nothing of your org does (step 5), and of
+    # that org the listing says its name, nothing else (no owner, no author):
+    # `lent_by_org` = a rule of that org opens it to you; `elsewhere_org` = your own
+    # personal account there (#172).
+    lent_by_org: Optional[str] = None
+    elsewhere_org: Optional[str] = None
+    # Accounts of another org only: the level you hold on it (none < read < write <
+    # sensitive < manage). `level`, above, stays the proximity rank.
+    your_level: Optional[Literal["none", "read", "write", "sensitive", "manage"]] = None
 
 
 class ConnectorInstances(BaseModel):
@@ -197,8 +179,7 @@ class ConnectorInstances(BaseModel):
     Two deliberate blind spots, which mean an absence proves nothing: the list
     applies NO activation/exposure filter (an instance exists even if
     the connector is not exposed — deliberate divergence from `connectors.me`), and
-    its "shared with me" / "personal cross-org" sections are logged fail-open
-    (an incident makes them empty without an error)."""
+    the stable identifiers are logged fail-open (an incident leaves `id` absent)."""
     instances: list[ConnectorInstance]
     count: int                              # = len(instances), AFTER filters
 
@@ -303,47 +284,16 @@ def _platform_eligible(provider: str) -> bool:
     return con is not None and "platform" in con.auth_modes
 
 
-def _shared_ref(entity_type: str, entity_id: str, connector: str,
-                account: str) -> Optional[str]:
-    """PINNABLE ref of an instance shared with me (share_side), rebuilt from
-    (entity_type, entity_id). None if not pinnable (oauth `user` residue, malformed id)."""
-    if entity_type == "member":
-        oid, _, osub = entity_id.partition(":")
-        if not (oid.isdigit() and osub):
-            return None
-        return instance_refs.make_member_ref(int(oid), osub, connector, account)
-    if entity_type == "group" and entity_id.isdigit():
-        return instance_refs.make_group_ref(int(entity_id), connector, account)
-    if entity_type == "org" and entity_id.isdigit():
-        return instance_refs.make_org_ref(int(entity_id), connector, account)
-    return None
-
-
-def _shared_owner(entity_type: str, entity_id: str) -> dict:
-    """Owner (the LENDER) of a shared instance — not me."""
-    if entity_type == "member":
-        _, _, osub = entity_id.partition(":")
-        return {"type": "user", "id": osub}
-    return {"type": entity_type, "id": entity_id}
-
-
 def _stamp_instance_identity(out: list[dict]) -> None:
-    """Sets `id = inst:{id}` and `visible_to` on each instance, and REMOVES the private key.
+    """Sets `id = inst:{id}` on each instance, and REMOVES the private key.
 
-    **Two queries for the whole list**, never two per instance: one returns
-    `(id, visibility)` from the instances table, the other the sharing of each
-    vault row. The projection runs inline on a single-loop server, against a
-    remote managed database — a lookup per instance would make N round trips on a
-    surface that returns dozens. (The platform keys of a switched connector
-    additionally read their edges; there are a handful, and it is the only level whose
-    audience is not structural.)
+    **One query for the whole list**, never one per instance: the projection runs
+    inline on a single-loop server, against a remote managed database — a lookup per
+    instance would make N round trips on a surface that returns dozens.
 
-    **Logged fail-open**, like the "shared with me" and "personal cross-org" sections
-    of this same list: `id` and `visible_to` are descriptive, nothing consumes them
-    yet, and `ref` is still served. Taking down a user's key listing
+    **Logged fail-open**: `ref` is still served. Taking down a user's key listing
     because the instances table did not answer would be out of proportion. The
-    counterpart is explicit in the output model: **both may be
-    absent**.
+    counterpart is explicit in the output model: `id` **may be absent**.
 
     ⚠️ The private key `_vault_key` is removed in ALL cases (the output model
     is `extra="allow"`: whatever stays in the dict goes out on the wire).
@@ -351,6 +301,8 @@ def _stamp_instance_identity(out: list[dict]) -> None:
     cles = [i.get("_vault_key") for i in out]
     for i in out:
         i.pop("_vault_key", None)
+    # An account of another org carries its identifier already (`_comptes_d_ailleurs`).
+    cles = [k if "id" not in i else None for i, k in zip(out, cles)]
     vraies = [k for k in cles if k]
     try:
         connues = db.instances_for_vault_rows(vraies)
@@ -358,25 +310,40 @@ def _stamp_instance_identity(out: list[dict]) -> None:
         logger.warning("instances: stable identifiers unavailable (fail-open)",
                        exc_info=True)
         return
-    try:
-        partages = credentials_store.sharing_for_vault_rows(vraies)
-    except Exception:
-        logger.warning("instances: sharing unavailable — `visible_to` omitted (fail-open)",
-                       exc_info=True)
-        partages = None
     for inst, cle in zip(out, cles):
         ligne = connues.get(cle) if cle else None
-        if ligne is None:
-            continue
-        inst["id"] = instance_refs.make_instance_ref(ligne["id"])
-        if partages is None:
-            continue
-        mode, down, side = partages.get(cle, ("open", [], []))
-        inst["visible_to"] = instance_visibility.derive(
-            cle[0], cle[1], cle[2], account=cle[3],
-            visibility=ligne["visibility"], share_mode=mode,
-            share_down=down, share_side=side)
+        if ligne is not None:
+            inst["id"] = instance_refs.make_instance_ref(ligne["id"])
     custom_api.stamp_instances(out, connues, cles)
+
+
+_PROXIMITE = {"member": ("member", "user"), "group": ("group", "group"),
+              "org": ("org", "org")}
+
+
+def _comptes_d_ailleurs(sub: str, org: int, connector: Optional[str]) -> list[dict]:
+    """The accounts of OTHER orgs than `org` that `sub` can name (`access.comptes_hors_org`),
+    as instances. Their `ref` is their stable identifier: the composed ref would carry the
+    owner's sub, and nothing of that org is said but its name."""
+    appelant = access.Appelant(sub, org, lambda: access.current_group(sub))
+    carrier = providers.credential_provider(connector) if connector else None
+    out = []
+    for compte in access.comptes_hors_org(carrier, org, sub):
+        level, owner_type = _PROXIMITE[compte.owner_type]
+        ident = instance_refs.make_instance_ref(compte.instance_id)
+        nom_d_org = compte.org_nom or f"#{compte.org_id}"
+        inst = {"id": ident, "ref": ident, "connector": compte.connector, "level": level,
+                "owner": {"type": owner_type},
+                "name": _instance_name(compte.connector, compte.label, compte.account),
+                "account": compte.account, "via": "credential",
+                "your_level": access.niveau(appelant, compte)}
+        if compte.proprietaire == sub:
+            inst["elsewhere_org"] = nom_d_org
+            inst["owner"] = {"type": "user", "id": sub}
+        else:
+            inst["lent_by_org"] = nom_d_org
+        out.append(inst)
+    return out
 
 
 def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
@@ -436,6 +403,12 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
                 _vault_key("org", org, row["connector"],
                            row.get("account") or "")))
 
+    # 3 ter. OTHER ORGS (D1, #1499) — an account another org opens to me by a rule, and
+    # my own personal key in another org (#172): listed so that I can NAME it, with the
+    # name of its org and my level, nothing else of that org.
+    if org is not None:
+        out.extend(_comptes_d_ailleurs(sub, org, inp.connector))
+
     # 3 bis. TENANT (L-keys PR 2) — the key of the CALLER's tenant (qualified sub),
     # between the org and the platform as in the walker. Empty for a bare account.
     for slug, ref, row in instances_tenant.tenant_rows(sub):
@@ -483,81 +456,8 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
             k["provider"], k.get("label") or "", "free_tier",
             {"set_at": k.get("set_at")}))
 
-    # 5. SHARED WITH ME (ADR 0044 share_side): instances of OTHERS whose
-    # share_side targets me (named `user:`, via one of my groups, or my whole active
-    # org `org:`). Cross-org possible (the named loan = consent). The pin resolves the
-    # owner's key. Dedup by ref (a group instance already listed in §2 does not
-    # reappear).
-    my_scopes = [f"user:{sub}"]
-    if org is not None:
-        for g in group_store.list_groups_for_user(sub, org):
-            my_scopes.append(f"group:{g.get('group_id') or g.get('id')}")
-        my_scopes.append(f"org:{org}")
-    my_eids = {credentials_store.member_id(org, sub)} if org is not None else set()
-    existing_refs = {i["ref"] for i in out}
-    try:
-        shared = credentials_store.list_shared_with(my_scopes)
-    except Exception:
-        logger.warning("instances: 'shared with me' unavailable (fail-open)", exc_info=True)
-        shared = []
-    for row in shared:
-        et, eid = row["entity_type"], row["entity_id"]
-        if et == "member" and eid in my_eids:
-            continue  # defensive: never my own row
-        ref = _shared_ref(et, eid, row["connector"], row.get("account") or "")
-        if ref is None or ref in existing_refs:
-            continue
-        existing_refs.add(ref)
-        inst = _cred_instance(et, _shared_owner(et, eid), ref, row,
-                              _vault_key(et, eid, row["connector"],
-                                         row.get("account") or ""))
-        inst["via"] = "shared_with_me"
-        out.append(inst)
-
-    # 6. PERSONAL CROSS-ORG (issue #172, track A): my member instances of a
-    # PER-PERSON connector (unipile) set in ANOTHER org follow me — proximity
-    # resolution finds them from any org (see
-    # `access.personal_instance_org`), so the list MUST show them, otherwise gap
-    # #1 ("nothing signals that I already have a personal instance elsewhere" → we reconnect
-    # → duplicate). Pinnable (`guard_instance_access`: my own row, org where I am
-    # a member). Dedup by ref (already listed if the context org IS the carrying org).
-    try:
-        for provider in providers.PERSONAL_CROSS_ORG_PROVIDERS:
-            # A connector that DELEGATES its credential has no vault row:
-            # its personal instance is its carrier's, already listed under it. Probing
-            # it would cost one query per channel for an always-empty list.
-            # A pin set on this instance DOES hold for the channel's calls:
-            # `_instance=` is compared AND read under the carrier (access/resolve.py) —
-            # both, not only the comparison, otherwise the pin is recognized then
-            # lost at the vault.
-            if providers.delegates_credential(provider):
-                continue
-            for other_org in credentials_store.list_member_orgs_for(sub, provider):
-                if org is not None and other_org == org:
-                    continue
-                for row in credentials_store.list_credentials(
-                        credentials_store.MEMBER,
-                        credentials_store.member_id(other_org, sub)):
-                    if row["connector"] != provider:
-                        continue
-                    ref = instance_refs.make_member_ref(other_org, sub, provider,
-                                                        row.get("account") or "")
-                    if ref in existing_refs:
-                        continue
-                    existing_refs.add(ref)
-                    inst = _cred_instance(
-                        "member", {"type": "user", "id": sub}, ref, row,
-                        _vault_key(credentials_store.MEMBER,
-                                   credentials_store.member_id(other_org, sub),
-                                   provider, row.get("account") or ""))
-                    inst["via"] = "personal_cross_org"
-                    out.append(inst)
-    except Exception:
-        logger.warning("instances: 'personal cross-org' unavailable (fail-open)",
-                       exc_info=True)
-
     # Input filters. A service card (`google_ads`, `gmail`…) owns no vault row: it is
-    # filtered under its carrier, the same translation as the loan (`credential_provider`).
+    # filtered under its carrier (`credential_provider`).
     if inp.connector:
         carrier = providers.credential_provider(inp.connector)
         out = [i for i in out if providers.credential_provider(i["connector"]) == carrier]
@@ -567,7 +467,7 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
     # §C preference carried by the SORT: member < group < org < platform.
     out.sort(key=lambda i: (i["connector"], _LEVEL_RANK[i["level"]],
                             i.get("account") or ""))
-    # The identity (stable identifier + derived audience), LAST: after the
+    # The stable identifier, LAST: after the
     # filters, to resolve only what comes out, and because the private key must
     # disappear from EVERYTHING that comes out.
     _stamp_instance_identity(out)
@@ -588,10 +488,12 @@ CAPABILITIES += [
             "Metadata only — the secret is never returned. `id` (`inst:<n>`) is the stable "
             "identifier of the instance and will replace `ref`; it is set as soon as the key is "
             "stored, but may still be missing if it could not be read, so keep using `ref` as "
-            "the pin handle for now. Both are opaque: pass them back as-is. `visible_to` "
-            "lists the scopes that can DISCOVER each instance (`user:<sub>`, `group:<id>`, "
-            "`org:<id>`, or `platform` for a key open to everyone), derived from the access "
-            "chain — it describes the instance, it does not filter this list. Contrast with "
+            "the pin handle for now. Both are opaque: pass them back as-is. Another "
+            "person's account of your org is not listed: name it (`_account=`) to use it, "
+            "at the level its rules give you. An account of ANOTHER org opened to you by a "
+            "rule is listed with `lent_by_org` (that org's name) and `your_level`, your own "
+            "key in another org with `elsewhere_org`: both serve when named, and unnamed "
+            "when no account of your org does. Contrast with "
             "oto_identity (operable accounts of ONE connector) and oto_connector op=list "
             "(catalog of TYPES)."),
         rest=RestBinding("GET", "/api/me/connector-instances"),

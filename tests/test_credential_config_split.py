@@ -54,12 +54,18 @@ def _wire(monkeypatch, *, user=None, group=None, org=None, meta=None,
     # (3 args) — le défaut couvre les deux. list_accounts vide ⇒ account='' (legacy).
     monkeypatch.setattr(access.db, "get_member_api_key",
                         lambda sub, org, prov, account="": user)
-    monkeypatch.setattr(access.credentials_store, "list_accounts", lambda *a, **k: [])
+    # The team and org steps read their vault rows by account (#1499): one row `''`
+    # where the test puts a key, none elsewhere.
+    tenus = {"group": group, "org": org}
+    monkeypatch.setattr(access.credentials_store, "list_accounts",
+                        lambda et, eid, p, *a, **k: (
+                            [{"account": "", "meta": {}}] if tenus.get(et) else []))
+    monkeypatch.setattr(access.credentials_store, "has_credential",
+                        lambda et, eid, p, account=None: bool(tenus.get(et)))
+    monkeypatch.setattr(access.credentials_store, "get_credential",
+                        lambda et, eid, p, account="": tenus.get(et))
     monkeypatch.setattr(access, "current_group", lambda sub: active_group)
     monkeypatch.setattr(access, "current_org", lambda sub: active_org)
-    # #172 : pas d'instance perso cross-org ici (ces tests visent org/plateforme).
-    monkeypatch.setattr(access.credentials_store, "list_member_orgs_for",
-                        lambda sub, con: [])
     monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: None)
     monkeypatch.setattr(access.group_store, "get_group_secret", lambda gid, prov, account="": group)
     monkeypatch.setattr(access.org_store, "get_org_secret", lambda oid, prov, account="": org)
@@ -95,11 +101,9 @@ def test_resolve_credential_platform_config_from_meta(monkeypatch):
     monkeypatch.setattr(access.db, "get_member_api_key", lambda s, o, p: None)
     monkeypatch.setattr(access, "current_group", lambda s: None)
     monkeypatch.setattr(access, "current_org", lambda s: None)
-    monkeypatch.setattr(access, "personal_instance_org",
-                        lambda sub, con, exclude_org=None: None)  # #172 : pas d'instance perso
     monkeypatch.setattr(access.credentials_store, "list_platform_instances",
                         lambda p: [{"label": "plat", "share_mode": "closed",
-                                    "share_down": ["user:u1"], "share_side": [], "meta": meta}])
+                                    "share_down": ["user:u1"], "meta": meta}])
     monkeypatch.setattr(access.credentials_store, "get_credential",
                         lambda et, eid, p, account="": "PK")
     monkeypatch.setattr(access.credentials_store, "get_credential_with_meta",

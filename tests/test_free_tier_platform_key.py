@@ -31,7 +31,7 @@ def _no_byo_no_grant(monkeypatch):
 
 # Instance free-tier serper : 'open' + share_down vide ⟹ ouverte à tous ; quota meta.rate_limit=200.
 _FREE_SERPER = [{"label": "free", "share_mode": "open", "share_down": [],
-                 "share_side": [], "meta": {"rate_limit": 200}}]
+                 "meta": {"rate_limit": 200}}]
 
 
 def test_free_tier_resolves_platform_key_under_quota(_no_byo_no_grant, monkeypatch):

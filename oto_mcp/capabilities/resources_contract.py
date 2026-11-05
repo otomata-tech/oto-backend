@@ -84,9 +84,6 @@ class ResourceGrant(BaseModel):
     role: Optional[str] = None
     permission: Optional[str] = None
     granted_at: Optional[str] = None
-    # #480 — sur un PROJET seulement : avec quelles clés ce bénéficiaire y travaille
-    # (`own` = les siennes ; `inherit` = celles du propriétaire lui sont prêtées).
-    credentials: Optional[Literal["own", "inherit"]] = None
     # otomata-tech/oto#39 — l'échéance du partage (null = sans échéance), et s'il est
     # ÉCHU : il reste listé, marqué, comme un jeton expiré — il ne donne plus rien.
     expires_at: Optional[str] = None
@@ -240,8 +237,6 @@ class ResourceShared(_Avertissement):
     principal_type: str
     role: str
     permission: str
-    # #480 — rendu sur le partage d'un PROJET : les clés que ce partage déclare.
-    credentials: Optional[Literal["own", "inherit"]] = None
     # otomata-tech/oto#39 — l'échéance ÉCRITE en base (null = sans échéance).
     expires_at: Optional[str] = None
     cascade: Optional[list[CascadeEntry]] = None
@@ -353,9 +348,6 @@ REFUS: tuple[DeclaredError, ...] = (
                   "`share` of a page (`resource_type=\"doc\"`) with a role other than "
                   "`viewer` — a page is shared read-only; share its project to let "
                   "someone write"),
-    DeclaredError(400, "credentials_project_share_only",
-                  "`credentials` sur autre chose que le partage d'un projet à une "
-                  "personne, une équipe ou une org"),
     DeclaredError(400, "ttl_days_grant_only",
                   "`ttl_days` hors du partage d'une ressource à une personne, une équipe "
                   "ou une org (autre op, ou audience public/secret/private)"),
@@ -368,9 +360,6 @@ REFUS: tuple[DeclaredError, ...] = (
     # #1176 — audience public/secret par un gérant qui n'est pas membre de l'org
     # propriétaire : levé par `publish_project_mcp`, la règle unique de publication.
     _publication.REFUS_HORS_ORG,
-    DeclaredError(403, "inherit_beyond_sharer_rights",
-                  "`credentials='inherit'` demandé par qui n'est pas membre de l'org "
-                  "propriétaire du projet — on ne prête que les clés qu'on atteint"),
     DeclaredError(403, "group_not_visible",
                   "grant d'équipe visant un groupe d'une org dont tu n'es pas membre"),
     DeclaredError(403, "not_group_member",
@@ -385,8 +374,8 @@ REFUS: tuple[DeclaredError, ...] = (
                   "`sub` — un partage par `email` sans compte devient un partage EN "
                   "ATTENTE"),
     DeclaredError(400, "pending_share_plain_only",
-                  "partage en attente (adresse sans compte) avec `cascade` ou "
-                  "`credentials='inherit'` : à refaire une fois la personne inscrite"),
+                  "partage en attente (adresse sans compte) avec `cascade` : à refaire "
+                  "une fois la personne inscrite"),
     DeclaredError(404, "unknown_org", "org destinataire inconnue"),
     DeclaredError(404, "unknown_group", "groupe destinataire inconnu"),
     DeclaredError(409, "confirm_loss_of_control",

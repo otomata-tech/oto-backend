@@ -10,11 +10,11 @@ serveur rend une valeur de plus (c'est l'argument qui garde `AuthDescriptor.meth
 
 **Ce fichier est ce qui rend l'énuméré tenable.** Il lit l'AST du module producteur et
 compare, dans les deux sens, les littéraux réellement posés au jeu déclaré. Ajouter un
-huitième `via` sans toucher au modèle fait rougir la CI ici, au lieu de casser un
+sixième `via` sans toucher au modèle fait rougir la CI ici, au lieu de casser un
 client généré, en silence, chez quelqu'un d'autre.
 
-⚠️ Pourquoi l'AST et pas un appel : produire les sept `via` demanderait sept montages
-(un coffre, un tenant, deux grants, une clé ouverte, un prêt, une org tierce). Un banc
+⚠️ Pourquoi l'AST et pas un appel : produire les cinq `via` demanderait cinq montages
+(un coffre, un tenant, deux grants, une clé ouverte). Un banc
 qui ne monterait que les cas faciles certifierait une couverture qu'il n'a pas — c'est
 le mode d'échec qu'on veut éviter, pas celui qu'on veut reproduire.
 
@@ -82,7 +82,7 @@ def test_le_banc_voit_bien_les_trois_formes_de_pose():
     """Témoin. Un collecteur muet (une forme d'AST qui change, un renommage de la
     fabrique) rendrait les deux tests suivants verts sans avoir rien lu."""
     poses = _poses()
-    assert len(poses) >= 7, sorted(poses)
+    assert len(poses) >= 5, sorted(poses)
     assert "credential" in poses          # forme 1 : dict d'un bloc
     assert "tenant_key" in poses          # forme 2 : affectation par indice
     assert "user_grant" in poses          # forme 3 : argument de la fabrique
@@ -106,11 +106,12 @@ def test_aucune_valeur_declaree_n_a_disparu_du_code():
 
 
 @pytest.mark.parametrize("valeur", ["shared_with_me", "personal_cross_org"])
-def test_les_deux_provenances_qui_se_ressemblent_restent_distinctes(valeur):
-    """Un prêt nominatif et ma propre clé posée ailleurs sont toutes deux vues depuis
-    une org qui ne les porte pas. Les confondre ferait proposer « retirer » sur la clé
-    d'un pair, ou « demander l'accès » sur la sienne."""
-    assert valeur in _declarees()
+def test_le_compte_d_autrui_et_la_cle_d_une_autre_org_ne_sont_plus_des_provenances(valeur):
+    """La bascule des comptes (#1499) retire le prêt nominatif et la clé personnelle
+    suivie d'une org à l'autre : le compte d'une autre personne ne se liste plus (il se
+    NOMME, au niveau que ses règles donnent), et la clé d'une autre org n'est plus vue
+    depuis celle-ci."""
+    assert valeur not in _declarees()
 
 
 def test_un_dict_d_appoint_ne_peut_pas_glisser_un_huitieme_via():

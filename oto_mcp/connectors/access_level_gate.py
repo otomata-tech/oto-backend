@@ -17,10 +17,9 @@ reading of the setting and of the key's owner, not one byte of schema changed):
   arguments, so it judges the `op`; a call without `op` is judged as the tool's default.
   An undeclared tool or op of a leveled connector is refused, never let through. It
   judges EVERY context whose key the call can be served from (`_judged_contexts`): the
-  call's own, plus the team a shared project lends by inheritance, the owner of an
-  instance pinned (`_instance=`) or bound by the project, and for a LENT key (which serves
-  only designated, `access/prets.py`) its lender's org and the team it is lent to — each
-  must cover the call.
+  call's own, plus the owner of an instance pinned (`_instance=`) or bound by the
+  project — each must cover the call. Another person's account named by `_account=`
+  belongs to the call's org (`access/comptes.autrui_nomme`): the call's context judges it.
 
 Without a sub (local stdio) nothing is guarded, like activation: only the multi-user
 surface is targeted.
@@ -33,8 +32,7 @@ from typing import Awaitable, Callable, Optional
 from mcp.types import INVALID_PARAMS, ErrorData
 from starlette.concurrency import run_in_threadpool
 
-from .. import access, call_axes, credentials_store, group_store, providers, session_org
-from ..access import heritage
+from .. import access, call_axes, group_store, providers, session_org
 from ..mcp_errors import McpError
 from . import access_levels
 
@@ -58,48 +56,13 @@ def _owner_context(ref) -> Optional[tuple[Optional[int], Optional[int]]]:
     return None
 
 
-def _loan_contexts(sub: str, connector: str, carrier: str,
-                   ref) -> list[tuple[Optional[int], Optional[int]]]:
-    """The `(org, team)` of a LOAN the call designates: the team a pinned member row of
-    another person is lent to (none when it is lent to her by name or to the whole org:
-    the owner's org already judges it), or, without a pin, the lender's org and the
-    borrowing team of every loan that `_account=` (or the project's pinned identity)
-    names — Microsoft and the cascade's team and org rungs serve a loan only so. Judged
-    before the resolution: a loan named like an own account is judged too, which can
-    only restrict."""
-    if ref is not None:
-        if getattr(ref, "level", None) != "member" or ref.sub == sub:
-            return []
-        equipe = access.equipe_du_pret(sub, (
-            credentials_store.MEMBER, credentials_store.member_id(ref.org_id, ref.sub),
-            carrier, ref.account or ""))
-        return [(int(ref.org_id), equipe["id"])] if equipe else []
-    nom = (session_org.current_call_account() or access.project_pinned_identity(connector)
-           or access.project_pinned_identity(carrier))
-    if not nom:
-        return []
-    out = []
-    for c in access.prets_de(sub, carrier):
-        if c["account"] == nom:
-            out.append((c["lender_org"], None))
-            if c.get("via_group"):
-                out.append((c["lender_org"], c["via_group"]["id"]))
-    return out
-
-
 def _judged_contexts(sub: str, connector: str) -> list[tuple[Optional[int], Optional[int]]]:
     """Every `(org, team)` whose level this call must satisfy: the call's context, AND the
-    context that OWNS a key the call can be served from outside it — the owning team a
-    shared project lends by inheritance (`groupe_herite`, walked by the cascade after the
-    active team), and the instance pinned by `_instance=` or bound by the project (which
-    `resolve_credential` serves before any cascade), and a designated loan
-    (`_loan_contexts`). Without them, a team's restriction was crossed by serving that
-    team's key under a context judged `full`."""
+    context that OWNS the instance pinned by `_instance=` or bound by the project (which
+    `resolve_credential` serves before any cascade). Without it, a team's restriction was
+    crossed by serving that team's key under a context judged `full`."""
     org, group = _context(sub)
     out = [(org, group)]
-    cles = heritage.du_contexte(sub, org)
-    if cles is not None and cles.groupe_herite is not None:
-        out.append((cles.org, cles.groupe_herite))
     carrier = providers.credential_provider(connector)
     ref = session_org.current_call_instance()
     if ref is None or getattr(ref, "connector", None) != carrier:
@@ -107,7 +70,6 @@ def _judged_contexts(sub: str, connector: str) -> list[tuple[Optional[int], Opti
     owner = _owner_context(ref) if ref is not None else None
     if owner is not None:
         out.append(owner)
-    out += _loan_contexts(sub, connector, carrier, ref)
     return list(dict.fromkeys(out))
 
 

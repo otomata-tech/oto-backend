@@ -751,4 +751,5 @@ def test_le_resolveur_reserve_sur_la_cle_du_tenant_primaire_apres_son_quota():
     branche = src[src.index('win.mode == "tenant":'):src.index('if win.mode != "platform":')]
     assert branche.index("tenant_budget.enforce(") < branche.index("credits.reserver(")
     assert "credits.rang_refacture(win.mode, win.entity_id)" in branche
-    assert 'credits.reserver(sub, heritage.org_des_cles(sub, active_org), "tenant")' in branche
+    assert 'credits.reserver(sub, org_m, "tenant")' in branche
+    assert 'org_m = scope.org_d_appartenance(sub, active_org)' in src

@@ -193,7 +193,7 @@ qui est partagé à la personne (`perso_de_la_liste`). **Les lentilles « moi »
 op=shared_with_me` sans `scope` ou `scope="me"` — sont **servies dans toute org**, avec le
 même contenu : un partage à une personne n'appartient à aucune org. Le 409
 `personal_view_outside_personal_org` est retiré. La cascade des clés ne préfère plus l'org
-perso (`personal_instance_org` : la clé la plus récente). Bancs :
+perso. Bancs :
 `tests/test_org_perso_est_une_org.py`, `tests/test_projets_perso_visibles_ou_crees.py`.
 
 ## Dans une org, on ne voit QUE l'org (décision du 28/09/2026, ADR 0030 §9)
@@ -234,7 +234,7 @@ demandent explicitement (`owner_type`/`owner`). Aucun refus à la création. Pas
 migration : les objets existants restent où ils sont.
 
 `context_org_id` n'est plus lu par aucune liste. Il reste lu, pour un projet perso, par
-la résolution des clés de son axe `project=` (`access/heritage`), l'org d'origine
+l'org d'origine
 (`org_origin`, ADR 0071), la vue bornée (`_perso_range_hors_de`, oto#270) et la portée de
 résolution des `[[…]]` (`db/backlinks`). Pour un tableau, il est écrit et plus lu. Bancs :
 `tests/test_listes_seule_l_org.py` (base réelle), `tests/test_search_scope_tripwire.py`.
@@ -307,55 +307,32 @@ gardé), modifier, partager à une personne, une équipe ou une org. Banc :
 > l'originale reste chez la source. Les deux sont écrits dans la description servie.
 > Banc : `tests/test_transfert_procedure_oto65.py` (org A → org B, contre un vrai PG).
 
-## Les clés d'un projet partagé (#480, arbitrage du 23/09/2026)
+## Les clés d'un projet partagé (#480, #1499)
 
-> **La règle.** Qui reçoit un projet y travaille **avec ses propres clés**. Les clés du
-> propriétaire — clé d'org, clé de l'équipe propriétaire, accès plateforme accordés à son
-> org, plan de son org — ne lui sont prêtées que si le partageur le **déclare** au partage
-> (`oto_resource op=share … credentials="inherit"`), **borné à ses propres droits**, et
-> **révocable** (`credentials="own"`, ou `unshare`). **Iso** : le même paramètre et le
-> même comportement pour une personne, une équipe ou une org — la règle ne regarde que
-> l'appartenance de l'appelant à l'org du projet, jamais le type de grant par lequel il
-> est entré.
+> **La règle.** Qui reçoit un projet y travaille **avec ses propres clés**, sans exception
+> depuis la bascule des comptes (#1499, 05/11/2026) : les clés du propriétaire — clé
+> d'org, clé de l'équipe propriétaire, accès plateforme accordés à son org, plan de son
+> org — ne lui sont jamais prêtées. Le prêt déclaré au partage (`credentials="inherit"`,
+> `access/heritage.py`) est retiré, ses grants `project_credentials` archivés par la
+> migration de la bascule. Un compte ne sert hors de son org que par une règle de compte
+> qui NOMME la personne ([`partage-de-compte.md`](partage-de-compte.md), D1).
 
-> **Le trou fermé.** `_project=` co-pose l'org propriétaire comme contexte de l'appel
-> (`call_axes._pin_project`) ; le barreau ORG de la cascade n'était gardé par aucune
-> appartenance, et un bénéficiaire hors de l'org agissait sous ses clés d'org. Le barreau
-> équipe l'était déjà (`can_read_group` à la pose).
-
-> **Mécanique** (`access/heritage.py`). Le verdict `ClesDuProjet` se calcule UNE fois à
-> la pose de `_project=` (threadpool) et voyage dans un contextvar ; le walker
-> (`walk_cascade`), la traversée L7 (`chain_resolution`), la garde d'un binding de projet
-> et le plan de l'org (`_win_quota`) le lisent sans requête. Pour un **bénéficiaire hors
-> de l'org** : sa clé membre dans l'org du projet s'il l'y a posée, sinon **sa clé
-> personnelle posée ailleurs** (org perso d'abord, sinon la plus récente — l'instance
-> cross-org de #172, étendue à tout connecteur à clé personnelle, multi-compte compris),
-> son tenant, ses propres accès plateforme ; jamais le barreau org de l'org du projet ni
-> ses accès `org:<id>`. Le refus « aucune clé » lui dit alors les deux sorties (poser sa
-> clé, ou demander l'héritage).
-
-> **L'héritage est une arête de la chaîne de grants** (ADR 0053, point d'extension
-> `resource_kind`) : `grants.resource_kind='project_credentials'`, `resource_id=
-> 'project:<id>'`, émise par le partageur (`grantor = user:<sub>`), reçue par le principal
-> du partage. **Aucune colonne neuve** : révoquer = archiver l'arête (`revoked_at`). La
-> **borne se relit à chaque pose** — le prêt n'ouvre le barreau org que si le partageur
-> est ENCORE membre de l'org du projet (et le barreau d'équipe que s'il la lit) ; sorti de
-> l'org, son prêt s'éteint sans rien réécrire. À la déclaration, un partageur hors de l'org
-> propriétaire est refusé (`403 inherit_beyond_sharer_rights`). Omis, `credentials` laisse
-> l'état existant intact (un re-partage qui ne change qu'un rôle ne retire pas un prêt) ;
-> `op=get` rend le `credentials` de chaque grant d'un projet.
+> **Mécanique.** `_project=` co-pose l'org propriétaire comme contexte de l'appel
+> (`call_axes._pin_project`) ; pour un bénéficiaire hors de l'org, il note aussi
+> `session_org.set_call_hors_org`. `access.org_d_appartenance(sub, org)` rend alors None :
+> le barreau org de la cascade, les droits plateforme de l'org et la facturation ne
+> voient pas cette org (zéro requête).
 
 > **Hors des clés, la portée.** L'org co-posée par `_project=` n'est pas pour autant une
 > org de l'appelant : pour un bénéficiaire **hors de l'org** (verdict `membre=False`), la
 > pièce `("org", X)` sort de tous les seams de portée — `active_org_principals` (donc
 > `principaux_de_liste` et `visible_in_org`), `project_scope_owners`, `owner_in_scope`, le
 > `_active_scope` du datastore et les partages reçus de la recherche — par un seam unique,
-> `ownership.owner_de_portee` (← `heritage.org_du_perimetre`). Sans lui, `data_list_datastores`
+> `ownership.owner_de_portee` (← `access.org_d_appartenance`). Sans lui, `data_list_datastores`
 > sous `_project=` rendait tout le catalogue de l'org (nom, propriétaire, schéma), et un
 > tableau de l'org se lisait par son numéro ou par un `slot:` du projet (la lecture ne
 > repasse pas par `can_access`). Le partage d'un projet ne partage pas les tableaux qu'il
-> lie : le bénéficiaire lit ceux qui lui sont partagés. L'héritage des clés n'y change
-> rien — il prête des clés, jamais l'appartenance
+> lie : le bénéficiaire lit ceux qui lui sont partagés
 > (`tests/test_projet_partage_hors_org_listes.py`).
 
 ## L'échéance d'un partage (otomata-tech/oto#39, 24/09/2026)
@@ -366,7 +343,7 @@ gardé), modifier, partager à une personne, une équipe ou une org. Banc :
 > (ailleurs : `400 ttl_days_grant_only` ; une valeur illisible : `400 invalid_input`,
 > jamais lue comme « sans échéance », contrairement aux jetons). Passée l'échéance, le
 > partage **ne donne plus rien** : ni le contenu, ni les listes (projets, tableaux, pages
-> reçus, pastille « partagé »), ni le prêt des clés d'un projet (`credentials="inherit"`).
+> reçus, pastille « partagé »).
 > **Aucun rappel** avant l'échéance (décision du 24/09 ; il attend otomata-tech/oto#272).
 
 > **Stockage.** `resource_grants.expires_at TIMESTAMPTZ`, NULL = sans échéance — tout
@@ -383,8 +360,7 @@ gardé), modifier, partager à une personne, une équipe ou une org. Banc :
 > re-partage qui ne change qu'un rôle ne la retire pas en silence) ; un partage neuf ou
 > ÉCHU n'en reçoit pas (re-partager ce qui a expiré le rouvre). Retirer une échéance :
 > `unshare` puis `share`. `cascade=true` pose la même échéance sur les tableaux et
-> procédures liés. L'héritage des clés (`access/heritage.evaluer`) ne lit une arête
-> `project_credentials` que pour un principal dont le partage du projet est vivant.
+> procédures liés.
 > Hors périmètre : `data_share` (partage d'un tableau par sa propre surface) ne pose pas
 > d'échéance.
 
@@ -406,7 +382,7 @@ gardé), modifier, partager à une personne, une équipe ou une org. Banc :
 > adresse rend le premier (`already_pending`, un index unique partiel l'impose). `op=get`
 > liste le partage en attente dans `grants` (`pending: true`, sans `principal_id`) ;
 > `op=unshare` avec la même adresse le retire. **Refusé** (`pending_share_plain_only`) avec
-> `cascade=true` ou `credentials="inherit"` : ce sont des gestes sur un compte, à refaire
+> `cascade=true` : c'est un geste sur un compte, à refaire
 > une fois la personne inscrite. `ttl_days` se garde : l'échéance court depuis
 > l'acceptation. Un `sub` inconnu reste un 404 : il désigne un compte, pas une adresse.
 

@@ -37,9 +37,7 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
     -- ADR 0044 : l'entrée du coffre EST une instance de connecteur (config possédée).
     version     INTEGER NOT NULL DEFAULT 1,   -- verrou optimiste (B1) vs last-writer-wins
     share_down  JSONB NOT NULL DEFAULT '[]',  -- grantees des instances PLATFORM uniquement (§F) — le cran BYO « restreindre sous le niveau » est RETIRÉ (2026-07-08 : restreindre = poser l'instance au bon niveau)
-    share_side  JSONB NOT NULL DEFAULT '[]',  -- EXTENSION : prêts NOMINATIFS à des pairs (liste de refs de principaux)
     share_mode  TEXT NOT NULL DEFAULT 'open', -- ADR 0044 §F : polarité du vide de share_down. 'open' = vide→sous-arbre (BYO) ; 'closed' = vide→personne (plateforme)
-    share_services JSONB NOT NULL DEFAULT '{}', -- les SERVICES prêtés, par cible du share_side (`{"user:<sub>": ["google_ads"]}`) — compte Google ou Microsoft seulement (access/prets.PORTEURS_A_SERVICES)
     PRIMARY KEY (entity_type, entity_id, connector, account)
 );
 CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);
@@ -175,12 +173,6 @@ CREATE TABLE IF NOT EXISTS connector_instances (
     -- `config_fields` packés (ex. `data_center` zoho) vivent DANS le ciphertext —
     -- les sortir est un lot à part entière (il faut déchiffrer pour dépacker).
     config JSONB NOT NULL DEFAULT '{}'::jsonb,
-    -- R9, tranché le 27/08 : **la visibilité est une propriété de l'INSTANCE**,
-    -- dérivée de la chaîne (découvrable par les scopes sous son propriétaire dans la
-    -- MÊME org, jamais cross-org), avec surcharge explicite par le propriétaire.
-    -- La colonne porte la SURCHARGE ; `inherited` (le défaut) dit « laisse la
-    -- dérivation décider ». **La dérivation n'est pas écrite** — c'est un lot.
-    visibility TEXT NOT NULL DEFAULT 'inherited',
     -- Sous-instances (0053-D9-3) : une instance enfant AJOUTE des crans à son parent
     -- — « le LinkedIn de Jane » sous la clé Unipile plateforme. Rien n'en crée
     -- encore. ⚠️ Le jour où une sous-instance REDÉFINIT ce que `account` contient au
@@ -203,9 +195,7 @@ CREATE TABLE IF NOT EXISTS connector_instances (
     -- Contraintes NOMMÉES (docs/live-migrations.md) : un futur DROP CONSTRAINT ne
     -- peut pas viser autre chose que ce qu'il croit viser.
     CONSTRAINT connector_instances_owner_type_check
-        CHECK (owner_type IN ('platform', 'tenant', 'org', 'group', 'member', 'user')),
-    CONSTRAINT connector_instances_visibility_check
-        CHECK (visibility IN ('inherited', 'hidden', 'org'))
+        CHECK (owner_type IN ('platform', 'tenant', 'org', 'group', 'member', 'user'))
 );
 -- **Une instance vivante par ligne de coffre**, et c'est la base qui le tient, pas
 -- le backfill : l'unicité porte sur le quadruplet du coffre. PARTIEL sur les
@@ -277,7 +267,8 @@ CREATE INDEX IF NOT EXISTS idx_apollo_phone_reveals_expires
 # le journal des prêts de compte (`oto_instance op=lend`, docs/partage-de-compte.md)
 LOAN_EVENTS = """
 -- Qui a prêté quel compte, à qui, quand — et qui l'a repris. Une ligne par pose ou
--- retrait EFFECTIF d'une cible du `share_side` (ADR 0044), append-only : rien ne la
+-- retrait EFFECTIF d'une cible de l'ancien `share_side` (ADR 0044, retiré par la bascule
+-- des comptes, #1499 — le journal reste, en lecture), append-only : rien ne la
 -- modifie ni ne la supprime. Le compte est désigné par sa ligne du coffre (celle du
 -- prêteur : `entity_type`, `entity_id`, `connector`, `account`), jamais par son secret ;
 -- `target` est la cible telle que le `share_side` l'écrit : `user:<sub>`, `group:<id>`
@@ -306,8 +297,8 @@ ACCOUNT_RULES = """
 -- Une RÈGLE d'accès sur un compte de connecteur (une instance), pour UN sujet : une
 -- personne, une équipe ou l'org entière — le modèle d'oto-core (`access_rules` sur un
 -- compte), transposé (docs/partage-de-compte.md § Les règles de comptes).
--- ⚠️ Rien ne lit encore cette table : la résolution passe toujours par les prêts
--- (`share_side`, prêts Unipile). La bascule est un lot à part.
+-- Lue par la résolution d'un compte et la garde de niveau (`access/niveaux`) depuis la
+-- bascule (lot L3), qui a retiré les prêts d'avant.
 CREATE TABLE IF NOT EXISTS connector_account_rules (
     id BIGSERIAL PRIMARY KEY,
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -348,7 +339,9 @@ CREATE INDEX IF NOT EXISTS idx_account_rules_subject_group
 
 -- Le JOURNAL des partages : chaque règle posée, dont le niveau change, ou retirée. Écrit
 -- par un DÉCLENCHEUR sur `connector_account_rules` (`db/regles_de_comptes`), dans la
--- transaction du geste ; append-only. Aucune clé vers les orgs, les équipes ni les
+-- transaction du geste ; append-only. Un changement de propriétaire y entre aussi
+-- (`transferred` : le nouveau propriétaire en sujet, l'ancien en `owner_before`,
+-- `db/transfert_de_compte`). Aucune clé vers les orgs, les équipes ni les
 -- personnes : la ligne survit à son sujet. Elle part avec son compte.
 CREATE TABLE IF NOT EXISTS connector_account_share_events (
     id BIGSERIAL PRIMARY KEY,
@@ -362,8 +355,10 @@ CREATE TABLE IF NOT EXISTS connector_account_share_events (
     previous_level TEXT,
     services TEXT[],
     actor_sub TEXT,               -- `oto.acteur` de la transaction, sinon NULL (geste hors serveur)
+    owner_before TEXT,            -- `transferred` : `<type>:<id>` du propriétaire d'avant
+    hors_org BOOLEAN NOT NULL DEFAULT false,  -- le sujet personne n'est pas membre de l'org du compte (D1)
     CONSTRAINT connector_account_share_events_action_check
-        CHECK (action IN ('set', 'removed')),
+        CHECK (action IN ('set', 'removed', 'transferred')),
     CONSTRAINT connector_account_share_events_subject_kind_check
         CHECK (subject_kind IN ('user', 'group', 'org'))
 );

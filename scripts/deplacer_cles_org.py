@@ -64,9 +64,9 @@ Refus (sortie non nulle, rien d'écrit en `--apply`) :
   en le disant.
 
 Ne sont PAS repris : les partages de l'instance d'org. `share_down` ne vit plus que
-sur les clés plateforme (le cran BYO a été retiré, cf. `access/rbac.py`) et
-`share_side` (prêt nominatif) n'est lu qu'au niveau membre ; la sortie compte les
-lignes qui en portaient un. `share_mode` seul n'est pas un partage : `'open'` est sa
+sur les clés plateforme (le cran BYO a été retiré, cf. `access/rbac.py`) ; la sortie
+compte les lignes qui en portaient un. Les règles du compte (#1499) suivent son
+instance. `share_mode` seul n'est pas un partage : `'open'` est sa
 valeur par défaut.
 
 **Aucun secret n'est affiché ni journalisé**, y compris en erreur : la sortie ne
@@ -168,7 +168,7 @@ def _lisible_au_niveau(vers: str, connector: str) -> Optional[str]:
     except ValueError:
         return "n'accepte pas de clé d'équipe"
     # Le coffre accepte aussi un connecteur byo_user au palier équipe, mais le walker
-    # ne le lit qu'org-partageable (`instance_visibility.derive`) : une clé posée là
+    # ne le lit qu'org-partageable (`providers.is_org_shareable`) : une clé posée là
     # existerait sans jamais servir.
     if not providers.is_org_shareable(connector):
         return "une clé d'équipe ne serait jamais lue (connecteur non org-partageable)"
@@ -176,7 +176,7 @@ def _lisible_au_niveau(vers: str, connector: str) -> Optional[str]:
 
 
 def _partage_reel(r) -> bool:
-    return bool(r["share_down"] or r["share_side"] or r["share_mode"] == "closed")
+    return bool(r["share_down"] or r["share_mode"] == "closed")
 
 
 def _planifier(conn, org: int, cible: Cible, connectors: list) -> Plan:
@@ -188,7 +188,7 @@ def _planifier(conn, org: int, cible: Cible, connectors: list) -> Plan:
             plan.refus.append((connector, motif))
             continue
         lignes = conn.execute(
-            "SELECT account, share_mode, share_down, share_side FROM connector_credentials "
+            "SELECT account, share_mode, share_down FROM connector_credentials "
             "WHERE entity_type = %s AND entity_id = %s AND connector = %s "
             "ORDER BY account FOR UPDATE",
             (cs.ORG, str(org), connector)).fetchall()
@@ -439,8 +439,7 @@ def deplacer(org: int, sub: str, connectors: list, *, vers: str = MEMBRE,
             out(f"  REFUS {connector} : {motif}")
         if plan.partages_non_repris:
             out(f"  partage d'instance non repris sur {plan.partages_non_repris} ligne(s) "
-                "(share_down ne vit plus que sur les clés plateforme ; share_side n'est lu "
-                "qu'au niveau membre)")
+                "(share_down ne vit plus que sur les clés plateforme)")
         out(f"  autres membres de l'org : {len(autres)}")
 
         actifs = []

@@ -11,8 +11,8 @@ d'abord, l'extinction du free-tier mesurée connecteur par connecteur ensuite.**
 rendre la chaîne capable de dire tout ce que la ligne du coffre dit.
 
 1. **« tout le monde »** — une arête `platform:platform → platform:platform` par
-   instance ouverte. Le mot n'est pas inventé : `connectors.instance_visibility`
-   appelle déjà EVERYONE le scope `platform`, et le CHECK de `grants.grantee_kind`
+   instance ouverte. Le mot n'est pas inventé : la visibilité dérivée (R9)
+   appelait EVERYONE le scope `platform`, et le CHECK de `grants.grantee_kind`
    l'accepte — **aucune migration de schéma**.
 2. **les nominatives restées derrière** — un scope de `share_down` ∪
    `meta.rate_limit_by` sans aucune arête. Le semis de L5 ne couvrait que les

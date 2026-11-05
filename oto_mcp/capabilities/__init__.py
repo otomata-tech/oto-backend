@@ -124,10 +124,10 @@ from . import media_and_files  # noqa: F401 — me.avatar.clear, org.logo.clear,
 from . import tools_me  # noqa: F401 — me.tools.{list,registry,disable,enable,detail,call}
 # Denylist de TOOLS par org/équipe — remplace l'ancienne baseline allowlist (retirée 3951a57).
 from . import tools_visibility  # noqa: F401 — tools.{org,group}_{list,hide,unhide}
-# Partage d'instance (ADR 0044) — le propriétaire PRÊTE sa clé à un pair (share_side — MCP via oto_instance op=lend).
-import oto_mcp.capabilities.connectors.sharing  # noqa: F401 — connectors.lend_instance
+# Les règles d'un compte (#1499) — qui le gère les pose (MCP via oto_instance op=set_rule).
+import oto_mcp.capabilities.connectors.sharing  # noqa: F401 — connectors.instances.rules.*
+import oto_mcp.capabilities.connectors.transfert  # noqa: F401 — connectors.instances.transfer
 # Autorisation de compte connecteur partagé (#55) — le propriétaire accorde l'opération de SON compte.
-import oto_mcp.capabilities.connectors.account_grants  # noqa: F401 — connectors.account_grants.{list,grant,revoke}
 # Forcer un connecteur dans la toolbox d'un membre (ADR 0031) — override positif (allow).
 import oto_mcp.capabilities.connectors.force  # noqa: F401 — connectors.force.member (MCP via oto_connector op=force)
 # Projection lecture du coffre en instances possédées nommées (ADR 0038 B4).
@@ -136,10 +136,10 @@ import oto_mcp.capabilities.connectors.http_operations  # noqa: F401 — custom_
 # Console admin consolidée par concept (ADR 0009, fusion *_op) — réutilise les handlers
 # de domaine. À importer APRÈS eux (orgs_admin/reads/members, users_admin).
 from . import admin_console  # noqa: F401 — admin.{org,org_member,user,key_grant,guide,signal}
-# Console connecteurs consolidée (ADR 0047 B1, fusion *_op) — porte les 6 tools MCP de la
-# famille (activation/access/connector/instance/identity/account_access) ; les modules
+# Console connecteurs consolidée (ADR 0047 B1, fusion *_op) — porte les tools MCP de la
+# famille (activation/access/connector/instance/identity) ; les modules
 # ci-dessus gardent leurs faces REST. À importer APRÈS eux.
-import oto_mcp.capabilities.connectors.console  # noqa: F401 — connectors.console.{activation,access_level,access,connector,instance,identity,account_access}
+import oto_mcp.capabilities.connectors.console  # noqa: F401 — connectors.console.{activation,access_level,access,connector,instance,identity}
 # Partage d'une procédure par lien (/p/<token>) et ses lecteurs — AVANT la console
 # procédures, qui en reprend les handlers en op=share_*.
 from . import partages_procedure  # noqa: F401 — org.instruction.share.{get,write,readers} + me.process_share.{read,copy}

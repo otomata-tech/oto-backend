@@ -67,12 +67,8 @@ def _wire_byo(monkeypatch, mode="org"):
                         lambda *a, **k: {"meta": {"dsn": "api6.unipile.com:13616"}})
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeUnipile)
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
-    # #55 : par défaut, pas de grant reçu ni de pointeur « identité opérée ».
-    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
-    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
-    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
+    # Aucun compte propre lié ; les comptes d'autrui sont vides (conftest, #1499).
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: [])
-    monkeypatch.setattr("oto_mcp.db.clear_operated_account", lambda sub, prov: None)
 
 
 def test_unipile_list_byo(monkeypatch):
@@ -109,10 +105,10 @@ def test_unipile_select_unknown_id_raises(monkeypatch):
 
 
 def test_unipile_platform_no_selector(monkeypatch):
-    # clé plateforme (revente) SANS grant → liste vide, sélection refusée
-    # (hosted-auth conservé, widget strictement inchangé).
+    # clé plateforme (revente), aucun compte ni compte d'autrui ouvert → liste vide,
+    # sélection refusée (hosted-auth conservé, widget strictement inchangé).
     monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
-    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
+    monkeypatch.setattr(access, "current_org", lambda sub: 39)
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: [])
     assert asyncio.run(connector_identities.list_identities("u1", "unipile")) == []
     with pytest.raises(ValueError, match="platform key"):
@@ -120,13 +116,10 @@ def test_unipile_platform_no_selector(monkeypatch):
 
 
 def test_unipile_hosted_lists_own_accounts(monkeypatch):
-    # Feedback #132 : revente/hosted SANS grant mais un compte CONNECTÉ → il doit
+    # Feedback #132 : revente/hosted, un compte CONNECTÉ → il doit
     # apparaître (le faux [] faisait conclure « aucun compte » à l'agent).
     monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
-    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
-    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
-    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts",
                         lambda sub: [{"account_id": "H1", "account_name": "Jane Doe",
                                       "provider": "LINKEDIN", "org_id": 39}])
@@ -143,9 +136,6 @@ def test_unipile_hosted_reflects_live_status(monkeypatch):
     # live (list_accounts().sources[].status), résolu via la clé plateforme.
     monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
-    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
-    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
-    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts",
                         lambda sub: [{"account_id": "H1", "account_name": "Jane",
                                       "provider": "LINKEDIN", "org_id": 39}])
@@ -202,9 +192,6 @@ def test_unipile_hosted_status_failsoft_unknown(monkeypatch):
     # un compte mort comme vivant (signal 1360, décision du 10/10/2026).
     monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
-    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
-    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
-    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts",
                         lambda sub: [{"account_id": "H1", "account_name": "Jane",
                                       "provider": "LINKEDIN", "org_id": 39}])
@@ -224,9 +211,6 @@ def test_unipile_hosted_scopes_accounts_to_current_org(monkeypatch):
     # compte d'org 2 affiché dans l'org 168 où l'option n'était même pas activée).
     monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
     monkeypatch.setattr(access, "current_org", lambda sub: 168)
-    monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
-    monkeypatch.setattr("oto_mcp.db.get_operated_account", lambda sub, prov: None)
-    monkeypatch.setattr("oto_mcp.db.granted_accounts_for", lambda sub, prov: {})
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts",
                         lambda sub: [{"account_id": "A2", "account_name": "Alexis",
                                       "provider": "LINKEDIN", "org_id": 2}])

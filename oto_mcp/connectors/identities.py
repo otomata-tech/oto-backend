@@ -13,18 +13,15 @@ the unification is at the surface level, not the storage level):
 
 Common `Identity` contract = `{id, label, status, is_default, channel}` (`channel` None
 outside multi-channel — accepted leak: unipile is per-channel, Google per-service).
-Additive fields for a SHARED account (#55): `granted=True` + `owner={sub,email,name}`,
-plus `via_group={id,name}` if the access comes from a group (2026-09 extension, `None`
-otherwise) — the `label` prefers it over `owner` when present: "Growth team" identifies
-a shared account better than the name of whoever historically connected it.
-
-**Granted accounts (otomata-private#55)**: an account whose owner granted the operation
-to the user (`connector_account_grants`) appears in the list and can be selected —
-the selection sets the `unipile_operated_accounts` pointer (it NEVER touches the
-grantee's `unipile_accounts` connection row). Validation of the select for a granted
-account = the grant itself (deny-by-default), not `cli.list_accounts` (under resale the
-grantee has no BYO key). Resolution at call time: `resolve_operated_account_id`
-(revalidated against live grants, hard backstop).
+An identity that is not the caller's own — her team's, her org's, a peer's — carries
+`level` (`read`|`write`|`sensitive`|`manage`: what the rules of that account give her,
+#1499) and `owner` (`{type, id}`, plus `label`/`name` when known). It is operable NAMED
+(`_account=`, `_instance=`), never her default; unnamed only at step 5, when nothing of
+hers, her team's or her org's serves. An account of ANOTHER org (D1)
+is listed only when it is hers (`elsewhere_org`, #172) or a rule naming her opens it
+(`lent_by_org` + its owner's label) — nothing else of that org (`_hors_org`). There is no pointer and no grant:
+another person's hosted account is resolved by `resolve_operated_account_id` through
+`connectors/comptes_heberges` at the level of its sub-instance's rules.
 
 ⚠️ A registered backend may be **async** (e.g. Browserbase execution):
 `list_identities`/`select_identity` then return an awaitable — the capabilities
@@ -33,6 +30,8 @@ grantee has no BYO key). Resolution at call time: `resolve_operated_account_id`
 from __future__ import annotations
 
 import asyncio
+
+from . import comptes_heberges
 
 
 def _tableau_de_bord(sub) -> str:
@@ -121,6 +120,60 @@ def _oauth_status(meta: dict) -> str:
 
 # --- Google: N vault credentials (account=email) ----------------------------
 
+# The holder type of an account of the shared tier, as its instance names it.
+_TYPE_DU_PALIER = {"group": "group", "org": "org"}
+
+
+def _niveaux(sub: str, porteur: str, service: "str | None", cles: list) -> dict:
+    """`{(owner_type, owner_id, account): level}` — the level the rules of each of these
+    accounts (not the caller's own) give her, in one read (#1499). An account without
+    its instance is a defect: RAISES, never a level presumed."""
+    if not cles:
+        return {}
+    from .. import access
+    comptes = access.comptes_des_lignes(porteur, cles)
+    appelant = access.Appelant(sub, access.current_org(sub),
+                                       lambda: access.current_group(sub))
+    out = {}
+    for cle in cles:
+        compte = comptes.get(cle)
+        if compte is None:
+            raise RuntimeError(f"{porteur} account {':'.join(cle)} has no live instance: "
+                               "its level cannot be judged")
+        out[cle] = access.niveau(appelant, compte, service)
+    return out
+
+
+def _hors_org(sub: str, porteur: str, service: "str | None", vus) -> list[dict]:
+    """The accounts of `porteur` in ANOTHER org than the call's that `sub` may NAME (D1,
+    #1499), never served unnamed: her own key set in another org (#172, marked
+    `elsewhere_org`) and another person's account a rule naming her opens
+    (`lent_by_org`, plus its owner's label — nothing else of the lending org).
+    `vus` = ids already listed (an id is listed once)."""
+    from .. import access
+    org = access.current_org(sub)
+    if org is None:
+        return []
+    appelant = access.Appelant(sub, org, lambda: access.current_group(sub))
+    out = []
+    for compte in access.comptes_hors_org(porteur, org, sub):
+        if compte.account in vus:
+            continue
+        detenu = access.niveau(appelant, compte, service)
+        if access.RANG[detenu] == 0:
+            continue
+        ident = {"id": compte.account, "label": compte.label or compte.account,
+                 "status": "ok", "is_default": False, "channel": None, "level": detenu}
+        if compte.proprietaire == sub:
+            ident["elsewhere_org"] = compte.org_nom
+        else:
+            ident.update(lent_by_org=compte.org_nom,
+                         owner={"type": "member", "id": compte.owner_id,
+                                "label": access.libelle_de_personne(compte.proprietaire)})
+        out.append(ident)
+    return out
+
+
 def _google_list(sub: str, service: "str | None" = None) -> list[dict]:
     """The member's Google accounts — ALL of them for the account, those that
     AUTHORIZED `service` for a service's card (split of 2026-09-26): `oto_identity(
@@ -131,16 +184,21 @@ def _google_list(sub: str, service: "str | None" = None) -> list[dict]:
     mine = [{"id": a["google_email"], "label": a["google_email"], "status": _oauth_status(a),
              "is_default": a["is_default"], "channel": None}
             for a in google_oauth.list_accounts(sub) if ok(a)]
-    # Accounts SHARED by the team or org (2026-09-27): reachable via
-    # `_account=`, marked `shared` with their tier in `shared_scope` (the label stays
-    # the address: the screen says "shared" itself) — never the member's default.
+    # The accounts of the team or org (2026-09-27): reachable via `_account=`, marked
+    # with the `level` their rules give the caller and their `owner` (#1499) — never
+    # the member's default.
     vus = {i["id"] for i in mine}
-    partages = [{"id": a["google_email"], "label": a["google_email"],
-                 "status": "ok", "is_default": False, "channel": None, "shared": True,
-                 "shared_scope": "team" if a.get("scope") == "group" else "org"}
-                for a in google_oauth.list_shared_accounts(sub)
-                if ok(a) and a["google_email"] not in vus]
-    return mine + partages
+    autres = [a for a in google_oauth.list_shared_accounts(sub)
+              if ok(a) and a["google_email"] not in vus]
+    cles = [(_TYPE_DU_PALIER[a["scope"]], str(a["target_id"]), a["google_email"])
+            for a in autres]
+    niveaux = _niveaux(sub, "google", service, cles)
+    partages = [{"id": a["google_email"], "label": a["google_email"], "status": "ok",
+                 "is_default": False, "channel": None, "level": niveaux[cle],
+                 "owner": {"type": cle[0], "id": cle[1]}}
+                for a, cle in zip(autres, cles)]
+    listes = mine + partages
+    return listes + _hors_org(sub, "google", service, {i["id"] for i in listes})
 
 
 def _google_select(sub: str, identity_id: str) -> dict:
@@ -152,48 +210,26 @@ def _google_select(sub: str, identity_id: str) -> dict:
 
 
 # --- Unipile: 1 key → N remote identities (BYO-only) ------------------------
-# + accounts GRANTED by their owner (#55, any mode — including resale).
+# + the accounts other members of the org opened by their rules (#1499), served NAMED.
 
 def _own_unipile_account_id(sub: str, provider: str) -> str | None:
     """`sub`'s OWN connected Unipile account on this channel — the LIVE binding of
-    the context org (the binding is an ACT per org, explicit model: a platform seat
-    connected elsewhere is offered for ADOPTION at connect, never as a silent
-    fallback here — the former auto #221 was removed, it made disconnect
-    inconsistent). Only remaining cross-org case: **BYO** (#172) — the member key
-    follows me into another org → account taken from the SAME org as the key
-    (`personal_instance_org`), key and account paired. None if there is none."""
-    from .. import access, providers, db
-    org = access.current_org(sub)
-    acc = db.get_unipile_account_id(sub, org, provider)
-    if acc:
-        return acc
-    if providers.is_personal_cross_org("unipile"):
-        pio = access.personal_instance_org(sub, "unipile", exclude_org=org)
-        if pio is not None:
-            return db.get_unipile_account_id(sub, pio, provider)
-    return None
+    the context org (the binding is an ACT per org: an account connected elsewhere is
+    offered for ADOPTION at connect, never as a fallback here). None if there is none."""
+    from .. import access, db
+    return db.get_unipile_account_id(sub, access.current_org(sub), provider)
 
 
 def _own_account_ids(sub: str, provider: str) -> set[str]:
-    """The sub's own LIVE `account_id`s on this channel that are operable HERE — guard
-    set for the `_account=` pin (their own, in addition to granted accounts).
-
-    HERE = linked to the context org (member scope, ADR 0033 B4), plus the one account
-    the unpinned resolution would serve anyway (`_own_unipile_account_id`: the BYO
-    cross-org pairing of #172, key and account from the same org). An account linked
-    to ANOTHER org of the same sub is not in it (#1342, decision of 27/10/2026, option C
-    « strict partitioning + adoption »): pinning it used to pass while the list and the
-    unpinned refusal said « none » — one rule must hold everywhere. Such a pin gets the
-    named refusal `account_in_other_org` (see `_ligne_dans_une_autre_org`)."""
+    """The sub's own LIVE `account_id`s on this channel linked to the context org
+    (member scope, ADR 0033 B4) — guard set for the `_account=` pin. An account linked
+    to ANOTHER org of the same sub is not in it (#1342, option C of 27/10/2026): such a
+    pin gets the named refusal `account_in_other_org` (see `_ligne_dans_une_autre_org`)."""
     from .. import access, db
     p = provider.upper()
     org = access.current_org(sub)
-    ids = {a["account_id"] for a in db.list_unipile_accounts(sub)
-           if (a.get("provider") or "").upper() == p and a.get("org_id") == org}
-    propre = _own_unipile_account_id(sub, provider)
-    if propre:
-        ids.add(propre)
-    return ids
+    return {a["account_id"] for a in db.list_unipile_accounts(sub)
+            if (a.get("provider") or "").upper() == p and a.get("org_id") == org}
 
 
 # #1342 (option C of 27/10/2026): the code of the refusal served when the caller's OWN
@@ -276,79 +312,53 @@ def refuser_si_compte_dans_une_autre_org(sub: str, provider: str, account_id: st
         adoptable=account_id in adoptables))
 
 
-def refuser_si_preteur_en_pause(sub: str, provider: str, account_id: str) -> None:
-    """Raises `PreteurEnPause` if `account_id` is lent to `sub` by a PAUSED account.
-
-    To be called wherever a lent account is not (or no longer) operable, BEFORE the
-    generic refusal: without it, the lender's pause would read as "authorization
-    revoked or account disconnected", and the beneficiary would go ask again for a
-    loan that was never withdrawn (#898, decision of 23/09/2026: option A)."""
-    from .. import db
-    preteur = db.suspended_lenders_for(sub, provider).get(account_id)
-    if preteur:
-        raise _preteur_en_pause(preteur, provider, account_id)
-
-
-def _preteur_en_pause(pret: dict, provider: str, account_id: str):
-    """The named refusal of a withheld loan, from a loan row (`owner_sub`,
-    `owner_email`) — a single wording for the two paths that raise it."""
-    from .. import account_suspension
-    return account_suspension.PreteurEnPause(
-        pret.get("owner_email") or pret["owner_sub"],
-        f"Le compte {provider.title()} `{account_id}`")
+def _refus_autrui(provider: str, comment: str) -> ValueError:
+    return ValueError(
+        f"The {provider.title()} account named by {comment} is neither yours nor an account "
+        "another member of this org opened to you — or it is no longer operable. List the "
+        "operable identities with oto_identity(op='list').")
 
 
 def resolve_operated_account_id(sub: str, provider: str) -> str | None:
-    """Unipile account operated by `sub` on this channel (THE #55/0051 resolution point).
+    """Unipile account operated by `sub` on this channel (THE resolution point).
 
-    **Call pin `_account=` (ADR 0051)**: operated identity pinned FOR THIS
-    CALL — takes precedence over the home pointer, EPHEMERAL (no state written).
-    Guarded: GRANTED account (live #55) OR the sub's OWN account operable HERE (linked
-    to the context org, #1342); a non-operable pin RAISES (never a silent fallback to
-    another identity) — named `account_in_other_org` when it is the sub's own account
-    linked to another org.
+    **Named by the call** — `_account=<account_id>` or `_instance=` (ephemeral, no state
+    written): the sub's OWN account operable HERE (linked to the context org, #1342), or
+    ANOTHER member's account of the org at the level its rules give (`comptes_heberges.autrui_nomme`).
+    A name that serves nothing RAISES — never a silent fallback to another identity
+    (a message sent under the wrong identity is irreversible); named
+    `account_in_other_org` when it is the sub's own account linked to another org.
 
-    Otherwise, a "home identity" pointer set → REVALIDATED against LIVE grants on
-    every call (owner revocation or disconnection = immediate effect, hard
-    backstop). Invalid pointer → EXPLICIT `ValueError`, never a silent fallback
-    to the own account: the agent would believe it acts as the owner and would act
-    as itself (a message sent under the wrong identity is irreversible).
-    No pin and no pointer → own connected account (context org OR cross-org
-    personal instance, #172)."""
-    from .. import db, session_org
+    Unnamed: the sub's own account of the context org; without one, another person's
+    account a rule lends her (`comptes_heberges.prete_sans_nom`, step 5 of #1499: the
+    echo says who lends it); else None."""
+    from .. import session_org
     pin = session_org.current_call_account()
     if pin:
-        if pin in db.granted_accounts_for(sub, provider) or pin in _own_account_ids(sub, provider):
+        if pin in _own_account_ids(sub, provider):
             return pin
-        refuser_si_preteur_en_pause(sub, provider, pin)
+        autrui = comptes_heberges.autrui_nomme(sub, provider, account_id=pin)
+        if autrui:
+            return autrui
         refuser_si_compte_dans_une_autre_org(sub, provider, pin)
-        raise ValueError(
-            f"The pinned {provider.title()} account (`_account=`) is neither "
-            "yours nor an account granted to you — or it is no longer operable. List the "
-            "operable identities with oto_identity(op='list').")
-    op = db.get_operated_account(sub, provider)
-    if op:
-        if op["account_id"] in db.granted_accounts_for(sub, provider):
-            return op["account_id"]
-        # The pointer is NOT cleared: it's what makes the loan come back on wake-up.
-        refuser_si_preteur_en_pause(sub, provider, op["account_id"])
-        raise ValueError(
-            f"The {provider.title()} account that was granted to you is no longer operable "
-            "(authorization revoked or account disconnected by its owner). "
-            "Reselect your identity (oto_identity(op='set') or "
-            f"{_tableau_de_bord(sub)}/connectors).")
-    return _own_unipile_account_id(sub, provider)
-
-
-def _unipile_chosen(sub: str, provider: str) -> str | None:
-    """Account actually operated, for the `is_default` display (valid pointer,
-    otherwise own account) — fail-soft version of `resolve_operated_account_id`
-    (an identity list must not raise on an orphaned pointer)."""
-    from .. import db
-    op = db.get_operated_account(sub, provider)
-    if op and op["account_id"] in db.granted_accounts_for(sub, provider):
-        return op["account_id"]
-    return _own_unipile_account_id(sub, provider)
+        raise _refus_autrui(provider, "`_account=`")
+    ref = comptes_heberges.ref_du_canal(sub, provider)
+    if ref is not None:
+        from .. import access
+        if ref.level == "member" and ref.sub == sub and ref.org_id == access.current_org(sub):
+            return _own_unipile_account_id(sub, provider)
+        autrui = comptes_heberges.autrui_nomme(sub, provider, ref=ref)
+        if autrui:
+            return autrui
+        own = access.comptes_des_lignes(
+            "unipile", [("member", f"{access.current_org(sub)}:{sub}",
+                         comptes_heberges.compte_du_canal(provider))])
+        if ref.level == "inst" and any(c.instance_id == ref.instance_id
+                                       for c in own.values()):
+            return _own_unipile_account_id(sub, provider)
+        raise _refus_autrui(provider, "`_instance=`")
+    return (_own_unipile_account_id(sub, provider)
+            or comptes_heberges.prete_sans_nom(sub, provider))
 
 
 def _unipile_client(sub: str):
@@ -410,12 +420,21 @@ async def _unipile_list(sub: str, canal: str | None = None) -> list[dict]:
     since the 2026-08-28 split. None = all channels (call path that doesn't
     know a channel)."""
     from .. import db
-    granted = [g for g in db.list_account_grants_to(sub) if g.get("active")]
     out = []
     cli = _unipile_client(sub)
     # Live status of hosted accounts (platform key), resolved at most once and
-    # only if a non-BYO account requires it (#201). Fail-soft → "ok".
+    # only if a non-BYO account requires it (#201). Fail-soft → "unknown".
     _live: dict = {}
+    _propres: dict = {}
+
+    def _propre(ch: str | None) -> str | None:
+        """The sub's own account of this channel in the context org — what a call
+        without a name operates (`is_default`)."""
+        if not ch:
+            return None
+        if ch not in _propres:
+            _propres[ch] = _own_unipile_account_id(sub, ch)
+        return _propres[ch]
 
     async def _live_status(account_id: str) -> str:
         if "map" not in _live:
@@ -427,15 +446,9 @@ async def _unipile_list(sub: str, canal: str | None = None) -> list[dict]:
 
         oto#42, rule 1: a value we couldn't establish is never rendered
         by its default — and "ok" is the worst of defaults, it asserts that it
-        works. The probe is fail-soft (empty map if it fails wholesale, account
-        missing if it failed for it alone), and the caller then fell back on
-        "ok" without any trace warning it: a really dead account
-        showed up as connected, which is the #201/#236 defect through a third
-        path — that of the PROBE OUTAGE, not that of the stale status.
-        Since 10/10/2026 (signal 1360, Alexis's decision): an unmeasured status is served
-        as `unknown`, never as the « ok » default — an agent that reads `status` alone
-        took a dead account for a live one while every call answered 500. The front
-        shows `unknown` as a non-ok status."""
+        works. Since 10/10/2026 (signal 1360): an unmeasured status is served as
+        `unknown`, never as the « ok » default — an agent that reads `status` alone
+        took a dead account for a live one while every call answered 500."""
         return account_id in _live.get("map", {})
     if cli is not None:  # BYO: the key's accounts (existing list)
         # oto-backend#867 — NO LONGER swallow the failure: this is the list itself
@@ -450,83 +463,45 @@ async def _unipile_list(sub: str, canal: str | None = None) -> list[dict]:
                 "id": a.get("id"),
                 "label": a.get("name"),
                 "status": (sources[0].get("status") if sources else None) or "ok",
-                "is_default": bool(ch) and a.get("id") == _unipile_chosen(sub, ch),
+                "is_default": bool(ch) and a.get("id") == _propre(ch),
                 "channel": ch,
             })
     else:
         # Resale (platform key / hosted-auth): the OWN accounts connected
-        # IN THE CONTEXT ORG. Always listed — even without a grant and with no
-        # "choice" to make, a connected account MUST appear (feedback #132:
-        # `identities: []` while a hosted LinkedIn was connected = false
-        # negative, the agent wrongly concluded "no account" and sent
-        # the user back to the dashboard). Org filter = member scope ADR 0033 B4,
-        # aligned with `status_for` and the call resolution (`get_unipile_account_id`):
-        # an account from ANOTHER org is not operable here → listing it would be a
-        # false positive (inert "Use this account" button, experienced 2026-07-08).
+        # IN THE CONTEXT ORG. Always listed — a connected account MUST appear
+        # (feedback #132). Org filter = member scope ADR 0033 B4, aligned with
+        # `status_for` and the call resolution (`get_unipile_account_id`).
         accounts = db.list_unipile_accounts(sub)
         if accounts:  # org resolved only if there is something to filter
             from .. import access
             org = access.current_org(sub)
             accounts = [a for a in accounts if a.get("org_id") == org]
         for a in accounts:
-            mesure = await _live_status(a["account_id"])
             out.append({
                 "id": a["account_id"],
                 "label": a.get("account_name") or a["account_id"],
-                "status": mesure if _statut_mesure(a["account_id"]) else "unknown",
-                # Said ONLY on a discrepancy: an always-present field becomes noise
-                # that people stop reading. Absent ⟹ the status was indeed measured.
-                **({} if _statut_mesure(a["account_id"]) else {
-                    "status_measured": False,
-                    "status_hint": (
-                        "the liveness probe did not answer for this account: its "
-                        "state is UNKNOWN, not ok — a dead account looks exactly like "
-                        "this. Retry to measure, or call the channel's tool and read its "
-                        "error."),
-                }),
-                "is_default": a["account_id"] == _unipile_chosen(sub, a["provider"]),
+                **(await _statut(a["account_id"], _live_status, _statut_mesure)),
+                "is_default": a["account_id"] == _propre(a["provider"]),
                 "channel": a["provider"],
             })
-    # GRANTED accounts (#55), any mode. A shared BYO key already lists the owner's
-    # account → we ANNOTATE the existing entry rather than duplicate it.
+    # The accounts OTHER members of the org opened to the caller by their rules (#1499):
+    # listed with `level` (what their rules give) and `owner`, operable NAMED
+    # (`_account=<id>`) — never the default; unnamed only without an account of the
+    # caller's own on the channel (`comptes_heberges.prete_sans_nom`). A shared BYO key
+    # may already list one:
+    # its entry is annotated rather than duplicated.
     seen = {i["id"]: i for i in out}
-    for g in granted:
-        owner = {"sub": g["owner_sub"], "email": g.get("owner_email"),
-                 "name": g.get("owner_name"),
-                 "org": g.get("owner_org_id"), "org_name": g.get("owner_org_name")}
-        # Received via a group (#55 extension, 2026-09): says WHAT carries the access,
-        # not just who owns the account — a member who doesn't know the
-        # owner still recognizes "the Growth team". None
-        # on a named grant (`via_group_id` absent or empty, e.g. original #55).
-        via_group_id = g.get("via_group_id")
-        via_group = ({"id": via_group_id, "name": g.get("via_group_name")}
-                     if via_group_id else None)
-        existing = seen.get(g["account_id"])
+    # Off-loop: the rules and the accounts are read in the database (#867).
+    for ident in await asyncio.to_thread(comptes_heberges.autrui_listes, sub, canal):
+        existing = seen.get(ident["id"])
         if existing is not None:
-            existing["granted"] = True
-            existing["owner"] = owner
-            existing["via_group"] = via_group
+            existing.update(level=ident["level"], owner=ident["owner"],
+                            instance_id=ident["instance_id"], is_default=False)
             continue
-        if via_group:
-            libelle = f"team account ({via_group['name'] or via_group_id})"
-        else:
-            libelle = f"account of {g.get('owner_name') or g.get('owner_email') or g['owner_sub']}"
-        mesure = await _live_status(g["account_id"])
-        out.append({
-            "id": g["account_id"],
-            "label": f"{g.get('account_name') or g['account_id']} — {libelle}",
-            "status": mesure if _statut_mesure(g["account_id"]) else "unknown",
-            **({} if _statut_mesure(g["account_id"]) else {"status_measured": False}),
-            "is_default": g["account_id"] == _unipile_chosen(sub, g["provider"]),
-            "channel": g["provider"],
-            "granted": True,
-            "owner": owner,
-            "via_group": via_group,
-        })
+        ident.update(await _statut(ident["id"], _live_status, _statut_mesure))
+        out.append(ident)
     if canal:
-        # Filter AFTER annotating granted accounts: a granted account of the right
-        # channel must stay listed (it's the only identity some grantees
-        # have). An account whose channel is UNKNOWN (`channel=None` — seen in BYO when
+        # An account whose channel is UNKNOWN (`channel=None` — seen in BYO when
         # Unipile doesn't return `type`) attaches to no channel card: silencing it
         # here is better than making it appear under all six.
         _c = canal.upper()
@@ -534,76 +509,72 @@ async def _unipile_list(sub: str, canal: str | None = None) -> list[dict]:
     return out
 
 
+async def _statut(account_id: str, live_status, mesure) -> dict:
+    """The `status` of a hosted account, `unknown` (with its hint) when the probe did
+    not answer for it — never the « ok » default."""
+    statut = await live_status(account_id)
+    if mesure(account_id):
+        return {"status": statut}
+    return {"status": "unknown", "status_measured": False,
+            "status_hint": ("the liveness probe did not answer for this account: its state "
+                            "is UNKNOWN, not ok — a dead account looks exactly like this. "
+                            "Retry to measure, or call the channel's tool and read its "
+                            "error.")}
+
+
 async def _unipile_select(sub: str, identity_id: str, canal: str | None = None) -> dict:
-    """Chooses the operated identity. `canal` (a channel connector's card) = guard:
-    you don't switch your Telegram identity from the WhatsApp card. The REAL channel
-    is the ACCOUNT's, never the one we assume — hence a guard on the result
-    rather than a filter on the input: the three selection paths (granted account,
-    return to self, BYO switch) each discover it in their own way, and a single place
-    must decide."""
+    """Chooses the operated identity among the sub's OWN accounts (another person's
+    account is never a default: named, `_account=`, or as the last resort of step 5).
+    `canal` (a channel
+    connector's card) = guard: you don't switch your Telegram identity from the WhatsApp
+    card. The REAL channel is the ACCOUNT's, never the one we assume."""
     from .. import db
 
     def _exige_canal(trouve: str | None) -> None:
-        """Refuses BEFORE writing if the account is not of the card's channel.
-
-        After the write it would be too late: setting the pointer then raising
-        would leave the operated identity changed by a call that returned an error."""
+        """Refuses BEFORE writing if the account is not of the card's channel."""
         if canal and (trouve or "").upper() != canal.upper():
             raise ValueError(
                 f"This account is a {(trouve or 'unknown').title()} account: it can't be "
                 f"chosen from the {canal.title()} card. Use the card of "
                 "its channel.")
-    # 1) GRANTED account (#55): sets the "operated identity" POINTER — NEVER touches
-    #    the grantee's `unipile_accounts` connection row. Validation
-    #    = the live grant (deny-by-default), not the key.
-    recus = db.list_account_grants_to(sub)
-    g = next((r for r in recus
-              if r.get("active") and r["account_id"] == identity_id), None)
-    if g:
-        _exige_canal(g["provider"])
-        db.set_operated_account(sub, g["provider"], identity_id, g["owner_sub"])
-        return {"id": identity_id, "channel": g["provider"], "is_default": True,
-                "granted": True}
-    # 1bis) Account lent by a PAUSED account (#898): the grant exists, it is withheld
-    #    — say so, rather than falling further down to "unknown account".
-    retenu = next((r for r in recus
-                   if r.get("owner_suspended") and r["account_id"] == identity_id), None)
-    if retenu:
-        raise _preteur_en_pause(retenu, retenu["provider"], identity_id)
-    # 2) Return to SELF (any mode, including resale): clears the channel's pointer.
+    # 1) Another member's account: never a default — say how it serves.
+    for ch in ([canal.upper()] if canal else comptes_heberges.canaux()):
+        autres = await asyncio.to_thread(comptes_heberges.comptes_d_autrui_du_canal, sub, ch)
+        if any(a["account_id"] == identity_id for a in autres):
+            raise ValueError(
+                f"`{identity_id}` is another member's {ch.title()} account: it is never "
+                f"your default — name it on each call with `_account={identity_id}`.")
+    # 2) An OWN account already linked: it is the one a call operates, nothing to write.
     own = next((a for a in db.list_unipile_accounts(sub)
                 if a["account_id"] == identity_id), None)
     if own:
         _exige_canal(own["provider"])
-        db.clear_operated_account(sub, own["provider"])
         return {"id": identity_id, "channel": own["provider"], "is_default": True}
-    # 3) Existing BYO path: choose an account of ITS key (switches the connection).
+    # 3) BYO path: choose an account of ITS key (switches the connection).
     cli = _unipile_client(sub)
     if cli is None:
         raise ValueError("Account selection unavailable (platform key — use "
                          "the hosted connection).")
-    # oto-backend#867 — same rule as `_unipile_list`: an Unipile outage/slowness here
-    # must be stated, not confused with an unknown id (`unknown_identity`, 404) — the
-    # capable layer (`_set_default`) distinguishes this `RuntimeError` from a `ValueError`.
+    # oto-backend#867 — an Unipile outage/slowness here must be stated, not confused with
+    # an unknown id (`unknown_identity`, 404) — the capable layer (`_set_default`)
+    # distinguishes this `RuntimeError` from a `ValueError`.
     try:
         accounts = await _call_unipile(cli.list_accounts)
     except Exception as e:
         raise RuntimeError(f"Unipile did not answer when choosing this account: {e}") from e
     match = next((a for a in accounts if a.get("id") == identity_id), None)
-    if match is None:  # anti-binding: the id MUST exist on the key (or be granted)
+    if match is None:  # anti-binding: the id MUST exist on the key
         raise ValueError(f"Unknown Unipile account on this key: {identity_id}")
     ch = (match.get("type") or "LINKEDIN").upper()
     _exige_canal(ch)
     # Member scope (ADR 0033 B4): the binding applies in the context org. BYO →
     # not a platform seat (platform_seat=False), consistent with unipile_connect.
-    # Connection switch = return-to-self on this channel → clears the operated pointer (#55).
     from .. import access
     org = access.current_org(sub)
     if org is None:
         raise ValueError("No context org — unable to attach the account.")
     db.set_unipile_account(sub, identity_id, match.get("name"), org_id=org,
                            provider=ch, platform_seat=False)
-    db.clear_operated_account(sub, ch)
     return {"id": identity_id, "channel": ch, "is_default": True}
 
 
@@ -647,27 +618,10 @@ def _keyed_list(sub: str, connector: str, scope: str = "member") -> list[dict]:
             "is_default": bool(meta.get("is_default")),
             "channel": None,
         }
-        if meta.get("lent_by"):
-            # A member's instance lent to the team: same shape as a granted account.
-            entry.update(granted=True, owner={"sub": meta["lent_by"]})
         out.append(entry)
+    if scope == "member":
+        out += _hors_org(sub, connector, None, {i["id"] for i in out})
     return out
-
-
-def _refuse_lent(sub: str, connector: str, identity_id: str, scope: str, action: str) -> None:
-    """An account LENT to the team stays its lender's: the team neither renames it nor
-    makes it its default (the default lives on the team's own vault rows)."""
-    if scope != "group":
-        return
-    from .. import group_store
-    ent = keyed_entity(sub, scope)
-    if ent is None:
-        return
-    for i in group_store.lent_instances(int(ent[1]), connector):
-        if i["account"] == identity_id:
-            raise ValueError(
-                f"`{identity_id}` is a member's instance lent to the team: the team "
-                f"cannot {action} it. Only its lender manages it.")
 
 
 def _keyed_select(sub: str, connector: str, identity_id: str, scope: str = "member") -> dict:
@@ -675,14 +629,16 @@ def _keyed_select(sub: str, connector: str, identity_id: str, scope: str = "memb
     ent = keyed_entity(sub, scope)
     if ent is None:
         raise ValueError("No context org/team — unable to choose an account.")
-    _refuse_lent(sub, connector, identity_id, scope, "set as default")
     accounts = [r["account"] for r in credentials_store.list_accounts(ent[0], ent[1], connector)]
     if identity_id not in accounts:
         raise ValueError(f"Unknown account `{identity_id}` for {connector}.")
-    # UNIQUE default: sets is_default on the chosen row, removes it from the others.
-    for acct in accounts:
-        credentials_store.update_meta(ent[0], ent[1], connector, acct,
-                                      {"is_default": acct == identity_id})
+    # UNIQUE default of the tier, with its author and date (D3, #1499): the chosen row
+    # gets `is_default` + `default_set_by`/`default_set_at`, the others lose the mark.
+    from ..db import regles_de_comptes
+    from ..db._conn import _connect
+    with _connect() as conn:
+        regles_de_comptes.poser_le_defaut(conn, ent[0], ent[1], connector, identity_id,
+                                          par=sub)
     return {"id": identity_id, "label": identity_id, "is_default": True, "channel": None}
 
 
@@ -699,7 +655,6 @@ def rename_identity(sub: str, connector: str, identity_id: str, new_name: str,
     new_name = (new_name or "").strip()
     if not new_name:
         raise ValueError("The new name is empty.")
-    _refuse_lent(sub, connector, identity_id, scope, "rename")
     ent = keyed_entity(sub, scope)
     if ent is None:
         raise ValueError("No context org/team — unable to rename an account.")
@@ -785,33 +740,32 @@ def _microsoft_list(sub: str, service: "str | None") -> list[dict]:
     """The member's Microsoft accounts that AUTHORIZED `service` (all of them for the
     carrier, `service=None`) — same shape as the generic keyed backend, filtered like a
     Google service: `oto_identity(connector='sharepoint')` must not offer an account that
-    `sharepoint_file` will refuse. An account of her team or org is marked like a shared
-    Google account (`shared`, `shared_scope`) plus `shared_owner` ({id, name})."""
-    from .. import db
+    `sharepoint_file` will refuse. An account that is not hers (her team's, her org's, a
+    peer's) carries the `level` its rules give her and its `owner` (#1499): operable
+    through `_account=`, never her default."""
     from ..auth import microsoft as ms_auth
     comptes = ms_auth.avec_noms(ms_auth.accounts_for(sub, service))
-    # An account LENT by a peer (`oto_instance op=lend`) is operable through `_account=`
-    # and marked `granted` + `owner`, like a granted Unipile account: not the borrower's
-    # to revoke nor to make their default.
-    preteurs = sorted({c["lent_by"] for c in comptes if c.get("lent_by")})
-    emails = db.emails_by_subs(preteurs) if preteurs else {}
+
+    def _cle(c: dict) -> "tuple | None":
+        if c.get("shared"):
+            return (_TYPE_DU_PALIER[c["shared"]], str(c["shared_owner"]["id"]), c["account"])
+        return None
+    cles = {i: k for i, k in ((i, _cle(c)) for i, c in enumerate(comptes)) if k}
+    niveaux = _niveaux(sub, "microsoft", service, list(cles.values()))
     out = []
-    for c in comptes:
+    for i, c in enumerate(comptes):
         meta = c.get("meta") or {}
         ident = {"id": c["account"], "label": meta.get("label") or c["account"],
                  "status": _oauth_status(meta), "is_default": bool(meta.get("is_default")),
                  "channel": None}
-        if c.get("shared"):
-            ident.update(shared=True, shared_owner=c["shared_owner"],
-                         shared_scope="team" if c["shared"] == "group" else "org")
-        if c.get("lent_by"):
-            ident.update(granted=True, is_default=False,
-                         owner={"sub": c["lent_by"], "email": emails.get(c["lent_by"]),
-                                "org": c.get("lender_org")})
-            if c.get("via_group"):          # lent to a team of hers (`via_group`, #55)
-                ident["via_group"] = c["via_group"]
+        cle = cles.get(i)
+        if cle is not None:
+            ident.update(is_default=False, level=niveaux[cle],
+                         owner={"type": cle[0], "id": cle[1],
+                                **({"name": c["shared_owner"].get("name")}
+                                   if c.get("shared") else {})})
         out.append(ident)
-    return out
+    return out + _hors_org(sub, "microsoft", service, {i["id"] for i in out})
 
 
 def _register_microsoft_services() -> None:
@@ -834,7 +788,7 @@ def _register_microsoft_services() -> None:
 
 def _register_microsoft_carrier() -> None:
     """The carrier's member list = the one of its services, unfiltered: her accounts,
-    her team's and org's (`shared`), the loans (`granted`) — the generic keyed list
+    her team's, her org's and her peers' (with their `level`) — the generic keyed list
     only knows her own rows. Its org and team lists stay the generic ones."""
     keyed = _LISTERS["microsoft"]
     _LISTERS["microsoft"] = lambda sub, scope="member": (

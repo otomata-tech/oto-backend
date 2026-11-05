@@ -28,7 +28,7 @@ from the traversal for everyone in the org, read at its source like the other no
    the registry (`is_byo_user`, `org_shareable`, `auth_modes`), an instance's
    suspension, the `grants` edges. This module writes a different TRAVERSAL, not
    a second copy of the gates. Same discipline as
-   `connectors/instance_visibility.py`, which already inverts the walker without cloning it.
+   the derived visibility (R9), which inverted the walker without cloning it.
 2. **The designation concerns the TIER, not the account.** The choice of a
    multi-identity account is a notch of the instance (0053-D9), not an authorization:
    `rung_for_pick` delegates it to the PROBE that `resolve` composed, and never
@@ -44,7 +44,7 @@ from .. import (credentials_store, grants_chain, group_store, org_store, provide
                 tenant_vault)
 from ..connectors import cle_perso
 from ..db import grants as db_grants
-from . import heritage, scope
+from . import scope
 
 logger = logging.getLogger(__name__)
 
@@ -170,13 +170,14 @@ def _paliers(sub: str, provider: str, org: Optional[int], want: str,
     instance, not authorizations, and they hold on both sides of the window.
     """
     porteur = providers.credential_provider(provider)
-    # SHARED project (#480): same guards as the walker, read at the same verdict.
-    cles = heritage.du_contexte(sub, org)
-    org_cles = heritage.org_partagee(org, cles)
+    # The org of the call whose member the subject is — None for the beneficiary of a
+    # shared project of another org (#1499, D1): same seam as the walker.
+    org_cles = scope.org_d_appartenance(sub, org)
     if org is not None and providers.is_byo_user(porteur):
         if (credentials_store.has_credential(
                 credentials_store.MEMBER, credentials_store.member_id(org, sub),
                 porteur, account=None)
+                # A SUSPENDED key is skipped, like the walker's: the next rung serves.
                 and not credentials_store.instance_suspended(
                     credentials_store.MEMBER, credentials_store.member_id(org, sub), porteur)
                 and not cle_perso.interdite(org, porteur)):   # the org's policy (#1239)
@@ -192,9 +193,6 @@ def _paliers(sub: str, provider: str, org: Optional[int], want: str,
         gids = _group_ids(sub, org)
         if active is not None and int(active) in gids:
             gids = [int(active)] + [g for g in gids if g != int(active)]
-        if cles is not None and cles.groupe_herite is not None \
-                and cles.groupe_herite not in gids:
-            gids.append(cles.groupe_herite)   # the owning team, lent (#480)
         for gid in gids:
             if group_store.has_group_secret(gid, porteur):
                 yield ChainPick("group", "group", str(gid), group_id=gid)
@@ -210,7 +208,7 @@ def _paliers(sub: str, provider: str, org: Optional[int], want: str,
                     and not credentials_store.instance_suspended(
                         credentials_store.TENANT, slug, porteur)):
                 # Same edge as the walker: SILENT ⟹ membership; REFUSES ⟹ move on.
-                verdict = grants_chain.tenant_rung(slug, porteur, org_cles)  # #480
+                verdict = grants_chain.tenant_rung(slug, porteur, org_cles)
                 if verdict is None or verdict.granted:
                     yield ChainPick("tenant", credentials_store.TENANT, slug,
                                     via="grant" if verdict else "appartenance")

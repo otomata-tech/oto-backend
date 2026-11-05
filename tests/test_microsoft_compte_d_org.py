@@ -3,8 +3,8 @@ compte, `docs/partage-de-compte.md`, décision du 15/10/2026).
 
 Le concept 1 du modèle : posé par l'admin d'org ou le chef de l'équipe active, le compte
 appartient à l'org ou à l'équipe et sert ses membres SANS désignation, après leur compte
-propre (propre → équipe active → org, puis les prêts nommés). Ce n'est pas un prêt : pas
-de `lent_by`. Même banc que `test_microsoft_oauth.py` (cœur moqué, coffre en mémoire,
+propre (propre → équipe active → org ; le compte d'une collègue seulement nommé, au niveau
+de ses règles). Ce n'est pas le compte d'une autre personne : pas de `lent_by`. Même banc que `test_microsoft_oauth.py` (cœur moqué, coffre en mémoire,
 vraie résolution).
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ import pytest
 
 from oto_mcp.mcp_errors import McpError
 from test_microsoft_oauth import (  # noqa: F401 — fixtures et doublures du banc Microsoft
-    CHEZ_PRETEUSE, EMPRUNTEUSE, ORG, PORTEUR, PRETEUSE, SCOPE_COURRIER, SCOPE_FICHIERS,
-    _callback, _grant, _repondre, env, pret, trace)
+    COLLEGUE, ORG, PORTEUR, SCOPE_COURRIER, SCOPE_FICHIERS, _callback, _grant, _regle,
+    _repondre, autrui, env, trace)
 
 EQUIPE = 49
 ADMIN = "admin-de-l-org"
@@ -29,7 +29,7 @@ SCOPE_TOUT = f"{SCOPE_COURRIER} {SCOPE_FICHIERS}"
 
 
 @pytest.fixture
-def org(pret, monkeypatch):
+def org(autrui, monkeypatch):
     """L'org ORG (admin ADMIN) et son équipe EQUIPE (chef CHEF), active pour tous."""
     from oto_mcp import access, group_store, org_store, roles
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, oid: (sub, oid) == (ADMIN, ORG))
@@ -40,7 +40,7 @@ def org(pret, monkeypatch):
         {"id": gid, "org_id": ORG, "name": "Ventes"} if gid == EQUIPE else None))
     monkeypatch.setattr(org_store, "get_org", lambda oid: {"id": oid, "name": "Contoso"})
     monkeypatch.setattr(org_store, "nom_d_org", lambda oid: "Contoso")
-    return pret
+    return autrui
 
 
 def _poser(env, palier, cible, compte, secret, scopes=SCOPE_COURRIER, **meta):
@@ -71,7 +71,8 @@ def test_l_admin_connecte_outlook_au_nom_de_l_org(org):
     assert org.auth.services_granted(ligne["meta"]["scopes"]) == ["outlook"], \
         "la ligne de l'org ne garde que ce que SON consentement demandait"
     assert ligne["meta"]["is_default"] is False, "à l'org, l'admin choisit le défaut"
-    assert not [k for k in org.coffre.lignes if k[0] == "member"], "rien chez l'admin"
+    assert not [k for k in org.coffre.lignes
+                if k[0] == "member" and k[1] == f"{ORG}:{ADMIN}"], "rien chez l'admin"
 
 
 def test_le_chef_connecte_au_nom_de_son_equipe_active(org):
@@ -82,8 +83,8 @@ def test_le_chef_connecte_au_nom_de_son_equipe_active(org):
 
 
 @pytest.mark.parametrize("sub,valeurs,statut,code", [
-    (EMPRUNTEUSE, {"scope": "org"}, 403, "scope_forbidden"),
-    (EMPRUNTEUSE, {"scope": "group"}, 403, "scope_forbidden"),
+    (COLLEGUE, {"scope": "org"}, 403, "scope_forbidden"),
+    (COLLEGUE, {"scope": "group"}, 403, "scope_forbidden"),
     (ADMIN, {"scope": "tenant"}, 400, "invalid_scope"),
 ])
 def test_un_palier_que_l_appelant_n_administre_pas_est_refuse(org, sub, valeurs, statut,
@@ -120,83 +121,49 @@ def test_un_droit_perdu_avant_le_retour_n_ecrit_rien(org, monkeypatch):
     org.coeur.auth.exchange_code.assert_not_called()
 
 
-# ── Le service : sans désignation, propre → équipe → org, puis les prêts ─────
+# ── Le service : sans désignation, propre → équipe → org ; autrui seulement nommé ─
 
 def test_le_compte_de_l_org_sert_le_membre_sans_designation_et_n_est_pas_un_pret(org,
                                                                                 trace):
     _poser(org, "org", ORG, BOITE_ORG, "RT-ORG")
-    assert org.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-ORG"
+    assert org.auth.access_token_for(COLLEGUE, "outlook") == "AT:RT-ORG"
     assert _repondre("outlook") == {"ok": True, "_account": BOITE_ORG}
 
 
 def test_l_ordre_propre_puis_equipe_puis_org(org):
     _poser(org, "org", ORG, BOITE_ORG, "RT-ORG")
     _poser(org, "group", EQUIPE, BOITE_EQUIPE, "RT-EQUIPE")
-    _poser(org, "member", f"{ORG}:{EMPRUNTEUSE}", "moi@contoso.example", "RT-MOI")
-    jeton = lambda: org.auth.access_token_for(EMPRUNTEUSE, "outlook")  # noqa: E731
+    _poser(org, "member", f"{ORG}:{COLLEGUE}", "moi@contoso.example", "RT-MOI")
+    jeton = lambda: org.auth.access_token_for(COLLEGUE, "outlook")  # noqa: E731
     assert jeton() == "AT:RT-MOI"
-    del org.coffre.lignes[("member", f"{ORG}:{EMPRUNTEUSE}", "moi@contoso.example")]
+    del org.coffre.lignes[("member", f"{ORG}:{COLLEGUE}", "moi@contoso.example")]
     assert jeton() == "AT:RT-EQUIPE"
     del org.coffre.lignes[("group", str(EQUIPE), BOITE_EQUIPE)]
     assert jeton() == "AT:RT-ORG"
     # Nommé, le compte de l'org sert même quand l'équipe en a un.
     _poser(org, "group", EQUIPE, BOITE_EQUIPE, "RT-EQUIPE")
     assert org.sous_compte(BOITE_ORG)(
-        org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-ORG"
+        org.auth.access_token_for, COLLEGUE, "outlook") == "AT:RT-ORG"
 
 
 def test_deux_comptes_de_l_org_sans_nom_refus_d_ambiguite_nomme(org):
     _poser(org, "org", ORG, BOITE_ORG, "RT-ORG")
     _poser(org, "org", ORG, "compta@contoso.example", "RT-COMPTA")
     with pytest.raises(McpError) as e:
-        org.auth.access_token_for(EMPRUNTEUSE, "outlook")
+        org.auth.access_token_for(COLLEGUE, "outlook")
     assert BOITE_ORG in str(e.value) and "compta@contoso.example" in str(e.value)
     org.coeur.auth.refresh.assert_not_called()
     assert org.sous_compte("compta@contoso.example")(
-        org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-COMPTA"
+        org.auth.access_token_for, COLLEGUE, "outlook") == "AT:RT-COMPTA"
 
 
-def test_le_compte_de_l_org_avant_les_prets_le_pret_seulement_nomme(org, trace):
+def test_le_compte_de_l_org_avant_celui_d_une_collegue_seulement_nomme(org, trace):
+    org.regles.append(_regle("sensitive"))
     _poser(org, "org", ORG, BOITE_ORG, "RT-ORG")
-    org.coffre.poser_chez(CHEZ_PRETEUSE, JANE, "RT-JANE", {"scopes": SCOPE_COURRIER},
-                          prete_a=[EMPRUNTEUSE])
-    assert org.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-ORG"
+    assert org.auth.access_token_for(COLLEGUE, "outlook") == "AT:RT-ORG"
     assert org.sous_compte(JANE)(
-        org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
-    assert _repondre("outlook")["lent_by"] == "preteuse@contoso.example"
-
-
-def test_un_pret_a_l_equipe_active_n_est_juge_qu_une_fois_et_jamais_par_le_palier(
-        org, trace, monkeypatch):
-    """Microsoft est désormais visité par les paliers équipe et org de la cascade : ils
-    ne servent que les comptes de l'équipe et de l'org elles-mêmes. Le prêt reste jugé
-    par le seul résolveur Microsoft — une fois, et servi sur la ligne de la prêteuse."""
-    from oto_mcp import access, group_store, roles
-    monkeypatch.setattr(roles, "is_org_member", lambda sub, oid: oid == ORG)
-    monkeypatch.setattr(group_store, "list_groups_for_user", lambda sub, org_id=None: (
-        [{"group_id": EQUIPE, "org_id": ORG, "name": "Ventes"}] if sub == EMPRUNTEUSE
-        else []))
-    monkeypatch.setattr(group_store, "is_group_member",
-                        lambda sub, gid: (sub, gid) == (EMPRUNTEUSE, EQUIPE))
-    org.coffre.poser_chez(CHEZ_PRETEUSE, JANE, "RT-JANE", {"scopes": SCOPE_COURRIER},
-                          cibles=[f"group:{EQUIPE}"])
-    vus, regle = [], access.pret_a_servir
-    monkeypatch.setattr(access, "pret_a_servir", lambda candidats, nom, *, quoi: (
-        vus.append(nom), regle(candidats, nom, quoi=quoi))[1])
-    with pytest.raises(McpError) as e:
-        org.auth.access_token_for(EMPRUNTEUSE, "outlook")
-    assert e.value.error.data["code"] == "account_required" and vus == [None]
-    vus.clear()
-    assert org.sous_compte(JANE)(
-        org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
-    assert vus == [JANE]
-    assert _repondre("outlook") == {
-        "ok": True, "_account": JANE, "lent_by": "preteuse@contoso.example",
-        "lent_via_group": {"id": EQUIPE, "name": "Ventes"}}
-    # Avec un compte de l'org : il sert sans nom, aucun prêt n'est jugé.
-    vus.clear()
-    _poser(org, "org", ORG, BOITE_ORG, "RT-ORG")
-    assert org.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-ORG" and vus == []
+        org.auth.access_token_for, COLLEGUE, "outlook") == "AT:RT-JANE"
+    assert _repondre("outlook")["lent_by"] == "titulaire@contoso.example"
 
 
 def test_le_renouvellement_n_elargit_pas_la_ligne_partagee(org):
@@ -206,7 +173,7 @@ def test_le_renouvellement_n_elargit_pas_la_ligne_partagee(org):
     org.coeur.auth.refresh.return_value = _grant("AT2", "RT-ORG", scope=(
         "Team.ReadBasic.All Chat.ReadWrite ChannelMessage.Read.All Mail.ReadWrite "
         "Mail.Send User.Read offline_access"))
-    assert org.auth.access_token_for(EMPRUNTEUSE, "teams") == "AT2"
+    assert org.auth.access_token_for(COLLEGUE, "teams") == "AT2"
     meta = org.coffre.lignes[("org", str(ORG), BOITE_ORG)]["meta"]
     assert org.auth.services_granted(meta["scopes"]) == ["teams"], \
         "le courrier personnel du titulaire n'entre pas dans la ligne de l'org"
@@ -225,7 +192,7 @@ def test_microsoft_accounts_et_identites_disent_le_niveau(org, monkeypatch):
 
     _poser(org, "org", ORG, BOITE_ORG, "RT-ORG", is_default=True)
     _poser(org, "group", EQUIPE, BOITE_EQUIPE, "RT-EQUIPE")
-    monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: EMPRUNTEUSE)
+    monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: COLLEGUE)
     m = FastMCP("t")
     outils.register(m)
     comptes = asyncio.run(m.get_tool("microsoft_accounts")).fn()["accounts"]
@@ -235,24 +202,26 @@ def test_microsoft_accounts_et_identites_disent_le_niveau(org, monkeypatch):
         (BOITE_ORG, "org", {"id": ORG, "name": "Contoso"}, False)]
     assert not any("lent_by" in c for c in comptes)
     for carte in ("outlook", PORTEUR):
-        idents = identities.list_identities(EMPRUNTEUSE, carte)
-        assert [(i["id"], i["shared"], i["shared_scope"], i["is_default"])
-                for i in idents] == [(BOITE_EQUIPE, True, "team", False),
-                                     (BOITE_ORG, True, "org", False)], carte
-        assert not any(i.get("granted") for i in idents)
-    # `shared_owner` traverse le modèle de sortie REST (il le supprimait) : l'écran nomme
-    # l'équipe ou l'org qui possède le compte.
+        idents = identities.list_identities(COLLEGUE, carte)
+        # #1499 : plus de marques `shared`/`granted` — le `level` que donnent les règles
+        # (sans règle : membre de l'équipe `sensitive`, membre de l'org `sensitive`, écart (a)).
+        assert [(i["id"], i["level"], i["owner"]["type"], i["is_default"])
+                for i in idents] == [(BOITE_EQUIPE, "sensitive", "group", False),
+                                     (BOITE_ORG, "sensitive", "org", False)], carte
+        assert not any("shared" in i or "granted" in i for i in idents)
+    # `owner` traverse le modèle de sortie REST : l'écran nomme l'équipe ou l'org qui
+    # possède le compte.
     from oto_mcp.capabilities.connectors.identities import ConnectorIdentities
     servi = ConnectorIdentities(connector="outlook", supported=True,
-                                identities=identities.list_identities(EMPRUNTEUSE, "outlook")
+                                identities=identities.list_identities(COLLEGUE, "outlook")
                                 ).model_dump(mode="json")
-    assert [i["shared_owner"] for i in servi["identities"]] == [
-        {"id": EQUIPE, "name": "Ventes"}, {"id": ORG, "name": "Contoso"}]
-    assert identities.list_identities(EMPRUNTEUSE, "sharepoint") == []
+    assert [(i["owner"]["id"], i["owner"]["name"]) for i in servi["identities"]] == [
+        (str(EQUIPE), "Ventes"), (str(ORG), "Contoso")]
+    assert identities.list_identities(COLLEGUE, "sharepoint") == []
     # Le palier org de la carte du porteur : les comptes de l'org (admin, générique).
     assert [i["id"] for i in identities.list_identities(ADMIN, PORTEUR, "org")] == [
         BOITE_ORG]
-    assert org.auth._link_state_for("outlook")(EMPRUNTEUSE).linked is True
+    assert org.auth._link_state_for("outlook")(COLLEGUE).linked is True
 
 
 def test_seul_l_admin_retire_le_compte_de_l_org(org, monkeypatch):
@@ -269,7 +238,7 @@ def test_seul_l_admin_retire_le_compte_de_l_org(org, monkeypatch):
     _poser(org, "org", ORG, BOITE_ORG, "RT-ORG")
     entree = mc.CredentialClearInput(provider=PORTEUR, scope="org", account=BOITE_ORG)
     with pytest.raises(AuthzDenied) as e:
-        mc._clear(types.SimpleNamespace(sub=EMPRUNTEUSE), entree)
+        mc._clear(types.SimpleNamespace(sub=COLLEGUE), entree)
     assert e.value.status == 403
     assert ("org", str(ORG), BOITE_ORG) in org.coffre.lignes
     out = mc._clear(types.SimpleNamespace(sub=ADMIN), entree)
@@ -292,9 +261,9 @@ def test_une_equipe_en_lecture_ne_se_fait_pas_ecrire_par_le_compte_de_l_org(org,
     monkeypatch.setitem(al.DECLARED, "outlook", decl)
     monkeypatch.setattr(al, "settings", lambda o, g: (
         {PORTEUR: {"org": None, "group": "read"}} if g == EQUIPE else {}))
-    monkeypatch.setattr(call_axes, "current_user_sub_from_token", lambda: EMPRUNTEUSE)
+    monkeypatch.setattr(call_axes, "current_user_sub_from_token", lambda: COLLEGUE)
     _poser(org, "org", ORG, BOITE_ORG, "RT-ORG")
-    assert org.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-ORG"
+    assert org.auth.access_token_for(COLLEGUE, "outlook") == "AT:RT-ORG"
 
     async def schema():
         return {}

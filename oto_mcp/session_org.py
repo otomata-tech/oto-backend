@@ -128,25 +128,27 @@ def current_call_group() -> Optional[int]:
     return _CALL_GROUP.get()
 
 
-# Clés d'un projet PARTAGÉ (#480) : le verdict `access.heritage.ClesDuProjet` calculé à
-# la pose de `_project=` quand l'appelant n'atteint pas de lui-même toutes les clés du
-# propriétaire (hors de son org, ou hors de son équipe). Lu par le walker de cascade —
-# zéro requête sur le chemin chaud. None = rien à dire (hors projet, ou membre de tout).
-_CALL_CLES: contextvars.ContextVar[Optional[object]] = contextvars.ContextVar(
-    "oto_call_cles", default=None)
+# Un projet PARTAGÉ d'une org dont l'appelant n'est PAS membre (`_project=`) : l'org du
+# projet est co-posée comme org de l'appel (slots, identité épinglée), mais l'appelant n'y
+# est pas un principal. Marque `(sub, org)` posée à la pose de `_project=`, lue par
+# `access.scope.org_d_appartenance` — zéro requête sur le chemin chaud. Aucun compte de
+# l'org ni de l'équipe propriétaire ne lui sert (#1499, D1/D2) ; None = hors de ce cas.
+_CALL_HORS_ORG: contextvars.ContextVar[Optional[tuple]] = contextvars.ContextVar(
+    "oto_call_hors_org", default=None)
 
 
-def set_call_cles(verdict: object) -> contextvars.Token:
-    return _CALL_CLES.set(verdict)
+def set_call_hors_org(sub: str, org: int) -> contextvars.Token:
+    return _CALL_HORS_ORG.set((sub, int(org)))
 
 
-def reset_call_cles(token: contextvars.Token) -> None:
-    _CALL_CLES.reset(token)
+def reset_call_hors_org(token: contextvars.Token) -> None:
+    _CALL_HORS_ORG.reset(token)
 
 
-def current_call_cles() -> Optional[object]:
-    """Verdict des clés du projet de l'appel (`access.heritage`), ou None."""
-    return _CALL_CLES.get()
+def current_call_hors_org() -> Optional[tuple]:
+    """`(sub, org)` quand l'appel travaille dans l'org d'un projet partagé dont `sub`
+    n'est pas membre, sinon None."""
+    return _CALL_HORS_ORG.get()
 
 
 def set_call_run(run_id: str) -> contextvars.Token:
@@ -318,6 +320,25 @@ def current_call_account() -> Optional[str]:
 # `copy_context()` copie les BINDINGS — un `.set()` fait dans le thread ne remonte
 # jamais au contexte appelant, alors que la mutation du dict posé en amont, si (c'est
 # le même objet). Vérifié empiriquement avant d'être écrit ici.
+# Ce que l'appel d'outil en cours FAIT (`access/niveaux.noter_l_appel`, #1499) : l'outil,
+# ses arguments, s'il se déclare en lecture — et le niveau qu'il exige, une fois jugé.
+# Hors du relevé : ce n'est ni journalisé, ni remonté d'une cible d'`oto_call` à l'enveloppe.
+_CALL_EXIGENCE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "oto_call_exigence", default=None)
+
+
+def set_call_exigence(holder: dict) -> contextvars.Token:
+    return _CALL_EXIGENCE.set(holder)
+
+
+def reset_call_exigence(token: contextvars.Token) -> None:
+    _CALL_EXIGENCE.reset(token)
+
+
+def current_call_exigence() -> Optional[dict]:
+    return _CALL_EXIGENCE.get()
+
+
 _CALL_TRACE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "oto_call_trace", default=None)
 

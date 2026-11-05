@@ -226,12 +226,8 @@ def account_axis_advertised_for(sub: Optional[str]) -> dict[str, str]:
         from . import access, credentials_store
         by_name = {c.name: c for c in providers._REGISTRY_LIST}
         found: dict[str, list[str]] = {}
-        from . import group_store
         for etype, eid, palier in _palier_entities(sub):
             rows = list(credentials_store.list_credentials(etype, eid))
-            if etype == "group":
-                rows += [{"connector": i["connector"], "account": i["account"], "meta": {}}
-                         for i in group_store.lent_instances(int(eid))]
             for row in rows:
                 con = by_name.get(row["connector"])
                 if con is None or not con.auth_multi_account:
@@ -326,35 +322,55 @@ def _is_project_scopable_tool(name: str) -> bool:
             or name in _RUN_VERBS)
 
 
+def _contexte_du_projet(project_id: int) -> Optional[tuple[Optional[int], Optional[int]]]:
+    """`(org, team)` under which a project WORKS — None if the project does not exist.
+
+    Org project: the org. Team project: its parent org + the team. Personal project:
+    its context org (`context_org_id`), falling back to the owner's personal org for
+    a legacy personal project without context (never `int(sub)`)."""
+    from . import db, group_store, org_store, ownership
+    owner = ownership.owner_of("project", str(project_id))
+    if owner is None:
+        return None
+    owner_type, owner_id = owner
+    if owner_type == "org":
+        return int(owner_id), None
+    if owner_type == "group":
+        g = group_store.get_group(int(owner_id))
+        return (g.get("org_id") if g else None), int(owner_id)
+    if owner_type == "user":
+        row = db.get_project_by_id(int(project_id))
+        ctx = row.get("context_org_id") if row else None
+        return (int(ctx) if ctx is not None else org_store.get_personal_org(owner_id)), None
+    return None, None
+
+
 def _resolve_project_context_guarded(
     sub: str, pid: int, subdomain_org: Optional[int],
-) -> tuple[Optional[int], Optional[int], object]:
+) -> tuple[Optional[int], Optional[int], bool]:
     """Garde d'accès + dérivation du CONTEXTE (org, groupe) propriétaire du projet
     (chemin DB sync, appelé en threadpool). Lève une McpError actionnable si l'acteur
     n'a pas accès en lecture (privacy-by-default ADR 0030 — jamais is_org_member), si le
     projet n'existe pas, ou s'il échappe au lock de sous-domaine.
 
-    L'org dérivée (`heritage.contexte_du_projet`) est co-posée pour que
-    credentials/redaction/datastore résolvent sous l'org du projet. **Pour un projet
+    L'org dérivée (`_contexte_du_projet`) est co-posée pour que redaction/datastore et
+    l'identité épinglée du projet résolvent sous l'org du projet. **Pour un projet
     d'ÉQUIPE, le groupe propriétaire est co-posé** si l'appelant le lit
     (`can_read_group`) : ouvrir le projet résout alors la cascade de cette équipe de
     façon DÉTERMINISTE, indépendante du groupe actif (#218). Jamais l'inverse (poser
     un groupe sur un projet org-owned).
 
-    3e valeur : le verdict des CLÉS du projet (`access.heritage`, #480) — posé quand
-    l'appelant n'atteint pas de lui-même toutes les clés du propriétaire (hors de son
-    org, ou hors de son équipe). Un bénéficiaire d'un simple partage travaille avec
-    SES clés ; celles du propriétaire ne lui sont prêtées que par héritage déclaré au
-    partage, borné aux droits du partageur. Même règle pour les trois types de
-    bénéficiaire (personne, équipe, org)."""
+    3e valeur : l'appelant n'est PAS membre de l'org du projet (un partage venu d'une
+    autre org). Il y travaille avec SES comptes : aucun compte de l'org ni de l'équipe
+    propriétaire ne lui sert, et l'org ne compte pas parmi ses principaux
+    (`access.scope.org_d_appartenance`, #1499 — l'héritage de clés #480 est retiré)."""
     from . import ownership, roles
-    from .access import heritage
     if not ownership.can_access(sub, "project", str(pid), "read"):
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"Projet #{pid} inaccessible (tu n'y as pas accès en lecture, ou il "
                      "n'existe pas). Liste tes projets avec `oto_project op=list`.")))
-    ctx = heritage.contexte_du_projet(pid)
+    ctx = _contexte_du_projet(pid)
     if ctx is None:
         raise McpError(ErrorData(
             code=INVALID_PARAMS, message=f"Projet #{pid} introuvable."))
@@ -366,28 +382,30 @@ def _resolve_project_context_guarded(
             code=INVALID_PARAMS,
             message=(f"Le projet #{pid} appartient à une autre org que celle de ce "
                      "endpoint (verrou de sous-domaine) — impossible de l'activer ici.")))
-    return org, group, heritage.evaluer(sub, pid, org, owner_group, group)
+    hors_org = org is not None and not roles.is_org_member(sub, int(org))
+    return org, group, hors_org
 
 
 async def _pin_project(value: object) -> list[UndoEntry]:
     """Épingle le projet de l'appel + co-pose l'org dérivée (+ le groupe propriétaire
-    pour un projet d'équipe, + le verdict des clés pour un bénéficiaire). Rejette
-    l'anonyme AVANT toute pose. Garde `can_access` en threadpool (DB sur le chemin
-    inbound chaud)."""
+    pour un projet d'équipe, + la marque « hors de l'org » pour un bénéficiaire d'une
+    autre org). Rejette l'anonyme AVANT toute pose. Garde `can_access` en threadpool
+    (DB sur le chemin inbound chaud)."""
     if value is None:
         return []
     pid = require_axis_int(value, "_project")
     sub = require_axis_sub("_project")
     cand = session_org.current_subdomain_candidate()
-    org, group, cles = await run_in_threadpool(_resolve_project_context_guarded, sub, pid,
-                                               cand)
+    org, group, hors_org = await run_in_threadpool(_resolve_project_context_guarded, sub,
+                                                   pid, cand)
     undo: list[UndoEntry] = []
     if org is not None:
         undo.append((session_org.reset_call_org, session_org.set_call_org(org)))
     if group is not None:
         undo.append((session_org.reset_call_group, session_org.set_call_group(group)))
-    if cles is not None:
-        undo.append((session_org.reset_call_cles, session_org.set_call_cles(cles)))
+    if hors_org:
+        undo.append((session_org.reset_call_hors_org,
+                     session_org.set_call_hors_org(sub, org)))
     undo.append((session_org.reset_call_project, session_org.set_call_project(pid)))
     return undo
 
@@ -606,6 +624,24 @@ def _is_instance_scopable_tool(name: str) -> bool:
     return providers.connector_for_namespace(namespace_of(name)) is not None
 
 
+def _ref_de_l_instance(ref):
+    """`inst:<id>` (the stable identifier `oto_instance op=list` gives) → the ref of its
+    vault row, the one the guard and the resolution read (a hosted messaging account,
+    `canal:`, gets its `member` ref: its channel tools resolve it, not the vault).
+    Unknown or archived: refused — never another account in its place."""
+    from . import instance_refs
+    from .db import regles_de_comptes
+    row = regles_de_comptes.compte_par_id(ref.instance_id)
+    if row is None:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"`_instance` refused: no live account `inst:{ref.instance_id}` "
+                     "(oto_instance op='list', oto_identity op='list').")))
+    canon = instance_refs.ref_for_credential(row["owner_type"], str(row["owner_id"]),
+                                             row["connector"], row["account"] or "")
+    return instance_refs.parse_ref(canon)
+
+
 async def _pin_instance(value: object, tool_name: str) -> list[UndoEntry]:
     """Épingle l'instance explicite de l'appel (§C : `_instance=` prime sur la
     préférence de proximité, jamais de fallback si elle ne résout pas) + co-pose
@@ -623,6 +659,8 @@ async def _pin_instance(value: object, tool_name: str) -> list[UndoEntry]:
                      "via oto_instance(op='list') (opaque, à repasser tel quel).")))
     sub = require_axis_sub("_instance")
     con = providers.connector_for_namespace(namespace_of(tool_name))
+    if ref.level == "inst":
+        ref = await run_in_threadpool(_ref_de_l_instance, ref)
     if ref.connector is not None:
         # A ref names a VAULT row, so it is compared under the CARRIER, on both sides:
         # the ref of a Microsoft account (`…:microsoft:…`, what `oto_instance op=list`

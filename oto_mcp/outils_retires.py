@@ -380,8 +380,29 @@ def annonce_act() -> str:
             + ". The old names and ops refuse, naming the call to make instead.")
 
 
+#: `oto_account_access` — retiré le 05/11/2026 (#1499, la bascule des comptes) : il n'y a
+#: plus de prêt de compte de messagerie ni de pointeur vers le compte d'autrui. Le compte
+#: d'une personne sert les autres par les RÈGLES posées sur lui, et seulement nommé.
+ACCOUNT_ACCESS = Retrait(
+    message=(
+        "`oto_account_access` is retired: messaging accounts are no longer lent by a "
+        "grant. Who may use an account, and at which level (read, write, sensitive, "
+        "manage), is now a RULE set on that account by whoever manages it: list your "
+        "accounts and their rules with `oto_instance op=list`, then set or remove a rule "
+        "with `oto_instance op=set_rule` / `op=remove_rule` (a person, a team or the whole "
+        "org). Another member's account is used only NAMED on each call "
+        "(`_account=<account id>`, ids listed by `oto_identity op=list` with their "
+        "`level`), never as a default. If a procedure or a page told you to call "
+        "`oto_account_access`, it predates this change: this name only returns this "
+        "refusal, called directly or through `oto_call`."),
+    hint=("set a rule on the account with oto_instance op=set_rule; use another member's "
+          "account by naming it with _account="),
+)
+
+
 RETIRES: dict[str, Retrait] = {
     "oto_kb": KB,
+    "oto_account_access": ACCOUNT_ACCESS,
     **{a: _retrait_act(a) for a in dict.fromkeys(r.ancien for r in RENOMMAGES)},
 }
 

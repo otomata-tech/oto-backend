@@ -54,7 +54,7 @@ OWNER_KINDS = ("platform", "tenant", "org", "group", "member", "user")
 _OWNER_KINDS_SQL = "(" + ", ".join(f"'{k}'" for k in OWNER_KINDS) + ")"
 
 _INSTANCE_COLS = ("id, connector, owner_type, owner_id, account, label, config, "
-                  "visibility, parent_id, created_at, revoked_at, revoked_reason")
+                  "parent_id, created_at, revoked_at, revoked_reason")
 
 # Les motifs d'archivage POSÉS par ce dépôt. Constante et pas CHECK en base : le
 # vocabulaire n'est fermé que par le code qui écrit, et un CHECK ferait une migration
@@ -103,19 +103,14 @@ def most_recent_revocation(owner_type: str, owner_id: str, connector: str) -> Op
 
 def instances_for_vault_rows(
         keys: Sequence[tuple[str, str, str, str]]) -> dict[tuple[str, str, str, str], dict]:
-    """Résolution EN LOT des quadruplets → `{id, visibility}`, pour une projection qui
+    """Résolution EN LOT des quadruplets → `{id}`, pour une projection qui
     en tient des dizaines (`GET /api/me/connector-instances`).
 
     **Une seule requête**, jamais une par instance : la projection tourne sur un
     serveur MONO-LOOP, et N lookups par PK y coûtent N allers-retours vers une base
     managée DISTANTE — le mode de panne que `docs/event-loop-perf.md` documente. Les
     couples sont comparés colonne à colonne (`(a,b,c,d) IN ((…),(…))`), servis par
-    `idx_connector_instances_vault`.
-
-    Rend `visibility` avec l'id parce que les deux se lisent au même endroit et
-    servent la même réponse : la SURCHARGE du propriétaire (R9) entre dans le calcul
-    de `visible_to`, et aller la chercher séparément doublerait la requête pour une
-    colonne de la même ligne."""
+    `idx_connector_instances_vault`."""
     uniques = sorted({(k[0], str(k[1]), k[2], k[3] or "") for k in keys})
     if not uniques:
         return {}
@@ -125,12 +120,12 @@ def instances_for_vault_rows(
         params += list(k)
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, owner_type, owner_id, connector, account, visibility "
+            "SELECT id, owner_type, owner_id, connector, account "
             "FROM connector_instances "
             "WHERE revoked_at IS NULL AND (owner_type, owner_id, connector, account) "
             f"IN ({clause})", params).fetchall()
     return {(r["owner_type"], r["owner_id"], r["connector"], r["account"]):
-            {"id": r["id"], "visibility": r["visibility"]} for r in rows}
+            {"id": r["id"]} for r in rows}
 
 
 def instance_ids_for_vault_rows(
@@ -503,3 +498,16 @@ def configs_for_instance_ids(ids: Sequence[int]) -> dict[int, dict]:
                          "WHERE id = ANY(%s) AND revoked_at IS NULL",
                          (list(ids),)).fetchall()
     return {r["id"]: r["config"] or {} for r in rows}
+
+def unipile_channel_instance_ids(sub: str) -> dict:
+    """`{(org_id, provider): instance_id}` — the live SOUS-INSTANCE of each hosted account
+    of the user (`unipile`, `member` `<org>:<sub>`, `canal:<PROVIDER>`, `db/sous_instances`),
+    in ONE read: the id the owner names to set rules on her own account (#1499)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, owner_id, account FROM connector_instances "
+            "WHERE connector = 'unipile' AND owner_type = 'member' AND revoked_at IS NULL "
+            "AND account LIKE 'canal:%%' AND split_part(owner_id, ':', 2) = %s",
+            (sub,)).fetchall()
+    return {(int(r["owner_id"].partition(":")[0]), r["account"].partition(":")[2]): r["id"]
+            for r in rows}

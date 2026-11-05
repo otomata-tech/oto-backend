@@ -80,12 +80,6 @@ def coffre(monkeypatch):
         "https://auth.oto.ninja/oidc",
         tenants=[{"slug": "pilote", "issuer": "https://auth.pilote.test/oidc"}])),
         raising=False)
-    # Le walker appelle `personal_instance_org` LUI-MÊME (pas via la sonde) pour les
-    # connecteurs personal_cross_org : il touche la base, on le neutralise ici. C'est
-    # aussi ce qui documente la limite de la sonde préchargée — ce barreau-là n'est pas
-    # préchargeable sans toucher au walker, et on refuse d'y toucher.
-    monkeypatch.setattr(access, "personal_instance_org",
-                        lambda sub, provider, exclude_org=None: None)
     return etat
 
 
@@ -113,7 +107,8 @@ def test_les_deux_sondes_rendent_le_MEME_verdict_sur_TOUT_le_registre(coffre):
 def test_une_instance_SUSPENDUE_est_sautee_par_les_deux(coffre):
     sonde = access.preloaded_presence_probe("u1", org=2, groups=[])
     # `pennylane` est au coffre mais suspendue : la cascade doit la sauter des DEUX
-    # côtés, sinon la préchargée résoudrait une clé que la vraie ignore.
+    # côtés, sinon la préchargée résoudrait une clé que la vraie ignore (décision de
+    # #1499 : la clé suspendue passe la main, comme avant la bascule).
     assert access.PRESENCE_PROBE.member("u1", 2, "pennylane") is None
     assert sonde.member("u1", 2, "pennylane") is None
     assert sonde.member("u1", 2, "folk") is not None

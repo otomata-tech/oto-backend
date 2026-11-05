@@ -2,8 +2,8 @@
 
 Trou relevé à la conception de l'accès invité. `_pin_project` co-pose l'org
 propriétaire du projet comme org de l'appel, sans appartenance : c'est voulu (les slots,
-l'identité épinglée du projet s'y résolvent), et #480 a borné ce qu'elle prête en CLÉS
-(`heritage.org_partagee`). Mais les seams de LISTE et de résolution lisaient encore
+l'identité épinglée du projet s'y résolvent), et aucun compte de cette org ne lui sert
+(#1499, D1). Mais les seams de LISTE et de résolution lisaient encore
 cette org comme celle de l'appelant :
 
 - `data_list_datastores` rendait tout le catalogue de l'org (nom, propriétaire,
@@ -11,9 +11,9 @@ cette org comme celle de l'appelant :
 - un tableau de l'org se lisait par son numéro (`_active_scope` = `[X]`, et la lecture
   ne repasse pas par `can_access`).
 
-La règle : un bénéficiaire HORS de l'org (verdict `membre=False`) n'y a pour principal
-que lui-même — la pièce `("org", X)` sort de toutes les listes et de la portée, par UN
-seam (`heritage.org_du_perimetre`). Ce qui lui est partagé s'ouvre toujours ; un membre
+La règle : un bénéficiaire HORS de l'org (marque `session_org.current_call_hors_org`)
+n'y a pour principal que lui-même — la pièce `("org", X)` sort de toutes les listes et
+de la portée, par UN seam (`access.scope.org_d_appartenance`). Ce qui lui est partagé s'ouvre toujours ; un membre
 de l'org n'y perd rien.
 
 Base réelle, vraie pose de l'axe (`call_axes.PROJECT.pin`), vrais outils.
@@ -85,12 +85,12 @@ def _catalogue(m: dict, sub: str, monkeypatch) -> set[int]:
 
 
 def test_le_contexte_est_bien_celui_d_un_beneficiaire_hors_org(monde, monkeypatch):
-    """Contrôle du banc : l'axe pose l'org du projet ET le verdict « hors org »."""
+    """Contrôle du banc : l'axe pose l'org du projet ET la marque « hors org »."""
     from oto_mcp import access
-    org, cles = _sous_projet(monde, monde["invite"], monkeypatch, lambda: (
-        access.current_org(monde["invite"]), session_org.current_call_cles()))
+    org, hors = _sous_projet(monde, monde["invite"], monkeypatch, lambda: (
+        access.current_org(monde["invite"]), session_org.current_call_hors_org()))
     assert org == monde["x"]
-    assert cles is not None and cles.membre is False
+    assert hors == (monde["invite"], monde["x"])
 
 
 # ── Le trou : rouge sur le code d'avant ────────────────────────────────────────

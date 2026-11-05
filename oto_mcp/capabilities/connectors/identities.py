@@ -11,7 +11,6 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
-from ... import account_suspension
 from ...connectors import identities as connector_identities
 from .._authz import SUB_ONLY, _refus_chef_d_equipe, _refus_org_admin
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -47,19 +46,11 @@ class RenamedIdentity(BaseModel):
 
 
 class IdentityOwner(BaseModel):
-    """Owner of a GRANTED account (#55) — present only on an identity
-    that is operated without being owned."""
-    sub: str
-    email: Optional[str] = None
-    name: Optional[str] = None
-    org: Optional[int] = None               # org under which the owner connected the account
-    org_name: Optional[str] = None
-
-
-class IdentitySharedOwner(BaseModel):
-    """The team or org whose OWN account this is — present with `shared`."""
-    id: int
-    name: Optional[str] = None
+    """Who holds an account that is not the caller's own — present with `level`."""
+    type: Literal["member", "group", "org"]
+    id: str                                 # `<org>:<sub>` for a member, else the team/org id
+    label: Optional[str] = None             # the person, as she is named to others
+    name: Optional[str] = None              # the team or org, when the backend names it
 
 
 class Identity(BaseModel):
@@ -83,16 +74,17 @@ class Identity(BaseModel):
     # `null` outside multi-channel (Google) — an accepted leak of the Unipile model, which is
     # per-channel where Google is per-service.
     channel: Optional[str] = None
-    granted: Optional[bool] = None          # present (true) if the account is GRANTED (#55)
-    owner: Optional[IdentityOwner] = None   # the lender, present with `granted`
-    # `true` = an account OWNED by the caller's team or org (Google, Microsoft), reachable
-    # via `_account=` but not theirs: the member cannot revoke it (a team or org admin
-    # does, from the shared tier). Always served, `false` by default.
-    shared: bool = False
-    # The tier that shares it — `team` | `org` — present with `shared`, `null` otherwise.
-    shared_scope: Optional[Literal["team", "org"]] = None
-    # Which team or org, named — present with `shared` when the backend knows it.
-    shared_owner: Optional[IdentitySharedOwner] = None
+    # An account that is not the caller's own (a peer's, her team's, her org's, #1499):
+    # the level its rules give her — operable NAMED (`_account=`), never her default;
+    # unnamed only when nothing of hers, her team's or her org's serves (step 5).
+    # Absent on her own accounts (she manages them).
+    level: Optional[Literal["read", "write", "sensitive", "manage"]] = None
+    owner: Optional[IdentityOwner] = None   # present with `level`
+    # An account of ANOTHER org (D1, #1499), operable named (unnamed at step 5): lent by a
+    # rule naming her — the lending org's name, and nothing else of it…
+    lent_by_org: Optional[str] = None
+    # …or her OWN key set in another org (#172): that org's name.
+    elsewhere_org: Optional[str] = None
 
 
 class IdentityElsewhere(BaseModel):
@@ -143,20 +135,17 @@ class ConnectorIdentities(BaseModel):
 
 class SelectedIdentity(BaseModel):
     """The chosen identity, as returned by the connector's backend. The keys
-    vary with the branch taken: a GRANTED account carries `granted`, the generic
-    keyed backend returns a `label`, the others neither —
+    vary with the branch taken: the generic keyed backend returns a `label`, the
+    others don't —
     hence the openness to additional fields."""
     model_config = ConfigDict(extra="allow")
 
     connector: str
     id: str
     is_default: bool                        # always true — it is the effect of the verb
-    # `null` for a non-multi-channel connector. On Unipile, selecting
-    # ONE'S OWN account clears the channel's « operated identity » pointer (back to
-    # self); the return is the same in both cases.
+    # `null` for a non-multi-channel connector.
     channel: Optional[str] = None
     label: Optional[str] = None
-    granted: Optional[bool] = None
 
 
 # Async handlers: a registered identities backend (`connector_identities.register`)
@@ -337,10 +326,6 @@ async def _set_default(ctx: ResolvedCtx, inp: SetIdentityInput) -> dict:
         res = connector_identities.select_identity(ctx.sub, inp.connector, inp.identity_id, inp.scope)
         if inspect.isawaitable(res):
             res = await res
-    except account_suspension.PreteurEnPause as e:
-        # #898: the account exists and is lent to you — it is its lender who is paused.
-        # An « unknown » 404 would send people looking for an identity that has not vanished.
-        raise AuthzDenied(403, account_suspension.CODE_PRETEUR, str(e))
     except ValueError as e:
         raise AuthzDenied(404, "unknown_identity", str(e))
     except AuthzDenied:

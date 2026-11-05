@@ -19,7 +19,11 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 from ._conn import _connect
+from . import regles_de_comptes
 from .users import upsert_user
+
+#: Ce qu'un défaut porte avec lui (#1499, D3) : gardé tel quel quand la ligne se ré-écrit.
+_MARQUE_DU_DEFAUT = ("is_default", "default_set_by", "default_set_at")
 
 
 GOOGLE = "google"   # connecteur Google dans le coffre (account = email)
@@ -80,24 +84,21 @@ def set_google_oauth(
     prior = next((a for a in accts if a["account"] == account), None)
     if make_default is None:
         make_default = n_named == 0
-    is_default = bool(prior and prior["meta"].get("is_default")) or make_default
     granted_at = (prior["meta"].get("granted_at") if prior else None) \
         or datetime.now(timezone.utc).isoformat()
     meta = {"access_token": access_token, "expires_at": expires_at, "scopes": scopes,
-            "is_default": is_default, "granted_at": granted_at, "client_id": client_id}
+            "is_default": False, "granted_at": granted_at, "client_id": client_id}
+    if prior and prior["meta"].get("is_default"):   # le défaut reste, avec sa marque
+        meta.update({k: prior["meta"][k] for k in _MARQUE_DU_DEFAUT if k in prior["meta"]})
     with _connect() as conn:
         with conn.transaction():
             if account:   # claim l'éventuelle ligne mono pré-migration (account='')
                 credentials_store.clear_credential(et, eid, GOOGLE, account="", conn=conn)
-            if make_default:   # un seul défaut : retire le flag aux autres comptes
-                conn.execute(
-                    "UPDATE connector_credentials SET meta = jsonb_set(meta, '{is_default}', 'false') "
-                    "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account<>%s",
-                    (et, eid, GOOGLE, account),
-                )
             credentials_store.set_credential(
                 et, eid, GOOGLE, refresh_token, set_by=sub,
                 meta=meta, account=account, conn=conn)
+            if make_default:   # un seul défaut, posé par `sub` (#1499, D3)
+                regles_de_comptes.poser_le_defaut(conn, et, eid, GOOGLE, account, par=sub)
 
 
 def get_google_oauth(sub: str, org_id: Optional[int], account: Optional[str] = None) -> Optional[dict]:
@@ -140,26 +141,22 @@ def list_google_accounts(sub: str, org_id: Optional[int]) -> list[dict]:
 
 
 def set_default_google_account(sub: str, org_id: int, account: str) -> bool:
-    """Marque `account` comme défaut (meta.is_default) dans le coffre — scope
-    (sub, org). False si le compte n'existe pas dans cette org."""
+    """Marque `account` comme défaut (meta.is_default, auteur `sub`, date) dans le coffre
+    — scope (sub, org). False si le compte n'existe pas dans cette org."""
     from .. import credentials_store
     et, eid = _ent(sub, org_id)
     accts = credentials_store.list_accounts(et, eid, GOOGLE)
     if not any(a["account"] == account for a in accts):
         return False
     with _connect() as conn:
-        conn.execute(
-            "UPDATE connector_credentials "
-            "SET meta = jsonb_set(meta, '{is_default}', to_jsonb(account = %s)) "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s",
-            (account, et, eid, GOOGLE),
-        )
+        regles_de_comptes.poser_le_defaut(conn, et, eid, GOOGLE, account, par=sub)
     return True
 
 
 def delete_google_oauth(sub: str, org_id: int, account: Optional[str] = None) -> None:
     """Supprime un compte (account=email) ou tous (account=None) du coffre — scope
-    (sub, org). Si on retire le défaut et qu'il reste des comptes, promeut le plus ancien."""
+    (sub, org). Si on retire le défaut et qu'il reste des comptes, promeut le plus ancien
+    (posé par `sub`, qui retire)."""
     from .. import credentials_store
     et, eid = _ent(sub, org_id)
     with _connect() as conn:
@@ -176,10 +173,7 @@ def delete_google_oauth(sub: str, org_id: int, account: Optional[str] = None) ->
                 "WHERE entity_type=%s AND entity_id=%s AND connector=%s", (et, eid, GOOGLE)).fetchall()
             if rem and not any((r["meta"] or {}).get("is_default") for r in rem):
                 oldest = min(rem, key=lambda r: (r["meta"] or {}).get("granted_at") or "")["account"]
-                conn.execute(
-                    "UPDATE connector_credentials SET meta = jsonb_set(meta, '{is_default}', 'true') "
-                    "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
-                    (et, eid, GOOGLE, oldest))
+                regles_de_comptes.poser_le_defaut(conn, et, eid, GOOGLE, oldest, par=sub)
 
 
 # --- comptes PARTAGÉS : l'org ou l'équipe détient le compte (2026-09-27) --------
@@ -212,17 +206,20 @@ def set_shared_google_oauth(scope: str, target_id: int, *, set_by: str, google_e
     accts = credentials_store.list_accounts(et, eid, GOOGLE)
     prior = next((a for a in accts if a["account"] == account), None)
     make_default = not any(a["account"] for a in accts)
-    is_default = bool(prior and prior["meta"].get("is_default")) or make_default
     granted_at = (prior["meta"].get("granted_at") if prior else None) \
         or datetime.now(timezone.utc).isoformat()
     meta = {"access_token": access_token, "expires_at": expires_at, "scopes": scopes,
-            "is_default": is_default, "granted_at": granted_at, "client_id": client_id,
+            "is_default": False, "granted_at": granted_at, "client_id": client_id,
             "connected_by": set_by}
+    if prior and prior["meta"].get("is_default"):   # le défaut reste, avec sa marque
+        meta.update({k: prior["meta"][k] for k in _MARQUE_DU_DEFAUT if k in prior["meta"]})
     with _connect() as conn:
         with conn.transaction():
             credentials_store.set_credential(
                 et, eid, GOOGLE, refresh_token, set_by=set_by,
                 meta=meta, account=account, conn=conn)
+            if make_default:   # le premier compte, posé par qui le connecte (#1499, D3)
+                regles_de_comptes.poser_le_defaut(conn, et, eid, GOOGLE, account, par=set_by)
 
 
 def get_shared_google_oauth(scope: str, target_id: int,
@@ -259,23 +256,23 @@ def list_shared_google_accounts(scope: str, target_id: int) -> list[dict]:
     return out
 
 
-def set_default_shared_google_account(scope: str, target_id: int, account: str) -> bool:
+def set_default_shared_google_account(scope: str, target_id: int, account: str, *,
+                                      par: str) -> bool:
+    """Le défaut du palier partagé, posé par `par` (admin d'org, responsable d'équipe :
+    `auth/google.scope_target`)."""
     from .. import credentials_store
     et, eid = _shared_ent(scope, target_id)
     if not any(a["account"] == account for a in credentials_store.list_accounts(et, eid, GOOGLE)):
         return False
     with _connect() as conn:
-        conn.execute(
-            "UPDATE connector_credentials "
-            "SET meta = jsonb_set(meta, '{is_default}', to_jsonb(account = %s)) "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s",
-            (account, et, eid, GOOGLE),
-        )
+        regles_de_comptes.poser_le_defaut(conn, et, eid, GOOGLE, account, par=par)
     return True
 
 
-def delete_shared_google_oauth(scope: str, target_id: int, account: Optional[str] = None) -> None:
-    """Retire un compte partagé (ou tous) ; promeut le plus ancien restant en défaut."""
+def delete_shared_google_oauth(scope: str, target_id: int, account: Optional[str] = None, *,
+                               par: str) -> None:
+    """Retire un compte partagé (ou tous) ; promeut le plus ancien restant en défaut,
+    posé par `par` (qui retire)."""
     from .. import credentials_store
     et, eid = _shared_ent(scope, target_id)
     with _connect() as conn:
@@ -289,10 +286,7 @@ def delete_shared_google_oauth(scope: str, target_id: int, account: Optional[str
                 "WHERE entity_type=%s AND entity_id=%s AND connector=%s", (et, eid, GOOGLE)).fetchall()
             if rem and not any((r["meta"] or {}).get("is_default") for r in rem):
                 oldest = min(rem, key=lambda r: (r["meta"] or {}).get("granted_at") or "")["account"]
-                conn.execute(
-                    "UPDATE connector_credentials SET meta = jsonb_set(meta, '{is_default}', 'true') "
-                    "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
-                    (et, eid, GOOGLE, oldest))
+                regles_de_comptes.poser_le_defaut(conn, et, eid, GOOGLE, oldest, par=par)
 
 
 def google_grant_holders(google_email: str) -> list[dict]:

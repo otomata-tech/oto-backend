@@ -94,66 +94,6 @@ def entity_for_scope(scope: str, org_id: int, sub: str,
     raise ValueError(f"palier inconnu : {scope!r}")
 
 
-def get_instance_sharing(entity_type: str, entity_id: str, connector: str,
-                         account: str = "") -> tuple[list, list]:
-    """(share_down, share_side) d'une instance du coffre (ADR 0044). `share_down` =
-    ALLOWLIST deny-by-default (vide = ouverte) ; `share_side` = EXTENSION (prêts
-    nominatifs). Listes vides si la ligne n'existe pas (JSONB → list côté psycopg)."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT share_down, share_side FROM connector_credentials "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
-            (entity_type, entity_id, connector, account)).fetchone()
-    if not row:
-        return [], []
-    return (row["share_down"] or []), (row["share_side"] or [])
-
-
-def sharing_for_vault_rows(
-        keys: "Sequence[tuple[str, str, str, str]]") -> dict[tuple, tuple[str, list, list]]:
-    """`{quadruplet: (share_mode, share_down, share_side)}` — EN LOT.
-
-    Sert la visibilité dérivée (R9), qui a besoin du partage de CHAQUE instance listée.
-    **Une seule requête, jamais une par instance** : même raison que
-    `db.instance_ids_for_vault_rows` — la projection tourne inline sur un serveur
-    mono-loop, contre une base managée distante, et elle en rend des dizaines.
-
-    ⚠️ Ces trois colonnes ne sont volontairement PAS ajoutées à `list_credentials` :
-    sa forme part telle quelle vers le front (`capabilities/admin_console`), donc y
-    ajouter des clés changerait une charge servie."""
-    uniques = sorted({(k[0], str(k[1]), k[2], k[3] or "") for k in keys})
-    if not uniques:
-        return {}
-    clause = ", ".join(["(%s, %s, %s, %s)"] * len(uniques))
-    params: list = []
-    for k in uniques:
-        params += list(k)
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT entity_type, entity_id, connector, account, share_mode, "
-            "share_down, share_side FROM connector_credentials "
-            f"WHERE (entity_type, entity_id, connector, account) IN ({clause})",
-            params).fetchall()
-    return {(r["entity_type"], r["entity_id"], r["connector"], r["account"]):
-            (r["share_mode"], r["share_down"] or [], r["share_side"] or [])
-            for r in rows}
-
-
-@lecture_d_appel
-def list_shared_with(scopes: list) -> list[dict]:
-    """Instances dont le `share_side` vise l'un des `scopes` (ex. `['user:sub',
-    'group:2']`) — le « partagé avec moi » (ADR 0044). Métadonnées seulement (secret
-    jamais lu). `[]` scopes ⟹ `[]`. `jsonb_exists_any` = indexé par le GIN share_side."""
-    if not scopes:
-        return []
-    with _connect() as conn:
-        return conn.execute(
-            "SELECT entity_type, entity_id, connector, account, meta, secret_kind, "
-            "set_by, set_at FROM connector_credentials "
-            "WHERE jsonb_exists_any(share_side, %s)",
-            (list(scopes),)).fetchall()
-
-
 def entities_holding(entity_type: str, entity_ids: Sequence[str], connector: str) -> set[str]:
     """The `entity_ids` that hold a `connector` row at `entity_type` — `has_credential`
     (any account) for a whole list, in ONE query whatever its length (#1317)."""
@@ -168,79 +108,6 @@ def entities_holding(entity_type: str, entity_ids: Sequence[str], connector: str
     return {r["entity_id"] for r in rows}
 
 
-def lent_to_scopes(scopes: Sequence[str], connector: str) -> list[dict]:
-    """The `connector` rows whose `share_side` holds one of `scopes`, WITH that
-    `share_side` — what `list_shared_with` reads, for one connector, plus the column
-    that says to whom each row is lent: a caller asking for several teams at once tells
-    them apart without one query per team (#1317). Metadata only, the secret is never read."""
-    if not scopes:
-        return []
-    with _connect() as conn:
-        return conn.execute(
-            "SELECT entity_type, entity_id, connector, account, meta, share_side "
-            "FROM connector_credentials "
-            "WHERE connector = %s AND jsonb_exists_any(share_side, %s)",
-            (connector, list(scopes))).fetchall()
-
-
-def services_pretes(entity_type: str, entity_id: str, connector: str,
-                    account: str = "") -> dict[str, list]:
-    """`{cible: [services]}` — les services qu'un prêt couvre, par cible du `share_side`
-    (`access/prets.PORTEURS_A_SERVICES`). `{}` si la ligne n'existe pas ou ne prête
-    aucun service : une cible absente n'a AUCUN service prêté, jamais « tous »."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT share_services FROM connector_credentials "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
-            (entity_type, entity_id, connector, account)).fetchone()
-    return dict(row["share_services"] or {}) if row else {}
-
-
-def prets_de_l_org(org_id: int) -> list[dict]:
-    """Les comptes que des MEMBRES de `org_id` prêtent : leurs lignes du coffre dont le
-    `share_side` n'est pas vide (ADR 0044). Métadonnées seulement, le secret n'est
-    jamais lu. Sert la vue d'admin des prêts de l'org (`org.loans.list`)."""
-    with _connect() as conn:
-        return conn.execute(
-            "SELECT entity_id, connector, account, share_side, share_services "
-            "FROM connector_credentials "
-            "WHERE entity_type = %s AND entity_id LIKE %s AND share_side <> '[]'::jsonb "
-            "ORDER BY entity_id, connector, account",
-            (MEMBER, f"{int(org_id)}:%")).fetchall()
-
-
-def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
-                         account: str = "", *, share_down=None, share_side=None,
-                         share_services=None, journal: Sequence[dict] = ()) -> bool:
-    """Met à jour `share_down`/`share_side`/`share_services` d'une instance EXISTANTE (ADR 0044) sans
-    toucher au secret ; bump `version`. Ne met à jour que les champs fournis (non
-    None). Renvoie False si aucune ligne (⟹ pas d'instance à partager — l'appelant
-    lève actionnable). Le partage présuppose que la clé existe. `journal` : les gestes
-    de prêt à noter (`db.loan_events.noter`), dans la même transaction."""
-    sets, params = ["version = version + 1"], []
-    if share_down is not None:
-        sets.append("share_down = %s::jsonb"); params.append(json.dumps(share_down))
-    if share_side is not None:
-        sets.append("share_side = %s::jsonb"); params.append(json.dumps(share_side))
-    if share_services is not None:
-        sets.append("share_services = %s::jsonb"); params.append(json.dumps(share_services))
-    if len(sets) == 1:
-        return True  # rien à changer
-    params += [entity_type, entity_id, connector, account]
-    from .db import loan_events
-    with _connect() as conn, conn.transaction():
-        cur = conn.execute(
-            f"UPDATE connector_credentials SET {', '.join(sets)} "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
-            tuple(params))
-        if (cur.rowcount or 0) == 0:
-            return False
-        for geste in journal:
-            loan_events.noter(conn, entity_type=entity_type, entity_id=entity_id,
-                              connector=connector, account=account, **geste)
-    return True
-
-
 def list_platform_instances(provider: str) -> list[dict]:
     """ADR 0044 §F : les instances scope PLATEFORM d'un `provider` (label + partage +
     meta), SANS secret (le gagnant est déchiffré à part via `get_credential`, chemin chaud
@@ -248,12 +115,11 @@ def list_platform_instances(provider: str) -> list[dict]:
     C'est la source de la résolution du palier plateforme depuis le cutover R3."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT entity_id AS label, share_mode, share_down, share_side, meta "
+            "SELECT entity_id AS label, share_mode, share_down, meta "
             "FROM connector_credentials WHERE entity_type=%s AND connector=%s "
             "ORDER BY set_at DESC", (PLATFORM, provider)).fetchall()
     return [{"label": r["label"], "share_mode": r["share_mode"],
-             "share_down": r["share_down"] or [], "share_side": r["share_side"] or [],
-             "meta": r["meta"] or {}} for r in rows]
+             "share_down": r["share_down"] or [], "meta": r["meta"] or {}} for r in rows]
 
 
 @lecture_d_appel
@@ -268,14 +134,13 @@ def list_all_platform_instances() -> dict[str, list[dict]]:
     with _connect() as conn:
         rows = conn.execute(
             "SELECT connector, entity_id AS label, share_mode, share_down, "
-            "share_side, meta FROM connector_credentials WHERE entity_type=%s "
+            "meta FROM connector_credentials WHERE entity_type=%s "
             "ORDER BY connector, set_at DESC", (PLATFORM,)).fetchall()
     out: dict[str, list[dict]] = {}
     for r in rows:
         out.setdefault(r["connector"], []).append(
             {"label": r["label"], "share_mode": r["share_mode"],
-             "share_down": r["share_down"] or [], "share_side": r["share_side"] or [],
-             "meta": r["meta"] or {}})
+             "share_down": r["share_down"] or [], "meta": r["meta"] or {}})
     return out
 
 
@@ -1496,7 +1361,7 @@ def set_platform_key(label: str, connector: str, secret: str,
         # nouvelle clé. Elle fermait toute clé payante (une clé ouverte à tous ne
         # servait plus personne, sans un mot) et l'upsert écrasait `meta` — quotas
         # par bénéficiaire et révocations compris. On relit la ligne : son
-        # `share_mode` reste le sien (`share_down`/`share_side` ne sont pas dans le
+        # `share_mode` reste le sien (`share_down` n'est pas dans le
         # SET de l'upsert) et les clés d'accord de `meta` sont reportées, sauf si la
         # pose les nomme elle-même.
         # Verrouillée : un accord ou une révocation entre cette lecture et l'upsert
@@ -1780,30 +1645,6 @@ def first_entity_with(entity_type: str, connector: str,
         return row["entity_id"] if row else None
 
 
-@lecture_d_appel
-def list_member_orgs_for(sub: str, connector: str) -> list[int]:
-    """Org ids où `sub` détient un credential MEMBRE pour `connector`, triés récent
-    d'abord (`set_at` DESC). Base de l'instance PERSONNELLE cross-org (issue #172,
-    piste A) : `member_id = f'{org}:{sub}'` → on extrait l'org du préfixe. Le `LIKE`
-    ne PRÉSÉLECTIONNE que le suffixe `:sub` (index sur (entity_type, connector)) ;
-    le filtre EXACT est refait en Python (un `sub` qui serait le suffixe d'un autre
-    ne passe pas). Mono/multi-compte confondus (une org apparaît une fois)."""
-    esc = sub.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT entity_id, MAX(set_at) AS set_at FROM connector_credentials "
-            "WHERE entity_type=%s AND connector=%s AND entity_id LIKE %s ESCAPE '\\' "
-            "GROUP BY entity_id ORDER BY set_at DESC",
-            (MEMBER, connector, f"%:{esc}")).fetchall()
-    out: list[int] = []
-    for r in rows:
-        org_s, _, rsub = str(r["entity_id"]).partition(":")
-        if rsub == sub and org_s.isdigit():
-            out.append(int(org_s))
-    return out
-
-
-
 def rekey_personal_credentials(conn, old_sub: str, new_sub: str) -> dict:
     """Les clés PERSONNELLES d'un compte fusionné suivent la personne (#439).
 
@@ -1887,60 +1728,6 @@ def rekey_personal_credentials(conn, old_sub: str, new_sub: str) -> dict:
     return bilan
 
 
-def suivre_les_prets_recus(conn, old_sub: str, new_sub: str) -> int:
-    """Les prêts faits À une personne la suivent quand ses comptes fusionnent (#1251).
-
-    Un prêt nominatif est une entrée `user:<sub>` du `share_side` de la ligne du
-    PRÊTEUR, et, pour un compte Google ou Microsoft, la clé de la même cible dans
-    `share_services`. Sans ce repointage, l'entrée visait un sub qui n'a plus de ligne
-    `users` : le compte prêté cessait de servir l'emprunteur fusionné, sans refus qui
-    l'explique. Chaque `user:<old_sub>` devient `user:<new_sub>`, à sa place dans la
-    liste ; si le canonique y figure déjà, l'entrée de l'ancien disparaît (pas de
-    doublon) et ses services s'ajoutent aux siens (c'est la même personne : l'union est
-    ce que `access.prets.exiger_service_prete` lui servait déjà avant la fusion). Les
-    entrées `group:` et `org:` ne portent pas de sub : intactes.
-
-    `share_side` et `share_services` sont HORS de l'AAD (`_aad` : entité, connecteur,
-    compte) : un UPDATE de ces colonnes laisse la ligne déchiffrable, sans rechiffrer.
-    Les lignes se lisent par `share_side ? 'user:<old>'` (index GIN `share_side`) :
-    `share_services` n'a de clé que pour une cible du `share_side` (écrits ensemble,
-    `capabilities/connectors/sharing`).
-
-    ⚠️ Le journal des prêts (`connector_loan_events.target`) n'est PAS réécrit : c'est
-    un journal, il garde la cible telle qu'elle a été nommée au geste. Conséquence
-    assumée : la date de dernière pose (`loan_events.dernieres_poses`) d'un prêt repointé
-    n'est plus connue sous la nouvelle cible.
-
-    Dans la transaction de l'appelant (`conn`), lignes verrouillées. Rend le nombre de
-    lignes du coffre réécrites."""
-    if not old_sub or not new_sub or old_sub == new_sub:
-        return 0
-    ancien, nouveau = f"user:{old_sub}", f"user:{new_sub}"
-    rows = conn.execute(
-        "SELECT entity_type, entity_id, connector, account, share_side, share_services "
-        "FROM connector_credentials WHERE share_side ? %s "
-        "ORDER BY entity_type, entity_id, connector, account FOR UPDATE",
-        (ancien,)).fetchall()
-    for r in rows:
-        side = _repointer_la_cible(r["share_side"], ancien, nouveau)
-        services = dict(r["share_services"] or {})
-        if ancien in services:
-            herites = services.pop(ancien) or []
-            siens = list(services.get(nouveau) or [])
-            services[nouveau] = siens + [s for s in herites if s not in siens]
-        conn.execute(
-            "UPDATE connector_credentials SET share_side = %s::jsonb, "
-            "share_services = %s::jsonb, version = version + 1 "
-            "WHERE entity_type = %s AND entity_id = %s AND connector = %s "
-            "AND account = %s",
-            (json.dumps(side), json.dumps(services), r["entity_type"], r["entity_id"],
-             r["connector"], r["account"]))
-    if rows:
-        logger.info("prêts reçus %s → %s : %d ligne(s) du coffre repointée(s)",
-                    old_sub, new_sub, len(rows))
-    return len(rows)
-
-
 def _repointer_la_cible(cibles, ancien: str, nouveau: str) -> list:
     """`cibles` (liste de principaux) où `ancien` devient `nouveau`, à sa place ; si
     `nouveau` y figure déjà, l'entrée en trop disparaît (pas de doublon). Les autres
@@ -1964,7 +1751,7 @@ def _quota_le_plus_strict(a: "int | None", b: "int | None") -> "int | None":
 def suivre_les_accords_recus(conn, old_sub: str, new_sub: str) -> int:
     """Les ACCORDS et les REFUS nominatifs d'une clé plateforme suivent la personne quand
     ses comptes fusionnent (#1258). Trois endroits nomment `user:<sub>` sur une ligne du
-    coffre, hors du `share_side` (`suivre_les_prets_recus`) :
+    coffre :
 
     - `share_denied` dans `meta` (F-046) : la RÉVOCATION. C'est le point de sécurité :
       sans repointage, le refus visait un sub sans ligne `users`, et le compte fusionné

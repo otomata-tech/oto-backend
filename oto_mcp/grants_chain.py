@@ -100,8 +100,8 @@ PLATFORM_SCOPE = ("platform", "platform")
 # modèle : une clé plateforme OUVERTE (`share_mode='open'`, `share_down` vide) accorde
 # à quiconque, ce qu'aucune arête ne savait dire.
 #
-# Le mot existait déjà, il n'a pas fallu l'inventer : `connectors.instance_visibility`
-# appelle EVERYONE le scope `platform` depuis R9. On le reprend tel quel — le CHECK de
+# Le mot existait déjà, il n'a pas fallu l'inventer : la visibilité dérivée (R9, retirée
+# par #1499) appelait EVERYONE le scope `platform` depuis R9. On le reprend tel quel — le CHECK de
 # `grants.grantee_kind` accepte déjà `platform`, donc **aucune migration de schéma**.
 # L'arête est `platform:platform → platform:platform` sur l'instance : le propriétaire
 # accorde à tout le monde, ce qui est exactement ce que la ligne du coffre disait.
@@ -305,8 +305,8 @@ def tenant_ref(slug: str, provider: str) -> str:
 
 def tenant_rung(slug: str, provider: str, org: Optional[int]) -> Optional[ChainVerdict]:
     """Le barreau TENANT vu par la chaîne, pour l'org des CLÉS de l'appel — l'org de
-    contexte bornée par #480 (`access.heritage.org_partagee`) : un bénéficiaire HORS de
-    l'org d'un projet partagé, à qui rien n'est prêté, arrive ici avec `None` et ne
+    contexte dont l'appelant est membre (`access.scope.org_d_appartenance`) : un
+    bénéficiaire HORS de l'org d'un projet partagé arrive ici avec `None` et ne
     lit pas l'arête de cette org (ni son budget, ni sa révocation). `None` = MUETTE
     (aucune arête n'a jamais visé cette org ⟹ la clé sert comme en PR 1) ;
     `granted=False` = REFUSE (toutes révoquées ⟹ le barreau se saute, l'org retombe

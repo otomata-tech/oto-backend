@@ -10,9 +10,7 @@ set_by TEXT,
 set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 version INTEGER NOT NULL DEFAULT 1,
 share_down JSONB NOT NULL DEFAULT '[]',
-share_side JSONB NOT NULL DEFAULT '[]',
 share_mode TEXT NOT NULL DEFAULT 'open',
-share_services JSONB NOT NULL DEFAULT '{}',
 PRIMARY KEY (entity_type, entity_id, connector, account)
 );
 CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);

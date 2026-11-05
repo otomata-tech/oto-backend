@@ -10,7 +10,7 @@ import asyncio
 import pytest
 
 from oto_mcp.capabilities.connectors import console as cc
-from oto_mcp.capabilities.connectors import account_grants as connectors_account_grants, activation as connectors_activation, force as connectors_force, identities as connectors_identities, instances as connectors_instances, selection as connectors_selection, sharing as connectors_sharing, verify as connectors_verify
+from oto_mcp.capabilities.connectors import activation as connectors_activation, force as connectors_force, identities as connectors_identities, instances as connectors_instances, selection as connectors_selection, sharing as connectors_sharing, transfert as connectors_transfert, verify as connectors_verify
 from oto_mcp.capabilities._authz import BY_OP
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
@@ -97,14 +97,27 @@ def test_connector_required_fields():
 # ── oto_instance ────────────────────────────────────────────────────────────
 def test_instance_routes(monkeypatch):
     monkeypatch.setattr(connectors_instances, "_list_instances", _tag("_list"))
-    monkeypatch.setattr(connectors_sharing, "_lend_instance", _tag("_lend"))
+    for nom in ("_list_rules", "_set_rule", "_remove_rule", "_share_events"):
+        monkeypatch.setattr(connectors_sharing, nom, _tag(nom))
+    monkeypatch.setattr(connectors_transfert, "_transfer", _tag("_transfer"))
     monkeypatch.setattr(connectors_verify, "_verify", _atag("_verify"))
     I = cc.InstanceInput
     run = lambda inp: asyncio.run(cc._instance(CTX, inp))
     out = run(I(op="list", connector="folk", level="org"))
     assert out["called"] == "_list" and out["inp"].level == "org"
-    out = run(I(op="lend", connector="folk", to="bob", revoke=True))
-    assert out["called"] == "_lend" and out["inp"].revoke is True
+    out = run(I(op="rules", instance="inst:12"))
+    assert out["called"] == "_list_rules" and out["inp"].instance_id == 12
+    out = run(I(op="set_rule", instance="12", to="bob", level="write",
+                services=["outlook"]))
+    assert out["called"] == "_set_rule"
+    assert (out["inp"].instance_id, out["inp"].to, out["inp"].level,
+            out["inp"].services) == (12, "bob", "write", ["outlook"])
+    out = run(I(op="remove_rule", instance="inst:12", to_group=3))
+    assert out["called"] == "_remove_rule" and out["inp"].to_group == 3
+    out = run(I(op="share_events", instance="inst:12", limit=5))
+    assert out["called"] == "_share_events" and out["inp"].limit == 5
+    out = run(I(op="transfer", instance="inst:12", to_org=True))
+    assert out["called"] == "_transfer" and out["inp"].to_org is True
     out = run(I(op="verify", connector="folk"))               # level défaut = auto
     assert out["called"] == "_verify" and out["inp"].level == "auto"
     assert out["inp"].provider == "folk"                      # mapping connector→provider
@@ -120,8 +133,22 @@ def test_instance_level_validated_per_op():
         run(I(op="verify", connector="folk", level="member"))  # vocabulaire de list
     assert e.value.code == "invalid_level"
     with pytest.raises(AuthzDenied) as e:
-        run(I(op="lend", connector="folk"))
-    assert e.value.code == "missing_to"
+        run(I(op="set_rule", instance="inst:12", to="bob", level="admin"))
+    assert e.value.code == "invalid_level"
+    with pytest.raises(AuthzDenied) as e:
+        run(I(op="rules"))
+    assert e.value.code == "missing_instance"
+    with pytest.raises(AuthzDenied) as e:
+        run(I(op="rules", instance="member:8:x:zoho"))
+    assert e.value.code == "invalid_instance"
+
+
+def test_le_pret_est_retire_sans_alias():
+    import typing
+    assert "lend" not in typing.get_args(cc.InstanceInput.model_fields["op"].annotation)
+    from oto_mcp.capabilities.registry import CAPABILITIES
+    cles = {c.key for c in CAPABILITIES}
+    assert not cles & {"connectors.lend_instance", "connectors.lend_state", "org.loans.list"}
 
 
 # ── oto_identity ────────────────────────────────────────────────────────────
@@ -137,20 +164,20 @@ def test_identity_routes(monkeypatch):
     assert e.value.code == "missing_identity"
 
 
-# ── oto_account_access ──────────────────────────────────────────────────────
-def test_account_access_routes(monkeypatch):
-    monkeypatch.setattr(connectors_account_grants, "_list", _tag("_list"))
-    monkeypatch.setattr(connectors_account_grants, "_grant", _tag("_grant"))
-    monkeypatch.setattr(connectors_account_grants, "_revoke", _tag("_revoke"))
-    A = cc.AccountAccessInput
-    assert cc._account_access(CTX, A(op="list"))["called"] == "_list"
-    out = cc._account_access(CTX, A(op="grant", channel="linkedin", grantee="b@c.co"))
-    assert out["called"] == "_grant" and out["inp"].channel == "linkedin"
-    assert cc._account_access(CTX, A(op="revoke", channel="linkedin",
-                                     grantee="b@c.co"))["called"] == "_revoke"
-    with pytest.raises(AuthzDenied) as e:
-        cc._account_access(CTX, A(op="grant", grantee="b@c.co"))
-    assert e.value.code == "missing_channel"
+# ── oto_account_access : retiré (#1499) ────────────────────────────────────
+def test_account_access_is_gone_and_its_name_refuses_naming_the_rules():
+    """Plus de prêt de compte : ni capacité, ni route REST, ni outil MCP. Le nom
+    refuse en nommant le geste qui aboutit (une règle sur le compte, le nommage)."""
+    from oto_mcp import outils_retires
+    from oto_mcp.capabilities.registry import CAPABILITIES
+    assert not [c.key for c in CAPABILITIES
+                if "account_grants" in c.key or c.key.endswith(".account_access")
+                or c.mcp == "oto_account_access"]
+    assert not [b for c in CAPABILITIES for b in c.rest_bindings()
+                if "/connector-accounts" in str(b)]
+    refus = outils_retires.retrait("oto_account_access")
+    assert refus is not None
+    assert "op=set_rule" in refus.message and "_account=" in refus.message
 
 
 # ── BY_OP : dispatch (op, scope) + clé inconnue = refus net ─────────────────
@@ -186,7 +213,6 @@ def test_console_carries_the_mcp_surface():
         "connectors.console.connector": "oto_connector",
         "connectors.console.instance": "oto_instance",
         "connectors.console.identity": "oto_identity",
-        "connectors.console.account_access": "oto_account_access",
     }
     for key, mcp in expected.items():
         assert caps[key].mcp == mcp, key
@@ -198,9 +224,7 @@ def test_console_carries_the_mcp_surface():
         "connectors.me", "connectors.select", "connectors.pause", "connectors.unselect",
         "connectors.recommend", "connectors.force.member", "connectors.instances.list",
         "connectors.identities", "connectors.set_default_identity",
-        "connectors.lend_instance", "connectors.verify",
-        "connectors.account_grants.list", "connectors.account_grants.grant",
-        "connectors.account_grants.revoke",
+        "connectors.verify",
     ]
     for key in demoted:
         assert caps[key].mcp is None, key

@@ -2,12 +2,12 @@
 
 Ce que la base porte : les contraintes (sujet unique, niveau, une règle par compte et
 sujet, `owner_subject`), le journal écrit par déclencheur, la sous-instance d'un compte
-Unipile posée à sa connexion, la reprise idempotente des anciens partages, la fusion de
-deux comptes et la suppression d'une équipe ou d'une org.
+Unipile posée à sa connexion, la fusion de deux comptes et la suppression d'une équipe ou
+d'une org. La reprise des anciens partages est celle de la révision de la bascule
+(`tests/test_migration_20261105_bascule_comptes.py`).
 """
 from __future__ import annotations
 
-import json
 import uuid
 
 import pytest
@@ -48,12 +48,10 @@ def _groupe(org, nom):
                  (org, nom))[0]["id"]
 
 
-def _compte(owner_type, owner_id, connector, account="", share_side=(), services=None):
-    """Une ligne de coffre (secret factice : la reprise ne déchiffre rien) et son instance."""
+def _compte(owner_type, owner_id, connector, account=""):
+    """Une ligne de coffre (secret factice) et son instance."""
     _exec("INSERT INTO connector_credentials (entity_type, entity_id, connector, account, "
-          "secret_enc, share_side, share_services) VALUES (%s, %s, %s, %s, 'x', %s, %s)",
-          (owner_type, owner_id, connector, account, json.dumps(list(share_side)),
-           json.dumps(services or {})))
+          "secret_enc) VALUES (%s, %s, %s, %s, 'x')", (owner_type, owner_id, connector, account))
     return _rows("INSERT INTO connector_instances (connector, owner_type, owner_id, account) "
                  "VALUES (%s, %s, %s, %s) RETURNING id",
                  (connector, owner_type, owner_id, account))[0]["id"]
@@ -68,18 +66,6 @@ def _regle(org, instance, *, user=None, group=None, org_entiere=False, level="re
     if conn is not None:
         return conn.execute(sql, params).fetchone()["id"]
     return _rows(sql, params)[0]["id"]
-
-
-def _reprendre():
-    from oto_mcp.db import regles_de_comptes
-    with _c() as c, c.transaction():
-        return regles_de_comptes.reprendre_les_prets(c)
-
-
-def _regles_reprises():
-    return {(r["instance_id"], r["subject_user"], r["subject_group"], r["subject_org"]):
-            (r["level"], r["services"])
-            for r in _rows("SELECT * FROM connector_account_rules WHERE origine = 'reprise'")}
 
 
 @pytest.fixture
@@ -217,108 +203,6 @@ def test_un_siege_plateforme_a_pour_parent_la_cle_plateforme_unique(live, u):
     db.set_unipile_account(sub, "ACC9", None, org_id=org, provider="WHATSAPP",
                            platform_seat=True)
     assert _sous_instance(org, sub, "WHATSAPP")["parent_id"] == plateforme
-
-
-# ── La reprise ──────────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def partages(live, u):
-    """Un propriétaire qui prête dans son org A : un compte du coffre à un pair, à une
-    équipe, à toute l'org et à une personne d'une autre org ; un compte Google à un pair
-    pour un service ; son LinkedIn (prêt Unipile) au pair, à l'équipe, à une équipe d'une
-    autre org et à la personne de l'autre org. L'org A a son propre compte."""
-    from oto_mcp import db
-    a, b = _org(f"a_{u}"), _org(f"b_{u}")
-    proprio, pair, dehors = f"p_{u}", f"q_{u}", f"x_{u}"
-    for sub in (proprio, pair):
-        _membre(a, sub)
-    _membre(b, dehors)
-    g, h = _groupe(a, f"g_{u}"), _groupe(b, f"h_{u}")
-    zoho = _compte("member", f"{a}:{proprio}", "zoho",
-                   share_side=[f"user:{pair}", f"group:{g}", f"org:{a}", f"user:{dehors}"])
-    google = _compte("member", f"{a}:{proprio}", "google", "p@exemple.test",
-                     share_side=[f"user:{pair}"], services={f"user:{pair}": ["gmail"]})
-    attio = _compte("org", str(a), "attio")
-    db.set_unipile_account(proprio, "ACC_LK", None, org_id=a, provider="LINKEDIN")
-    lk = _sous_instance(a, proprio)["id"]
-    db.set_account_grant(proprio, "LINKEDIN", "ACC_LK", pair, granted_by=proprio)
-    db.set_account_grant(proprio, "LINKEDIN", "ACC_LK", dehors, granted_by=proprio)
-    db.set_account_group_grant(proprio, "LINKEDIN", "ACC_LK", g, granted_by=proprio)
-    db.set_account_group_grant(proprio, "LINKEDIN", "ACC_LK", h, granted_by=proprio)
-    return dict(a=a, b=b, proprio=proprio, pair=pair, dehors=dehors, g=g, h=h, zoho=zoho,
-                google=google, attio=attio, lk=lk)
-
-
-def test_la_reprise_recalcule_les_regles_et_ne_reprend_pas_les_prets_entre_orgs(partages):
-    s = partages
-    bilan = _reprendre()
-    attendu = {
-        (s["zoho"], s["pair"], None, False): ("sensitive", None),
-        (s["zoho"], None, s["g"], False): ("sensitive", None),
-        (s["zoho"], None, None, True): ("sensitive", None),
-        (s["google"], s["pair"], None, False): ("sensitive", ["gmail"]),
-        (s["attio"], None, None, True): ("sensitive", None),
-        (s["lk"], s["pair"], None, False): ("sensitive", None),
-        (s["lk"], None, s["g"], False): ("sensitive", None),
-    }
-    reprises = {k: v for k, v in _regles_reprises().items()
-                if k[0] in {s["zoho"], s["google"], s["attio"], s["lk"]}}
-    assert reprises == attendu
-    ecartes = {(e["source"], e["cible"], e["motif"]) for e in bilan["non_reprises"]
-               if e.get("org_id") == s["a"]}
-    assert ecartes == {
-        ("pret_du_coffre", f"user:{s['dehors']}", "hors_org"),
-        ("unipile_pret", f"user:{s['dehors']}", "hors_org"),
-        ("unipile_pret_equipe", f"group:{s['h']}", "hors_org"),
-    }
-
-
-def test_la_reprise_rejouee_ne_change_rien(partages):
-    _reprendre()
-    avant = _rows("SELECT * FROM connector_account_rules ORDER BY id")
-    journal = _rows("SELECT count(*) AS n FROM connector_account_share_events")[0]["n"]
-    bilan = _reprendre()
-    assert (bilan["posees"], bilan["mises_a_jour"], bilan["retirees"]) == (0, 0, 0)
-    assert bilan["sous_instances"] == {"posees": 0, "reparentees": 0}
-    assert _rows("SELECT * FROM connector_account_rules ORDER BY id") == avant
-    assert _rows("SELECT count(*) AS n FROM connector_account_share_events")[0]["n"] == journal
-
-
-def test_un_pret_retire_retire_sa_regle_reprise(partages):
-    from oto_mcp import db
-    s = partages
-    _reprendre()
-    _exec("UPDATE connector_credentials SET share_side = %s WHERE entity_type = 'member' "
-          "AND entity_id = %s AND connector = 'zoho'",
-          (json.dumps([f"org:{s['a']}"]), f"{s['a']}:{s['proprio']}"))
-    db.clear_account_grant(s["proprio"], "LINKEDIN", s["pair"])
-    bilan = _reprendre()
-    reprises = _regles_reprises()
-    assert (s["zoho"], s["pair"], None, False) not in reprises
-    assert (s["zoho"], None, s["g"], False) not in reprises
-    assert (s["lk"], s["pair"], None, False) not in reprises
-    assert (s["zoho"], None, None, True) in reprises
-    assert bilan["retirees"] >= 3
-    assert ("removed", "user", s["pair"]) in {e[:3] for e in _journal(s["zoho"])}
-
-
-def test_une_regle_posee_a_la_main_reste_intacte(partages):
-    s = partages
-    manuelle = _regle(s["a"], s["zoho"], user=s["pair"], level="read",
-                      created_by=s["proprio"])
-    autre = _regle(s["a"], s["attio"], user=s["pair"], level="none")
-    bilan = _reprendre()
-    regles = {r["id"]: r for r in _rows("SELECT * FROM connector_account_rules "
-                                        "WHERE id = ANY(%s)", ([manuelle, autre],))}
-    assert (regles[manuelle]["level"], regles[manuelle]["origine"]) == ("read", "manuelle")
-    assert (regles[autre]["level"], regles[autre]["origine"]) == ("none", "manuelle")
-    assert bilan["manuelles_gardees"] >= 1
-    # Le prêt retiré ne retire pas la règle manuelle du même sujet.
-    _exec("UPDATE connector_credentials SET share_side = '[]' WHERE entity_type = 'member' "
-          "AND entity_id = %s AND connector = 'zoho'", (f"{s['a']}:{s['proprio']}",))
-    _reprendre()
-    assert _rows("SELECT level FROM connector_account_rules WHERE id = %s",
-                 (manuelle,))[0]["level"] == "read"
 
 
 # ── La fusion de deux comptes ───────────────────────────────────────────────────

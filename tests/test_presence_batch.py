@@ -104,14 +104,13 @@ def test_les_deux_sondes_rendent_le_MEME_verdict_sur_TOUT_le_registre(coffre):
     assert not ecarts, "divergence entre les deux sondes :\n  " + "\n  ".join(ecarts)
 
 
-def test_une_instance_SUSPENDUE_est_presente_pour_les_deux(coffre):
+def test_une_instance_SUSPENDUE_est_sautee_par_les_deux(coffre):
     sonde = access.preloaded_presence_probe("u1", org=2, groups=[])
-    # `pennylane` est au coffre mais suspendue : depuis #1499 (L3), elle ne passe plus
-    # la main à la clé d'en dessous — le résolveur la refuse par son nom
-    # (`account_suspended`). Les DEUX sondes la voient donc présente, sinon le statut
-    # montrerait une clé d'équipe que la résolution ne servira jamais.
-    assert access.PRESENCE_PROBE.member("u1", 2, "pennylane") is not None
-    assert sonde.member("u1", 2, "pennylane") is not None
+    # `pennylane` est au coffre mais suspendue : la cascade doit la sauter des DEUX
+    # côtés, sinon la préchargée résoudrait une clé que la vraie ignore (décision de
+    # #1499 : la clé suspendue passe la main, comme avant la bascule).
+    assert access.PRESENCE_PROBE.member("u1", 2, "pennylane") is None
+    assert sonde.member("u1", 2, "pennylane") is None
     assert sonde.member("u1", 2, "folk") is not None
 
 

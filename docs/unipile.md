@@ -211,8 +211,8 @@ de paiement).
 > d'avis, ce n'est **pas** « illimité ». Jusque-là, la souscription écrivait `NULL`, relu
 > comme le défaut (5) : un plafond posé à la main retombait à 5 au paiement.
 
-> **Le compte d'autrui : par les règles, et seulement nommé (#1499, bascule du
-> 05/11/2026).** Plus de prêt ni de pointeur : `connector_account_grants`,
+> **Le compte d'autrui : par les règles, nommé, ou sans nom en dernier recours (#1499,
+> bascule du 05/11/2026).** Plus de prêt ni de pointeur : `connector_account_grants`,
 > `connector_account_group_grants` et `unipile_operated_accounts` sont retirées, avec
 > l'outil `oto_account_access` (il refuse en nommant le geste, `outils_retires`) et les
 > routes `/api/me/connector-accounts/*/grants`. Un compte hébergé a une
@@ -220,13 +220,18 @@ de paiement).
 > `<org>:<sub>`, compte `canal:<PROVIDER>`) ; les règles posées sur elle
 > (`oto_instance op=set_rule`, une personne, une équipe ou l'org) donnent aux autres
 > membres un niveau (`read` < `write` < `sensitive` < `manage`), calculé par
-> `access.niveaux.niveau`. Le compte d'autrui ne sert que **nommé** par l'appel
+> `access.niveaux.niveau`. Le compte d'autrui sert **nommé** par l'appel
 > (`_account=<account_id>` ou `_instance=inst:<id>`), au niveau qu'exige l'op
 > (`tools/effets` : lire → `read`, envoyer → `sensitive`) : sans règle il ne sert pas
 > (refus comme un compte inconnu, il n'est pas révélé), sous le niveau il est refusé
-> `insufficient_level` en nommant qui le gère. Non nommé, jamais : un appel sans nom
-> opère le compte propre de l'org de contexte ; un pin de projet ne désigne que le compte
-> propre. Un compte d'une autre org est coupé (D1, dans `niveau`) ; celui d'un
+> `insufficient_level` en nommant qui le gère. Sans nom, un appel opère le compte propre
+> de l'org de contexte ; s'il n'y en a pas, l'étape 5 (`comptes_heberges.prete_sans_nom`) :
+> un compte de l'org qu'une règle ouvre au niveau exigé (le prêt le plus récent, date de
+> la règle), puis un compte d'une autre org (sa propre clé, puis un prêt) ; la réponse
+> dit `lent_by`. Les anciens pointeurs, repris en règles, retrouvent ainsi leur usage,
+> mais derrière le compte propre (avant : le pointeur passait devant). Un pin de projet ne
+> désigne que le compte propre. Un compte d'une autre org n'est ouvert que par une règle
+> nommant la personne (D1, dans `niveau`) ; celui d'un
 > propriétaire sorti de l'org ou en pause ne sert plus. Code :
 > `connectors/comptes_heberges.py` (préfixe `canal:` ↔ connecteur de canal, comptes
 > d'autrui du canal, nommage) sous `connector_identities.resolve_operated_account_id`.

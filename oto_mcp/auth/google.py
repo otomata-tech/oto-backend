@@ -720,8 +720,9 @@ def _no_account_message(sub: str, org_id: Optional[int], account: Optional[str])
 # shared mailbox, a team calendar. Resolution order at call time: the MEMBER's account
 # first (their own, or the one they name), then that of their active TEAM,
 # then that of their ORG, each at the level its rules give the member. Another person's
-# PERSONAL account serves only when the call names it, at the level its rules give
-# (#1499, `access/comptes.ChoixDuParcours.autrui_nomme`): it is not listed here.
+# PERSONAL account serves when the call names it, at the level its rules give (#1499,
+# `access/comptes.ChoixDuParcours.autrui_nomme`), or unnamed at step 5 when nothing of
+# the member, her team or her org serves: it is not listed here.
 
 def _shared_targets(sub: str, org_id: int) -> list:
     """The shared-account holders reachable by this member, from nearest to

@@ -109,7 +109,7 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
             return ref.org_id                    # owner: my own instance, in its org
         # ANOTHER person's account, or the caller's own key in an org she cannot act in
         # (a delegated job locked to its org, #172), or an account of another org a rule
-        # naming her opens (D1, #1499): it serves only NAMED, to someone its rules open
+        # naming her opens (D1, #1499): pinned, it serves to someone its rules open
         # it to — the exact level the call requires is judged at resolution
         # (`resolve._resolve_pinned_instance`). The caller KEEPS her org.
         return _ouvert_par_une_regle(

@@ -14,7 +14,8 @@ on the scale `none` < `read` < `write` < `sensitive` < `manage`
 - a rule that names the person wins; else a rule on her ACTIVE team (or on the team that
   owns the account, for one of its members); else the account's default — `sensitive`
   for a member of the owning team (D2 for a non-member, `niveau_equipe_non_membre`),
-  `read` for a member of the owning org — raised by a rule on the whole org;
+  `sensitive` for a member of the owning org (deviation (a) from oto-core) — on an org
+  account, a rule on the whole org replaces it; on a team's, it raises it;
 - under the level a call needs, the org admin manages the org's and the teams' accounts,
   and a team lead manages his team's accounts unless a rule names him.
 A rule with `services` (a Google or Microsoft account) covers only those services and the
@@ -108,6 +109,9 @@ class Compte:
     #: When its key was set (`connector_credentials.set_at`, ISO): the most recent of
     #: several accounts of other orgs serves at step 5. None without a vault row.
     pose_le: Optional[str] = None
+    #: When the most recent rule that opens it to the caller was set (ISO): the most
+    #: recent LOAN serves at step 5. None when no rule opens it to her (or not read).
+    prete_le: Optional[str] = None
     label: Optional[str] = None
 
     @property
@@ -180,8 +184,8 @@ def niveau_entre_orgs(appelant: Appelant, compte: Compte, service: Optional[str]
     owner (a person's own key set in another org, #172) manages it; anyone else holds only
     what a rule NAMING her gives (a person outside the account's org — never a team or an
     org from outside); no team rule, org rule, default or role reaches across orgs. Such
-    an account serves only NAMED (`access/comptes`), never as a fallback; its owner must
-    still be a member of its org."""
+    an account serves NAMED, or unnamed at step 5 when nothing local serves
+    (`access/comptes`); its owner must still be a member of its org."""
     proprietaire = compte.proprietaire
     if proprietaire is not None:
         if compte.org_id is None or not _proprietaire_present(proprietaire, compte.org_id):
@@ -359,6 +363,16 @@ def libelle_de_personne(sub: str) -> str:
     if email:
         return email
     return (db.get_user(sub) or {}).get("name") or sub
+
+
+def preteur(compte: Compte) -> str:
+    """Who lends an account of the call's org served unnamed (step 5, `lent_by`): its
+    owner's e-mail, or the team that owns it."""
+    if compte.proprietaire is not None:
+        return libelle_de_personne(compte.proprietaire)
+    from .. import group_store
+    equipe = compte.equipe
+    return f"team {(group_store.get_group(equipe) or {}).get('name') or f'#{equipe}'}"
 
 
 def qui_gere(compte: Compte, org_appel: Optional[int] = None) -> str:

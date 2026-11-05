@@ -81,14 +81,15 @@ def resolve_credential_fields(provider: str, account: Optional[str] = None) -> d
     return resolve.resolve_credential(provider, want="byo", account=account).fields
 
 
-#: The mode a status serves when only an account of ANOTHER org serves (step 5, #1499):
-#: `compte_d_ailleurs` says whose org and whether it is the caller's own key.
+#: The mode a status serves when only step 5 serves (#1499) — an account lent in the
+#: call's org, her own key in another org, or one another org lends: `compte_d_ailleurs`
+#: says which (`lent_by`, `your_account_in_org` or `lent_by_org`).
 ELSEWHERE = "elsewhere"
 
 
 def compte_d_ailleurs(sub: str, provider: str, org: Optional[int],
                       probe: "Optional[CascadeProbe]" = None) -> Optional[dict]:
-    """`{org, own}` of the account of another org that step 5 would serve for
+    """The provenance (`comptes.provenance`) of the account step 5 would serve for
     `provider`, or None. From the preloaded probe when it carries the inventory,
     otherwise one read."""
     porteur = providers.credential_provider(provider)
@@ -98,7 +99,7 @@ def compte_d_ailleurs(sub: str, provider: str, org: Optional[int],
         return None
     from . import comptes
     return comptes.d_ailleurs_affiche(sub, org, porteur,
-                                      comptes.comptes_hors_org(porteur, org, sub))
+                                      comptes.candidats_etape5(porteur, org, sub))
 
 
 def credential_mode_for(sub: str, provider: str, *,

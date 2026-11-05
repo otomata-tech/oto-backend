@@ -69,8 +69,9 @@ def _echo_account(result, tool_name: str, rappel: Optional[dict] = None):
         trace = session_org.current_call_trace() or {}
         account = trace.get("resolved_account") or ""
         # A mono-account row is anonymous (no echo) — unless it is an account of ANOTHER
-        # org, which is always said (#1499, D1/#172).
-        if not (account or trace.get("compte_d_une_autre_org")) or (
+        # org, or one lent to the caller served unnamed: always said (#1499).
+        if not (account or trace.get("compte_d_une_autre_org")
+                or trace.get("compte_prete") or trace.get("cle_suspendue")) or (
                 providers.credential_provider(trace.get("resolved_connector") or "")
                 != providers.credential_provider(namespace_of(tool_name))):
             return result
@@ -103,6 +104,17 @@ async def _rappel_de_l_appel() -> Optional[dict]:
     succeeded."""
     trace = session_org.current_call_trace() or {}
     account = trace.get("resolved_account") or ""
+    # An account lent to the caller served UNNAMED (step 5, #1499): who lends it, noted
+    # at resolution (`lent_by`, or `lent_by_org` for a hosted account of another org).
+    prete = trace.get("compte_prete")
+    if prete:
+        return {"_account": prete.get("account") or account,
+                **{k: v for k, v in prete.items() if k != "account"}}
+    # Her own key is SUSPENDED and was skipped (#401, #1499): the next rung served —
+    # say which, she did not get the key she may think she got.
+    if trace.get("cle_suspendue"):
+        return {"_account": account, "served_by": trace.get("key_mode"),
+                "suspended_key_skipped": True}
     # An account of ANOTHER org served (#1499, D1/#172): always said, named or not.
     autre_org = trace.get("compte_d_une_autre_org")
     if not account and not autre_org:

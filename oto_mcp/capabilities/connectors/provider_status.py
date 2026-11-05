@@ -37,8 +37,10 @@ class ProviderStatus(BaseModel):
         "Values served as of 2026-09-01: `user` | `group` | `org` | `tenant` | "
         "`platform` (the tier that supplies the key), `over_quota` (a key resolves but "
         "today's quota is exhausted), `forbidden` (no key resolves), `elsewhere` "
-        "(nothing of this org serves: an account of ANOTHER org does — "
-        "`lent_by_org` or `your_account_in_org` says which). Declared "
+        "(nothing of yours, your team's or your org's serves: an account lent to you "
+        "does — `lent_by` (a member's e-mail or a team, in this org), `lent_by_org` "
+        "(another org) — or your own key in another org (`your_account_in_org`)). "
+        "Declared "
         "`str` and not enumerated on purpose: the first five come from the cascade, "
         "which has its own home — an enum here would break a generated client the "
         "day it returns a sixth."))
@@ -58,8 +60,10 @@ class ProviderStatus(BaseModel):
     platform_key_label: Optional[str] = None
     # The team whose key would be REACHABLE for this connector, when there is one.
     team_key_group: Optional[int] = None
-    # `mode='elsewhere'` (#1499, step 5): the org of the account that serves — lent to
-    # you by a rule of that org, or your own key set there. Null otherwise.
+    # `mode='elsewhere'` (#1499, step 5) — exactly one of the three: who lends the
+    # account that serves in THIS org (a member's e-mail, or `team <name>`); the org
+    # that lends it; the org where your own key that serves is set. Null otherwise.
+    lent_by: Optional[str] = None
     lent_by_org: Optional[str] = None
     your_account_in_org: Optional[str] = None
 

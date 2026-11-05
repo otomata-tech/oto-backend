@@ -230,10 +230,9 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     def _member_fetch(msub: str, morg: int, mprov: str) -> Optional[tuple]:
         """The caller's OWN account in the call's org: she manages it, no level to judge.
         Several: the named one, else the only one, else her default (D3), else
-        `ambiguous_account`. A SUSPENDED key is refused by name — it no longer hands
-        over to the team or org key (#1499)."""
-        # Named: that account alone (absent, the step hands over). Mono-account, or none
-        # listed: the row `''`.
+        `ambiguous_account`. A SUSPENDED key is skipped: the next step serves (#401);
+        NAMED, it is refused by name — another account than the named one never serves.
+        Named: that account alone (absent, the step hands over); none listed: `''`."""
         multi = cascade._is_multi_account(mprov, morg)
         lignes = ([(named_account if multi else "", False)]
                   if named_account is not None or not multi else
@@ -241,11 +240,10 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                    for a in credentials_store.list_accounts(
                        credentials_store.MEMBER, credentials_store.member_id(morg, msub),
                        mprov)] or [("", False)])
-        actives = (lignes if len(lignes) == 1 else    # one: suspension judged on its key
-                   [(a, d) for a, d in lignes
-                    if not db.member_instance_suspended(msub, morg, mprov, a)])
-        if not actives:
-            raise _suspendu(mprov, lignes[0][0])
+        actives = lignes if len(lignes) == 1 else [   # one: judged on its key, below
+            (a, d) for a, d in lignes if not db.member_instance_suspended(msub, morg, mprov, a)]
+        if not actives:   # all set aside: the next step serves, the echo says so
+            return session_org.note_call_trace(cle_suspendue=True)
         if len(actives) > 1:
             tranche = [a for a, d in actives if d]
             if len(tranche) != 1:
@@ -262,16 +260,18 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         eff = actives[0][0]
         key = db.get_member_api_key(msub, morg, mprov, eff)
         if key and len(lignes) == 1 and db.member_instance_suspended(msub, morg, mprov, eff):
+            if named_account is None:
+                return session_org.note_call_trace(cle_suspendue=True)   # None: hand over
             raise _suspendu(mprov, eff)
         return (key, eff) if key else None
 
     def _suspendu(mprov: str, eff: str) -> McpError:
         return McpError(ErrorData(
             code=INVALID_PARAMS,
-            message=(f"Your `{mprov}` key{' `' + eff + '`' if eff else ''} is suspended: "
-                     "reactivate it (oto_instance op='resume'), or name another account "
-                     "with `_account=`. It no longer hands over to a team or org key. "
-                     "Nothing was done."),
+            message=(f"Your `{mprov}` key{' `' + eff + '`' if eff else ''}, which the call "
+                     "names, is suspended: reactivate it (oto_instance op='resume'), or "
+                     "name another account with `_account=`, or name none. Nothing was "
+                     "done."),
             data={"code": niveaux.CODE_COMPTE_SUSPENDU, "retryable": False}))
 
     def _etape(entity_type: str, entity_id: str, mprov: str, ou: str, lire):
@@ -334,8 +334,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                                       instance_id=autrui.instance_id)
         raise _not_found(named_account, provider)
     choix.refuser_si_sous_le_niveau(win)
-    # STEP 5 (#1499): nothing local served, nothing named — an account of another org,
-    # before the tenant's and the platform's key (`ChoixDuParcours.cle_d_ailleurs`).
+    # STEP 5 (#1499): nothing local, nothing named — an account lent to her, or her key
+    # elsewhere, before the tenant's and platform's key (`ChoixDuParcours.cle_d_ailleurs`).
     servi = (choix.cle_d_ailleurs(lambda: cle_perso.interdite(active_org, porteur))
              if not named_account and (win is None or win.mode in ("tenant", "platform"))
              else None)

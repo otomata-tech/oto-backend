@@ -160,17 +160,21 @@ class CascadeProbe:
     org: Callable[[int, str], Optional[object]]
     tenant: Callable[[str, str], Optional[object]]
     platform: Callable[[Optional[str], str, Optional[int]], Optional[dict]]
-    #: STEP 5, for a status (`views.compte_d_ailleurs`): `carrier → {org, own}` or
-    #: None, from the accounts of other orgs read ONCE. None = no preload, read live.
+    #: STEP 5, for a status (`views.compte_d_ailleurs`): `carrier → provenance` or
+    #: None, from the accounts step 5 may serve read ONCE. None = no preload, read live.
     ailleurs: Optional[Callable[[str], Optional[dict]]] = None
 
 
-# A SUSPENDED personal key is PRESENT for the walk: since the switch to account rules
-# (#1499, L3) it no longer hands over to the team or org key below it — the resolver
-# refuses it by name (`account_suspended`, `access/resolve._member_fetch`), and the
-# status shows the rung that would serve, the suspended key.
+# A SUSPENDED member instance (batch 2 / ADR 0044 §KeyStack) is folded into the
+# probes: the key exists in the vault but the cascade treats it as absent — resolution
+# AND status skip the member rung, the level below takes over (decision of #1499: as
+# before the account rules). It stays listed by `oto_instance op=list`, reactivatable.
+# ⚠️ The member probe of the RESOLUTION path is `_member_fetch` (multi-account
+# selection): it returns the SAME verdict (#401). A NAMED suspended key is refused by
+# name there (`account_suspended`): another account than the named one never serves.
 PRESENCE_PROBE = CascadeProbe(
-    member=lambda s, o, p: ((True, "") if db.has_member_api_key(s, o, p) else None),
+    member=lambda s, o, p: ((True, "") if db.has_member_api_key(s, o, p)
+                            and not db.member_instance_suspended(s, o, p) else None),
     legacy_user=lambda s, p: (True if credentials_store.has_credential(
         credentials_store.USER, s, p) else None),
     group=lambda g, p: (True if group_store.has_group_secret(g, p) else None),
@@ -185,8 +189,9 @@ PRESENCE_PROBE = CascadeProbe(
 # own CascadeProbe on top — do not plug FETCH_PROBE as-is into a
 # new resolution path of a multi-account connector (review #399 F3).
 FETCH_PROBE = CascadeProbe(
-    member=lambda s, o, p: ((lambda k: (k, "") if k else None)(
-        db.get_member_api_key(s, o, p))),
+    member=lambda s, o, p: ((lambda k: (k, "") if k
+                             and not db.member_instance_suspended(s, o, p) else None)(
+                                 db.get_member_api_key(s, o, p))),
     legacy_user=lambda s, p: credentials_store.get_credential(
         credentials_store.USER, s, p),
     group=lambda g, p: group_store.get_group_secret(g, p),
@@ -258,8 +263,15 @@ def preloaded_presence_probe(sub: str, *, org: Optional[int],
     from .. import credentials_store as cs
 
     membre: set = set()
+    suspendues: set = set()
     if org is not None:
-        membre = {r["connector"] for r in cs.list_credentials(cs.MEMBER, cs.member_id(org, sub))}
+        for r in cs.list_credentials(cs.MEMBER, cs.member_id(org, sub)):
+            membre.add(r["connector"])
+            # Suspension only applies to the MONO account (account '') — what the
+            # original probe queries (`account=""`).
+            if (r.get("meta") or {}).get("suspended") in (True, "true") \
+                    and not r.get("account"):
+                suspendues.add(r["connector"])
 
     par_groupe = group_secret_map(groups)
 
@@ -278,15 +290,16 @@ def preloaded_presence_probe(sub: str, *, org: Optional[int],
     # providers, the `_platform_grant_meta` computation does not move.
     instances_par_provider = cs.list_all_platform_instances()
 
-    # STEP 5 (#1499): the accounts of other orgs open to the person, one read for all
-    # connectors — the status says « lent by <org> » / « your key in <org> ».
+    # STEP 5 (#1499): the accounts lent to the person (in her org, then elsewhere) and
+    # her keys in other orgs, read once for all connectors — the status says which.
     from . import comptes
-    d_ailleurs = comptes.comptes_hors_org(None, org, sub) if org is not None else []
+    d_ailleurs = comptes.candidats_etape5(None, org, sub) if org is not None else []
 
     return CascadeProbe(
         # The inventory only covers the CONTEXT org — the only one the walker reads.
         member=lambda s, o, p: (PRESENCE_PROBE.member(s, o, p) if o != org
-                                else (True, "") if p in membre else None),
+                                else (True, "") if p in membre and p not in suspendues
+                                else None),
         legacy_user=PRESENCE_PROBE.legacy_user,  # (#876) read at the source
         group=lambda g, p: (True if p in par_groupe.get(int(g), ()) else None),
         org=lambda o, p: (True if p in org_secrets else None),

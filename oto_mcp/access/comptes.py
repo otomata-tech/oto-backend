@@ -8,13 +8,15 @@ accounts of the step whose level (`access/niveaux.niveau`) covers what the call 
 one serves; two are settled by D3 (`niveaux.defaut_qui_tranche`) or refused
 `ambiguous_account`; none hands over to the next step, and if nothing at the right level
 serves at all, the call is refused `insufficient_level` — never the platform key in their
-place. Another person's account serves only NAMED (`autrui_nomme`).
+place. Another person's account serves NAMED (`autrui_nomme`); unnamed, only at step 5,
+when nothing local served: an account lent to her in her org, then her own key in another
+org, then an account another org lends her (`d_ailleurs_sans_nom`).
 
-`comptes_de`, `comptes_d_autrui` and `compte_de_la_ligne` are the only reads of the rules
-on the hot path (one query each), and the seam the tests replace.
+`comptes_des_lignes`, `comptes_d_autrui`, `comptes_hors_org` and `candidats_etape5` are
+the reads of the rules on the hot path (one query each), and the seams the tests replace.
 
-The echo of a call (`rappel_du_compte`) says which account served and, when it is another
-person's, whose (`lent_by`).
+The echo of a call (`rappel_du_compte`, or `compte_prete` noted at step 5) says which
+account served and, when it is another person's, whose (`lent_by`).
 """
 from __future__ import annotations
 
@@ -25,6 +27,10 @@ from .. import credentials_store, providers
 from ..connectors.comptes_heberges import PREFIXE_CANAL
 from . import niveaux
 from .niveaux import Compte, Regle
+
+
+def _iso(valeur) -> Optional[str]:
+    return valeur.isoformat() if hasattr(valeur, "isoformat") else valeur
 
 
 def _compte(row: dict) -> Compte:
@@ -40,9 +46,7 @@ def _compte(row: dict) -> Compte:
                   default_par=row.get("default_par"),
                   default_le=(str(row["default_le"]) if row.get("default_le") else None),
                   org_nom=row.get("org_nom"),
-                  pose_le=(row["pose_le"].isoformat() if hasattr(row.get("pose_le"),
-                                                                  "isoformat")
-                           else row.get("pose_le")))
+                  pose_le=_iso(row.get("pose_le")), prete_le=_iso(row.get("prete_le")))
 
 
 def comptes_des_lignes(porteur: str, lignes: list) -> dict:
@@ -69,6 +73,15 @@ def comptes_hors_org(connector: Optional[str], org_id: int, sub: str,
                                                                     account)]
 
 
+def candidats_etape5(connector: Optional[str], org_id: int, sub: str) -> list:
+    """Every account step 5 may serve (#1499), in one read per call: those of the call's
+    org a rule opens to `sub` (another person's or a team's), and those of other orgs she
+    may name (`comptes_hors_org`). The seam the tests replace."""
+    from ..db import regles_de_comptes
+    return [_compte(r) for r in regles_de_comptes.comptes_de_l_etape5(connector, sub,
+                                                                       org_id)]
+
+
 def comptes_de_l_etape(porteur: str, entity_type: str, entity_id: str,
                        lignes: list[tuple[str, bool]]) -> list:
     """The accounts of one step: its vault rows (`(account, is_default)`, read by the
@@ -88,10 +101,29 @@ def comptes_de_l_etape(porteur: str, entity_type: str, entity_id: str,
     return out
 
 
-def rang_a_l_etape5(compte: Compte, sub: str) -> tuple:
-    """The order of step 5 among accounts of other orgs: the caller's OWN key first,
-    then the most recently set (`pose_le`), as #172 did."""
-    return (compte.proprietaire == sub, compte.pose_le or "", compte.instance_id or 0)
+def rang_a_l_etape5(compte: Compte, sub: str, org: Optional[int]) -> tuple:
+    """The order of step 5 (#1499), highest first: an account of the CALL's org that a
+    rule lends her, then her OWN key in another org (#172), then an account another org
+    lends her. Within each, the most recent: the loan's rule (`prete_le`), the key's
+    setting (`pose_le`)."""
+    if compte.org_id is not None and compte.org_id == org:
+        groupe, date = 2, compte.prete_le
+    elif compte.proprietaire == sub:
+        groupe, date = 1, compte.pose_le
+    else:
+        groupe, date = 0, compte.prete_le
+    return (groupe, date or "", compte.instance_id or 0)
+
+
+def provenance(compte: Compte, sub: str, org: Optional[int]) -> dict:
+    """What a status or the context says of the account step 5 serves: `lent_by` (who
+    lends it in the call's org), `your_account_in_org` (her own key there) or
+    `lent_by_org` (the org that lends it) — one of the three."""
+    if compte.org_id is not None and compte.org_id == org:
+        return {"lent_by": niveaux.preteur(compte)}
+    nom = compte.org_nom or f"#{compte.org_id}"
+    return ({"your_account_in_org": nom} if compte.proprietaire == sub
+            else {"lent_by_org": nom})
 
 
 def sert_a_l_etape5(compte: Compte) -> bool:
@@ -102,19 +134,18 @@ def sert_a_l_etape5(compte: Compte) -> bool:
 def d_ailleurs_affiche(sub: str, org: Optional[int], porteur: str,
                        candidats: list) -> Optional[dict]:
     """What the STATUS says of step 5 for `porteur` (`credential_mode_for`, the
-    connector lists): `{org, own}` — the org of the account of another org that would
-    serve unnamed, and whether it is the caller's own key — or None. `candidats`: the
-    accounts of other orgs open to her (`comptes_hors_org`, read once by the caller).
-    A status reads no call: any level above `none` counts."""
+    connector lists): the `provenance` of the account that would serve unnamed, or None.
+    `candidats`: what step 5 may serve (`candidats_etape5`, read once by the caller). A
+    status reads no call: any level above `none` counts — the level its rules give,
+    without the roles that manage (no read per connector)."""
     if org is None:
         return None
     appelant = niveaux.Appelant(sub, org, None)
     ouverts = [c for c in candidats if c.connector == porteur and sert_a_l_etape5(c)
-               and niveaux.RANG[niveaux.niveau(appelant, c)] > 0]
+               and niveaux.RANG[niveaux.niveau(appelant, c, besoin="none")] > 0]
     if not ouverts:
         return None
-    c = max(ouverts, key=lambda c: rang_a_l_etape5(c, sub))
-    return {"org": c.org_nom or f"#{c.org_id}", "own": c.proprietaire == sub}
+    return provenance(max(ouverts, key=lambda c: rang_a_l_etape5(c, sub, org)), sub, org)
 
 
 class ChoixDuParcours:
@@ -194,27 +225,33 @@ class ChoixDuParcours:
         return None
 
     def d_ailleurs_sans_nom(self, cle_perso_interdite=lambda: False) -> Optional[Compte]:
-        """STEP 5 (#1499, D1 and #172): no local candidate served at steps 2 to 4 (named,
-        personal, team, org) — an account of ANOTHER org serves unnamed, at the level the
-        call requires: the caller's OWN key there first, else one a rule naming her opens;
-        of several, the most recently set (`pose_le`), as #172 did. Never before a local
+        """STEP 5 (#1499): no local candidate served at steps 2 to 4 (named, personal,
+        team, org) — an account lent to her serves unnamed, at the level the call
+        requires (under it, it does not serve): one of the call's org a rule lends her,
+        else her OWN key in another org (#172), else one another org lends her; of
+        several in a group, the most recent (`rang_a_l_etape5`). Never before a local
         account (the resolver calls it only once they all handed over); the response
-        says which served (`servir`). A hosted channel (no vault row) does not serve here. `cle_perso_interdite()`: the org forbids
-        personal keys (#1239) — no person's account serves; read only if one is a
-        candidate. None: nothing serves."""
+        says which served (`servir`; `lent_by` for a loan of the call's org). A hosted
+        channel (no vault row) does not serve here. `cle_perso_interdite()`: the org
+        forbids personal keys (#1239) — no person's account serves; read only if one is
+        a candidate. None: nothing serves."""
         org = self.appelant.org
         if org is None:
             return None
         porteur = providers.credential_provider(self.service)
         utilisables = [
-            c for c in comptes_hors_org(porteur, org, self.appelant.sub)
+            c for c in candidats_etape5(porteur, org, self.appelant.sub)
             if sert_a_l_etape5(c) and niveaux.suffit(self.niveau(c), self.besoin)]
         if any(c.owner_type == "member" for c in utilisables) and cle_perso_interdite():
             utilisables = [c for c in utilisables if c.owner_type != "member"]
         if not utilisables:
             return None
-        return self.servir(max(utilisables,
-                               key=lambda c: rang_a_l_etape5(c, self.appelant.sub)))
+        elu = max(utilisables, key=lambda c: rang_a_l_etape5(c, self.appelant.sub, org))
+        if elu.org_id == org:   # lent in the call's org: the echo says by whom
+            from .. import session_org
+            session_org.note_call_trace(compte_prete={
+                "account": elu.account, **provenance(elu, self.appelant.sub, org)})
+        return self.servir(elu)
 
     def cle_d_ailleurs(self, cle_perso_interdite) -> Optional[tuple]:
         """`(compte, key)` of step 5 (`d_ailleurs_sans_nom`), the key read from the vault;
@@ -277,22 +314,28 @@ def defauts_des_etapes(org: int, equipe: Optional[int]) -> list[dict]:
 
 
 def comptes_du_contexte(sub: str, org: Optional[int], equipe: Optional[int]) -> dict:
-    """The accounts the context names: those of OTHER orgs the caller may name — her own
-    key there (#172, `your_account_in_org`) and those a rule opens to her (D1:
-    `lent_by_org` and the level, nothing else of that org) —, and the defaults that settle
+    """The accounts the context names: those lent to her in her org (`lent_by`, #1499), and
+    those of OTHER orgs the caller may name — her own key there (#172,
+    `your_account_in_org`) and those a rule opens to her (D1: `lent_by_org` and the
+    level, nothing else of that org) —, each with `serves_unnamed`; and the defaults that settle
     a tie at the org's and the active team's step (D3: the account, who set it, when)."""
     if org is None:
         return {"to_name": [], "defaults": []}
     appelant = niveaux.Appelant(sub, org, equipe)
     a_nommer = []
-    for c in comptes_hors_org(None, org, sub):
+    for c in candidats_etape5(None, org, sub):
         detenu = niveaux.niveau(appelant, c)
         if niveaux.RANG[detenu] > 0:
-            a_nommer.append({"connector": c.connector, **niveaux.a_nommer(
-                c, detenu, propre=c.proprietaire == sub),
-                "_rang": rang_a_l_etape5(c, sub) if sert_a_l_etape5(c) else None})
+            entree = ({"account": c.account, "label": c.libelle,
+                       "instance": f"inst:{c.instance_id}", "level": detenu,
+                       **provenance(c, sub, org)} if c.org_id == org
+                      else niveaux.a_nommer(c, detenu, propre=c.proprietaire == sub))
+            a_nommer.append({"connector": c.connector, **entree,
+                             "_rang": (rang_a_l_etape5(c, sub, org) if sert_a_l_etape5(c)
+                                       else None)})
     # Step 5: of its connector, the one that serves unnamed when nothing local does —
-    # her own key first, then the most recently set (`d_ailleurs_sans_nom`).
+    # a loan of her org, then her own key elsewhere, then a loan of another org, the
+    # most recent in each (`d_ailleurs_sans_nom`).
     elu: dict = {}
     for e in a_nommer:
         if e["_rang"] is not None and (e["connector"] not in elu

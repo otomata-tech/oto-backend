@@ -148,20 +148,15 @@ def test_channel_config_reads_credential_owner_not_channel(monkeypatch):
 
 
 @pytest.mark.parametrize("authority", ["legacy", "chain"])
-def test_suspended_member_refuses_instead_of_handing_over(vault, monkeypatch, authority):
-    """#1499 : une clé personnelle SUSPENDUE ne passe plus la main à la clé d'équipe —
-    l'appel est refusé par son nom (`account_suspended`), sous les deux autorités."""
-    from oto_mcp.access import niveaux
+def test_suspended_member_never_beats_team(vault, monkeypatch, authority):
+    """Une clé personnelle SUSPENDUE est sautée : la clé d'équipe sert, sous les deux
+    autorités (décision de #1499 : comme avant la bascule)."""
     monkeypatch.setenv("OTO_L7_DECIDE", authority)
     monkeypatch.setattr(access, "current_group", lambda sub: 3)
     vault[("member", "7:u")] = "SUSPENDED_KEY"
     monkeypatch.setattr(credentials_store, "instance_suspended",
                         lambda et, *a, **k: et == "member")
-    with pytest.raises(McpError) as e:
-        rc = access.resolve_credential("serper", sub="u", emit_on_failure=False)
-        pytest.fail(f"servie malgré la suspension : {rc.mode} {rc.key}")
-    assert (e.value.error.data or {}).get("code") == niveaux.CODE_COMPTE_SUSPENDU
-    assert "GROUP_KEY" not in e.value.error.message
+    assert access.resolve_credential("serper", sub="u").key == "GROUP_KEY"
 
 
 @pytest.mark.parametrize("authority", ["legacy", "chain"])

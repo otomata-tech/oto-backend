@@ -55,7 +55,9 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   (`capabilities/me_account.py` ; `api_routes_account.py` supprimé). **Pas de face MCP** —
   l'identité d'une session MCP est `oto_whoami`, l'activité se lit par les lentilles de
   monitoring. `GET /api/me` rend profil + rôle plateforme + `providers` (accès effectif
-  par connecteur : mode/clé/quota) + `features.billing` + le couple **`active_*` / `home_*`** :
+  par connecteur : mode/clé/quota ; `mode: "elsewhere"` quand seul un compte prêté ou sa
+  clé d'une autre org sert, avec UN des champs `lent_by` (e-mail de la personne de l'org
+  qui prête, ou `team <nom>`), `lent_by_org` ou `your_account_in_org`) + `features.billing` + le couple **`active_*` / `home_*`** :
   `active_org`/`active_group` sont les valeurs EFFECTIVES de la requête (seam `current_org`,
   ADR 0023 — la consultation `X-Oto-Org` l'emporte), `home_*` le défaut persistant. Un front
   qui scope ses vues sur `home_org` affiche les données d'une autre org que celle qu'il
@@ -914,7 +916,10 @@ et mêmes bornes qu'une règle locale. Le refus d'une adresse est NEUTRE :
 `404 unknown_subject`, même message que l'adresse soit inconnue ou qu'elle ne porte aucun
 compte désignable (un compte de tenant tiers), pour ne rien dire de l'existence d'un
 compte. Ce compte sert la personne au niveau de sa règle : nommé, ou sans nom quand
-aucun compte de son org ne sert l'appel (étape 5, la réponse dit `lent_by_org`) ;
+aucun compte de son org ne sert l'appel (étape 5, la réponse dit `lent_by_org`). Une règle
+de la même org fait de même, et passe d'abord : à l'étape 5, un compte de l'org prêté à la
+personne (la réponse dit `lent_by`), puis sa propre clé d'ailleurs, puis un prêt d'une
+autre org, le plus récent dans chaque groupe ;
 `GET /api/me/connector-instances` le lui montre avec `lent_by_org` (le nom de l'org
 prêteuse) et `your_level`, rien d'autre de cette org (ni titulaire, ni auteur, ni autre
 compte) ; sa propre clé posée dans une autre org y figure avec `elsewhere_org`. Les trois

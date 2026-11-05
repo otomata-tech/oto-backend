@@ -165,8 +165,8 @@ def _paliers(sub: str, provider: str, org: Optional[int], want: str,
     a fallback (#673). Yielding instead of returning restores the fallback, without rewriting anything in
     the read.
 
-    The connector's notches (byo_user, org-shareable, declared platform tier) are read
-    at their source — they are properties of the
+    The connector's notches (byo_user, org-shareable, declared platform tier,
+    suspended instance) are read at their source — they are properties of the
     instance, not authorizations, and they hold on both sides of the window.
     """
     porteur = providers.credential_provider(provider)
@@ -177,8 +177,9 @@ def _paliers(sub: str, provider: str, org: Optional[int], want: str,
         if (credentials_store.has_credential(
                 credentials_store.MEMBER, credentials_store.member_id(org, sub),
                 porteur, account=None)
-                # A SUSPENDED key is picked like the walker's: the resolver refuses it by
-                # name (`account_suspended`), it no longer hands over (#1499).
+                # A SUSPENDED key is skipped, like the walker's: the next rung serves.
+                and not credentials_store.instance_suspended(
+                    credentials_store.MEMBER, credentials_store.member_id(org, sub), porteur)
                 and not cle_perso.interdite(org, porteur)):   # the org's policy (#1239)
             # The free-tier flag is only used if the chain stays silent.
             yield ChainPick("user", credentials_store.MEMBER,

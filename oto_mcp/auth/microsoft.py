@@ -66,9 +66,10 @@ GENERIC mechanics of multi-account connectors (`cardinality="multi"`): choice vi
 accounts (`access.resolve_credential`), removal via
 `DELETE /api/settings/api-keys/microsoft?account=…`.
 
-**Another person's account serves only when the call names it** (`_account=`, or an
-explicit `_instance=`), at the level its rules give, for the services the rule covers
-(#1499, `access/comptes.ChoixDuParcours.autrui_nomme`): never implicitly. Every response
+**Another person's account serves when the call names it** (`_account=`, or an explicit
+`_instance=`), at the level its rules give, for the services the rule covers (#1499,
+`access/comptes.ChoixDuParcours.autrui_nomme`); unnamed only at step 5, when nothing of
+the person, her team or her org serves (`d_ailleurs_sans_nom`). Every response
 says which account served and, when it is another person's, whose
 (`_account` + `lent_by`, `middleware/call_context._echo_account`). The rule is the
 COMMON one, resolved by `access.resolve_credential` like every connector.
@@ -737,7 +738,7 @@ def resolve_account(sub: str, service: str, account: Optional[str] = None):
     default account, otherwise a refusal that names the accounts (`McpError`).
     The person's OWN accounts first, then those of her active team, then of her org (the
     cascade's rungs, unnamed, each at the level the call requires); another person's
-    account only when the call NAMES it, at the level its rules give."""
+    account when the call NAMES it, at the level its rules give, or at step 5."""
     from .. import access  # lazy: avoids any import cycle at boot
 
     if service not in SERVICE_SCOPES:
@@ -857,7 +858,7 @@ def accounts_for(sub: str, service: Optional[str] = None) -> list[dict]:
     """The Microsoft accounts of the person in their context org, then those of her team
     and org (`shared`, `shared_accounts`) — ALL of them for the account, those that
     AUTHORIZED `service` for a service's card. Another person's account is not listed:
-    it serves only named. Vault rows (`account`, `meta`, `set_at`), no secret. A name appears
+    it serves named, or at step 5. Vault rows (`account`, `meta`, `set_at`), no secret. A name appears
     once, at the nearest level: the one a call naming it resolves."""
     from .. import access  # lazy
 

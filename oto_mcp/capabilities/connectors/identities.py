@@ -75,11 +75,12 @@ class Identity(BaseModel):
     # per-channel where Google is per-service.
     channel: Optional[str] = None
     # An account that is not the caller's own (a peer's, her team's, her org's, #1499):
-    # the level its rules give her — operable only NAMED (`_account=`), never her
-    # default. Absent on her own accounts (she manages them).
+    # the level its rules give her — operable NAMED (`_account=`), never her default;
+    # unnamed only when nothing of hers, her team's or her org's serves (step 5).
+    # Absent on her own accounts (she manages them).
     level: Optional[Literal["read", "write", "sensitive", "manage"]] = None
     owner: Optional[IdentityOwner] = None   # present with `level`
-    # An account of ANOTHER org (D1, #1499), operable only NAMED: lent to the caller by a
+    # An account of ANOTHER org (D1, #1499), operable named (unnamed at step 5): lent by a
     # rule naming her — the lending org's name, and nothing else of it…
     lent_by_org: Optional[str] = None
     # …or her OWN key set in another org (#172): that org's name.

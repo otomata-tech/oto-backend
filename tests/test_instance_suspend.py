@@ -1,13 +1,14 @@
 """Suspension d'instance (lot 2 / ADR 0044 §KeyStack).
 
-Une clé membre `suspended` n'est PAS servie, et ne passe plus la main à la clé
-d'équipe ou d'org (#1499) : la résolution la refuse en la nommant et dit le geste
-(la réactiver, ou nommer un autre compte). Elle reste listée et réactivable. Trois
-plans testés :
-- la cascade (`walk_cascade`) garde le barreau membre suspendu : la marche ne descend
-  pas à l'org à sa place (ce que le statut annonce = ce que la résolution juge) ;
-- la RÉSOLUTION RÉELLE (`resolve_credential` → `_member_fetch`, #401) lève le refus
-  nommé `account_suspended`, jamais la clé d'org ;
+Une clé membre `suspended` est SAUTÉE par la résolution de credential (le barreau
+du dessous prend le relais) mais reste listée et réactivable — décision de #1499 : comme
+avant la bascule sur les règles. La réponse dit quel barreau a servi. NOMMÉE, elle est
+refusée par son nom : on ne sert pas un autre compte que celui qu'on nomme. Trois plans
+testés :
+- la cascade (`walk_cascade`) saute le barreau membre suspendu ;
+- la RÉSOLUTION RÉELLE (`resolve_credential` → `_member_fetch`, #401) rend le même
+  verdict que les sondes — c'est le trou vécu : la sonde honorait la suspension,
+  le montage réel non (patron « fail-open + tests stubbés » du CLAUDE.md) ;
 - la capacité d'écriture (`_suspend_instance`) pose/lève le flag, garde SUB_ONLY,
   et 404 si aucune clé membre.
 
@@ -36,12 +37,11 @@ def _stub_member_and_org(monkeypatch, *, suspended):
 
 
 @pytest.mark.parametrize("probe", [access.PRESENCE_PROBE, access.FETCH_PROBE])
-def test_suspended_member_rung_does_not_hand_over(monkeypatch, probe):
+def test_suspended_member_rung_is_skipped(monkeypatch, probe):
     _stub_member_and_org(monkeypatch, suspended=True)
     win = access.cascade_winner("u1", "serper", org=1, group=None, probe=probe)
-    # la marche s'arrête à la clé membre (que la résolution refusera par son nom) :
-    # l'org ne la remplace pas
-    assert win is not None and win.mode == "user"
+    # la clé membre est mise de côté → l'org gagne
+    assert win is not None and win.mode == "org"
 
 
 @pytest.mark.parametrize("probe", [access.PRESENCE_PROBE, access.FETCH_PROBE])
@@ -51,14 +51,14 @@ def test_active_member_rung_wins(monkeypatch, probe):
     assert win is not None and win.mode == "user"
 
 
-def test_walk_keeps_suspended_rung_first_in_status(monkeypatch):
-    """Statut (walk complet) : le barreau suspendu reste en tête — la résolution le
-    juge (et le refuse) avant l'org, qui n'est jamais servie à sa place."""
+def test_walk_omits_suspended_rung_from_status(monkeypatch):
+    """Statut (walk complet) : le barreau suspendu ne figure PAS parmi les gagnants
+    (la résolution ne l'utilise pas) — seul l'org reste."""
     _stub_member_and_org(monkeypatch, suspended=True)
     # zoho = byo-only (pas de barreau plateforme → pas d'I/O plateforme)
     modes = [r.mode for r in access.walk_cascade(
         "u1", "zoho", org=1, group=None, probe=access.PRESENCE_PROBE, want="byo")]
-    assert modes == ["user", "org"]
+    assert modes == ["org"]
 
 
 # --- résolution réelle (#401) : resolve_credential de bout en bout -----------
@@ -85,22 +85,12 @@ def _wire_real_resolution(monkeypatch, *, suspended, org=1):
     monkeypatch.setattr(access.db, "insert_tool_call", lambda payload: None)
 
 
-def _refus_suspendu(provider):
-    from oto_mcp.mcp_errors import McpError
-    with pytest.raises(McpError) as e:
-        access.resolve_credential(provider, sub="u1", emit_on_failure=False)
-    return e.value.error
-
-
-def test_resolution_refuses_suspended_member_key_by_name(monkeypatch):
-    """Clé membre suspendue en coffre → refus NOMMÉ, qui dit quoi faire ; la clé d'org
-    présente n'est pas servie à sa place."""
+def test_resolution_skips_suspended_member_key(monkeypatch):
+    """Clé membre suspendue en coffre → le barreau org GAGNE la résolution réelle
+    (même verdict que FETCH_PROBE — c'est ce que le dashboard/KeyStack annonce)."""
     _wire_real_resolution(monkeypatch, suspended=True)
-    err = _refus_suspendu("serper")
-    assert err.data["code"] == access.niveaux.CODE_COMPTE_SUSPENDU
-    assert "`serper` key is suspended" in err.message
-    assert "oto_instance op='resume'" in err.message and "_account=" in err.message
-    assert "OK" not in err.message
+    rc = access.resolve_credential("serper", sub="u1")
+    assert rc.mode == "org" and rc.key == "OK"
 
 
 def test_resolution_uses_member_key_when_not_suspended(monkeypatch):
@@ -109,18 +99,50 @@ def test_resolution_uses_member_key_when_not_suspended(monkeypatch):
     assert rc.mode == "user" and rc.key == "MK"
 
 
-def test_resolution_multi_account_refuses_suspended_account(monkeypatch):
-    """Multi-compte (zoho) : le compte auto-sélectionné (unique) suspendu est refusé
-    par son nom aussi — la suspension se pose PAR compte (`SuspendInstanceInput.account`)."""
+def test_resolution_multi_account_skips_suspended_account(monkeypatch):
+    """Multi-compte (zoho) : le compte auto-sélectionné (unique) suspendu est sauté
+    aussi — la suspension se pose PAR compte (`SuspendInstanceInput.account`)."""
     _wire_real_resolution(monkeypatch, suspended=False)
     monkeypatch.setattr(access.credentials_store, "list_accounts",
                         lambda et, eid, p: [{"account": "a1", "meta": {}}])
     monkeypatch.setattr(access.db, "member_instance_suspended",
                         lambda s, o, p, account="", *a, **k: account == "a1")
-    err = _refus_suspendu("zoho")
-    assert err.data["code"] == access.niveaux.CODE_COMPTE_SUSPENDU
-    assert "`zoho` key `a1` is suspended" in err.message
-    assert "oto_instance op='resume'" in err.message
+    rc = access.resolve_credential("zoho", sub="u1")
+    assert rc.mode == "org" and rc.key == "OK"
+
+
+def test_la_reponse_dit_que_la_cle_suspendue_a_ete_sautee(monkeypatch):
+    """L'écho de la réponse dit quel barreau a servi, et que sa clé suspendue a été
+    sautée (`served_by`, `suspended_key_skipped`)."""
+    import asyncio
+
+    from oto_mcp import session_org
+    from oto_mcp.middleware import call_context
+    _wire_real_resolution(monkeypatch, suspended=True)
+    trace: dict = {}
+    tok = session_org.set_call_trace(trace)
+    try:
+        access.resolve_credential("serper", sub="u1")
+        assert asyncio.run(call_context._rappel_de_l_appel()) == {
+            "_account": "", "served_by": "org", "suspended_key_skipped": True}
+    finally:
+        session_org.reset_call_trace(tok)
+
+
+def test_une_cle_nommee_suspendue_reste_refusee(monkeypatch):
+    """Nommée (`_account=`), la clé suspendue est refusée par son nom — jamais un autre
+    compte à sa place (avant la bascule aussi, elle ne servait pas : refus « introuvable »
+    faute d'un compte du même nom plus bas)."""
+    from oto_mcp.mcp_errors import McpError
+    _wire_real_resolution(monkeypatch, suspended=False)
+    monkeypatch.setattr(access.credentials_store, "list_accounts",
+                        lambda et, eid, p: [{"account": "a1", "meta": {}}])
+    monkeypatch.setattr(access.db, "member_instance_suspended",
+                        lambda s, o, p, account="", *a, **k: account == "a1")
+    with pytest.raises(McpError) as e:
+        access.resolve_credential("zoho", sub="u1", account="a1", emit_on_failure=False)
+    assert e.value.error.data["code"] == access.niveaux.CODE_COMPTE_SUSPENDU
+    assert "`zoho` key `a1`" in e.value.error.message
 
 
 # --- capacité d'écriture -----------------------------------------------------

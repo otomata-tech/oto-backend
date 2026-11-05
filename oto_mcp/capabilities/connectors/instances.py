@@ -161,7 +161,8 @@ class ConnectorInstance(BaseModel):
     daily_quota: Optional[int] = None       # granted platform levels only
     # `http` instances only: the custom connector's card (`custom_api.py`). May be absent.
     custom_api: Optional[dict] = None
-    # An account of ANOTHER org (D1, #1499) — it serves only NAMED (`_account=`), and of
+    # An account of ANOTHER org (D1, #1499) — it serves named (`_account=`), or unnamed
+    # when nothing of your org does (step 5), and of
     # that org the listing says its name, nothing else (no owner, no author):
     # `lent_by_org` = a rule of that org opens it to you; `elsewhere_org` = your own
     # personal account there (#172).

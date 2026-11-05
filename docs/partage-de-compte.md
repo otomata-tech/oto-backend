@@ -56,17 +56,36 @@ L'ordre d'oto-core : le compte que l'appel **nomme** (`_account=` / `_instance=`
 sien, puis celui de son équipe ACTIVE, puis celui de l'org ; ne restent à chaque étape que
 les comptes actifs dont le niveau couvre ce que l'appel exige. Un compte sert ; deux au même
 étage sont refusés `ambiguous_account` (**D3**), sauf si un défaut tranche — le refus
-nomme les candidats par leur libellé et dit comment en nommer un. Puis les clés plateforme et
-le palier du tenant, inchangés.
+nomme les candidats par leur libellé et dit comment en nommer un. Puis l'**étape 5** (plus
+bas), puis les clés plateforme et le palier du tenant, inchangés.
 
-- Le compte d'autrui ne sert que **nommé**. Un nom se cherche d'abord dans l'org de
+- **Une clé personnelle suspendue est sautée** : l'étape suivante sert (équipe, org,
+  étape 5, plateforme), comme avant la bascule, et la réponse le dit (`served_by`,
+  `suspended_key_skipped`). Nommée, elle est refusée `account_suspended` : on ne sert pas
+  un autre compte que celui qu'on nomme.
+- Le compte d'autrui sert **nommé**. Un nom se cherche d'abord dans l'org de
   l'appel (ses étapes, puis les comptes des autres personnes), puis parmi les comptes
   d'autres orgs que l'appelant peut nommer (les siens, #172 ; ceux qu'une règle lui
   ouvre, D1) ; deux au même endroit : `ambiguous_account`. Un nom qu'aucun compte ne
   porte lève `CompteIntrouvable`. `_instance=inst:<id>` nomme aussi un compte.
-- Un compte d'une autre org ne sert **jamais sans nom**, même si l'appelant n'a aucun
-  compte local ; mais le refus (aucun compte, `ambiguous_account`,
-  `insufficient_level`) le **liste** parmi les candidats à nommer (`to_name` : libellé,
+- **L'étape 5** : quand rien de local ne sert aux étapes 2 à 4 (nommé, personnel, équipe
+  active, org) et rien n'est nommé, un compte prêté sert SANS NOM, au niveau que l'appel
+  exige (sous ce niveau, il ne sert pas), avant la clé du tenant et celle de la
+  plateforme, jamais devant un compte local. L'ordre : d'abord un compte de l'org de
+  l'appel qu'une règle lui ouvre (celui d'une autre personne, ou d'une équipe dont la
+  règle la nomme ; une seule sorte de règle, celles de la reprise comprises), puis sa
+  propre clé posée dans une autre org (#172), puis un compte qu'une autre org lui prête
+  (D1). Dans chaque groupe, le plus récent : pour un prêt, la date de la règle ; pour sa
+  clé, `set_at`. Les comptes de messagerie hébergée (Unipile) suivent le même ordre quand
+  la personne n'a pas de compte à elle sur le canal (`comptes_heberges.prete_sans_nom`) :
+  les anciens pointeurs, repris en règles, retrouvent ainsi leur usage. La réponse dit
+  qui prête (`lent_by` : l'e-mail de la personne, ou `team <nom>`), `lent_by_org` et
+  `level`, ou `your_account_in_org` ; le statut affiché porte `mode: "elsewhere"` et le
+  même champ ; `oto_context.accounts.to_name[].serves_unnamed` désigne le compte qui
+  sert. Une politique « clé perso interdite » (#1239) écarte à l'étape 5 les comptes de
+  personnes.
+- Un compte d'une autre org qui ne sert pas est **listé** par le refus (aucun compte,
+  `ambiguous_account`, `insufficient_level`) parmi les candidats à nommer (`to_name` : libellé,
   `inst:<id>`, « lent by <org> » et le niveau, ou « your own account in <org> : name it,
   or set the key in this org »). L'appelant ne voit rien d'autre de l'org prêteuse : ni
   ses autres comptes, ni ses membres (le refus de niveau dit « whoever manages it in
@@ -80,10 +99,10 @@ le palier du tenant, inchangés.
   l'appel ; la clé est celle de l'org prêteuse, qui n'est débitée de rien.
 - Des comptes vus mais tous sous le niveau exigé : refus `insufficient_level`, jamais la
   clé plateforme à leur place.
-- Ce qui a disparu : le pointeur Unipile vers le compte d'autrui, le passage de la main
-  d'une clé personnelle suspendue (la résolution lève `account_suspended`), la clé
-  personnelle d'une autre org servie AVANT l'équipe et l'org (#172 : elle sert
-  désormais à l'étape 5, après elles),
+- Ce qui a disparu : le pointeur Unipile vers le compte d'autrui (la règle reprise le
+  remplace, à l'étape 5, après le compte de la personne), la clé personnelle d'une autre
+  org servie AVANT l'équipe et l'org (#172 : elle sert désormais à l'étape 5, après
+  elles),
   l'équipe héritée par un projet partagé (#480), les prêts entre orgs hors des règles.
 
 ## La garde de niveau
@@ -172,8 +191,9 @@ tests (`tests/access/test_resolution_par_regles_1499.py`).
   neutrement, sans dire si le compte existe. Le journal porte `hors_org`. Le compte sert
   au niveau de la règle : nommé, ou SANS NOM à l'**étape 5** — quand aucun candidat
   local n'existe aux étapes 2 à 4 (nommé, personnel, équipe, org), avant la clé du
-  tenant et celle de la plateforme, jamais devant un compte local ; deux candidats
-  d'ailleurs → `ambiguous_account`, qui les nomme. La réponse le dit (`lent_by_org`, ou
+  tenant et celle de la plateforme, jamais devant un compte local, et après un compte de
+  l'org de l'appel qu'une règle lui prête ; de plusieurs candidats, le plus récent
+  (l'ordre complet : § Quel compte sert un appel). La réponse le dit (`lent_by_org`, ou
   `your_account_in_org` pour sa propre clé), `oto_context` aussi ; l'org de l'appel paie.
   La clé personnelle posée dans une autre org (#172) suit la même règle, pour tout
   connecteur. Une politique « clé perso interdite » (#1239) de l'org de l'appel écarte à

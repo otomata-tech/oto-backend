@@ -248,10 +248,11 @@ def _comptes_sans_regle_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sans base, chaque ligne de coffre a son compte (instance), SANS règle, et personne
     d'autre n'a de compte du même nom. La résolution lit le compte et les règles d'une
     ligne d'équipe ou d'org pour juger le niveau (`access/comptes`, #1499) ; un banc qui
-    double le coffre sans base n'a rien à y lire : il obtient les défauts d'oto-core
-    (membre d'équipe `sensitive`, membre d'org `read`). Un banc sur base réelle lit les
+    double le coffre sans base n'a rien à y lire : il obtient les défauts (membre
+    d'équipe `sensitive`, membre d'org `sensitive`). Un banc sur base réelle lit les
     vraies règles ; un banc qui teste les règles double lui-même ces lectures. Aucun
-    compte d'une autre org n'est nommable (`comptes_hors_org`)."""
+    compte d'une autre org n'est nommable (`comptes_hors_org`), rien ne sert à l'étape 5
+    (`candidats_etape5`)."""
     if os.environ.get("DATABASE_URL"):
         return
     from oto_mcp import access
@@ -272,6 +273,7 @@ def _comptes_sans_regle_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(access, "comptes_des_lignes", _sans_regle)
     monkeypatch.setattr(access, "comptes_d_autrui", lambda *a: [])
     monkeypatch.setattr(access, "comptes_hors_org", lambda *a, **k: [])
+    monkeypatch.setattr(access, "candidats_etape5", lambda *a, **k: [])
     monkeypatch.setattr(access, "defauts_des_etapes", lambda *a: [])
 
 

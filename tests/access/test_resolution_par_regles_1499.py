@@ -3,7 +3,8 @@
 Sans base : le coffre et les règles sont doublés (`access.comptes_des_lignes`,
 `access.comptes_d_autrui`), le reste de la résolution est le vrai chemin. Ce qu'on tient :
 - l'ordre : le compte nommé, puis le sien, puis l'équipe ACTIVE, puis l'org ;
-- un nom introuvable lève ; le compte d'autrui ne sert que nommé ;
+- un nom introuvable lève ; le compte d'autrui sert nommé, et sans nom à l'étape 5 quand
+  rien de local ne sert (prêté dans l'org, puis sa clé ailleurs, puis prêté d'ailleurs) ;
 - les décisions : D1 (entre orgs, coupé, en attente), D2 (équipe, non-membre coupé,
   tranchée), D3 (ambiguïté, sauf défaut, en attente) ;
 - `services` d'une règle Google ; une règle `none` ferme ; le niveau exigé par l'op ;
@@ -38,11 +39,13 @@ class _Monde:
         self.equipes_de: dict = {MOI: {EQUIPE}}
         self.defaut_par: dict = {}
         self.pose_le: dict = {}
+        self.prete_le: dict = {}
 
     def poser(self, etype, eid, connector, account="", *, regles=(), defaut=False,
-              defaut_par=None, pose_le=None):
+              defaut_par=None, pose_le=None, prete_le=None):
         self.coffre[(etype, str(eid), connector, account)] = f"K-{etype}-{eid}-{account}"
         self.pose_le[(etype, str(eid), account)] = pose_le
+        self.prete_le[(etype, str(eid), account)] = prete_le
         self.regles[(etype, str(eid), account)] = tuple(regles)
         if defaut:
             self.defauts.add((etype, str(eid), account))
@@ -61,7 +64,24 @@ class _Monde:
                 regles=self.regles.get((etype, eid, account), ()),
                 default_par=self.defaut_par.get((etype, eid, account)),
                 org_nom={ORG: "acme", AUTRE_ORG: "prêteuse"}.get(org),
-                pose_le=self.pose_le.get((etype, eid, account)))
+                pose_le=self.pose_le.get((etype, eid, account)),
+                prete_le=self.prete_le.get((etype, eid, account)))
+        return out
+
+    def pretes(self, connector, org, sub):
+        """Les comptes de l'org de l'appel — d'une autre personne ou d'une équipe —
+        qu'une règle lui ouvre (une règle qui la nomme, sur une de ses équipes, sur
+        l'org) : la première moitié de `regles_de_comptes.comptes_de_l_etape5`."""
+        out = []
+        for (etype, eid, con, acc) in self.coffre:
+            if (connector is not None and con != connector) or etype not in (
+                    "member", "group") or eid == f"{org}:{sub}":
+                continue
+            c = self.comptes(con, [(etype, eid, acc)])[(etype, eid, acc)]
+            if c.org_id == org and any(
+                    r.level != "none" and (r.user == sub or r.org or (
+                        r.group in self.equipes_de.get(sub, ()))) for r in c.regles):
+                out.append(c)
         return out
 
     def hors_org(self, connector, org, sub, account=None):
@@ -102,6 +122,8 @@ def monde(monkeypatch):
     monkeypatch.setattr(access, "comptes_des_lignes", m.comptes)
     monkeypatch.setattr(access, "comptes_d_autrui", m.autrui)
     monkeypatch.setattr(access, "comptes_hors_org", m.hors_org)
+    monkeypatch.setattr(access, "candidats_etape5",
+                        lambda con, org, sub: m.pretes(con, org, sub) + m.hors_org(con, org, sub))
 
     def _lignes(etype, eid, connector):
         return [{"account": a, "meta": {"is_default": (e, i, a) in m.defauts}}
@@ -202,12 +224,84 @@ def test_l_equipe_non_active_ne_sert_pas_sans_etre_nommee(monde, monkeypatch):
 
 # ── Le compte d'autrui ─────────────────────────────────────────────────────────
 
-def test_le_compte_d_autrui_ne_sert_que_nomme(monde):
+def _trace_de(f):
+    """`(résultat, relevé de l'appel)` de `f()`, sous un relevé posé comme à l'appel."""
+    toks = session_org.set_call_trace({})
+    try:
+        return f(), dict(session_org.current_call_trace())
+    finally:
+        session_org.reset_call_trace(toks)
+
+
+def test_le_compte_d_autrui_sert_nomme_et_sans_nom_faute_de_local(monde, appel):
+    """Étape 5 : rien de local — le compte qu'une collègue lui prête (règle qui la
+    nomme) sert SANS NOM, et la réponse dit qui le prête (`lent_by`, son e-mail)."""
     monde.poser("member", f"{ORG}:{COLLEGUE}", "zoho", "sa-boite",
                 regles=[_regle(user=MOI, level="sensitive")])
-    with pytest.raises(McpError):
-        _servi()                                   # jamais par défaut
+    appel("envoyer")
+    servi, trace = _trace_de(_servi)
+    assert servi == ("member", f"{ORG}:{COLLEGUE}", "sa-boite")
+    assert trace["compte_prete"] == {"account": "sa-boite", "lent_by": f"{COLLEGUE}@x.test"}
+    assert "compte_d_une_autre_org" not in trace
     assert _servi(account="sa-boite") == ("member", f"{ORG}:{COLLEGUE}", "sa-boite")
+
+
+def test_etape5_le_pret_de_l_org_ne_passe_jamais_devant_le_local(monde, appel):
+    monde.poser("member", f"{ORG}:{COLLEGUE}", "zoho", "sa-boite",
+                regles=[_regle(user=MOI, level="sensitive")], prete_le="2026-11-04")
+    appel("lire")
+    for etype, eid in (("org", ORG), ("group", EQUIPE), ("member", f"{ORG}:{MOI}")):
+        monde.poser(etype, eid, "zoho", f"local-{etype}")
+        assert _servi() == (etype, str(eid), f"local-{etype}")
+
+
+def test_etape5_de_deux_prets_de_l_org_le_plus_recent_sert(monde, appel):
+    """Le plus récent PRÊT, par la date de sa règle — pas par celle de la clé."""
+    monde.poser("member", f"{ORG}:{COLLEGUE}", "zoho", "ancien",
+                regles=[_regle(user=MOI, level="sensitive")],
+                prete_le="2026-03-01", pose_le="2026-10-01")
+    monde.poser("member", f"{ORG}:autre", "zoho", "recent",
+                regles=[_regle(org=True, level="sensitive")],
+                prete_le="2026-10-01", pose_le="2026-01-01")
+    appel("lire")
+    assert _servi() == ("member", f"{ORG}:autre", "recent")
+
+
+def test_etape5_l_ordre_des_trois_groupes(monde, appel):
+    """Prêté dans l'org, puis sa propre clé dans une autre org, puis prêté par une
+    autre org — quel que soit l'âge de chacun."""
+    monde.poser("member", f"{ORG}:{COLLEGUE}", "zoho", "pret-ici",
+                regles=[_regle(user=MOI, level="sensitive")], prete_le="2026-01-01")
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle", pose_le="2026-02-01")
+    monde.poser("org", AUTRE_ORG, "zoho", "pret-d-ailleurs",
+                regles=[_regle(user=MOI, level="sensitive")], prete_le="2026-11-01")
+    appel("lire")
+    assert _servi() == ("member", f"{ORG}:{COLLEGUE}", "pret-ici")
+    del monde.coffre[("member", f"{ORG}:{COLLEGUE}", "zoho", "pret-ici")]
+    assert _servi() == ("member", f"{AUTRE_ORG}:{MOI}", "ma-cle")
+    del monde.coffre[("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle")]
+    assert _servi() == ("org", str(AUTRE_ORG), "pret-d-ailleurs")
+
+
+def test_etape5_un_pret_sous_le_niveau_ne_sert_pas(monde, appel):
+    monde.poser("member", f"{ORG}:{COLLEGUE}", "zoho", "en-lecture",
+                regles=[_regle(user=MOI, level="read")], prete_le="2026-11-01")
+    appel("ecrire")
+    with pytest.raises(access.CredentialUnavailable):
+        _servi()
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle")   # le suivant sert
+    assert _servi() == ("member", f"{AUTRE_ORG}:{MOI}", "ma-cle")
+
+
+def test_etape5_le_compte_d_une_autre_equipe_que_lui_ouvre_une_regle(monde, appel):
+    """Un compte d'équipe dont elle n'est pas membre, ouvert par une règle (celles de la
+    reprise D2 comprises : une seule sorte de règle) — prêté par l'équipe."""
+    monde.poser("group", 99, "zoho", "boite-equipe",
+                regles=[_regle(user=MOI, level="sensitive")])
+    appel("lire")
+    servi, trace = _trace_de(_servi)
+    assert servi == ("group", "99", "boite-equipe")
+    assert trace["compte_prete"] == {"account": "boite-equipe", "lent_by": "team ventes"}
 
 
 def test_le_compte_d_autrui_sans_regle_est_introuvable(monde):
@@ -307,9 +401,11 @@ def test_etape5_sa_propre_cle_passe_devant_le_compte_prete(monde, appel):
 
 def test_etape5_de_deux_comptes_pretes_le_plus_recent_sert(monde, appel):
     monde.poser("member", f"{AUTRE_ORG}:{COLLEGUE}", "zoho", "ancien",
-                regles=[_regle(user=MOI, level="sensitive")], pose_le="2026-03-01")
+                regles=[_regle(user=MOI, level="sensitive")], prete_le="2026-03-01",
+                pose_le="2026-10-01")
     monde.poser("org", AUTRE_ORG, "zoho", "recent",
-                regles=[_regle(user=MOI, level="sensitive")], pose_le="2026-10-01")
+                regles=[_regle(user=MOI, level="sensitive")], prete_le="2026-10-01",
+                pose_le="2026-01-01")
     appel("lire")
     toks = session_org.set_call_trace({})
     try:
@@ -454,14 +550,21 @@ def test_oto_context_dit_les_comptes_a_nommer_et_les_defauts(monde, monkeypatch)
                 regles=[_regle(user=MOI, level="read")])
     monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle")
     monde.poser("org", AUTRE_ORG, "zoho", "pas-pour-moi")      # rien ne me l'ouvre
+    monde.poser("member", f"{ORG}:{COLLEGUE}", "zoho", "pret-ici",
+                regles=[_regle(user=MOI, level="write")])
     monkeypatch.setattr(access, "defauts_des_etapes", lambda o, g: [
         {"entity_type": "org", "entity_id": str(ORG), "connector": "zoho", "account": "us",
          "default_par": "l_admin", "default_le": "2026-11-04T10:00:00+00:00"}])
     vu = access.comptes_du_contexte(MOI, ORG, EQUIPE)
-    assert sorted((c["label"], c.get("lent_by_org"), c.get("your_account_in_org"),
-                   c["level"], c["serves_unnamed"]) for c in vu["to_name"]) == [
-        ("ma-cle", None, "prêteuse", "manage", True),     # sa clé passe devant
-        ("sa-boite", "prêteuse", None, "read", False)]
+    assert sorted((c["label"], c.get("lent_by"), c.get("lent_by_org"),
+                   c.get("your_account_in_org"), c["level"], c["serves_unnamed"])
+                  for c in vu["to_name"]) == [
+        ("ma-cle", None, None, "prêteuse", "manage", False),
+        ("pret-ici", f"{COLLEGUE}@x.test", None, None, "write", True),  # le prêt de l'org
+        ("sa-boite", None, "prêteuse", None, "read", False)]
+    monde.coffre.pop(("member", f"{ORG}:{COLLEGUE}", "zoho", "pret-ici"))
+    assert sorted((c["label"], c["serves_unnamed"]) for c in access.comptes_du_contexte(
+        MOI, ORG, EQUIPE)["to_name"]) == [("ma-cle", True), ("sa-boite", False)]
     monde.coffre.pop(("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle"))
     assert [c["serves_unnamed"] for c in access.comptes_du_contexte(
         MOI, ORG, EQUIPE)["to_name"]] == [True]
@@ -597,14 +700,24 @@ def test_le_statut_d_un_connecteur_servi_par_un_compte_prete(monde):
                 regles=[_regle(user=MOI, level="read")])
     assert access.credential_mode_for(MOI, "zoho", org=ORG, group=EQUIPE,
                                       probe=_sonde_vide()) == "elsewhere"
-    assert access.compte_d_ailleurs(MOI, "zoho", ORG) == {"org": "prêteuse", "own": False}
+    assert access.compte_d_ailleurs(MOI, "zoho", ORG) == {"lent_by_org": "prêteuse"}
 
 
 def test_le_statut_d_un_connecteur_servi_par_sa_cle_ailleurs(monde):
     monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle")
     assert access.credential_mode_for(MOI, "zoho", org=ORG, group=EQUIPE,
                                       probe=_sonde_vide()) == "elsewhere"
-    assert access.compte_d_ailleurs(MOI, "zoho", ORG) == {"org": "prêteuse", "own": True}
+    assert access.compte_d_ailleurs(MOI, "zoho", ORG) == {"your_account_in_org": "prêteuse"}
+
+
+def test_le_statut_d_un_connecteur_servi_par_un_pret_de_l_org(monde):
+    """Seul un prêt de l'org sert : le statut dit `elsewhere` et qui le prête."""
+    monde.poser("member", f"{ORG}:{COLLEGUE}", "zoho", "sa-boite",
+                regles=[_regle(user=MOI, level="read")])
+    monde.poser("member", f"{AUTRE_ORG}:{MOI}", "zoho", "ma-cle")
+    assert access.credential_mode_for(MOI, "zoho", org=ORG, group=EQUIPE,
+                                      probe=_sonde_vide()) == "elsewhere"
+    assert access.compte_d_ailleurs(MOI, "zoho", ORG) == {"lent_by": f"{COLLEGUE}@x.test"}
 
 
 def test_le_statut_reste_local_quand_un_compte_local_sert(monde):

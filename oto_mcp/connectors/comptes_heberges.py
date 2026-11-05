@@ -4,9 +4,11 @@
 A hosted account has no vault row: its rules target its SUB-INSTANCE
 (`db/sous_instances`) — connector `unipile`, owner `member` `<org>:<sub>`, account
 `canal:<PROVIDER>`. There is no pointer and no grant: another person's account serves
-only NAMED by the call (`_account=<account_id>` or `_instance=inst:<id>`), at the level
-the rules of its sub-instance give the caller (`access.niveau`), and is refused
-below it (`insufficient_level`). The caller's own account is resolved by
+NAMED by the call (`_account=<account_id>` or `_instance=inst:<id>`), at the level the
+rules of its sub-instance give the caller (`access.niveau`), refused below it
+(`insufficient_level`); and UNNAMED when the caller has no account of her own on the
+channel (`prete_sans_nom`, step 5 of #1499 — where the old pointers, taken over as
+rules, find their use again). The caller's own account is resolved by
 `connectors/identities`, which asks here only for the others'.
 """
 from __future__ import annotations
@@ -121,6 +123,28 @@ def autrui_nomme(sub: str, provider: str, *, account_id: str | None = None,
             raise access.refus_niveau(compte, detenu, exige)
         return autre["account_id"]
     return None
+
+
+def prete_sans_nom(sub: str, provider: str) -> str | None:
+    """Unnamed, with no account of her own on this channel: the `account_id` of another
+    person's account a rule lends her (step 5, #1499) — of her org first, then of
+    another org; the most recent loan in each (`access.rang_a_l_etape5`); at the level
+    the call requires (under it, it does not serve). The echo of the call says who lends
+    it. None: nothing is lent to her."""
+    from .. import access, session_org
+    appelant = _appelant(sub)
+    exige = access.besoin()
+    service = _service_du_canal(provider)
+    utilisables = [a for a in comptes_d_autrui_du_canal(sub, provider)
+                   if access.suffit(access.niveau(appelant, a["compte"], service,
+                                                  besoin=exige), exige)]
+    if not utilisables:
+        return None
+    elu = max(utilisables,
+              key=lambda a: access.rang_a_l_etape5(a["compte"], sub, appelant.org))
+    session_org.note_call_trace(compte_prete={
+        "account": elu["account_id"], **access.provenance(elu["compte"], sub, appelant.org)})
+    return elu["account_id"]
 
 
 def ref_du_canal(sub: str, provider: str):

@@ -18,8 +18,10 @@ team account, an org admin for the team and org accounts — and anyone a rule g
 
 A rule may name a person OUTSIDE the account's org (D1): designated by the email of an
 existing oto account, never a team or an org of elsewhere. Such an account serves that
-person only NAMED, at the rule's level; it is listed to her with the lending org's name
-and nothing else of that org. Refusing an address says nothing of whether an oto account
+person at the rule's level, named, or unnamed when nothing of her org serves; it is
+listed to her with the lending org's name and nothing else of that org. A rule in the
+account's own org works the same way: unnamed, the account serves only when nothing of
+the person, her team or her org does (the most recent loan first). Refusing an address says nothing of whether an oto account
 carries it (`unknown_subject`, one code and one message for every subject not found).
 
 A rule naming the owner of a personal account is refused before writing

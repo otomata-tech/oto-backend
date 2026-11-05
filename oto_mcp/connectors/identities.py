@@ -15,8 +15,9 @@ Common `Identity` contract = `{id, label, status, is_default, channel}` (`channe
 outside multi-channel — accepted leak: unipile is per-channel, Google per-service).
 An identity that is not the caller's own — her team's, her org's, a peer's — carries
 `level` (`read`|`write`|`sensitive`|`manage`: what the rules of that account give her,
-#1499) and `owner` (`{type, id}`, plus `label`/`name` when known). It is operable only
-NAMED (`_account=`, `_instance=`), never her default. An account of ANOTHER org (D1)
+#1499) and `owner` (`{type, id}`, plus `label`/`name` when known). It is operable NAMED
+(`_account=`, `_instance=`), never her default; unnamed only at step 5, when nothing of
+hers, her team's or her org's serves. An account of ANOTHER org (D1)
 is listed only when it is hers (`elsewhere_org`, #172) or a rule naming her opens it
 (`lent_by_org` + its owner's label) — nothing else of that org (`_hors_org`). There is no pointer and no grant:
 another person's hosted account is resolved by `resolve_operated_account_id` through
@@ -328,8 +329,9 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
     (a message sent under the wrong identity is irreversible); named
     `account_in_other_org` when it is the sub's own account linked to another org.
 
-    Unnamed: the sub's own account of the context org, or None. Another person's account
-    never serves unnamed."""
+    Unnamed: the sub's own account of the context org; without one, another person's
+    account a rule lends her (`comptes_heberges.prete_sans_nom`, step 5 of #1499: the
+    echo says who lends it); else None."""
     from .. import session_org
     pin = session_org.current_call_account()
     if pin:
@@ -355,7 +357,8 @@ def resolve_operated_account_id(sub: str, provider: str) -> str | None:
                                        for c in own.values()):
             return _own_unipile_account_id(sub, provider)
         raise _refus_autrui(provider, "`_instance=`")
-    return _own_unipile_account_id(sub, provider)
+    return (_own_unipile_account_id(sub, provider)
+            or comptes_heberges.prete_sans_nom(sub, provider))
 
 
 def _unipile_client(sub: str):
@@ -482,8 +485,10 @@ async def _unipile_list(sub: str, canal: str | None = None) -> list[dict]:
                 "channel": a["provider"],
             })
     # The accounts OTHER members of the org opened to the caller by their rules (#1499):
-    # listed with `level` (what their rules give) and `owner`, operable only NAMED
-    # (`_account=<id>`) — never the default. A shared BYO key may already list one:
+    # listed with `level` (what their rules give) and `owner`, operable NAMED
+    # (`_account=<id>`) — never the default; unnamed only without an account of the
+    # caller's own on the channel (`comptes_heberges.prete_sans_nom`). A shared BYO key
+    # may already list one:
     # its entry is annotated rather than duplicated.
     seen = {i["id"]: i for i in out}
     # Off-loop: the rules and the accounts are read in the database (#867).
@@ -519,7 +524,8 @@ async def _statut(account_id: str, live_status, mesure) -> dict:
 
 async def _unipile_select(sub: str, identity_id: str, canal: str | None = None) -> dict:
     """Chooses the operated identity among the sub's OWN accounts (another person's
-    account is never a default: it serves only named, `_account=`). `canal` (a channel
+    account is never a default: named, `_account=`, or as the last resort of step 5).
+    `canal` (a channel
     connector's card) = guard: you don't switch your Telegram identity from the WhatsApp
     card. The REAL channel is the ACCOUNT's, never the one we assume."""
     from .. import db

@@ -113,15 +113,15 @@ def test_le_statut_affiche_dit_le_compte_prete_sans_requete_par_connecteur(monde
     from oto_mcp.access import comptes
     _dans_l_org(monkeypatch, monde)
     lus = []
-    reel = comptes.comptes_hors_org
-    monkeypatch.setattr(access, "comptes_hors_org",
+    reel = comptes.candidats_etape5
+    monkeypatch.setattr(access, "candidats_etape5",
                         lambda *a, **k: lus.append(a) or reel(*a, **k))
     sonde = access.preloaded_presence_probe(monde["moi"], org=monde["x"], groups=[])
     assert len(lus) == 1
     assert access.credential_mode_for(monde["moi"], "zoho", org=monde["x"], group=None,
                                       probe=sonde) == "elsewhere"
     vu = access.compte_d_ailleurs(monde["moi"], "zoho", monde["x"], sonde)
-    assert vu["own"] is False and vu["org"].startswith("Preteuse")
+    assert list(vu) == ["lent_by_org"] and vu["lent_by_org"].startswith("Preteuse")
     assert sonde.ailleurs("hubspot") is None
     assert len(lus) == 1
 
@@ -148,3 +148,69 @@ def test_la_liste_dit_elsewhere_quand_seule_l_etape_5_sert(monde, monkeypatch):
     ligne = next(c for c in out["connectors"] if c["name"] == "payfit")
     assert ligne["credential"]["level"] == "elsewhere"
     assert CredentialPresence(**ligne["credential"]).level == "elsewhere"
+
+
+# ── Étape 5 : un compte de la MÊME org qu'une règle lui ouvre (#1499) ────────────
+
+def _pret_dans_l_org(monde, sub, account, connector="zoho", **sujet):
+    """La clé de `sub` (membre de l'org X) posée et prêtée par une règle de X."""
+    from oto_mcp import credentials_store, db
+    from oto_mcp.db import regles_de_comptes
+    from oto_mcp.org_store import members
+    db.upsert_user(sub, email=f"{sub}@x.test", name=sub)
+    members.add_org_member(monde["x"], sub, "org_member")
+    credentials_store.set_credential("member", f"{monde['x']}:{sub}", connector, "k-" + sub,
+                                     set_by=sub, meta={}, account=account)
+    inst = regles_de_comptes.comptes_des_lignes(
+        connector, [("member", f"{monde['x']}:{sub}", account)])[0]["instance_id"]
+    regles_de_comptes.poser_regle(monde["x"], inst, level="sensitive", acteur=sub,
+                                  **(sujet or {"subject_user": monde["moi"]}))
+    return inst
+
+
+def test_le_pret_de_l_org_sert_sans_nom_avant_celui_d_une_autre_org(monde, monkeypatch):
+    """Rien de local : le compte qu'une collègue lui prête dans SON org sert avant celui
+    que Y lui prête ; la réponse dit qui le prête (`lent_by`)."""
+    from oto_mcp import session_org
+    _dans_l_org(monkeypatch, monde)
+    collegue = f"collegue_{monde['moi']}"
+    _pret_dans_l_org(monde, collegue, "sa-boite")
+    trace: dict = {}
+    tok = session_org.set_call_trace(trace)
+    try:
+        rc = _resoudre(monde)
+    finally:
+        session_org.reset_call_trace(tok)
+    assert (rc.entity_type, rc.entity_id, rc.account) == (
+        "member", f"{monde['x']}:{collegue}", "sa-boite")
+    assert trace["compte_prete"] == {"account": "sa-boite", "lent_by": f"{collegue}@x.test"}
+
+
+def test_de_deux_prets_de_l_org_la_regle_la_plus_recente_sert(monde, monkeypatch):
+    """La date du PRÊT (la règle, `prete_le`) ordonne, pas l'ordre des comptes — une
+    règle sur son équipe active compte comme une règle qui la nomme."""
+    from oto_mcp import access, group_store
+    from oto_mcp.db._conn import _connect
+    _dans_l_org(monkeypatch, monde)
+    equipe = group_store.create_group(monde["x"], f"g_{monde['moi']}")
+    group_store.add_group_member(equipe, monde["moi"])
+    monkeypatch.setattr(access, "current_group", lambda sub: equipe)
+    a, b = f"a_{monde['moi']}", f"b_{monde['moi']}"
+    _pret_dans_l_org(monde, b, "recent", subject_group=equipe)
+    vieux = _pret_dans_l_org(monde, a, "ancien")          # compte plus récent, prêt ancien
+    with _connect() as conn:
+        conn.execute("UPDATE connector_account_rules SET created_at = now() - "
+                     "interval '1 day' WHERE instance_id = %s", (vieux,))
+    assert _resoudre(monde).account == "recent"
+
+
+def test_le_statut_dit_elsewhere_et_qui_prete_dans_l_org(monde, monkeypatch):
+    from oto_mcp import access
+    _dans_l_org(monkeypatch, monde)
+    collegue = f"c_{monde['moi']}"
+    _pret_dans_l_org(monde, collegue, "sa-boite")
+    sonde = access.preloaded_presence_probe(monde["moi"], org=monde["x"], groups=[])
+    assert access.credential_mode_for(monde["moi"], "zoho", org=monde["x"], group=None,
+                                      probe=sonde) == "elsewhere"
+    assert access.compte_d_ailleurs(monde["moi"], "zoho", monde["x"], sonde) == {
+        "lent_by": f"{collegue}@x.test"}

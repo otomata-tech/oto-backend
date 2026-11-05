@@ -2,9 +2,11 @@
 
 Plus de prêt ni de pointeur : le compte d'autrui a une sous-instance (connecteur
 `unipile`, propriétaire `member` `<org>:<sub>`, compte `canal:<PROVIDER>`), et les règles
-posées sur elle disent à quel niveau il sert les autres. Il ne sert que NOMMÉ par l'appel
+posées sur elle disent à quel niveau il sert les autres. Il sert NOMMÉ par l'appel
 (`_account=` ou `_instance=inst:<id>`), au niveau qu'exige l'op ; sans règle il ne sert
-pas, sous le niveau il est refusé `insufficient_level`, non nommé il ne sert jamais.
+pas, sous le niveau il est refusé `insufficient_level`. Non nommé, il ne sert que si la
+personne n'a pas de compte à elle sur le canal (étape 5) : les pointeurs d'avant, repris
+en règles, retrouvent ainsi leur usage — prêté dans l'org d'abord, le plus récent.
 Toutes les valeurs sont fictives.
 """
 import pytest
@@ -131,9 +133,49 @@ def test_une_regle_read_refuse_l_envoi_insufficient_level(monde, nomme, monkeypa
     assert data["managed_by"] == "proprio@exemple.test"
 
 
-def test_non_nomme_il_ne_sert_pas(monde):
+def test_non_nomme_son_propre_compte_passe_devant(monde):
     monde["regles"] = (Regle(user=MOI, group=None, org=False, level="manage"),)
     assert unipile_tool.unipile_client("LINKEDIN").account_id == "OWN"
+
+
+def _sans_compte_a_moi(monkeypatch):
+    db = unipile_tool.db
+    monkeypatch.setattr(db, "get_unipile_account_id", lambda sub, org, prov: None)
+    monkeypatch.setattr(db, "list_unipile_accounts", lambda sub: [])
+    monkeypatch.setattr(ci, "comptes_dans_une_autre_org", lambda sub, prov: [])
+    monkeypatch.setattr(access, "libelle_de_personne", lambda sub: f"{sub}@exemple.test")
+
+
+def test_pointeur_repris_le_pret_sert_sans_nom_faute_de_compte_a_moi(monde, monkeypatch):
+    """Le pointeur d'avant (j'opérais le LinkedIn de proprio), repris en règle sur sa
+    sous-instance : sans compte à moi, il sert SANS NOM, et l'écho dit qui le prête."""
+    _sans_compte_a_moi(monkeypatch)
+    monde["regles"] = (Regle(user=MOI, group=None, org=False, level="sensitive"),)
+    monde["besoin"] = "sensitive"
+    trace: dict = {}
+    tok = session_org.set_call_trace(trace)
+    try:
+        assert unipile_tool.unipile_client("LINKEDIN").account_id == "AUTRUI"
+    finally:
+        session_org.reset_call_trace(tok)
+    assert trace["compte_prete"] == {"account": "AUTRUI", "lent_by": "proprio@exemple.test"}
+
+
+def test_sans_nom_le_pret_de_l_org_passe_devant_celui_d_ailleurs(monde, monkeypatch):
+    _sans_compte_a_moi(monkeypatch)
+    monde["regles"] = (Regle(user=MOI, group=None, org=False, level="read"),)
+    monde["hors_org"] = (Regle(user=MOI, group=None, org=False, level="read"),)
+    assert unipile_tool.unipile_client("LINKEDIN").account_id == "AUTRUI"
+    monde["regles"] = ()                      # plus de prêt dans l'org : celui d'ailleurs
+    assert unipile_tool.unipile_client("LINKEDIN").account_id == "LOIN"
+
+
+def test_sans_nom_un_pret_sous_le_niveau_ne_sert_pas(monde, monkeypatch):
+    _sans_compte_a_moi(monkeypatch)
+    monde["regles"] = (Regle(user=MOI, group=None, org=False, level="read"),)
+    monde["besoin"] = "sensitive"
+    with pytest.raises(McpError, match="Connect your Linkedin account"):
+        unipile_tool.unipile_client("LINKEDIN")
 
 
 def test_proprietaire_en_pause_il_ne_sert_plus(monde, nomme, monkeypatch):

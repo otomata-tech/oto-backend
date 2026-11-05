@@ -163,6 +163,21 @@ SELECT i.id AS instance_id, i.owner_type, i.owner_id, i.connector, i.account, i.
 """
 
 
+# The rules that open an account to `%(sub)s`: one naming her, one on a team she is a
+# member of, one on the whole org — what a LOAN is, whatever its origin.
+_OUVRE_A_SUB = (
+    "r.level <> 'none' AND (r.subject_user = %(sub)s OR r.subject_org "
+    "OR r.subject_group IN (SELECT gm.group_id FROM org_group_members gm "
+    "                        WHERE gm.sub = %(sub)s))")
+
+# `_COMPTES` plus `prete_le`: when the most recent rule that opens the account to
+# `%(sub)s` was set — the date of the loan, which orders step 5 (#1499).
+_COMPTES_PRETES = _COMPTES.replace(
+    "c.set_at AS pose_le,",
+    "c.set_at AS pose_le, (SELECT max(r.created_at) FROM connector_account_rules r "
+    f"WHERE r.instance_id = i.id AND {_OUVRE_A_SUB}) AS prete_le,")
+
+
 def comptes_des_lignes(connector: str, lignes: list[tuple[str, str, str]]) -> list[dict]:
     """Les comptes vivants (instances) de ces lignes de coffre
     (`(entity_type, entity_id, account)` de `connector`), avec leurs règles."""
@@ -183,9 +198,33 @@ def comptes_d_autrui(connector: str, org_id: int, sub: str, account: str) -> lis
     filtre = ("i.owner_type = 'member' AND starts_with(i.owner_id, %(prefixe)s) "
               "AND i.owner_id <> %(mien)s AND i.account = %(account)s")
     with _connect() as conn:
-        return conn.execute(_COMPTES.format(filtre=filtre), {
+        return conn.execute(_COMPTES_PRETES.format(filtre=filtre), {
             "connector": connector, "prefixe": f"{org_id}:", "mien": f"{org_id}:{sub}",
-            "account": account}).fetchall()
+            "account": account, "sub": sub}).fetchall()
+
+
+# Accounts of OTHER orgs than `%(org)s` that `%(sub)s` may name: her own key there (#172)
+# and those a rule NAMING her opens (D1) — a person's only while its owner is a member.
+_HORS_ORG = (
+    "(i.id IN (SELECT r.instance_id FROM connector_account_rules r "
+    "          WHERE r.subject_user = %(sub)s AND r.level <> 'none' "
+    "            AND r.org_id <> %(org)s) "
+    " OR (i.owner_type = 'member' AND NOT starts_with(i.owner_id, %(prefixe)s) "
+    "     AND substr(i.owner_id, strpos(i.owner_id, ':') + 1) = %(sub)s)) "
+    "AND (i.owner_type <> 'member' OR EXISTS (SELECT 1 FROM org_members m "
+    "     WHERE i.owner_id ~ '^[0-9]+:' "
+    "       AND m.org_id = split_part(i.owner_id, ':', 1)::bigint "
+    "       AND m.sub = substr(i.owner_id, strpos(i.owner_id, ':') + 1)))")
+
+# Accounts of the org `%(org)s` — another person's, or a team's — that a rule of that org
+# OPENS to `%(sub)s`, whatever the rule's origin (#1499). Their level is judged by the
+# resolver (a rule on a team counts only for her active team, `access/niveaux`).
+_PRETS_DE_L_ORG = (
+    f"i.id IN (SELECT r.instance_id FROM connector_account_rules r "
+    f"          WHERE r.org_id = %(org)s AND {_OUVRE_A_SUB}) "
+    "AND ((i.owner_type = 'member' AND starts_with(i.owner_id, %(prefixe)s) "
+    "      AND i.owner_id <> %(mien)s) "
+    "     OR (i.owner_type = 'group' AND g.org_id = %(org)s))")
 
 
 @lecture_d_appel
@@ -196,28 +235,30 @@ def comptes_hors_org(connector: Optional[str], sub: str, org_id: int,
     NOMME lui ouvre (D1, #1499). Un compte personnel n'y figure que si son propriétaire
     est encore membre de son org. `connector` None : tous les connecteurs (la liste des
     comptes). `account` : seulement ceux de ce nom. Ils servent nommés, et sans nom à
-    l'étape 5 quand rien de local ne sert (`access/comptes`).
+    l'étape 5 (`comptes_de_l_etape5`). Lue UNE fois par appel (`lecture_d_appel`)."""
+    filtre = _HORS_ORG + (" AND i.account = %(account)s" if account is not None else "")
+    with _connect() as conn:
+        return conn.execute(_COMPTES_PRETES.format(filtre=filtre), {
+            "connector": connector, "sub": sub, "org": int(org_id),
+            "prefixe": f"{org_id}:", "account": account}).fetchall()
+
+
+@lecture_d_appel
+def comptes_de_l_etape5(connector: Optional[str], sub: str, org_id: int) -> list[dict]:
+    """Tout ce que l'étape 5 peut servir sans nom (#1499), en UNE requête : les comptes
+    de l'org `org_id` qu'une règle de cette org ouvre à `sub` (d'une autre personne ou
+    d'une équipe) et ceux d'autres orgs qu'il peut nommer (`comptes_hors_org`), chacun
+    avec `prete_le`. `connector` None : tous (la sonde préchargée des listes).
 
     Lue UNE fois par appel (`lecture_d_appel`) : la sonde préchargée de l'étape 5
     (`cascade.preloaded_presence_probe`) est rebâtie à chaque `status_for` d'un même
     appel — la liste `include=card` en fait plusieurs, et sans cela relisait la base
     à chacun (#1245)."""
-    filtre = (
-        "(i.id IN (SELECT r.instance_id FROM connector_account_rules r "
-        "          WHERE r.subject_user = %(sub)s AND r.level <> 'none' "
-        "            AND r.org_id <> %(org)s) "
-        " OR (i.owner_type = 'member' AND NOT starts_with(i.owner_id, %(prefixe)s) "
-        "     AND substr(i.owner_id, strpos(i.owner_id, ':') + 1) = %(sub)s)) "
-        "AND (i.owner_type <> 'member' OR EXISTS (SELECT 1 FROM org_members m "
-        "     WHERE i.owner_id ~ '^[0-9]+:' "
-        "       AND m.org_id = split_part(i.owner_id, ':', 1)::bigint "
-        "       AND m.sub = substr(i.owner_id, strpos(i.owner_id, ':') + 1)))")
-    if account is not None:
-        filtre += " AND i.account = %(account)s"
+    filtre = f"(({_PRETS_DE_L_ORG}) OR ({_HORS_ORG}))"
     with _connect() as conn:
-        return conn.execute(_COMPTES.format(filtre=filtre), {
+        return conn.execute(_COMPTES_PRETES.format(filtre=filtre), {
             "connector": connector, "sub": sub, "org": int(org_id),
-            "prefixe": f"{org_id}:", "account": account}).fetchall()
+            "prefixe": f"{org_id}:", "mien": f"{org_id}:{sub}"}).fetchall()
 
 
 def defauts_des_etapes(org_id: int, group_id: Optional[int]) -> list[dict]:

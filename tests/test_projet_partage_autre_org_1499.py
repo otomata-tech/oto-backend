@@ -191,15 +191,13 @@ def test_le_membre_de_l_org_n_est_pas_touche(monde, monkeypatch):
     assert (rc.mode, rc.entity_id) == ("org", str(monde["org_a"]))
 
 
-# ── Une clé personnelle SUSPENDUE refuse, elle ne passe plus la main ───────────
+# ── Une clé personnelle SUSPENDUE est sautée, la suivante sert ─────────────────
 
-def test_sa_cle_suspendue_refuse_account_suspended_au_lieu_de_la_cle_d_org(
-        monde, monkeypatch):
-    """Membre de l'org A, sa clé personnelle y est suspendue : l'appel est refusé par
-    son nom (`account_suspended`), jamais servi par la clé d'org en dessous."""
+def test_sa_cle_suspendue_est_sautee_et_la_cle_d_org_sert(monde, monkeypatch):
+    """Membre de l'org A, sa clé personnelle y est suspendue : elle est sautée, la clé
+    d'org en dessous sert (décision de #1499 : comme avant la bascule), et le relevé de
+    l'appel le dit (`cle_suspendue`, d'où l'écho `suspended_key_skipped`)."""
     from oto_mcp import access, credentials_store, db, org_store
-    from oto_mcp.access import niveaux
-    from oto_mcp.mcp_errors import McpError
     m = monde
     org_store.add_org_member(m["org_a"], m["benef"])
     db.set_member_api_key(m["benef"], m["org_a"], CONNECTEUR, "SA-CLE")
@@ -208,8 +206,12 @@ def test_sa_cle_suspendue_refuse_account_suspended_au_lieu_de_la_cle_d_org(
         CONNECTEUR, "", {"suspended": "true"})
     monkeypatch.setattr(access, "current_org", lambda sub: m["org_a"])
     monkeypatch.setattr(access, "current_group", lambda sub: None)
-    with pytest.raises(McpError) as e:
+    trace: dict = {}
+    tok = session_org.set_call_trace(trace)
+    try:
         rc = access.resolve_credential(CONNECTEUR, "byo", sub=m["benef"],
                                        emit_on_failure=False)
-        pytest.fail(f"clé servie malgré la suspension : {rc.mode}:{rc.entity_id}")
-    assert (e.value.error.data or {}).get("code") == niveaux.CODE_COMPTE_SUSPENDU
+    finally:
+        session_org.reset_call_trace(tok)
+    assert (rc.mode, rc.entity_id) == ("org", str(m["org_a"]))
+    assert trace["cle_suspendue"] is True

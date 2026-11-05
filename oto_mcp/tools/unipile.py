@@ -933,9 +933,10 @@ def unipile_client(provider: str = "LINKEDIN"):
     1st account → **cross-user impersonation** (security audit 2026-06-18). We require the
     per-user credential, otherwise an actionable McpError. Reused by tools/whatsapp.py.
 
-    ONLY exception (#1499): another member's account of the org, NAMED by the call
-    (`_account=`/`_instance=`) and served at the level the rules of its sub-instance
-    give the caller (refused `insufficient_level` below it) — resolved by
+    ONLY exception (#1499): another person's account a rule opens to the caller, NAMED by
+    the call (`_account=`/`_instance=`), or unnamed when she has no account of her own on
+    the channel (step 5), served at the level the rules of its sub-instance give the
+    caller (refused `insufficient_level` below it when named) — resolved by
     `connector_identities.resolve_operated_account_id`, on every call. Limitation: if
     the owner is on a DIFFERENT Unipile key than the caller (personal BYO ≠ shared
     key), the Unipile API will answer 404 on the account_id — error surfaced as
@@ -965,7 +966,7 @@ def unipile_client(provider: str = "LINKEDIN"):
     # Project pin (#57): if the active project pins an unipile account, it takes precedence
     # over the per-channel default — BUT only if it belongs to THIS user IN THIS org
     # (anti-impersonation + member scope ADR 0033), AND to the requested channel. Another
-    # member's account is never served by a project pin: it serves only NAMED by the call.
+    # member's account is never served by a project pin: named by the call, or step 5.
     # Otherwise default (fail-soft).
     org = access.current_org(sub)
     # Same name duality as on the anonymous path (see `_project_operated_account`):

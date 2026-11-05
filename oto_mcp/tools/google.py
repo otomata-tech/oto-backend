@@ -1,6 +1,6 @@
 """The Google account — the carrier that the services (gmail, drive, sheets, calendar,
 tasks, chat since the 2026-09-26 split; bigquery since 2026-10-02; google_ads since
-2026-10-08) borrow.
+2026-10-08; youtube since 2026-11-04) borrow.
 
 A single, read-only tool: `google_accounts` — the connected accounts and, for
 each, the services it has AUTHORISED. This is the question that did not exist before the

@@ -183,6 +183,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "bigquery",
     # eighth service (2026-10-08) — same shape, `adwords` consent only, read-only tools.
     "google_ads",
+    # ninth service (2026-11-04) — same shape, YouTube consent only (Data + Analytics).
+    "youtube",
     # --- open-data / no credential ------------------------------------------
     # Unrelated public sources → distinct connectors (formerly `fr_open`, which
     # merged them: an incoherent "open data" bag, activating one activated the other).

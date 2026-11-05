@@ -39,8 +39,8 @@ CONNECTOR = _c(
     # vault holds one row per address. Declared here, not in a cross-cutting list.
     cardinality="multi", account_axis_static=True,
     label="Google account",
-    help="the Google account that Gmail, Drive, Sheets, Calendar, Tasks, Chat, BigQuery "
-         "and Google Ads borrow — each service connects from its own card",
+    help="the Google account that Gmail, Drive, Sheets, Calendar, Tasks, Chat, BigQuery, "
+         "Google Ads and YouTube borrow — each service connects from its own card",
     modules=("google",),
 )
 
@@ -52,7 +52,7 @@ DESCRIPTION = (
     "Your Google account, via OAuth: the carrier that the Google services borrow. "
     "Each connected Google address becomes a distinct account in the vault — "
     "several consents, several accounts — and each service (Gmail, Drive, "
-    "Sheets, Calendar, Tasks, Chat, BigQuery, Google Ads) is authorised from its own card, with only its scopes."
+    "Sheets, Calendar, Tasks, Chat, BigQuery, Google Ads, YouTube) is authorised from its own card, with only its scopes."
 )
 
 

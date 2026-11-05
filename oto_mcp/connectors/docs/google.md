@@ -1,6 +1,6 @@
 ## prerequisite — the Google account the services borrow
 
-this connector is the **account**: the Google address, its token, its default account. since the 2026-09-26 split, each service — Gmail, Drive, Sheets, Calendar, Tasks, Chat, BigQuery, Google Ads — is a connector in its own right, with **its own** consent (its scopes only): authorise them from their card, one by one, on the same account.
+this connector is the **account**: the Google address, its token, its default account. since the 2026-09-26 split, each service — Gmail, Drive, Sheets, Calendar, Tasks, Chat, BigQuery, Google Ads, YouTube — is a connector in its own right, with **its own** consent (its scopes only): authorise them from their card, one by one, on the same account.
 - you can connect **several** Google accounts; each service tool acts on the one the call names with `_account=<email>` (the tools' `account=<email>` is the same choice), otherwise the one the project pins — on the service's card, otherwise on this one —, otherwise the default. an unknown address is refused, never replaced by another; the response names the account that served (`_account`)
 - "linking an account" here requests the six services under the platform's app, and only the identity under a partner's app — its services then add theirs
 

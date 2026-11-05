@@ -178,7 +178,7 @@ def test_seuls_deux_connecteurs_se_declarent_MULTI_et_on_sait_pourquoi():
     # Split google (2026-09-26) : les six services déclarent la cardinalité du compte
     # qu'ils empruntent — même raison de fournisseur, portée par `google.service`.
     # bigquery (2026-10-02) : septième service, même forme ; google_ads (2026-10-08),
-    # huitième.
+    # huitième ; youtube (2026-11-04), neuvième.
     # sharepoint (2026-10-05, oto-backend#23) : OAuth comme google, une ligne par
     # compte Microsoft lié — même raison de fournisseur.
     # microsoft (2026-10-08) : le porteur du compte Microsoft 365 reprend la raison ;
@@ -189,7 +189,7 @@ def test_seuls_deux_connecteurs_se_declarent_MULTI_et_on_sait_pourquoi():
                   if c.cardinality == "multi") == [
         "bigquery", "browser", "calendar", "chat", "drive", "entra", "gmail", "google",
         "google_ads", "microsoft", "onenote", "outlook", "outlook_calendar", "sharepoint", "sheets", "tasks",
-        "teams"]
+        "teams", "youtube"]
     for nom in ("zoho", "folk"):
         con = providers.REGISTRY[nom]
         assert con.cardinality == "" and con.auth_multi_account is True, nom
@@ -232,6 +232,7 @@ def test_l_annonce_STATIQUE_de_l_axe_compte_n_est_plus_la_cardinalite():
     # `_account`, que l'annonce dynamique ne montrait jamais à l'emprunteuse.
     assert statiques == ["bigquery", "browser", "calendar", "chat", "drive", "entra", "folk", "gmail",
                          "google", "google_ads", "microsoft", "onenote", "outlook",
-                         "outlook_calendar", "sharepoint", "sheets", "tasks", "teams", "zoho"]
+                         "outlook_calendar", "sharepoint", "sheets", "tasks", "teams", "youtube",
+                         "zoho"]
     multi = [c.name for c in providers._REGISTRY_LIST if c.auth_multi_account]
     assert set(statiques) < set(multi) and len(multi) > len(statiques)

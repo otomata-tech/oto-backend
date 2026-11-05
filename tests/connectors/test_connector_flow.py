@@ -55,6 +55,8 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
         "bigquery",
         # google_ads (2026-10-08) : huitième service, même flux.
         "google_ads",
+        # youtube (2026-11-04) : neuvième service, même flux.
+        "youtube",
         # `instagram_meta` (2026-09-09) : flux Instagram Login hébergé par oto,
         # déclaré dans `auth/instagram_meta.py` — importé au boot par `api.routes`,
         # qui monte sa route de retour. C'est bien le chemin du boot, pas un import

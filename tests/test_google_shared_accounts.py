@@ -310,9 +310,9 @@ def test_le_statut_montre_les_comptes_partages(monkeypatch):
     assert [(a["email"], a["scope"]) for a in out["shared"]] == [
         ("group@x.test", "group"), ("org@x.test", "org")]
     # `ALL` = le consentement du COMPTE : les six du split, pas bigquery (2026-10-02)
-    # ni google_ads (2026-10-08), qui ne s'autorisent que depuis leur carte.
+    # ni google_ads (2026-10-08) ni youtube (2026-11-04), qui ne s'autorisent que depuis leur carte.
     assert out["shared"][0]["services"] == [s for s in G.SERVICES
-                                            if s not in ("bigquery", "google_ads")]
+                                            if s not in ("bigquery", "google_ads", "youtube")]
     # Qui l'a connecté : lu dans le statut, validé par le modèle servi.
     assert [a["connected_by"] for a in out["shared"]] == ["admin-group", "admin-org"]
     assert fo.GoogleStatus(**out).shared[1].connected_by == "admin-org"

@@ -9,12 +9,12 @@ Une seule transaction, dans cet ordre :
    Microsoft), une cible `org:<id>` → règle d'org, une règle d'org `sensitive` sur chaque
    compte d'org vivant. Un prêt à une PERSONNE hors de l'org est repris en règle hors
    org (D1) ; un prêt à une équipe ou une org d'ailleurs ne l'est pas : il est
-   journalisé, un par ligne. Puis l'USAGE d'un compte d'équipe par qui n'en est pas
-   membre (l'héritage d'équipe retiré, #480, D2) : une règle `sensitive` par couple
-   personne × compte d'équipe réellement appelé dans les 30 derniers jours du journal
-   d'appels (`tool_calls`), que rien d'autre n'ouvre — l'identification même de la
-   mesure L2 (`journal.pertes_d_acces.equipe_hors_appartenance`), sauf la personne
-   sortie de l'org du compte. Une règle `manuelle` n'est
+   journalisé, un par ligne. Puis l'HÉRITAGE d'un projet partagé (#480, retiré, D2),
+   lu dans l'état (arêtes `project_credentials` vivantes, partage vivant, atteinte du
+   partageur) : une règle `sensitive` par couple personne × compte qu'il lui prêtait —
+   compte d'org pour qui n'est pas de l'org, compte de l'équipe propriétaire pour qui ne
+   lit pas l'équipe —, que rien d'autre n'ouvre. **Aucune lecture du journal d'appels**
+   (`tool_calls`) : la révision ne lit aucune grosse table. Une règle `manuelle` n'est
    jamais touchée. **La reprise est FIGÉE ici** : c'est la seule lecture des anciennes
    tables qui reste, et elle part avec elles — aucun code applicatif ne les lit plus ;
 2. retrait de `connector_account_grants`, `connector_account_group_grants`,
@@ -383,80 +383,124 @@ def calculer_les_regles(cur) -> tuple[dict, list]:
     return regles, ecartes
 
 
-#: La profondeur du journal d'appels lu pour l'usage des comptes d'équipe (D2) : celle de
-#: la mesure L2.
-JOURS_D_USAGE = 30
-
-# Les appels qui ont servi un compte nommé par son ref (`args.instance`, posé au
-# résolveur) — la lecture de la mesure L2 (`_JOURNAL`), réduite à ce que D2 regarde. Une
-# agrégation sur l'index `created_at`, comme la mesure l'a jouée sur la prod.
-_APPELS_PAR_REF = """
-SELECT sub, args->>'instance' AS ref, count(*) AS n
-  FROM tool_calls
- WHERE created_at >= NOW() - make_interval(days => %s) AND kind = 'mcp'
-   AND sub IS NOT NULL AND args ? 'instance'
- GROUP BY 1, 2
+# L'héritage des clés d'un projet partagé (#480), lu dans l'ÉTAT — jamais dans le journal
+# d'appels : une arête `project_credentials` vivante, émise par une personne (le
+# partageur), reçue par un principal (personne, équipe, org) dont le partage du projet
+# est encore vivant (`resource_grants`, échéance non passée). C'est la lecture même
+# d'`access/heritage.evaluer` d'avant la bascule, rejouée pour toutes les arêtes à la fois.
+# L'org du projet est celle d'`heritage.contexte_du_projet` : l'org propriétaire, l'org
+# de l'équipe propriétaire, ou, pour un projet personnel, son org de contexte, sinon
+# l'org personnelle de son propriétaire.
+_HERITAGES = """
+SELECT e.grantor_id AS partageur, e.grantee_kind, e.grantee_id,
+       CASE WHEN p.owner_type = 'group' THEN g.id END AS equipe,
+       CASE WHEN p.owner_type = 'org' AND p.owner_id ~ '^[0-9]+$' THEN p.owner_id::bigint
+            WHEN p.owner_type = 'group' THEN g.org_id
+            WHEN p.owner_type = 'user' THEN COALESCE(p.context_org_id, (
+                 SELECT o.id FROM orgs o
+                  WHERE o.personal_of = p.owner_id AND o.archived_at IS NULL))
+       END AS org_id
+  FROM grants e
+  JOIN projects p ON e.resource_id = 'project:' || p.id::text
+  LEFT JOIN org_groups g ON p.owner_type = 'group' AND g.id::text = p.owner_id
+ WHERE e.resource_kind = 'project_credentials' AND e.revoked_at IS NULL
+   AND e.grantor_kind = 'user'
+   AND EXISTS (SELECT 1 FROM resource_grants rg
+                WHERE rg.resource_type = 'project' AND rg.resource_id = p.id::text
+                  AND rg.principal_type = e.grantee_kind
+                  AND rg.principal_id = e.grantee_id
+                  AND (rg.expires_at IS NULL OR rg.expires_at > NOW()))
+ ORDER BY 1, 2, 3, 4, 5
 """
 
 
-def regles_d_usage_d_equipe(cur, voulues: dict, existantes: dict) -> tuple[dict, int]:
-    """`({cle: {org_id, services}}, appels)` — D2 : chaque couple personne × compte
-    d'ÉQUIPE vivant qu'elle a appelé dans les `JOURS_D_USAGE` derniers jours sans être
-    membre de l'équipe, et qu'aucune règle (voulue par la reprise ou déjà en base)
-    n'ouvre — exactement le motif `equipe_hors_appartenance` de la mesure L2. Écartée :
-    la personne sortie de l'org du compte (`org_member_events` `removed`, plus membre).
-    Une sortie de l'ÉQUIPE seule n'est pas journalisée : elle n'est pas distinguée."""
-    from oto_mcp import instance_refs
+def regles_d_heritage(cur, voulues: dict, existantes: dict) -> tuple[dict, int]:
+    """`({cle: {org_id, services}}, aretes)` — D2 : ce que l'héritage d'un projet partagé
+    (#480, retiré par la bascule) ouvrait, repris en règles `sensitive` sur les comptes
+    qu'il prêtait, pour chaque personne qu'il servait, tel que l'état le dit à la bascule.
 
-    instances = {r["id"]: r for r in cur.execute(
-        "SELECT id, connector, owner_type, owner_id, account FROM connector_instances "
-        "WHERE revoked_at IS NULL").fetchall()}
-    par_cle = {(r["owner_type"], r["owner_id"], r["connector"], r["account"]): i
-               for i, r in instances.items()}
+    Avant la bascule, un bénéficiaire d'une arête vivante recevait, tant que le
+    partageur les atteignait lui-même :
+    - les comptes d'ORG de l'org du projet, s'il n'en est pas membre (le partageur, lui,
+      en est membre) ;
+    - les comptes de l'ÉQUIPE propriétaire d'un projet d'équipe, s'il ne lit pas l'équipe
+      (ni membre, ni admin de son org) et que le partageur la lit.
+    Un principal équipe ou org vaut pour ses membres d'aujourd'hui : la règle nomme chaque
+    personne (une règle hors org ne vise qu'une personne, D1). Un super-admin escalade
+    partout (`roles.effective_org_role`) : il n'hérite de rien, et son atteinte suffit
+    comme partageur. Une règle déjà posée qui ouvre le compte à la personne (reprise des
+    prêts, règle manuelle) l'emporte. Aucune lecture du journal d'appels."""
+    super_admins = {r["sub"] for r in cur.execute(
+        "SELECT sub FROM users WHERE role = 'super_admin'")}
+    personnes = {r["sub"] for r in cur.execute("SELECT sub FROM users")}
+    membres_org: dict = {}
+    admins: set = set()
+    for r in cur.execute("SELECT org_id, sub, org_role FROM org_members"):
+        membres_org.setdefault(r["org_id"], set()).add(r["sub"])
+        if r["org_role"] == "org_admin":
+            admins.add((r["org_id"], r["sub"]))
     groupes = {r["id"]: r["org_id"] for r in cur.execute("SELECT id, org_id FROM org_groups")}
+    membres_equipe: dict = {}
     equipes_de: dict = {}
     for r in cur.execute("SELECT group_id, sub FROM org_group_members"):
+        membres_equipe.setdefault(r["group_id"], set()).add(r["sub"])
         equipes_de.setdefault(r["sub"], set()).add(r["group_id"])
-    membres = {(r["org_id"], r["sub"]) for r in cur.execute(
-        "SELECT org_id, sub FROM org_members")}
-    sortis = {(r["org_id"], r["sub"]) for r in cur.execute(
-        "SELECT DISTINCT org_id, sub FROM org_member_events WHERE action = 'removed'")}
+    comptes: dict = {}
+    for r in cur.execute("SELECT id, owner_type, owner_id FROM connector_instances "
+                         "WHERE revoked_at IS NULL AND owner_type IN ('org', 'group') "
+                         "AND owner_id ~ '^[0-9]+$' ORDER BY id"):
+        comptes.setdefault((r["owner_type"], int(r["owner_id"])), []).append(r["id"])
+
+    def membre_org(sub: str, org: int) -> bool:
+        return sub in super_admins or sub in membres_org.get(org, ())
+
+    def lit_l_equipe(sub: str, gid: int) -> bool:
+        return (sub in super_admins or sub in membres_equipe.get(gid, ())
+                or (groupes.get(gid), sub) in admins)
+
+    def beneficiaires(genre: str, ident: str) -> set:
+        if genre == "user":
+            return {ident} & personnes
+        if genre == "group" and ident.isdigit():
+            return membres_equipe.get(int(ident), set()) & personnes
+        if genre == "org" and ident.isdigit():
+            return membres_org.get(int(ident), set()) & personnes
+        return set()
+
     ouvertes: dict = {}
     for (iid, user, groupe, org_entiere), v in list(voulues.items()) + [
             (cle, {"org_id": r["org_id"]}) for cle, r in existantes.items()]:
         ouvertes.setdefault(iid, []).append((user, groupe, org_entiere, v["org_id"]))
 
-    def _ouvre(iid: int, sub: str) -> bool:
+    def deja_ouvert(iid: int, sub: str) -> bool:
         return any((u is not None and u == sub)
                    or (g is not None and g in equipes_de.get(sub, ()))
-                   or (o and (org_id, sub) in membres)
+                   or (o and sub in membres_org.get(org_id, ()))
                    for u, g, o, org_id in ouvertes.get(iid, ()))
 
     regles: dict = {}
-    appels = 0
-    for r in cur.execute(_APPELS_PAR_REF, (JOURS_D_USAGE,)).fetchall():
-        try:
-            ref = instance_refs.parse_ref(r["ref"])
-        except ValueError:
+    aretes = 0
+    for a in cur.execute(_HERITAGES).fetchall():
+        org, equipe, partageur = a["org_id"], a["equipe"], a["partageur"]
+        if org is None:
             continue
-        if ref.level == "inst":
-            iid = ref.instance_id if ref.instance_id in instances else None
-        elif ref.level == "group":
-            iid = par_cle.get(("group", str(ref.group_id), ref.connector, ref.account))
-        else:
-            continue
-        inst = instances.get(iid) if iid is not None else None
-        if inst is None or inst["owner_type"] != "group" or not inst["owner_id"].isdigit():
-            continue
-        gid, sub = int(inst["owner_id"]), r["sub"]
-        org = groupes.get(gid)
-        if org is None or gid in equipes_de.get(sub, ()) or _ouvre(iid, sub):
-            continue
-        if (org, sub) in sortis and (org, sub) not in membres:
-            continue
-        regles.setdefault((iid, sub, None, False), {"org_id": org, "services": None})
-        appels += r["n"]
-    return regles, appels
+        aretes += 1
+        pretes = []   # (org du compte, comptes, qui en hérite)
+        if membre_org(partageur, org):
+            pretes.append((org, comptes.get(("org", org), []),
+                           lambda s: not membre_org(s, org)))
+        if equipe is not None and lit_l_equipe(partageur, equipe):
+            pretes.append((org, comptes.get(("group", equipe), []),
+                           lambda s, gid=equipe: not lit_l_equipe(s, gid)))
+        for sub in sorted(beneficiaires(a["grantee_kind"], str(a["grantee_id"]))):
+            for org_du_compte, iids, herite in pretes:
+                if not herite(sub):
+                    continue
+                for iid in iids:
+                    if not deja_ouvert(iid, sub):
+                        regles.setdefault((iid, sub, None, False),
+                                          {"org_id": org_du_compte, "services": None})
+    return regles, aretes
 
 
 def reprendre_les_prets(conn, *, retirer_perimees: bool = True) -> dict:
@@ -474,10 +518,10 @@ def reprendre_les_prets(conn, *, retirer_perimees: bool = True) -> dict:
         for r in cur.execute(
             "SELECT id, instance_id, subject_user, subject_group, subject_org, level, "
             "services, origine, org_id FROM connector_account_rules").fetchall()}
-    usage, appels_d_usage = regles_d_usage_d_equipe(
+    heritage, aretes = regles_d_heritage(
         cur, voulues, {c: r for c, r in existantes.items()
                        if r["origine"] != ORIGINE_REPRISE})
-    for cle, regle in usage.items():
+    for cle, regle in heritage.items():
         voulues.setdefault(cle, regle)
     posees = mises_a_jour = gardees = 0
     for cle, regle in sorted(voulues.items(), key=lambda kv: repr(kv[0])):
@@ -501,7 +545,8 @@ def reprendre_les_prets(conn, *, retirer_perimees: bool = True) -> dict:
                 and cle not in voulues]
     if perimees:
         cur.execute("DELETE FROM connector_account_rules WHERE id = ANY(%s)", (perimees,))
-    bilan.update(usage_d_equipe={"personne_x_compte": len(usage), "appels": appels_d_usage})
+    bilan.update(heritage_de_projet={"personne_x_compte": len(heritage),
+                                     "aretes": aretes})
     bilan.update(posees=posees, mises_a_jour=mises_a_jour, retirees=len(perimees),
                  manuelles_gardees=gardees, non_reprises=non_reprises)
     return bilan

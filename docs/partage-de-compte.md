@@ -198,10 +198,14 @@ tests (`tests/access/test_resolution_par_regles_1499.py`).
   La clé personnelle posée dans une autre org (#172) suit la même règle, pour tout
   connecteur. Une politique « clé perso interdite » (#1239) de l'org de l'appel écarte à
   l'étape 5 les comptes de personnes.
-- **D2 — reprise de l'usage** : la révision de bascule pose une règle `sensitive`
-  (origine `reprise`) par couple personne × compte d'équipe que la personne, non
-  membre, a appelé dans les 30 derniers jours (`tool_calls`), sauf si elle est sortie
-  de l'org du compte.
+- **D2 — reprise de l'héritage, lue dans l'état** : la révision de bascule pose une règle
+  `sensitive` (origine `reprise`) pour chaque personne qu'une arête `project_credentials`
+  vivante servait (#480 : partage du projet vivant, partageur qui atteint encore ce qu'il
+  prête) — sur les comptes de l'équipe propriétaire pour qui ne lit pas l'équipe, sur les
+  comptes d'org de l'org du projet pour qui n'en est pas membre ; un bénéficiaire équipe
+  ou org vaut pour ses membres du moment. Les autres chemins d'un non-membre vers un
+  compte d'équipe sont repris ailleurs : un prêt par la reprise des prêts, l'admin de
+  l'org par son niveau `manage`. La révision ne lit pas le journal d'appels.
 - **D2 — compte d'équipe pour un non-membre** (`niveau_equipe_non_membre`) : **on
   coupe** (`none`) ; une règle nominative peut l'ouvrir.
 - **D3 — plusieurs comptes au même étage** (`defaut_qui_tranche`) : **le défaut encadré**.

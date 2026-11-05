@@ -158,54 +158,119 @@ def _migration():
     return module
 
 
-def test_l_usage_d_un_compte_d_equipe_par_un_non_membre_devient_une_regle(base):
-    """D2 : l'héritage d'équipe retiré, la reprise pose une règle `sensitive` (`reprise`)
-    à qui a appelé le compte d'équipe dans les 30 derniers jours sans en être membre —
-    pas à qui ne l'a pas appelé depuis, ni à qui est sorti de l'org, ni à un membre de
-    l'équipe. Rejouée, elle donne le même état."""
+def test_l_heritage_d_un_projet_partage_devient_des_regles_lues_dans_l_etat(base):
+    """D2 : l'héritage des clés d'un projet partagé (#480) retiré, la reprise pose une
+    règle `sensitive` (`reprise`) pour chaque personne qu'une arête `project_credentials`
+    VIVANTE servait — sur les comptes de l'équipe propriétaire pour qui ne lit pas
+    l'équipe, sur les comptes de l'org pour qui n'en est pas membre —, lue dans l'état :
+    pas à qui le partage a échu, ni à qui n'a qu'un partage sans héritage, ni à un membre
+    de l'équipe, ni quand le partageur n'atteint plus l'équipe. Un principal équipe vaut
+    pour ses membres. Rejouée, elle donne le même état."""
     import psycopg
     from alembic import command
     from oto_mcp import db
     dsn, org, equipe = base["dsn"], base["org"], base["equipe"]
     command.downgrade(_alembic(), _PRECEDENTE)
-    for sub in ("appelant", "ancien", "parti", "coequipier"):
+    for sub in ("partageur", "beneficiaire", "echu", "sans_heritage", "coequipier",
+                "du_support", "exterieur"):
         db.upsert_user(sub)
     with psycopg.connect(dsn, autocommit=True) as c:
-        for sub in ("appelant", "ancien", "coequipier"):
+        for sub in ("partageur", "beneficiaire", "echu", "sans_heritage", "coequipier",
+                    "du_support"):
             c.execute("INSERT INTO org_members (org_id, sub) VALUES (%s, %s)", (org, sub))
-        c.execute("INSERT INTO org_member_events (org_id, sub, action) "
-                  "VALUES (%s, 'parti', 'removed')", (org,))
-        c.execute("INSERT INTO org_group_members (group_id, sub) VALUES (%s, 'coequipier')",
-                  (equipe,))
+        for sub in ("partageur", "coequipier"):
+            c.execute("INSERT INTO org_group_members (group_id, sub) VALUES (%s, %s)",
+                      (equipe, sub))
+        support = c.execute("INSERT INTO org_groups (org_id, name) VALUES (%s, 'support') "
+                            "RETURNING id", (org,)).fetchone()[0]
+        c.execute("INSERT INTO org_group_members (group_id, sub) VALUES (%s, 'du_support')",
+                  (support,))
         iid = c.execute("INSERT INTO connector_instances (connector, owner_type, owner_id, "
                         "account) VALUES ('hubspot', 'group', %s, '') RETURNING id",
                         (str(equipe),)).fetchone()[0]
-        appels = [("appelant", f"inst:{iid}", "1 day"),
-                  ("appelant", f"group:{equipe}:hubspot", "2 days"),
-                  ("ancien", f"inst:{iid}", "40 days"),
-                  ("parti", f"inst:{iid}", "1 day"),
-                  ("coequipier", f"inst:{iid}", "1 day")]
-        for sub, ref, age in appels:
-            c.execute("INSERT INTO tool_calls (sub, tool, args, org_id, created_at) "
-                      "VALUES (%s, 'hubspot_contact', %s, %s, NOW() - %s::interval)",
-                      (sub, json.dumps({"instance": ref}), org, age))
+        compte_d_org = c.execute(
+            "SELECT id FROM connector_instances WHERE owner_type = 'org' AND owner_id = %s "
+            "AND connector = 'attio'", (str(org),)).fetchone()[0]
+        projet = c.execute("INSERT INTO projects (owner_type, owner_id, name) "
+                           "VALUES ('group', %s, 'p') RETURNING id",
+                           (str(equipe),)).fetchone()[0]
+        partages = [("user", "beneficiaire", None), ("user", "echu", "-1 day"),
+                    ("user", "sans_heritage", None), ("user", "coequipier", None),
+                    ("group", str(support), None), ("user", "exterieur", None)]
+        for genre, ident, echeance in partages:
+            c.execute("INSERT INTO resource_grants (resource_type, resource_id, "
+                      "principal_type, principal_id, expires_at) VALUES ('project', %s, "
+                      "%s, %s, NOW() + %s::interval)",
+                      (str(projet), genre, ident, echeance or "1 year"))
+            if ident != "sans_heritage":
+                c.execute("INSERT INTO grants (resource_kind, resource_id, grantor_kind, "
+                          "grantor_id, grantee_kind, grantee_id) VALUES "
+                          "('project_credentials', %s, 'user', 'partageur', %s, %s)",
+                          (f"project:{projet}", genre, ident))
 
-    def _celles_du_compte():
-        return _un(dsn, "SELECT subject_user, subject_group, subject_org, level, origine "
-                        "FROM connector_account_rules WHERE instance_id = %s ORDER BY 1",
-                   (iid,))
-    attendues = [("appelant", None, False, "sensitive", "reprise")]
+    def _du_compte(i):
+        return _un(dsn, "SELECT subject_user, level, origine FROM connector_account_rules "
+                        "WHERE instance_id = %s AND subject_user IS NOT NULL ORDER BY 1",
+                   (i,))
     migration = _migration()
     from psycopg.rows import dict_row
     with psycopg.connect(dsn, row_factory=dict_row) as c:
         premier = migration.reprendre_les_prets(c, retirer_perimees=False)
         second = migration.reprendre_les_prets(c, retirer_perimees=False)
         c.commit()
-    assert premier["usage_d_equipe"] == {"personne_x_compte": 1, "appels": 2}
+    sur_l_equipe = [(s, "sensitive", "reprise")
+                    for s in ("beneficiaire", "du_support", "exterieur")]
+    assert _du_compte(iid) == sur_l_equipe
+    # Le compte d'org : prêté à qui n'est pas de l'org (le prêt Google de la base n'y
+    # touche pas).
+    assert ("exterieur", "sensitive", "reprise") in _du_compte(compte_d_org)
+    assert premier["heritage_de_projet"]["aretes"] == 4
     assert second["posees"] == second["mises_a_jour"] == second["retirees"] == 0
-    assert _celles_du_compte() == attendues
     command.upgrade(_alembic(), _REVISION)
-    assert _celles_du_compte() == attendues
+    assert _du_compte(iid) == sur_l_equipe
+    assert _un(dsn, "SELECT count(*) FROM grants WHERE resource_kind = "
+                    "'project_credentials' AND revoked_at IS NULL")[0][0] == 0
+
+
+def test_le_partageur_qui_n_atteint_plus_l_equipe_ne_prete_rien(base):
+    """La borne d'avant la bascule, relue à la reprise : le partageur ne prête que ce
+    qu'il atteint lui-même AUJOURD'HUI — sorti de l'équipe, son arête n'ouvre plus rien."""
+    import psycopg
+    from oto_mcp import db
+    dsn, org, equipe = base["dsn"], base["org"], base["equipe"]
+    for sub in ("ex_partageur", "beneficiaire_2"):
+        db.upsert_user(sub)
+    with psycopg.connect(dsn, autocommit=True) as c:
+        for sub in ("ex_partageur", "beneficiaire_2"):
+            c.execute("INSERT INTO org_members (org_id, sub) VALUES (%s, %s) "
+                      "ON CONFLICT DO NOTHING", (org, sub))
+        projet = c.execute("INSERT INTO projects (owner_type, owner_id, name) "
+                           "VALUES ('group', %s, 'p2') RETURNING id",
+                           (str(equipe),)).fetchone()[0]
+        c.execute("INSERT INTO resource_grants (resource_type, resource_id, principal_type, "
+                  "principal_id) VALUES ('project', %s, 'user', 'beneficiaire_2')",
+                  (str(projet),))
+        c.execute("INSERT INTO grants (resource_kind, resource_id, grantor_kind, grantor_id, "
+                  "grantee_kind, grantee_id) VALUES ('project_credentials', %s, 'user', "
+                  "'ex_partageur', 'user', 'beneficiaire_2')", (f"project:{projet}",))
+    migration = _migration()
+    from psycopg.rows import dict_row
+    with psycopg.connect(dsn, row_factory=dict_row) as c:
+        regles, aretes = migration.regles_d_heritage(c.cursor(), {}, {})
+        c.rollback()
+    assert aretes >= 1
+    assert not any(cle[1] == "beneficiaire_2" for cle in regles)
+
+
+def test_la_revision_ne_lit_aucune_grosse_table():
+    """Ni le journal d'appels ni l'usage : la reprise lit l'état seul, la révision tient
+    sa transaction le temps de lire des tables de configuration."""
+    import re
+    for nom in ("20261105_0900_regles_de_comptes", _REVISION):
+        source = (RACINE / "oto_mcp" / "db" / "migrations" / "versions"
+                  / f"{nom}.py").read_text()
+        assert not re.search(r"\b(FROM|JOIN)\s+(tool_calls|usage\w*|credit_movements|"
+                             r"connector_loan_events|runs)\b", source, re.I), nom
 
 
 def test_la_reprise_pose_le_niveau_le_plus_haut_qu_un_appel_exerce(base):

@@ -163,13 +163,24 @@ def test_membre_de_l_org_mais_pas_de_l_equipe_l_equipe_ne_sert_pas(monde, monkey
 
 
 @pytest.mark.parametrize("type_", TYPES)
-def test_sa_cle_d_une_autre_org_ne_le_suit_plus(monde, monkeypatch, type_):
-    """#172 retiré : sa clé posée chez lui (org B) ne sert pas dans le projet de l'org A
-    — l'ancien code l'y suivait. Aucun compte d'une autre org ne sert."""
+def test_sa_cle_d_une_autre_org_le_sert_a_l_etape_5(monde, monkeypatch, type_):
+    """#172 à l'étape 5 : dans le projet de l'org A, où rien de local ne le sert, SA clé
+    posée chez lui (org B) sert sans nom, et la trace de l'appel dit qu'elle est la
+    sienne dans l'org B (l'écho : `your_account_in_org`). Le partage du projet, lui, ne
+    lui donne aucune clé de l'org A ni de l'équipe propriétaire."""
     from oto_mcp import db
     db.set_member_api_key(monde["benef"], monde["org_b"], CONNECTEUR, "SA-CLE")
     _partager(monde, type_)
-    _refus(monde, monkeypatch)
+    trace: dict = {}
+    tok = session_org.set_call_trace(trace)
+    try:
+        rc = _resoudre_dans_le_projet(monde, monkeypatch)
+    finally:
+        session_org.reset_call_trace(tok)
+    assert (rc.mode, rc.entity_type, rc.entity_id) == (
+        "user", "member", f"{monde['org_b']}:{monde['benef']}")
+    assert trace["compte_d_une_autre_org"]["own"] is True
+    assert trace["compte_d_une_autre_org"]["org"].startswith("b_")
 
 
 def test_le_membre_de_l_org_n_est_pas_touche(monde, monkeypatch):

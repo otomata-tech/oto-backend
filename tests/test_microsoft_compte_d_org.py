@@ -204,10 +204,10 @@ def test_microsoft_accounts_et_identites_disent_le_niveau(org, monkeypatch):
     for carte in ("outlook", PORTEUR):
         idents = identities.list_identities(COLLEGUE, carte)
         # #1499 : plus de marques `shared`/`granted` — le `level` que donnent les règles
-        # (sans règle : membre de l'équipe `sensitive`, membre de l'org `read`).
+        # (sans règle : membre de l'équipe `sensitive`, membre de l'org `sensitive`, écart (a)).
         assert [(i["id"], i["level"], i["owner"]["type"], i["is_default"])
                 for i in idents] == [(BOITE_EQUIPE, "sensitive", "group", False),
-                                     (BOITE_ORG, "read", "org", False)], carte
+                                     (BOITE_ORG, "sensitive", "org", False)], carte
         assert not any("shared" in i or "granted" in i for i in idents)
     # `owner` traverse le modèle de sortie REST : l'écran nomme l'équipe ou l'org qui
     # possède le compte.

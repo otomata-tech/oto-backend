@@ -303,14 +303,14 @@ def test_la_carte_dun_service_est_reliee_par_un_compte_partage(monkeypatch):
 
 def test_les_identites_proposent_les_comptes_partages_avec_leur_niveau(monkeypatch):
     """#1499 : plus de marque `shared` ; un compte qui n'est pas le sien porte le
-    `level` que ses règles donnent (sans règle : les défauts d'oto-core — membre de
-    l'équipe `sensitive`, membre de l'org `read`) et son `owner`."""
+    `level` que ses règles donnent (sans règle : membre de l'équipe `sensitive`,
+    membre de l'org `sensitive` — écart (a) avec oto-core) et son `owner`."""
     _partages(monkeypatch)
     ids = identities.list_identities("u", "gmail")
     assert [i["id"] for i in ids] == ["group@x.test", "org@x.test"]
     assert all(i["is_default"] is False and "shared" not in i for i in ids)
     assert [(i["label"], i["level"], i["owner"]["type"]) for i in ids] == [
-        ("group@x.test", "sensitive", "group"), ("org@x.test", "read", "org")]
+        ("group@x.test", "sensitive", "group"), ("org@x.test", "sensitive", "org")]
 
 
 def test_le_contrat_sert_level_et_owner_jamais_shared(monkeypatch):
@@ -327,7 +327,7 @@ def test_le_contrat_sert_level_et_owner_jamais_shared(monkeypatch):
     assert {i["id"]: (i["level"], (i["owner"] or {}).get("type"))
             for i in servi["identities"]} == {
         "moi@x.test": (None, None), "group@x.test": ("sensitive", "group"),
-        "org@x.test": ("read", "org")}
+        "org@x.test": ("sensitive", "org")}
     assert not any("shared" in i or "granted" in i for i in servi["identities"])
 
 

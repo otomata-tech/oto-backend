@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from ._conn import _connect
+from .lecture_d_appel import lecture_d_appel
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,7 @@ def comptes_d_autrui(connector: str, org_id: int, sub: str, account: str) -> lis
             "account": account}).fetchall()
 
 
+@lecture_d_appel
 def comptes_hors_org(connector: Optional[str], sub: str, org_id: int,
                      account: Optional[str] = None) -> list[dict]:
     """Les comptes de `connector` d'AUTRES orgs que `org_id` que `sub` peut NOMMER : les
@@ -194,7 +196,12 @@ def comptes_hors_org(connector: Optional[str], sub: str, org_id: int,
     NOMME lui ouvre (D1, #1499). Un compte personnel n'y figure que si son propriétaire
     est encore membre de son org. `connector` None : tous les connecteurs (la liste des
     comptes). `account` : seulement ceux de ce nom. Ils servent nommés, et sans nom à
-    l'étape 5 quand rien de local ne sert (`access/comptes`)."""
+    l'étape 5 quand rien de local ne sert (`access/comptes`).
+
+    Lue UNE fois par appel (`lecture_d_appel`) : la sonde préchargée de l'étape 5
+    (`cascade.preloaded_presence_probe`) est rebâtie à chaque `status_for` d'un même
+    appel — la liste `include=card` en fait plusieurs, et sans cela relisait la base
+    à chacun (#1245)."""
     filtre = (
         "(i.id IN (SELECT r.instance_id FROM connector_account_rules r "
         "          WHERE r.subject_user = %(sub)s AND r.level <> 'none' "

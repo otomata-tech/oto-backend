@@ -124,3 +124,27 @@ def test_le_statut_affiche_dit_le_compte_prete_sans_requete_par_connecteur(monde
     assert vu["own"] is False and vu["org"].startswith("Preteuse")
     assert sonde.ailleurs("hubspot") is None
     assert len(lus) == 1
+
+
+def test_la_liste_dit_elsewhere_quand_seule_l_etape_5_sert(monde, monkeypatch):
+    """L'écran ne ment pas (#1499) : payfit, servi seulement par SA clé posée dans l'org Y
+    (étape 5), porte `credential.level == "elsewhere"` sur sa ligne de la liste — pas une
+    ligne sans credential alors que l'appel serait servi. La ligne passe le modèle."""
+    import _mcp_app
+
+    from oto_mcp import credentials_store, db
+    from oto_mcp.capabilities._types import ResolvedCtx
+    from oto_mcp.capabilities.connectors import selection as S
+    from oto_mcp.connectors.credential_presence import CredentialPresence
+    from oto_mcp.org_store import members
+    assert "payfit" in db.KEY_PROVIDERS        # le statut ne parcourt que ceux-là
+    _mcp_app.static_mcp()
+    _dans_l_org(monkeypatch, monde)
+    members.add_org_member(monde["y"], monde["moi"], "org_member")
+    credentials_store.set_credential("member", f"{monde['y']}:{monde['moi']}", "payfit",
+                                     "sa-cle", set_by=monde["moi"], meta={})
+    out = S._me(ResolvedCtx(sub=monde["moi"], org_id=monde["x"]),
+                S.MyConnectorsInput(name="payfit"))
+    ligne = next(c for c in out["connectors"] if c["name"] == "payfit")
+    assert ligne["credential"]["level"] == "elsewhere"
+    assert CredentialPresence(**ligne["credential"]).level == "elsewhere"

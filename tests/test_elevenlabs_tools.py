@@ -403,8 +403,53 @@ def test_the_setting_opens_another_generation(client, platform, trace, setting):
         _tool("elevenlabs_act")(op="create_speech", voice_id="v1", text="Hi")
     setting["value"] = "elevenlabs_act"
     client.create_music.return_value = _audio(character_count=500)
+    _tool("elevenlabs_act")(op="create_music", prompt="calm piano", music_length_ms=20_000)
+    assert trace[-1] == {"units": 500, "quantity": 500}, "a header above the length wins"
+
+
+@pytest.mark.parametrize("length_ms, credits", [
+    (20_000, 300), (50_000, 750), (60_000, 900), (1, 1), (None, 1), (0, 1),
+])
+def test_music_credits(length_ms, credits):
+    from oto_mcp.tools import elevenlabs as E
+    assert E.music_credits(length_ms) == credits
+
+
+def test_music_length_from_the_length_or_the_plan():
+    from oto_mcp.tools import elevenlabs as E
+    plan = {"sections": [{"duration_ms": 4000}, {"duration_ms": 42_000}, {"duration_ms": 4000}]}
+    assert E.asked_music_ms(None, plan) == 50_000
+    assert E.asked_music_ms(30_000, plan) == 30_000
+    assert E.asked_music_ms(None, {"sections": [{"section_name": "x"}]}) is None
+    assert E.asked_music_ms(None, None) is None
+    assert E.asked_music_ms(True, None) is None
+
+
+def test_platform_music_bills_its_length_when_elevenlabs_sends_no_count(
+        client, platform, trace, setting):
+    setting["value"] = "elevenlabs_act:create_speech,elevenlabs_act:create_music"
+    client.create_music.return_value = _audio()
+    plan = {"sections": [{"duration_ms": 4000}, {"duration_ms": 42_000}, {"duration_ms": 4000}]}
+    _tool("elevenlabs_act")(op="create_music", composition_plan=plan,
+                            respect_sections_durations=True)
+    assert platform == [750], "the grant's quota is checked for the track before the call"
+    assert trace == [{"units": 750, "quantity": 750}]
+
+
+def test_platform_music_without_a_length_is_refused_before_any_credit(
+        client, platform, trace, setting):
+    setting["value"] = "elevenlabs_act:create_music"
+    with pytest.raises(McpError, match="music_length_required"):
+        _tool("elevenlabs_act")(op="create_music", prompt="calm piano")
+    assert not client.method_calls
+    assert trace == []
+
+
+def test_own_key_music_needs_no_length(client, trace, setting):
+    client.create_music.return_value = _audio()
     _tool("elevenlabs_act")(op="create_music", prompt="calm piano")
-    assert trace[-1] == {"units": 500, "quantity": 500}
+    assert client.create_music.called
+    assert trace == [{"quantity": 10}], "no length: the prompt's estimate, as before"
 
 
 def test_platform_reads_are_free_but_the_balance_is_never_served(
@@ -576,6 +621,14 @@ def test_the_served_description_says_the_ceiling():
     assert f"{E.MAX_TEXT_CHARS:,}" in tool.description
     assert str(E.MAX_TEXT_CHARS) in f"{tool.description}{tool.parameters}", (
         "the `text` argument says its ceiling")
+
+
+def test_the_served_description_says_how_music_is_billed():
+    """The music rate is written out, tied to its constant, with the shared key's rule."""
+    from oto_mcp.tools import elevenlabs as E
+    tool = asyncio.run(_mcp().get_tool("elevenlabs_act"))
+    assert f"~{E.MUSIC_CREDITS_PER_MINUTE} credits a minute" in tool.description
+    assert "the length is required" in tool.description
 
 
 # --- a grant of the shared key REQUIRES a daily quota, in ElevenLabs credits ----------

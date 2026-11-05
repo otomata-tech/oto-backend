@@ -16,7 +16,8 @@ unit, on the customer's own key too — it filters on `key_mode`) and, on the sh
 only, `units` (the grant's quota axis). Speech: `ceil(characters × the model's rate)`,
 characters from ElevenLabs' `x-character-count` header (else the text's length), rate
 0.5 for the flash and turbo models, 1 otherwise — the API's default model when
-`model_id` is omitted (`eleven_multilingual_v2`) included. The reads note 0.
+`model_id` is omitted (`eleven_multilingual_v2`) included. Music: the length asked for,
+at `MUSIC_CREDITS_PER_MINUTE` (ElevenLabs sends no count for it). The reads note 0.
 
 **Surface** (the `<ns>` / `<ns>_act` pair):
 - `elevenlabs` (read-only) — the account's credits, its voices, one voice, the
@@ -112,6 +113,18 @@ MAX_TRANSCRIBE_BYTES_PLATFORM = 1 * 1024 * 1024
 AUDIO_SECONDS_REQUIRED = "audio_seconds_required"
 AUDIO_TOO_LARGE = "audio_too_large"
 
+# Music is billed per minute of track, not per character, and ElevenLabs sends no
+# `x-character-count` for it: every music call on 2 to 4 Nov 2026 noted 1 credit (the
+# estimate below falls back on the prompt's length, and a composition plan has none).
+# ElevenLabs' pricing page (FAQ, read 4 Nov 2026): "Eleven Music 900 credits per minute".
+# Measured the same day on a Creator plan: a 20 s track from a prompt took 275 credits off
+# the subscription (825 a minute), so the published rate bills slightly above the cost.
+# The length is the one ASKED for (`music_length_ms`, or the sum of the plan's sections),
+# which is what the quota is checked against before the call; on the shared key a prompt
+# without a length is refused (the model would choose it, so nothing bounds the bill).
+MUSIC_CREDITS_PER_MINUTE = 900
+MUSIC_LENGTH_REQUIRED = "music_length_required"
+
 
 def parse_platform_ops(value: str) -> frozenset[tuple[str, Optional[str]]]:
     """`platform.ops` as `(tool, op)` pairs, `op=None` for every op of the tool.
@@ -181,6 +194,25 @@ def heard_seconds(result: Any) -> float:
     words = result.get("words") if isinstance(result, dict) else None
     ends = [w.get("end") for w in words or [] if isinstance(w, dict)]
     return max([e for e in ends if isinstance(e, (int, float))], default=0.0)
+
+
+def asked_music_ms(music_length_ms: Optional[int], composition_plan: Any) -> Optional[int]:
+    """The track's asked length in milliseconds: `music_length_ms`, else the sum of the
+    plan's `sections[].duration_ms`; None when neither says it."""
+    if isinstance(music_length_ms, int) and not isinstance(music_length_ms, bool) \
+            and music_length_ms > 0:
+        return music_length_ms
+    sections = composition_plan.get("sections") if isinstance(composition_plan, dict) else None
+    total = sum(s.get("duration_ms") for s in sections or []
+                if isinstance(s, dict) and isinstance(s.get("duration_ms"), (int, float))
+                and not isinstance(s.get("duration_ms"), bool) and s.get("duration_ms") > 0)
+    return int(total) if total else None
+
+
+def music_credits(length_ms: Optional[int]) -> int:
+    """The ElevenLabs credits a track of `length_ms` spends, rounded UP (at least 1)."""
+    ms = length_ms if isinstance(length_ms, (int, float)) and length_ms > 0 else 0
+    return max(1, int(math.ceil(ms * MUSIC_CREDITS_PER_MINUTE / 60_000)))
 
 
 def generation_credits(op: str, audio: Any, fallback_text: Optional[str]) -> int:
@@ -385,7 +417,8 @@ def register(mcp: FastMCP) -> None:
 
     connector_verify.register(_NAME, _verify, couvre=connector_verify.AUTH_QUOTA)
 
-    def _client(tool: str, op: str, units: int = 1, text: Optional[str] = None
+    def _client(tool: str, op: str, units: int = 1, text: Optional[str] = None,
+                music_length: Optional[int] = None
                 ) -> tuple[ElevenLabsClient, Callable[[int], None]]:
         """`(client, served)`. The cascade runs whole (own key > platform grant), the
         grant's quota checked for `units`; on the platform key, a `text` over
@@ -405,6 +438,12 @@ def register(mcp: FastMCP) -> None:
             else:
                 ops = platform_ops()
                 refused = tool not in OPS or not _served(tool, op, ops)
+            if not refused and music_length == 0:
+                raise _bad(f"ElevenLabs ({MUSIC_LENGTH_REQUIRED}): on the shared key a track "
+                           "needs its length, `music_length_ms` (3,000 to 300,000) or a "
+                           "`composition_plan` whose sections carry `duration_ms`: music is "
+                           f"billed per minute ({MUSIC_CREDITS_PER_MINUTE} ElevenLabs credits). "
+                           "Nothing was spent.")
             if refused:
                 from ..auth.hooks import current_user_sub_from_token
                 from .. import links
@@ -623,7 +662,10 @@ def register(mcp: FastMCP) -> None:
           to 300,000) or from a `composition_plan` (sections, each with its
           duration and positive and negative styles), never both;
           `respect_sections_durations`, `force_instrumental`, `seed` optional. A
-          prompt naming an artist or a copyrighted work is refused.
+          prompt naming an artist or a copyrighted work is refused. Billed per
+          minute of track (~900 credits a minute). On the shared key, when the
+          instance serves it: the length is required (`music_length_ms`, or each
+          section's `duration_ms`), the quota is checked against it.
         - `create_sound` — a sound effect described in `text`;
           `duration_seconds` (0.5 to 30, else the model decides),
           `prompt_influence` (0 to 1), `loop` optional.
@@ -709,14 +751,17 @@ def register(mcp: FastMCP) -> None:
 
         if op == "create_music":
             _refuse_ignored(op, text=text, **speech, **sound, **design, **heard)
-            client, served = _client("elevenlabs_act", op)
+            length = asked_music_ms(music_length_ms, composition_plan)
+            client, served = _client("elevenlabs_act", op, units=music_credits(length),
+                                     music_length=length if length else 0)
             audio = _run(lambda: client.create_music(
                 prompt=prompt, composition_plan=composition_plan,
                 music_length_ms=music_length_ms, model_id=model_id, seed=seed,
                 force_instrumental=force_instrumental,
                 respect_sections_durations=respect_sections_durations,
                 output_format=output_format))
-            served(generation_credits(op, audio, prompt))
+            # The header when ElevenLabs sends one, never less than the length asked for.
+            served(max(music_credits(length), generation_credits(op, audio, prompt)))
             return _deposit(audio, "music", sub)
 
         if op == "create_sound":

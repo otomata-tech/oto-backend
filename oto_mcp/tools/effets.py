@@ -1088,7 +1088,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "wordpress_site": "lire",
     "wordpress_terms": {"lire": "list get", "ecrire": "create update", "detruire": "delete"},
     # update can archive the candidate (archived=true)
-    "wttj_candidate": {"lire": "list get", "ecrire": "create", "detruire": "update"},
+    "wttj_candidate": {"lire": "list get resume", "ecrire": "create", "detruire": "update"},
     "wttj_comment": "envoyer",
     "wttj_emails": "lire",
     "wttj_job": {"lire": "list get"},

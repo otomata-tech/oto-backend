@@ -192,6 +192,55 @@ def fresh_resume_url(prep: Prepared, candidate_reference: str) -> str:
     return url
 
 
+#: A resume larger than this is not read: a CV is a few pages, not a book.
+RESUME_MAX_BYTES = 10 * 1024 * 1024
+
+
+def resume_text(url: str) -> dict:
+    """The TEXT of the resume at `url` (a `resume_url` WTTJ just signed), read in
+    memory and dropped: nothing is stored, the file itself never leaves this call.
+
+    Returns `{format, text, pages, truncated}`, or `{text_unavailable}` naming why
+    (a scanned resume has no text: there is no OCR). Raises `ValueError` on a
+    download that cannot be made — the caller turns it into a refusal."""
+    from urllib.parse import unquote, urlsplit
+
+    import requests
+
+    from .. import egress, file_extract
+    from ..file_content import INLINE_TEXT_CAP
+
+    if not isinstance(url, str) or not url.startswith("https://"):
+        raise ValueError("Welcome to the Jungle returned an unusable resume address.")
+    try:
+        egress.check_url(url, connector="wttj", field="resume_url",
+                         exceptions_declarees=False)
+    except egress.EgressRefused as e:
+        raise ValueError(str(e)) from e
+    try:
+        with requests.get(url, timeout=(10, 30), stream=True) as r:
+            if r.status_code != 200:
+                raise ValueError(f"the resume could not be downloaded (HTTP "
+                                 f"{r.status_code}) — try again: its address expires "
+                                 "in 30 minutes.")
+            data = bytearray()
+            for chunk in r.iter_content(64 * 1024):
+                data.extend(chunk)
+                if len(data) > RESUME_MAX_BYTES:
+                    raise ValueError("the resume is over 10 MB: not read.")
+            mime = (r.headers.get("Content-Type") or "").split(";")[0].strip()
+    except requests.RequestException as e:
+        raise ValueError(f"the resume could not be downloaded "
+                         f"({type(e).__name__}).") from e
+    filename = unquote(urlsplit(url).path.rsplit("/", 1)[-1]) or "resume"
+    ex = file_extract.extract(bytes(data), filename, mime)
+    if not ex.ok:
+        return {"text_unavailable": f"{ex.status}: {ex.detail}"}
+    return {"format": filename.rsplit(".", 1)[-1].lower() if "." in filename else mime,
+            "text": ex.text[:INLINE_TEXT_CAP], "pages": ex.pages,
+            "truncated": len(ex.text) > INLINE_TEXT_CAP}
+
+
 def journal_line(payload: dict, *, ok: bool, error: Optional[str], duration_ms: int,
                  key_mode: Optional[str] = None) -> dict:
     """The `tool_calls` row of one opening. `kind='mcp'`, like the Pennylane relay: the

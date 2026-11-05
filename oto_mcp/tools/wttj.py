@@ -28,7 +28,12 @@ plus `resume_link`, an oto address that does not expire with it: on each click t
 server asks WTTJ for the candidate again and redirects to a fresh `resume_url`
 (`tools/wttj_resume.py`, route `GET /api/wttj/resume/{token}`). The raw `resume_url`
 is kept: an agent that downloads the file right away needs it, and it is what WTTJ
-returned. Nothing is stored by oto.
+returned. `wttj_candidate(op="resume")` returns the resume's TEXT instead, read by the
+server in memory (`wttj_resume.resume_text`): an agent whose sandbox cannot reach the
+CDN reads it that way. Nothing is stored by oto.
+
+A list drops the EMPTY values of its rows (the dozen `media_*` a profile leaves blank):
+nothing is lost, and a job with a hundred candidates fits in the context.
 
 ⚠️ This module WRITES into the client's ATS: `wttj_candidate` op="create"/"update"
 (update MOVES a candidate by `job_stage_id` or archives them) and `wttj_comment`.
@@ -53,7 +58,7 @@ OU_OBTENIR_LA_CLE = ("ask WTTJ via help.welcometothejungle.com "
                      "(the token is not generated self-service)")
 
 _JOB_OPS = ("list", "get")
-_CANDIDATE_OPS = ("list", "get", "create", "update")
+_CANDIDATE_OPS = ("list", "get", "resume", "create", "update")
 
 #: Body columns rendered as `<field>_length` in a list (sorting view).
 _JOB_BODIES = ("description", "profile", "company_description", "recruitment_process")
@@ -117,6 +122,17 @@ def _listed(key: str, rows, *, bodies: tuple[str, ...], always: tuple[str, ...],
     if notice:
         out["projection"] = notice
     return out
+
+
+def _sans_vides(value):
+    """`value` without its empty values (None, "", [], {}), at every depth — what a
+    list row carries that says nothing."""
+    if isinstance(value, dict):
+        out = {k: _sans_vides(v) for k, v in value.items()}
+        return {k: v for k, v in out.items() if v not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [_sans_vides(v) for v in value]
+    return value
 
 
 def _with_resume_links(rows: list) -> list:
@@ -239,7 +255,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def wttj_candidate(
-        op: Literal["list", "get", "create", "update"] = "list",
+        op: Literal["list", "get", "resume", "create", "update"] = "list",
         job_reference: Optional[str] = None,
         candidate_reference: Optional[str] = None,
         job_stage_id: Optional[int] = None,
@@ -263,9 +279,14 @@ def register(mcp: FastMCP) -> None:
         - **"list"** (default): candidates of one job (`job_reference` — there is
           no cross-job listing), optionally at one stage (`job_stage_id`), by
           `email`, `archived`, dates. Sorting view: `cover_letter` comes back as
-          `cover_letter_length`; `fields=["*"]` returns full rows.
+          `cover_letter_length`, empty values are left out; `fields=["*"]` returns
+          full rows.
         - **"get"**: one candidate (`candidate_reference`), with its stage and tags.
           Give a human `resume_link` (durable); `resume_url` expires in 30 min.
+        - **"resume"**: the TEXT of a candidate's resume (`candidate_reference`),
+          read by the server — to read or score a CV, rather than downloading
+          `resume_url`. A scanned resume has no text (`text_unavailable`): open
+          `resume_link` instead. Nothing is stored.
         - **"create"** — ⚠️ WRITES: add a candidate to a job at a stage.
           Required: `organization_reference`, `job_reference`, `job_stage_id`
           (from `wttj_job(op="get")`), `email`, `firstname`, `lastname`.
@@ -298,6 +319,8 @@ def register(mcp: FastMCP) -> None:
                 stage=True, page=page, per_page=per_page))
             if isinstance(rows, list):
                 rows = _with_resume_links(rows)
+                if fields != ["*"]:
+                    rows = [_sans_vides(r) for r in rows]
             return _listed("candidates", rows, bodies=_CANDIDATE_BODIES,
                            always=("reference", "stage_id"), fields=fields,
                            page=page, per_page=per_page)
@@ -307,6 +330,23 @@ def register(mcp: FastMCP) -> None:
             if isinstance(found, dict):
                 found, = _with_resume_links([found])
             return {"candidate": found}
+        if op == "resume":
+            _refuse_ignored(op, "op='resume' takes candidate_reference only",
+                            job_reference=job_reference, job_stage_id=job_stage_id,
+                            email=email, archived=archived, created_after=created_after,
+                            updated_after=updated_after, page=page, per_page=per_page,
+                            fields=fields, organization_reference=organization_reference,
+                            firstname=firstname, lastname=lastname, candidate=candidate,
+                            patch=patch)
+            ref = _need(candidate_reference, "candidate_reference", op)
+            found = _run(lambda: _client().get_candidate(ref))
+            url = found.get("resume_url") if isinstance(found, dict) else None
+            if not url:
+                raise _bad(f"candidate {ref} has no resume on file.")
+            lu = _run(lambda: wttj_resume.resume_text(url))
+            link, = _with_resume_links([found])
+            return {"candidate_reference": ref, "resume": lu,
+                    "resume_link": link.get("resume_link")}
         if op == "create":
             _refuse_ignored(op, "use op='update' to modify an existing candidate",
                             candidate_reference=candidate_reference, patch=patch)

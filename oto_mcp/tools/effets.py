@@ -308,6 +308,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "calendar_event": {"lire": "list get", "envoyer": "create", "detruire": "update rm"},
     "ccn_article": {"lire": "search get"},
     "ccn_conventions": "lire",
+    "ccn_rupture_conventionnelle": "lire",
     "chat_act": {"envoyer": "send"},
     "claap_recording_views": {"lire": "list get"},
     "claap_recordings": {"lire": "list get transcript", "ecrire": "create", "detruire": "delete"},

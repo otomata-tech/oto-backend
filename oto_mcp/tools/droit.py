@@ -132,6 +132,62 @@ def register(mcp: FastMCP) -> None:
         from ..fod import ccn as fod_ccn
         return fod_ccn.conventions(idcc=idcc, query=query, limit=limit)
 
+    @mcp.tool()
+    def ccn_rupture_conventionnelle(
+        date_entree: str,
+        date_signature: str,
+        date_rupture_envisagee: str,
+        indemnite_convenue: float,
+        mois: list[dict],
+        idcc: Optional[str] = None,
+        jours_non_comptes_anciennete: int = 0,
+        date_depot: Optional[str] = None,
+        alsace_moselle: bool = False,
+    ) -> dict:
+        """Check a French mutual termination (rupture conventionnelle) BEFORE it is
+        filed for approval: deterministic, nothing stored, nothing filed.
+
+        Returns `verdict` (`conforme` | `non_conforme` | `incomplet`) and one entry
+        per check in `controles` — reference salary, length of service, legal
+        severance floor, collective-agreement floor, withdrawal period, filing
+        date, earliest termination date — each with its figure, its status
+        (`ok` | `ko` | `non_couvert` | `donnees_insuffisantes` | `info`) and the
+        article it applies. `non_couvert` means the agreement's own floor is not
+        coded yet: say it must be checked by hand, never report it as compliant.
+        `telerc` lists the fields of the online filing (TéléRC, mandatory since
+        April 2022 — no paper form to fill) in their order, for HR to copy as is;
+        a `null` field could not be established and is filled in by hand.
+        The figures come from the employee's payroll: read them with the payroll
+        tools, never estimate them.
+
+        Args:
+            date_entree: Hiring date, YYYY-MM-DD.
+            date_signature: Date the agreement is signed, YYYY-MM-DD.
+            date_rupture_envisagee: Planned end of contract, YYYY-MM-DD.
+            indemnite_convenue: Agreed severance, gross euros.
+            mois: Gross pay month by month, at least the 12 months before the
+                signature month: `{"mois": "YYYY-MM", "brut": 2400.0,
+                "primes_exceptionnelles": 0, "neutralise": false}`.
+                `primes_exceptionnelles` = the part of `brut` paid as an annual or
+                one-off bonus. `neutralise: true` for a month whose pay dropped
+                because of sick leave, maternity or birth leave, or any
+                suspension — give the reason to nobody, it is health data — and
+                add the months BEFORE it so 12 unneutralised months remain.
+            idcc: Collective agreement IDCC of the employee (from payroll).
+            jours_non_comptes_anciennete: Days of suspension excluded from length
+                of service by law or agreement (default 0).
+            date_depot: Planned filing date, YYYY-MM-DD (default: earliest).
+            alsace_moselle: True for an establishment in Alsace-Moselle (Good
+                Friday and 26 December are public holidays there).
+        """
+        from ..fod import rupture as fod_rupture
+        dossier = {"date_entree": date_entree, "date_signature": date_signature,
+                   "date_rupture_envisagee": date_rupture_envisagee,
+                   "indemnite_convenue": indemnite_convenue, "mois": mois, "idcc": idcc,
+                   "jours_non_comptes_anciennete": jours_non_comptes_anciennete,
+                   "date_depot": date_depot, "alsace_moselle": alsace_moselle}
+        return fod_rupture.controler({k: v for k, v in dossier.items() if v is not None})
+
     # --- Consolidated codes (LEGI, via FOD service) ---
     # 22 French codes WITH historical versions: the article in force at a
     # given date (a 1992 decision cites art. 1128 CC → text of that time).

@@ -57,7 +57,12 @@ def test_a_blanc_rien_n_est_ecrit_et_seuls_des_nombres_sortent(monde, capsys):
     c = _compteurs(sortie)
     assert c["orgs_perso_vivantes"] == 3 and c["orgs_perso_marquees"] == 0
     assert c["orgs_perso_peuplees"] == 0
-    assert c["orgs_perso_vides_archivables"] == 1     # `pleine` a un projet, `seule` rien d'autre
+    # `pleine` a un projet, `seule` n'a pas d'autre org : seule `vide` est archivable.
+    with db._connect() as conn:
+        vides = set(R._vides(conn))
+    assert monde["vide"][1] in vides
+    assert not vides & {monde["pleine"][1], monde["seule"][1]}
+    assert c["orgs_perso_vides_archivables"] == 1
     assert c["projets_a_ranger"] == 1
     # Rien de nominatif : ni compte, ni nom d'org.
     for sub, _oid in (monde["vide"], monde["pleine"], monde["seule"]):
@@ -115,3 +120,95 @@ def test_appliquer_et_archiver(monde):
     with db._connect() as c:
         assert c.execute("SELECT count(*) AS n FROM orgs WHERE personal_of IS NOT NULL"
                          ).fetchone()["n"] == 0
+
+
+def test_archiver_seul_dit_en_clair_qu_il_ne_trouve_rien(monkeypatch, capsys):
+    """Sans base : `--archiver` sur une liste vide le dit, au lieu de passer en silence."""
+    from contextlib import contextmanager
+
+    from scripts import retirer_orgs_perso as R
+
+    class _C:
+        def execute(self, sql, params=None):
+            rows = [] if "SELECT o.id FROM orgs o" in sql else [{"n": 0}]
+            return type("R", (), {"fetchone": lambda s: rows[0] if rows else None,
+                                  "fetchall": lambda s: rows})()
+
+    @contextmanager
+    def _ouvrir():
+        yield _C()
+
+    monkeypatch.setattr(R, "_connect_autocommit", _ouvrir)
+    assert R.main(["--archiver"]) == 0
+    assert "--archiver : aucune org vide à archiver." in capsys.readouterr().out
+
+
+_LOT = "2026-11-06T00:52:26+01:00"     # mise en service du lot sur oto (v1.693.0)
+
+
+@pytest.fixture(scope="module")
+def deux_passages(live):
+    """Le geste joué en deux temps : `--appliquer` seul a déjà vidé l'étiquette. Les
+    orgs perso héritées sont nées avant le lot ; `recente` est une org d'inscription
+    née depuis, vide, dont le compte a une autre org."""
+    from oto_mcp import db, org_store
+    u = uuid.uuid4().hex[:6]
+    vide, pleine, seule = f"usr_rop2_vide_{u}", f"usr_rop2_pleine_{u}", f"usr_rop2_seule_{u}"
+    orgs = {k: _perso_heritee(db, org_store, sub)
+            for k, sub in (("vide", vide), ("pleine", pleine), ("seule", seule))}
+    with db._connect() as c:
+        c.execute("UPDATE orgs SET created_at = '2026-10-01T10:00:00+02:00' "
+                  "WHERE id = ANY(%s)", (list(orgs.values()),))
+    recente = f"usr_rop2_recente_{u}"
+    db.upsert_user(recente, email=f"{recente}@t.invalid", name=recente)
+    orgs["recente"] = org_store.home_org(recente)
+    assert _org(db, orgs["recente"])["auto_created"]
+    for sub in (vide, pleine, recente):
+        autre = org_store.create_org(f"Boîte {sub}", created_by=sub)
+        org_store.add_org_member(autre, sub, "org_admin")
+    db.create_project("user", pleine, f"rop2-{u}", created_by=pleine)
+    return orgs
+
+
+def test_archiver_apres_un_appliquer_seul_retrouve_les_ex_orgs_perso(deux_passages, capsys):
+    from oto_mcp import db
+    from scripts import retirer_orgs_perso as R
+    assert R.main(["--appliquer"]) == 0
+    for k in ("vide", "pleine", "seule"):
+        o = _org(db, deux_passages[k])
+        assert o["personal_of"] is None and o["auto_created"] and o["archived_at"] is None
+    capsys.readouterr()
+    # Sans borne : l'étiquette seule, plus rien — et le script le dit, avec la sortie.
+    assert R.main(["--archiver"]) == 0
+    sortie = capsys.readouterr().out
+    assert "--archiver : aucune org vide à archiver." in sortie and "--nees-avant" in sortie
+    # Bornée au lot : l'ex-org perso vide, et elle seule — pas l'org d'inscription récente.
+    with db._connect() as conn:
+        vides = set(R._vides(conn, R._instant(_LOT)))
+    assert deux_passages["vide"] in vides
+    assert not vides & {deux_passages[k] for k in ("pleine", "seule", "recente")}
+    assert R.main(["--archiver", "--nees-avant", _LOT]) == 0
+    assert _org(db, deux_passages["vide"])["archived_at"] is None   # à blanc : rien écrit
+    assert R.main(["--appliquer", "--archiver", "--nees-avant", _LOT]) == 0
+    assert _org(db, deux_passages["vide"])["archived_at"] is not None
+    for k in ("pleine", "seule", "recente"):
+        assert _org(db, deux_passages[k])["archived_at"] is None, k
+
+
+def test_une_org_d_inscription_recente_et_vide_n_est_jamais_retenue(deux_passages):
+    """Ni sans borne, ni avec : la relâcher relève de `liberer_perso_vierge`."""
+    from oto_mcp import db
+    from scripts import retirer_orgs_perso as R
+    with db._connect() as conn:
+        assert deux_passages["recente"] not in R._vides(conn)
+        assert deux_passages["recente"] not in R._vides(conn, R._instant(_LOT))
+
+
+@pytest.mark.parametrize("argv", [["--nees-avant", _LOT],                   # sans --archiver
+                                  ["--archiver", "--nees-avant", "2026-11-06T00:52:26"],
+                                  ["--archiver", "--nees-avant", "hier"]])
+def test_nees_avant_refuse_un_reglage_ambigu(argv):
+    from scripts import retirer_orgs_perso as R
+    with pytest.raises(SystemExit) as e:
+        R.main(argv)
+    assert e.value.code == 2

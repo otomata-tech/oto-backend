@@ -47,7 +47,14 @@ def verbe(outil: str, op: Optional[str]) -> str:
 
 
 def classer(outil: str, op: Optional[str]) -> str:
-    """`lire`, `ecrire`, `envoyer` ou `detruire` — jamais `lire` sur un verbe inconnu."""
+    """`lire`, `ecrire`, `envoyer` ou `detruire` — jamais `lire` sur un verbe inconnu. Un outil
+    servi par le lecteur générique (`tools/decrits.py`) se classe par sa DESCRIPTION (classe,
+    `act`, `effect` : `connectors/descriptions.classe`), jamais par un verbe : une op qu'il ne
+    sert pas lève."""
+    from ..connectors import descriptions
+    decrite = descriptions.classe_d_un_appel(outil, op)
+    if decrite is not None:
+        return decrite
     v = verbe(outil, op)
     if v in DESTRUCTION:
         return "detruire"

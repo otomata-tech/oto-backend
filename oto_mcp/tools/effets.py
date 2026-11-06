@@ -40,6 +40,10 @@ A doubt is the most constraining class, never `lire` by default.
 platform tools (`oto_*`, `data_*`, `run_*`, `email_send`, `feedback`) — plus the
 capabilities declared but not mounted yet (feature flag off).
 
+**Described connectors** (served by the generic reader, `tools/decrits.py`): their lines are
+DERIVED from their description (`connectors/descriptions.py`: class, `act`, `effect`, list
+arguments) and merged below, never written here; a tool declared both ways raises at import.
+
 **Nothing reads this table at call time yet**: `effet()` is what the next lots plug into
 the common path. No call is refused because of it today.
 """
@@ -1702,3 +1706,26 @@ def effet(name: str, args: Optional[dict] = None) -> tuple[str, Optional[Lot]]:
     if classe in ("ecrire", "envoyer"):
         return classe, lot(name, op)
     return classe, None
+
+
+# --- the described connectors -----------------------------------------------------------
+
+def _fusionner(table: dict, derivees: dict, nom: str) -> None:
+    """Merge the lines derived from a description; a key declared by hand too raises."""
+    doubles = sorted(set(table) & set(derivees))
+    if doubles:
+        raise ValueError(f"{nom}: {doubles} declared twice, by hand and by their description")
+    table.update(derivees)
+
+
+def _deriver_les_decrits() -> None:
+    from ..connectors import descriptions
+    for c in descriptions.inscrits():
+        d = descriptions.charger(c.name)
+        _fusionner(EFFETS, descriptions.effets(d), "EFFETS")
+        _fusionner(LOTS, {k: Lot(cle, max_, avec) for k, (cle, max_, avec) in
+                          descriptions.lots(d, LOT_MAX).items()}, "LOTS")
+        _fusionner(PAS_UN_LOT, descriptions.pas_un_lot(d, LOT_MAX), "PAS_UN_LOT")
+
+
+_deriver_les_decrits()

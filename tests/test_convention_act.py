@@ -12,6 +12,9 @@ règle mécanique, connecteur par connecteur :
 - **ops** : aucune op de `<ns>` ne porte un verbe à effet (hors simulations nommées), et
   `<ns>_act` n'a que des ops à effet ; aucun paramètre qui déclenche (`mode`, `notify`,
   `send_*`) sur `<ns>` ;
+- **connecteurs servis par le lecteur générique** (`tools/decrits.py`) : la garde lit leur
+  DESCRIPTION, pas un verbe — `<ns>` sert exactement leurs fonctions `act: false`, `<ns>_act`
+  leurs fonctions `act: true`, et l'annotation suit la classe ;
 - **retraits** : chaque ancien nom de `outils_retires.RENOMMAGES` n'est plus servi, et
   son remplaçant sert bien l'op annoncée ; chaque op de `outils_retires.OPS_DEPLACEES`
   a quitté le lecteur qui reste servi, et son acteur la sert.
@@ -28,6 +31,8 @@ import re
 import pytest
 
 from oto_mcp import outils_retires, providers, tool_visibility
+from oto_mcp.connectors import descriptions
+from oto_mcp.tools.lecture import ACTE, LECTURE, SIMULATION
 
 from _mcp_app import static_mcp
 
@@ -93,8 +98,37 @@ def par_connecteur():
     return _par_connecteur()
 
 
+def _servis_decrits() -> dict[str, dict]:
+    """`{ns: description}` des connecteurs servis par le lecteur générique."""
+    out = {}
+    for c in descriptions.inscrits():
+        d = descriptions.charger(c.name)
+        out[descriptions.espace(d)] = d
+    return out
+
+
 def _migres(par_connecteur):
     return {ns: outils for ns, outils in par_connecteur.items() if ns not in A_MIGRER}
+
+
+def _migres_par_verbe(par_connecteur):
+    """Les connecteurs migrés dont la garde lit le VERBE des ops : pas ceux que le lecteur sert
+    (leur garde lit la description, `test_un_connecteur_servi_suit_sa_description`)."""
+    servis = _servis_decrits()
+    return {ns: outils for ns, outils in _migres(par_connecteur).items() if ns not in servis}
+
+
+def test_un_connecteur_servi_suit_sa_description(par_connecteur):
+    for ns, d in _servis_decrits().items():
+        outils = par_connecteur[ns]
+        attendu = descriptions.outils(d)
+        assert set(outils) == set(attendu), (ns, sorted(outils))
+        for nom, fonctions in attendu.items():
+            assert _ops(outils[nom]) == [f["name"] for f in fonctions], nom
+            agit = nom != ns
+            assert all(descriptions.agit(f) is agit for f in fonctions), nom
+            annotation = (ACTE if agit else SIMULATION if descriptions.lecteur_simule(fonctions) else LECTURE)
+            assert outils[nom].annotations == annotation, nom
 
 
 def test_un_connecteur_migre_ne_sert_que_sa_paire(par_connecteur):
@@ -110,7 +144,7 @@ def test_a_migrer_ne_fait_que_retrecir(par_connecteur):
 
 
 def test_les_annotations_disent_qui_lit_et_qui_agit(par_connecteur):
-    for ns, outils in _migres(par_connecteur).items():
+    for ns, outils in _migres_par_verbe(par_connecteur).items():
         if ns in outils:
             a = outils[ns].annotations
             assert a is not None, ns
@@ -129,7 +163,7 @@ def test_les_annotations_disent_qui_lit_et_qui_agit(par_connecteur):
 
 
 def test_l_outil_qui_lit_n_a_aucune_op_ni_aucun_parametre_qui_agit(par_connecteur):
-    for ns, outils in _migres(par_connecteur).items():
+    for ns, outils in _migres_par_verbe(par_connecteur).items():
         if ns not in outils:
             continue
         for op in _ops(outils[ns]):
@@ -139,7 +173,7 @@ def test_l_outil_qui_lit_n_a_aucune_op_ni_aucun_parametre_qui_agit(par_connecteu
 
 
 def test_l_outil_qui_agit_n_a_que_des_ops_a_effet(par_connecteur):
-    for ns, outils in _migres(par_connecteur).items():
+    for ns, outils in _migres_par_verbe(par_connecteur).items():
         act = outils.get(f"{ns}_act")
         if act is None:
             continue

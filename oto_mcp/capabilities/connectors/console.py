@@ -27,6 +27,7 @@ from . import (access_level as connectors_access_level,
                identities as connectors_identities,
                instances as connectors_instances,
                selection as connectors_selection,
+               setup_link as connectors_setup_link,
                sharing as connectors_sharing,
                verify as connectors_verify)
 from .._authz import (
@@ -114,8 +115,8 @@ def _access_level(ctx: ResolvedCtx, inp: AccessLevelInput) -> dict:
 
 # ── oto_connector : list / select / pause / unselect · force / recommend ─────
 class ConnectorInput(BaseModel):
-    op: Literal["list", "select", "pause", "unselect", "force", "recommend"]
-    name: Optional[str] = None                 # list (filter 1 connector) · select/pause/unselect/force
+    op: Literal["list", "select", "pause", "unselect", "force", "recommend", "setup_link"]
+    name: Optional[str] = None                 # list (filter 1 connector) · select/pause/unselect/force · setup_link
     verbose: bool = False                      # list
     state: Optional[str] = None                # list: not_selected|active|paused
     org_id: Optional[int] = None               # force/recommend
@@ -135,6 +136,9 @@ async def _connector(ctx: ResolvedCtx, inp: ConnectorInput) -> dict:
         # dropped and the agent received the whole catalog.
         return await run_in_threadpool(sel._me, ctx, sel.MyConnectorsInput(
             verbose=inp.verbose, state=inp.state, name=inp.name))
+    if inp.op == "setup_link":
+        return await run_in_threadpool(connectors_setup_link.setup_link, ctx, _need(
+            inp.name, "missing_name", "`name` (connector) is required for setup_link."))
     if inp.op in ("select", "pause", "unselect"):
         action = sel.ConnectorActionInput(
             name=_need(inp.name, "missing_name", f"`name` (connector) is required for {inp.op}."))
@@ -284,6 +288,7 @@ CAPABILITIES += [
         key="connectors.console.connector", handler=_connector, Input=ConnectorInput,
         authz=BY_OP({
             "list": SUB_ONLY, "select": SUB_ONLY, "pause": SUB_ONLY, "unselect": SUB_ONLY,
+            "setup_link": SUB_ONLY,
             "force": ORG_ADMIN_OF("org_id"), "recommend": ORG_ADMIN_OF("org_id"),
         }),
         description=(
@@ -299,7 +304,11 @@ CAPABILITIES += [
             "tool (e.g. linkedin_unipile_account op=status): call it BEFORE concluding a "
             "connector is not connected. / select (install "
             "`name` — its tools do NOT mount in the current conversation: reach them right "
-            "away via oto_call, or open a new one) / pause / unselect. Org admin, on "
+            "away via oto_call, or open a new one) / pause / unselect / setup_link (`name` → the "
+            "page where a PERSON connects it themselves — key form, OAuth button or hosted "
+            "login — plus the fields they will be asked for and where to find the key: send "
+            "them the `url`; never ask for a key in the chat, this op takes no secret; the "
+            "Custom API has its own, `http(op=\"setup_link\")`). Org admin, on "
             "`org_id`: op=force (install `name` in ONE `member`'s toolbox — refused, with the "
             "date, if they paused or removed it themselves; not an access grant) / recommend (set the org's KIT `connectors` as a whole list: the "
             "DIFFERENCE is installed for current members too, never over their own choice; [] "

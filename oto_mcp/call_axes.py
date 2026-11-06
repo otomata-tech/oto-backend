@@ -520,7 +520,8 @@ def _is_org_scopable_tool(name: str) -> bool:
 # `email_send` (#1355) : il envoie depuis une adresse de l'org ACTIVE
 # (`access.current_org`) — sans l'axe, l'envoi partait de l'org maison quand le run en
 # visait une autre, et `_org=` était refusé comme champ inconnu.
-_LECTURES_D_ORG_ECRITES_A_LA_MAIN = frozenset({"oto_procedure_app", "email_send"})
+_LECTURES_D_ORG_ECRITES_A_LA_MAIN = frozenset({"oto_procedure_app", "email_send",
+                                               "oto_connector_app"})
 
 
 async def _pin_org_flat(value: object) -> list[UndoEntry]:

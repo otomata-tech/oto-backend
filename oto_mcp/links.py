@@ -83,7 +83,10 @@ DEFAULT_PATHS: dict[str, str] = {
 # names one — the "no pattern ⟹ no link" rule, applied to a view only some fronts
 # have. `app` = an app opened full screen (`oto_apps`), e.g. `/org/{org}/apps/{id}` on
 # a front that serves that view.
-DECLARED_ONLY_KINDS = frozenset({"app"})
+# `connect` = the page that shows ONE connector and its add form, nothing else
+# (`/org/{org}/connect/{connector}`), where `oto_connector op=setup_link` sends a person;
+# without it, the link falls back to the connectors page (`connector_setup_link`).
+DECLARED_ONLY_KINDS = frozenset({"app", "connect"})
 
 
 class InstancePathsInvalid(ValueError):

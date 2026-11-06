@@ -648,6 +648,16 @@ fait chez le tiers), `op=request` (appel brut), `op=import` (conversion OpenAPI,
 (`http_get`/`http_post`/`http_doc`) restent servis ; `http` reste dans `A_MIGRER` tant
 qu'ils n'ont pas rejoint la paire.
 
+**Le même lien pour tout le catalogue** : `oto_connector(op="setup_link", name=…)`
+(`capabilities/connectors/setup_link.py`) rend la carte d'UN connecteur
+(`links.connector_setup_link`, page connecteurs du produit de l'appelant), avec les
+champs que le formulaire demandera (noms, jamais de valeur), la méthode (`secret`,
+`oauth`, `hosted`…), et où trouver la clé (sections `prerequisite`/`setup` de la doc
+du connecteur). Le lien ne porte **ni secret ni texte choisi par le modèle** — une
+phrase d'agent affichée sur une page de confiance à côté d'un champ de clé serait un
+hameçon. `http` est renvoyé vers son propre `setup_link` (pré-remplissage). Savoir si la
+personne a fini : `op=list name=…` (`credential`), pas un état de plus.
+
 **Configuré une fois, servi à tous** : la `config` porte aussi la **définition** du
 connecteur personnalisé (`oto_mcp/custom_ops_definition.py`) — `label`, `description`,
 `logo_domain`, `headers` constants NON secrets (un en-tête qui authentifie ou route est

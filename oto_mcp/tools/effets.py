@@ -1199,7 +1199,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_clear_org": "ecrire",
     "oto_clear_project": "ecrire",
     # recommend REPLACES the org's kit
-    "oto_connector": {"lire": "list", "ecrire": "select force", "detruire": "pause unselect recommend"},
+    "oto_connector": {"lire": "list setup_link", "ecrire": "select force", "detruire": "pause unselect recommend"},
     "oto_connector_access_level": {"lire": "get", "detruire": "set clear"},
     "oto_connector_activation": {"lire": "list", "detruire": "set clear"},
     "oto_context": "lire",
@@ -1207,6 +1207,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_disable_tool": "ecrire",
     "oto_doc": {"lire": "list search get revisions backlinks shared_with_me outline verify", "ecrire": "create update patch move unarchive", "envoyer": "set_public", "detruire": "bulk_create delete revert archive"},
     "oto_doc_app": "lire",
+    "oto_connector_app": "lire",
     "oto_enable_tool": "ecrire",
     "oto_fleet": {"lire": "list get state", "ecrire": "create update take beat ack_stop", "envoyer": "launch", "detruire": "stop"},
     # `run` executes stored pure code (no network, no secret) and stores its files

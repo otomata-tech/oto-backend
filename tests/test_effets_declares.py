@@ -11,6 +11,8 @@ cette déclaration, jamais sur un verbe deviné. Cette garde la rend mécanique 
   toutes ses ops lisent) ;
 - **lots** : toute op qui écrit ou envoie, sur un outil qui prend une liste, déclare son
   lot — ou l'outil déclare que cette liste n'est pas un lot ;
+- **connecteurs décrits** : un outil servi par le lecteur générique a, op par op, la classe que
+  dérive sa description (classe, `act`, `effect`), et chaque liste d'une op qui écrit est un lot ;
 - **audit** : les cas que le verbe classe mal (un `add` qui lance une séquence, un
   `http_act` DELETE, un `refund`…) gardent leur classe.
 
@@ -348,3 +350,24 @@ def test_http_act_call_sans_action_leve(monkeypatch):
         effet("http_act", {"op": "call", "operation": "faire"})
     with pytest.raises(McpError):
         effet("http_act", {"op": "call"})
+
+
+# --- les connecteurs servis par le lecteur générique ---------------------------------------
+
+
+def test_un_outil_decrit_a_la_classe_de_sa_description(servis):
+    from oto_mcp.connectors import descriptions
+    for c in descriptions.inscrits():
+        d = descriptions.charger(c.name)
+        for outil, fonctions in descriptions.outils(d).items():
+            assert outil in servis, outil
+            classes = {f["name"]: descriptions.classe(f) for f in fonctions}
+            if set(classes.values()) == {"lire"} and outil == descriptions.espace(d):
+                assert en_lecture(servis[outil]) and outil not in EFFETS, outil
+                continue
+            assert effets.classes_par_op(outil) == classes, outil
+            for op, classe in classes.items():
+                listes = [n for n, s in next(f for f in fonctions if f["name"] == op)["input"]["properties"].items()
+                          if s.get("type") == "array"]
+                if classe in ("ecrire", "envoyer") and listes:
+                    assert effets.lot(outil, op) is not None, (outil, op)

@@ -51,6 +51,9 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.213.0 = lecteur générique : descriptions dans la distribution (`oto.connectors.descriptions`),
+    # `oto.connectors.serve` (refus nommé, strip, pagination, sonde) et champ `effect`
+    # send|destroy (connectors#200), lus par `tools/decrits.py` ;
     # v1.212.0 = threecx : toute la configuration du standard, lue et écrite par son propre
     # schéma (`Schema`, `read`/`create`/`update`/`delete`/`invoke`, connectors#187), servi par
     # `threecx_config` et `threecx_act` ;
@@ -503,7 +506,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.212.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.213.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome
@@ -531,6 +534,9 @@ dependencies = [
     "requests>=2.31",
     "httpx>=0.27",
     "pydantic>=2.0",
+    # jsonschema : le lecteur des descriptions (oto_mcp/tools/decrits.py) valide chaque appel contre le schéma
+    # d'entrée servi. Tirée jusqu'ici par fastmcp seulement : déclarée parce qu'elle est lue en direct.
+    "jsonschema>=4.20,<5",
     # `oto_mcp/empreinte_deps.py` (#932) lit l'`uv.lock` (TOML) et en évalue les
     # marqueurs PEP 508 pour dire si l'installé égale le verrou. `tomllib` n'existe
     # qu'à partir de 3.11 : la box tourne en 3.10, d'où `tomli` sous ce marqueur.

@@ -1438,8 +1438,8 @@ wheels = [
 
 [[package]]
 name = "oto-core"
-version = "1.212.0"
-source = { git = "https://github.com/otomata-tech/oto-core.git?rev=v1.212.0#4ec105f226e67e99c942cf4aad79d5993cd8498b" }
+version = "1.213.0"
+source = { git = "https://github.com/otomata-tech/oto-core.git?rev=v1.213.0#0a12f2b1c9175ba5c2816529404e90e3187a5c12" }
 dependencies = [
     { name = "defusedxml" },
     { name = "france-opendata" },
@@ -1472,6 +1472,7 @@ dependencies = [
     { name = "google-auth" },
     { name = "google-auth-oauthlib" },
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "markdown" },
     { name = "markdown-it-py" },
     { name = "openpyxl" },
@@ -1512,6 +1513,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "jsonschema", specifier = ">=4.20,<5" },
     { name = "markdown", specifier = ">=3.5" },
     { name = "markdown-it-py", specifier = ">=3.0" },
     { name = "openpyxl", specifier = ">=3.1" },

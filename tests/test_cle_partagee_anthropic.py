@@ -657,8 +657,8 @@ def bareme_par_modele(monkeypatch):
 
 def test_un_tour_se_reserve_au_prix_de_son_modele(bareme_par_modele):
     from oto_mcp.access import credits_tours as tours
-    assert tours.reserver_tour("t1", "s", ORG, 400, "claude-sonnet-5")["reserved"] == 40
-    assert tours.reserver_tour("t2", "s", ORG, 400, "claude-opus-5")["reserved"] == 100
+    assert tours.reserver_tour("runner:1:1:1", "s", ORG, 400, "claude-sonnet-5")["reserved"] == 40
+    assert tours.reserver_tour("copilot:th:000002", "s", ORG, 400, "claude-opus-5")["reserved"] == 100
     assert [r["function"] for r in bareme_par_modele["reserver"]] == [
         "messages:claude-sonnet-5", "messages:claude-opus-5"]
 
@@ -667,7 +667,7 @@ def test_un_tour_se_reserve_au_prix_de_son_modele(bareme_par_modele):
 def test_un_modele_sans_ses_lignes_est_sans_bareme(bareme_par_modele, model):
     from oto_mcp.access import credits_tours as tours
     with pytest.raises(tours.TourRefuse) as e:
-        tours.reserver_tour("t1", "s", ORG, 400, model)
+        tours.reserver_tour("runner:1:1:1", "s", ORG, 400, model)
     assert e.value.code == "credits_unpriced" and bareme_par_modele["reserver"] == []
     assert bareme_par_modele["notes"] == [
         f"unpriced:anthropic.messages:{model or '(no model)'}"]

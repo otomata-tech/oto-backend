@@ -8,7 +8,10 @@ Ce que ces bancs tiennent :
    restent en `report` ;
 2. **un réglage illisible refuse le démarrage**, en nommant l'élément — une fonction que
    le barème ne sait pas tarifer comprise ; un nom exact l'emporte toujours sur un motif ;
-3. **le plancher ne mord qu'en `enforce`**, sur le disponible (solde − réservations
+3. **un mode par SURFACE** (`runner/…`, `copilot/…`) ne vaut que pour les tours de cette
+   surface ; sans entrée de surface, runner et copilot lisent exactement ce qu'ils
+   lisaient avant ;
+4. **le plancher ne mord qu'en `enforce`**, sur le disponible (solde − réservations
    ouvertes) du payeur du travail ; `report` journalise, `off` et 0 ne lisent rien ; un
    solde illisible est `spend_ledger_unavailable`, rejouable.
 """
@@ -60,8 +63,8 @@ def test_un_nom_sans_etoile_est_exact(monkeypatch):
 def test_le_tour_lit_le_mode_de_son_modele(monkeypatch):
     monkeypatch.setenv("OTO_CREDITS_MODE", "off")
     monkeypatch.setenv("OTO_CREDITS_MODE_FUNCTIONS", "anthropic.messages:*=enforce")
-    assert tours.mode_du_modele("claude-sonnet-5-20261001") == "enforce"
-    assert tours.mode_du_modele(None) == "enforce", "un travail sans modèle : `messages:`"
+    assert tours.mode_du_modele("claude-sonnet-5-20261001", "runner") == "enforce"
+    assert tours.mode_du_modele(None, "copilot") == "enforce", "un travail sans modèle : `messages:`"
 
 
 @pytest.mark.parametrize("valeur", ["anthropic.messages:*", "anthropic=enforce",
@@ -131,6 +134,8 @@ def test_une_fonction_nommee_deux_fois_refuse_le_demarrage(monkeypatch):
     ("off", "anthropic.messages:*=report", True),
     ("off", "anthropic.messages:*=off", False),
     ("report", "", True),
+    ("off", "runner/anthropic.messages:*=enforce", True),
+    ("off", "copilot/anthropic.messages:*=off", False),
 ])
 def test_la_borne_d_outil_desarmee_se_dit_des_qu_une_fonction_reserve(
         monkeypatch, caplog, instance, fonctions, averti):
@@ -154,7 +159,132 @@ def test_un_plancher_illisible_refuse_le_demarrage(monkeypatch, valeur):
         credits.verifier_reglages()
 
 
-# ── 3. le plancher ──────────────────────────────────────────────────────────
+# ── 3. le mode par surface ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize("instance", ["off", "report", "enforce"])
+@pytest.mark.parametrize("fonctions", [
+    "",
+    "anthropic.messages:*=enforce",
+    "anthropic.messages:*=off",
+    "anthropic.messages:*=enforce, anthropic.messages:claude-haiku-4-5=off",
+    "anthropic.messages:claude-opus*=report, fullenrich.submit=enforce",
+])
+@pytest.mark.parametrize("model", ["claude-sonnet-5", "claude-haiku-4-5",
+                                   "claude-opus-5-20261001", None])
+def test_sans_entree_de_surface_runner_et_copilot_lisent_le_mode_d_avant(
+        monkeypatch, instance, fonctions, model):
+    """Figé : sans entrée de surface, les deux surfaces rendent le mode que la fonction
+    du modèle avait déjà (`mode_de` sans surface, la résolution d'avant)."""
+    monkeypatch.setenv("OTO_CREDITS_MODE", instance)
+    monkeypatch.setenv("OTO_CREDITS_MODE_FUNCTIONS", fonctions)
+    avant = modes.mode_de("anthropic", tours.fonction_du_modele(model) or "messages:")
+    assert tours.mode_du_modele(model, "runner") == avant
+    assert tours.mode_du_modele(model, "copilot") == avant
+
+
+def test_le_runner_en_enforce_le_copilot_garde_son_mode(monkeypatch):
+    monkeypatch.setenv("OTO_CREDITS_MODE", "report")
+    monkeypatch.setenv("OTO_CREDITS_MODE_FUNCTIONS", "runner/anthropic.messages:*=enforce")
+    assert tours.mode_du_modele("claude-sonnet-5", "runner") == "enforce"
+    assert tours.mode_du_modele(None, "runner") == "enforce"
+    assert tours.mode_du_modele("claude-sonnet-5", "copilot") == "report"
+    assert modes.mode_de("anthropic", "messages:claude-sonnet-5") == "report", \
+        "sans surface (un outil) : l'entrée de surface ne compte pas"
+    credits.verifier_reglages()
+
+
+def test_l_ordre_surface_exacte_motif_de_surface_exacte_motif_instance(monkeypatch):
+    monkeypatch.setenv("OTO_CREDITS_MODE", "off")
+    monkeypatch.setenv("OTO_CREDITS_MODE_FUNCTIONS", ", ".join([
+        "runner/anthropic.messages:claude-haiku-4-5=off",
+        "runner/anthropic.messages:claude-*=enforce",
+        "anthropic.messages:claude-opus-5=off",
+        "anthropic.messages:*=report",
+    ]))
+    m = tours.mode_du_modele
+    assert m("claude-haiku-4-5", "runner") == "off", "exacte de la surface"
+    assert m("claude-opus-5", "runner") == "enforce", \
+        "un motif de la surface l'emporte sur le nom exact sans surface"
+    assert m("claude-opus-5", "copilot") == "off", "pas d'entrée copilot : le nom exact"
+    assert m("claude-sonnet-5", "copilot") == "report", "puis le motif"
+    monkeypatch.setenv("OTO_CREDITS_MODE_FUNCTIONS", "runner/anthropic.messages:*=enforce")
+    assert m("claude-sonnet-5", "copilot") == "off", "rien pour lui : l'instance"
+
+
+@pytest.mark.parametrize("valeur,nomme", [
+    ("batch/anthropic.messages:*=enforce", "unknown surface `batch`"),
+    ("/anthropic.messages:*=enforce", "unknown surface ``"),
+    ("Runner/anthropic.messages:*=enforce", "unknown surface `Runner`"),
+    ("runner/fullenrich.submit=enforce", "a surface names model turns only"),
+    ("runner/anthropic.messages:*=strict", "is not"),
+    ("runner/anthropic.messages:*", "is not"),
+    ("runner/=enforce", "is not"),
+    ("runner/anthropic.message:*=enforce", "names no priced function"),
+    ("runner/anthropic.messages:*=enforce, runner/anthropic.messages:*=off",
+     "named twice"),
+])
+def test_une_entree_de_surface_illisible_refuse_le_demarrage(monkeypatch, valeur, nomme):
+    monkeypatch.setenv("OTO_CREDITS_MODE_FUNCTIONS", valeur)
+    with pytest.raises(ValueError, match="OTO_CREDITS_MODE_FUNCTIONS") as e:
+        credits.verifier_reglages()
+    assert nomme in str(e.value)
+
+
+def test_la_meme_fonction_sur_deux_surfaces_et_sans_surface_se_pose(monkeypatch):
+    monkeypatch.setenv("OTO_CREDITS_MODE_FUNCTIONS",
+                       "runner/anthropic.messages:*=enforce, "
+                       "copilot/anthropic.messages:*=report, anthropic.messages:*=off")
+    credits.verifier_reglages()
+
+
+def test_un_tour_sans_surface_leve(monkeypatch):
+    with pytest.raises(ValueError, match="no surface"):
+        tours.surface_du_tour("t1")
+    with pytest.raises(ValueError, match="unknown surface"):
+        tours.mode_du_modele("claude-sonnet-5", "batch")
+
+
+@pytest.fixture
+def registre_a_sec(monkeypatch):
+    """Un barème qui tarife Sonnet, un registre dont le disponible est 0 : une
+    réservation forcée (`report`) se pose, une réservation appliquée (`enforce`) non."""
+    lignes = [{"connector": "anthropic", "function": "messages:claude-sonnet-5", "unit": u,
+               "budget": 2, "per_n": 20} for u in tours.UNITES_DU_MODELE]
+    monkeypatch.setattr(db_credits, "version_du_bareme", lambda: 1)
+    monkeypatch.setattr(db_credits, "lignes_du_bareme", lambda v: lignes)
+    monkeypatch.setattr(db_credits, "orgs_en_mode_personne", lambda: set())
+    monkeypatch.setattr(db_credits, "reserver", lambda **k: db_credits.Reservation(
+        posee=k["forcer"], deja=False, insuffisant=True, disponible=0))
+    credits.oublier()
+    yield
+    credits.oublier()
+
+
+def test_runner_en_enforce_copilot_en_report_sous_le_solde(monkeypatch, registre_a_sec):
+    """Le cas du réglage : un tour du runner sous le solde est refusé, un tour du copilot
+    sur la même org est servi (réservation forcée)."""
+    monkeypatch.setenv("OTO_CREDITS_MODE", "off")
+    monkeypatch.setenv("OTO_CREDITS_MODE_FUNCTIONS",
+                       "runner/anthropic.messages:*=enforce, "
+                       "copilot/anthropic.messages:*=report")
+    with pytest.raises(tours.TourRefuse) as e:
+        tours.reserver_tour(tours.cle_du_tour(7, 1, 0), "s", 42, 400, "claude-sonnet-5")
+    assert e.value.code == "insufficient_credits"
+    from oto_mcp.capabilities.copilot.cle import uid_du_tour
+    assert tours.reserver_tour(uid_du_tour("th", 1), "s", 42, 400, "claude-sonnet-5") == \
+        {"held": True, "reserved": 40}
+
+
+def test_le_plancher_suit_le_mode_du_runner(monkeypatch):
+    monkeypatch.setenv("OTO_CREDITS_MODE", "report")
+    monkeypatch.setenv("OTO_CREDITS_MODE_FUNCTIONS", "copilot/anthropic.messages:*=enforce")
+    monkeypatch.setenv("OTO_CREDITS_JOB_FLOOR", "500")
+    monkeypatch.setattr(db_credits, "solde", lambda payer: 1 / 0)
+    assert tours.sous_le_plancher("alexis", 42, "claude-sonnet-5") is None, \
+        "le copilot en enforce ne touche pas le plancher d'un travail du runner"
+
+
+# ── 4. le plancher ──────────────────────────────────────────────────────────
 
 @pytest.fixture
 def solde(monkeypatch):

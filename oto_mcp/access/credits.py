@@ -128,7 +128,7 @@ def verifier_reglages() -> None:
     """The startup guard: each `OTO_CREDITS_*` setting is read once, or refuses to start."""
     modes.verifier()  # the instance's mode, and the per-function ones (`credits_modes`)
     from .credits_tours import verifier_les_noms  # it reads the model catalogue
-    verifier_les_noms(modes.modes_par_fonction())
+    verifier_les_noms(modes.entrees())
     hold_max_s()
     marge_sync_s()
     if modes.un_mode_arme() and bornes_processus.reglages().outil_s <= 0:

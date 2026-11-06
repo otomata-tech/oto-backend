@@ -8,6 +8,16 @@ longest prefix wins; any other function keeps the instance's mode (`credits.mode
 case it exists for: `anthropic.messages:*=enforce` — model calls refuse while the tools
 stay in `report`.
 
+**A mode per surface** (same variable): an entry prefixed by a surface,
+`<surface>/anthropic.<function>=<mode>`, holds only for the model turns of that surface —
+`runner` (a hosted agent's job, turn key `runner:…`) or `copilot` (the in-app agent, turn
+key `copilot:…`). The surface is the turn key's own prefix (`credits_tours.surface_du_tour`),
+and only model turns have one: a surface on another connector refuses to start. Order,
+first match wins: the surface's exact name, the surface's longest pattern, the exact name,
+the longest pattern, the instance's mode. Without a surface entry, both surfaces read
+exactly what they read before. The case it exists for: `runner/anthropic.messages:*=enforce`
+— the runner refuses below the floor while the copilot keeps the mode it had.
+
 Each entry must name a function the scale can price (`credits_tours.fonctions_connues`): a connector
 function with a declared cost (`oto.connectors.declared`), or a model call
 `anthropic.messages:<model>` of the hosted agents' catalogue (`runner_models`). A name
@@ -29,30 +39,53 @@ from typing import Optional
 _ENV_MODE_FONCTIONS = "OTO_CREDITS_MODE_FUNCTIONS"
 _ENV_PLANCHER = "OTO_CREDITS_JOB_FLOOR"
 _MOTIF = "*"
+#: The surfaces a model turn is called from: the prefix of its hold key.
+SURFACES = ("runner", "copilot")
 
 
-def modes_par_fonction() -> dict[tuple[str, str], str]:
-    """`{(connector, function): mode}`. Absent or empty: none. Unreadable or named twice:
-    raises, naming the item."""
+def entrees() -> dict[tuple[Optional[str], str, str], str]:
+    """`{(surface, connector, function): mode}`, surface None for an entry without one.
+    Absent or empty: none. Unreadable (syntax, mode, surface, a surface on a connector
+    without turns) or named twice: raises, naming the item."""
     from .credits import _MODES
+    from .credits_tours import MODELE_CONNECTOR
     # Names LITERAL: the inventory (`env_inventory.py`) finds its reads by the AST.
     lu = os.environ.get("OTO_CREDITS_MODE_FUNCTIONS", "")
-    out: dict[tuple[str, str], str] = {}
+    out: dict[tuple[Optional[str], str, str], str] = {}
     for item in (x.strip() for x in lu.split(",")):
         if not item:
             continue
         cle, _, m = item.partition("=")
         connector, _, function = cle.strip().partition(".")
+        # The surface prefixes the connector: a function's own `/` stays its own.
+        surface, barre, connector = connector.rpartition("/")
+        surface = surface.strip() if barre else None
         connector, function, m = connector.strip(), function.strip(), m.strip().lower()
         if not connector or not function or m not in _MODES:
             raise ValueError(f"{_ENV_MODE_FONCTIONS}: {item!r} is not "
-                             f"`<connector>.<function>=<mode>`, mode one of "
+                             f"`[<surface>/]<connector>.<function>=<mode>`, mode one of "
                              f"{', '.join(_MODES)}")
-        if (connector, function) in out:
-            raise ValueError(f"{_ENV_MODE_FONCTIONS}: `{connector}.{function}` is named "
-                             "twice")
-        out[(connector, function)] = m
+        if surface is not None and surface not in SURFACES:
+            raise ValueError(f"{_ENV_MODE_FONCTIONS}: {item!r} — unknown surface "
+                             f"`{surface}`, one of {', '.join(SURFACES)}")
+        if surface is not None and connector != MODELE_CONNECTOR:
+            raise ValueError(f"{_ENV_MODE_FONCTIONS}: {item!r} — a surface names model "
+                             f"turns only (`{MODELE_CONNECTOR}.<function>`)")
+        if (surface, connector, function) in out:
+            raise ValueError(f"{_ENV_MODE_FONCTIONS}: `{nom(surface, connector, function)}` "
+                             "is named twice")
+        out[(surface, connector, function)] = m
     return out
+
+
+def modes_par_fonction() -> dict[tuple[str, str], str]:
+    """`{(connector, function): mode}` of the entries WITHOUT a surface (`entrees`)."""
+    return {(c, f): m for (s, c, f), m in entrees().items() if s is None}
+
+
+def nom(surface: Optional[str], connector: str, function: str) -> str:
+    """An entry as the setting writes it."""
+    return f"{surface}/{connector}.{function}" if surface else f"{connector}.{function}"
 
 
 def _prefixe(function: str) -> Optional[str]:
@@ -61,29 +94,42 @@ def _prefixe(function: str) -> Optional[str]:
     return function[:-len(_MOTIF)] if function.endswith(_MOTIF) else None
 
 
-def mode_de(connector: str, function: Optional[str]) -> str:
-    """The mode of ONE scale function: its exact entry, else the pattern with the longest
-    prefix, else the instance's (`credits.mode`)."""
+def _choisir(lus: dict[str, str], function: str) -> Optional[str]:
+    """Among `{function: mode}`: the exact entry, else the pattern with the longest
+    prefix, else None."""
+    if function in lus and _prefixe(function) is None:
+        return lus[function]
+    retenu, longueur = None, -1
+    for f, m in lus.items():
+        p = _prefixe(f)
+        if p is not None and function.startswith(p) and len(p) > longueur:
+            retenu, longueur = m, len(p)
+    return retenu
+
+
+def mode_de(connector: str, function: Optional[str],
+            surface: Optional[str] = None) -> str:
+    """The mode of ONE scale function, called from `surface` (None: a tool call): the
+    surface's exact entry, else its longest pattern, else the exact entry, else the
+    longest pattern, else the instance's (`credits.mode`)."""
     from .credits import mode
+    if surface is not None and surface not in SURFACES:
+        raise ValueError(f"unknown surface `{surface}`, one of {', '.join(SURFACES)}")
     if function is None:
         return mode()
-    retenu, longueur = None, -1
-    for (c, f), m in modes_par_fonction().items():
-        if c != connector:
-            continue
-        p = _prefixe(f)
-        if p is None:
-            if f == function:
-                return m
-        elif function.startswith(p) and len(p) > longueur:
-            retenu, longueur = m, len(p)
-    return retenu if retenu is not None else mode()
+    lus = entrees()
+    for s in ((surface, None) if surface is not None else (None,)):
+        m = _choisir({f: m for (s_, c, f), m in lus.items() if s_ == s and c == connector},
+                     function)
+        if m is not None:
+            return m
+    return mode()
 
 
 def un_mode_arme() -> bool:
     """Does any function reserve — the instance's mode, or one of its own, not `off`?"""
     from .credits import mode
-    return mode() != "off" or any(m != "off" for m in modes_par_fonction().values())
+    return mode() != "off" or any(m != "off" for m in entrees().values())
 
 
 def plancher_travail() -> int:
@@ -106,5 +152,5 @@ def verifier() -> None:
     and each per-function entry checked against what the scale can price."""
     from .credits import mode
     mode()
-    modes_par_fonction()
+    entrees()
     plancher_travail()

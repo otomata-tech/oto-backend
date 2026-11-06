@@ -299,7 +299,23 @@ outils du périmètre restent en `report`. Illisible, nommée deux fois, ou qui 
 fonction que le barème sait tarifer — coût déclaré d'un connecteur (`oto.connectors.declared`),
 ou `anthropic.messages:<modèle>` du catalogue des agents hébergés (`runner_models`) — :
 refuse le démarrage (`credits_modes.verifier`), jamais un retour silencieux au mode de
-l'instance. La garde de la borne d'outil désarmée (`OTO_BORNE_OUTIL_S=0`) se lit dès
+l'instance.
+
+**Un mode par surface** (même variable) : une entrée préfixée d'une surface,
+`<surface>/anthropic.<fonction>=<mode>`, ne vaut que pour les tours de modèle de cette
+surface — `runner` (un travail d'agent hébergé, clé `runner:…`) ou `copilot` (l'agent
+intégré, clé `copilot:…`). La surface d'un tour est le préfixe de sa clé
+(`credits_tours.surface_du_tour`) : rien à redire à l'appel, et une clé sans surface
+connue lève. Ordre, la première qui répond l'emporte : nom exact de la surface, motif le
+plus long de la surface, nom exact, motif le plus long, `OTO_CREDITS_MODE`. Le cas pour
+lequel il existe : `runner/anthropic.messages:*=enforce` — les tours du runner refusent sous
+le solde (et le plancher d'un travail mord), pendant que le copilot garde le mode qu'il
+avait. **Sans entrée de surface, rien ne change** : runner et copilot lisent le mode de la
+fonction du modèle, comme avant (banc figé). Une surface inconnue, vide ou posée sur un
+autre connecteur que `anthropic` (les outils n'ont pas de surface) refuse le démarrage.
+La forme (un préfixe dans la même variable plutôt qu'une variable de plus) garde UNE
+règle de priorité et UNE garde de noms : l'entrée de surface est vérifiée contre le
+barème comme les autres. La garde de la borne d'outil désarmée (`OTO_BORNE_OUTIL_S=0`) se lit dès
 qu'UNE fonction réserve, même sur une instance `off`.
 
 **Le plancher d'un travail** (`OTO_CREDITS_JOB_FLOOR`, #1376 B) : avant qu'un travail

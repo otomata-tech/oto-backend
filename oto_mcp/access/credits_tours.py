@@ -9,8 +9,9 @@ and the cache are not reserved (no token count before the call) and settle as
 scale lines of `anthropic.messages:<model>`, one per unit. The MODEL is in the scale
 key: models are not priced alike, and a turn is reserved at the price of the model its
 job names (`fonction_du_modele`). The scale and the payer are the budget's
-(`access/credits`); the mode is that of the model's function (`mode_du_modele`), so
-model calls can be enforced while the tools stay in `report`. Before a job starts on a
+(`access/credits`); the mode is that of the model's function as called from the turn's
+SURFACE (`mode_du_modele`, `surface_du_tour`), so model calls can be enforced while the
+tools stay in `report`, and the runner's turns while the copilot's are not. Before a job starts on a
 re-billed key, its payer must have the floor available (`sous_le_plancher`): the first
 turn's input is never reserved. A turn's hold is keyed `runner:<job>:<attempt>:<turn>`
 (`cle_du_tour`), which every settlement of it says back (`appariement`).
@@ -93,27 +94,39 @@ def fonctions_connues(connector: str) -> frozenset[str]:
     return frozenset(f for f, d in DECLARED.get(connector, {}).items() if "cost" in d)
 
 
-def verifier_les_noms(lus: dict[tuple[str, str], str]) -> None:
-    """The startup guard of the per-function modes (`credits_modes.modes_par_fonction`),
-    here because it reads the model catalogue: every entry names at least one function
-    the scale can price, or raises naming it."""
-    for connector, function in lus:
+def verifier_les_noms(lus: dict[tuple[Optional[str], str, str], str]) -> None:
+    """The startup guard of the per-function modes (`credits_modes.entrees`), here
+    because it reads the model catalogue: every entry names at least one function the
+    scale can price, or raises naming it."""
+    for surface, connector, function in lus:
+        nom = modes.nom(surface, connector, function)
         connues = fonctions_connues(connector)
         p = modes._prefixe(function)
         if not connues:
-            raise ValueError(f"{modes._ENV_MODE_FONCTIONS}: `{connector}.{function}` — unknown "
+            raise ValueError(f"{modes._ENV_MODE_FONCTIONS}: `{nom}` — unknown "
                              f"connector `{connector}`: no function of it has a price")
         if (function not in connues if p is None
                 else not any(f.startswith(p) for f in connues)):
-            raise ValueError(f"{modes._ENV_MODE_FONCTIONS}: `{connector}.{function}` names no "
+            raise ValueError(f"{modes._ENV_MODE_FONCTIONS}: `{nom}` names no "
                              f"priced function of `{connector}` (one of "
                              f"{', '.join(sorted(connues))})")
 
 
-def mode_du_modele(model: Optional[str]) -> str:
-    """The budget mode of a call to `model` (`credits.mode_de` on its scale function); a
-    job that names no model reads the mode of `messages:` itself."""
-    return modes.mode_de(MODELE_CONNECTOR, fonction_du_modele(model) or PREFIXE_DES_MODELES)
+def surface_du_tour(uid: str) -> str:
+    """The surface a turn is called from: its hold key's prefix (`runner:` —
+    `cle_du_tour` —, `copilot:` — `copilot/cle.uid_du_tour`). Any other: raises."""
+    surface = uid.partition(":")[0]
+    if surface not in modes.SURFACES:
+        raise ValueError(f"turn key {uid!r}: no surface ({', '.join(modes.SURFACES)})")
+    return surface
+
+
+def mode_du_modele(model: Optional[str], surface: str) -> str:
+    """The budget mode of a call to `model` from `surface` (`credits_modes.mode_de` on
+    its scale function); a job that names no model reads the mode of `messages:`
+    itself."""
+    return modes.mode_de(MODELE_CONNECTOR, fonction_du_modele(model) or PREFIXE_DES_MODELES,
+                         surface)
 
 
 def sous_le_plancher(sub: Optional[str], org: Optional[int],
@@ -126,7 +139,7 @@ def sous_le_plancher(sub: Optional[str], org: Optional[int],
     `spend_ledger_unavailable` when the balance cannot be read (`available: None`) —
     replayable: the job goes back to the queue, neither served nor stopped."""
     plancher = modes.plancher_travail()
-    m = mode_du_modele(model)
+    m = mode_du_modele(model, "runner")
     if plancher <= 0 or m == "off":
         return None
     try:
@@ -162,8 +175,9 @@ def reserver_tour(uid: str, sub: str, org: Optional[int], max_tokens: int,
     that model's line, rounded up to the scale's packages. Idempotent on `uid` (a
     worker that asks again gets the same answer). Returns `{held, reserved}`; `enforce`
     raises `TourRefuse`, `report` reserves anyway (forced) and logs what it would refuse
-    — a model without its four lines is `credits_unpriced` —, `off` holds nothing."""
-    m = mode_du_modele(model)
+    — a model without its four lines is `credits_unpriced` —, `off` holds nothing. The
+    mode is that of the turn's surface (`surface_du_tour`)."""
+    m = mode_du_modele(model, surface_du_tour(uid))
     if m == "off":
         return {"held": False, "reserved": 0}
     try:
@@ -223,7 +237,7 @@ def regler_tour(uid: str, sub: str, org: Optional[int], tokens: dict,
     hold = db_credits.reservation(uid)
     if hold is not None and hold["state"] != db_credits.OUVERTE:
         return {"settled": False, "amount": 0, "exceeded": False}
-    if hold is None and mode_du_modele(model) == "off":
+    if hold is None and mode_du_modele(model, surface_du_tour(uid)) == "off":
         return None
     lu = budget._relire()
     # The lines of the version the turn was reserved under, not today's.

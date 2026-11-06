@@ -555,6 +555,12 @@ def _arg_names() -> dict[str, frozenset]:
         # illisible aurait renvoyé les mots de passe SMTP en clair au journal,
         # avec pour seul signal un warning parlant d'autre chose.
         table: dict[str, frozenset] = dict(SECRET_TOOL_ARGS)
+        # Les arguments `personal: true` des connecteurs servis par le lecteur générique
+        # (`tools/decrits.py`) : une personne ne part jamais en clair au journal. Lus
+        # dans la description, hors du try comme les déclarations ci-dessus.
+        from .connectors import descriptions
+        for outil, noms in descriptions.personnels_des_outils().items():
+            table[outil] = table.get(outil, frozenset()) | noms
         try:
             import oto_mcp.capabilities  # noqa: F401 — peuple le registre
             from oto_mcp.capabilities.registry import caps_with_mcp

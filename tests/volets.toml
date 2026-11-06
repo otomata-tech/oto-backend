@@ -62,6 +62,9 @@ tests = [
   "tests/test_selection_tests.py",
   "tests/test_convention_act.py",
   "tests/test_effets_declares.py",
+  # La surface d'outils servie, figée ; le lecteur des descriptions, qui sert les connecteurs inscrits.
+  "tests/test_surface_outils_figee.py",
+  "tests/test_decrits.py",
 ]
 
 [complete]
@@ -239,6 +242,8 @@ chemins = [
   "oto_mcp/tools/ecriture_non_cablee.py",
   # La déclaration des effets d'outil, op par op : elle couvre TOUT le catalogue.
   "oto_mcp/tools/effets.py",
+  # Le lecteur générique des descriptions : il sert TOUS les connecteurs inscrits par `_decrit`.
+  "oto_mcp/tools/decrits.py",
   "oto_mcp/tools/meta.py",
   "oto_mcp/tools/whoami.py",
   # L'API REST commune.

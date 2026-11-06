@@ -19,6 +19,8 @@ from oto_mcp.capabilities import _mcp_adapter, _rest_adapter, registry
 _EXPLICIT_TOOL_MODULES = {
     "meta", "profile", "whoami", "guide", "email", "datastore", "docs_app",
     "datastore_review_app", "datastore_table_app", "procedure_app", "guide_run", "remote", "mount",
+    # le lecteur générique des descriptions : il sert les connecteurs inscrits par `_decrit`
+    "decrits",
 }
 
 
@@ -71,7 +73,7 @@ def test_tools_module_derivation_matches_filesystem():
     from oto_mcp import providers
     derived: set[str] = set()
     for c in providers.REGISTRY.values():
-        if c.kind == "tools":
+        if c.kind == "tools" and not c.client:  # un connecteur décrit n'a pas de module : `decrits` le sert
             derived |= set(c.modules or (c.name,))
     files = _tools_module_files()
 

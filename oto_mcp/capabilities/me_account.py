@@ -112,6 +112,11 @@ class MeView(BaseModel):
     montre les données d'une autre org que celle qu'il affiche."""
     sub: str
     email: Optional[str] = None
+    # Le claim OIDC `email_verified` du jeton Logto de la requête (l'annuaire le pose
+    # vrai dès que l'adresse primaire est vérifiée). `null` = INCONNU, jamais un faux :
+    # jeton API, jeton sans le claim, ou « voir en tant que » (le jeton est celui de
+    # l'opérateur, pas de la cible).
+    email_verified: Optional[bool] = None
     name: Optional[str] = None
     avatar_url: Optional[str] = None
     # 'en' | 'fr' | null — null = non définie, le front retombe sur la langue du
@@ -321,9 +326,12 @@ def _me(ctx: ResolvedCtx, inp: MeInput) -> dict:
     if borne is not None:
         from ..api.routes import refused_prefixes_vue_bornee
         refused_prefixes = refused_prefixes_vue_bornee()
+    # Import paresseux, comme `refused_prefixes_vue_bornee` ci-dessus.
+    from ..api.base import email_verifie_de
     return {
         "sub": sub,
         "email": user.get("email"),
+        "email_verified": email_verifie_de(sub),
         "name": user.get("name"),
         "avatar_url": user.get("avatar_url"),
         # Préférence de langue de l'UI dashboard ('en'|'fr'), NULL = non définie

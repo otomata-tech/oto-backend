@@ -281,7 +281,8 @@ def emit_invitation(ctx: ResolvedCtx, *, org_id: int | None, email: str | None,
     share_url = _nominal_url(token, front_base=front_base)
     emailed = False
     if send_email and email_addr:
-        inviter = (db.get_user(ctx.sub) or {}).get("email")
+        hote = db.get_user(ctx.sub) or {}
+        inviter = hote.get("email")
         # Locale du DESTINATAIRE, si connue (oto-backend#700) : un invité qui a
         # déjà un compte oto (ré-invitation, autre org) a peut-être déjà posé sa
         # préférence via `me.locale.set`. Une adresse jamais vue n'a pas encore
@@ -291,7 +292,7 @@ def emit_invitation(ctx: ResolvedCtx, *, org_id: int | None, email: str | None,
         locale = (db.get_user_by_email(email_addr) or {}).get("locale")
         emailed = email_mod.send_invite_email(
             email_addr, target_name, _nominal_url(token, email_addr, front_base=front_base),
-            inviter, brand=brand, locale=locale)
+            inviter, brand=brand, locale=locale, inviter_name=hote.get("name"))
     return {"ok": True, "email": email_addr, "role": group_role or role,
             "invite_url": share_url, "emailed": emailed}
 

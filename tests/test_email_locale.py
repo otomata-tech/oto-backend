@@ -108,3 +108,36 @@ def test_signal_digest_email_default_is_french_unchanged(monkeypatch):
     email.send_signal_digest_email("a@b.c", items=items, brand="oto")
     assert "vos agents" in sent["html"] and "your agents" not in sent["html"]
     assert "traité" in sent["html"]
+
+
+# ── l'invitation se présente (invitations rangées en spam, 06/11/2026) ───────
+
+def test_invite_nomme_l_hote_et_dit_ce_qu_est_le_produit(monkeypatch):
+    sent = _captured(monkeypatch)
+    email.send_invite_email("a@b.c", "acme", "https://x/invitation/CODE", "alice@x.fr",
+                            brand="oto", locale="en", inviter_name="Alice Martin")
+    assert "<strong>Alice Martin (alice@x.fr)</strong> invites you" in sent["html"]
+    assert "is the workspace where the acme team shares its data" in sent["html"]
+    assert "not expecting this invitation?" in sent["html"]
+    email.send_invite_email("a@b.c", "acme", "https://x/invitation/CODE", "alice@x.fr",
+                            brand="oto", inviter_name="Alice Martin")
+    assert "<strong>Alice Martin (alice@x.fr)</strong> vous invite" in sent["html"]
+    assert "est l'espace de travail où l'équipe acme" in sent["html"]
+    assert "vous n'attendiez pas cette invitation" in sent["html"]
+
+
+def test_un_nom_qui_n_est_qu_une_adresse_ne_double_pas_l_hote(monkeypatch):
+    sent = _captured(monkeypatch)
+    email.send_invite_email("a@b.c", "acme", "https://x/invitation/CODE", "alice@x.fr",
+                            brand="oto", locale="en", inviter_name="alice@x.fr")
+    assert "<strong>alice@x.fr</strong> invites you" in sent["html"]
+
+
+def test_l_apercu_nomme_l_hote_sans_bourrage_invisible(monkeypatch):
+    sent = _captured(monkeypatch)
+    email.send_invite_email("a@b.c", "acme", "https://x/invitation/CODE", "alice@x.fr",
+                            brand="oto", locale="en", inviter_name="Alice Martin")
+    debut = sent["html"].index('<div style="display:none')
+    apercu = sent["html"][debut:sent["html"].index("</div>", debut)]
+    assert "Alice Martin (alice@x.fr) invites you to join acme" in apercu
+    assert "&#8203;" not in sent["html"] and "&#847;" not in sent["html"]

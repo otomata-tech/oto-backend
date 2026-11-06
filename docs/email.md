@@ -135,6 +135,18 @@ démarrage par `identite_instance.verifier`) — l'un ou l'autre, jamais les deu
   comme celui d'une org (`send_via_scaleway_tem`), best-effort.
 - Un relais déclaré **par l'appelant** (`mailer_url` + `bearer`, l'activation d'un
   tenant) passe toujours par ce relais : le transport de l'instance n'intervient pas.
+- **Une partie `text/plain` part avec chaque mail de plateforme** (06/11/2026) :
+  `email.version_texte` la tire du HTML (liens gardés en clair, preheader caché et
+  caractères invisibles retirés), `_send` la passe aux deux transports (`text` au relais,
+  `text` à l'API TEM). Un email en HTML seul est un signal anti-spam classique : des
+  invitations arrivaient en spam alors que SPF, DKIM et DMARC passaient. Le relais doit
+  **transmettre** `text` à son SMTP — un relais qui l'ignore envoie en HTML seul, comme
+  avant, sans erreur. Banc : `tests/test_email_version_texte.py`.
+- **L'invitation se présente** (06/11/2026) : l'hôte se nomme (`users.name` + son
+  adresse, `inviter_name`), une phrase dit ce qu'est le produit, une autre quoi faire
+  d'une invitation inattendue ; l'aperçu nomme l'hôte. `email_brand.page` ne met plus de
+  bourrage de largeur nulle après le preheader (120 caractères cachés = signal
+  anti-spam) : chaque preheader est une phrase qui se lit seule.
 - Banc : `tests/test_email_transport_instance.py`.
 
 > **Invariant connecteurs (corrigé 2026-06-24)** : `_org_list` (vue ORG

@@ -43,8 +43,10 @@ def test_send_strips_crlf_from_headers(monkeypatch):
 # Contrat du service d'envoi générique (`POST /api/send`) : il lit EXACTEMENT ces
 # clés et ignore en silence toute autre — un nom faux y est perdu sans erreur
 # (oto#148 : `reply_to` au lieu de `replyTo`). Changer cet ensemble exige de relire
-# la signature de corps de la route côté service, pas d'aligner le test.
-_CLES_SERVICE_SEND = {"from", "to", "cc", "subject", "html", "replyTo"}
+# la signature de corps de la route côté service, pas d'aligner le test. `text` (la
+# partie text/plain, 06/11/2026) est lue par la route depuis le relais qui la transmet ;
+# un relais plus ancien l'ignore et l'email part en HTML seul, comme avant.
+_CLES_SERVICE_SEND = {"from", "to", "cc", "subject", "html", "text", "replyTo"}
 
 
 def _capture_send(monkeypatch, **kw):

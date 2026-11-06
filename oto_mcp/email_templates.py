@@ -58,9 +58,19 @@ def _envoyer(m: _charte.Marque, to: str, subject: str, html: str) -> bool:
     return _email._send(to, subject, html, from_email=m.expediteur or None)
 
 
+def _qui_invite(inviter: str | None, inviter_name: str | None) -> str:
+    """L'hôte tel qu'il s'imprime : « Nom (adresse) », le nom seul, l'adresse seule.
+    Un nom qui n'est qu'une adresse (Logto recopie parfois l'email) ne compte pas."""
+    nom = " ".join((inviter_name or "").split())
+    if not nom or "@" in nom:
+        return inviter or ""
+    return f"{nom} ({inviter})" if inviter and inviter.lower() != nom.lower() else nom
+
+
 def send_invite_email(to: str, target_name: str | None, invite_url: str,
                       inviter: str | None = None, *, brand: str | None = None,
-                      locale: str | None = None) -> bool:
+                      locale: str | None = None,
+                      inviter_name: str | None = None) -> bool:
     """Email d'invitation à rejoindre `brand`. True si envoyé, False sinon.
 
     `target_name` = ce qu'on rejoint (nom d'org OU d'équipe) ; None = invitation
@@ -69,31 +79,60 @@ def send_invite_email(to: str, target_name: str | None, invite_url: str,
     **et** le dessin (`email_brand.marque`) **et** l'expéditeur, s'il en déclare un
     (`_envoyer`). `locale` = préférence du DESTINATAIRE (`users.locale`), à défaut la
     langue déclarée de la marque ; voix funnel dans les deux langues :
-    vouvoiement/« you » + minuscules."""
+    vouvoiement/« you » + minuscules.
+
+    `inviter` = l'adresse de l'hôte, `inviter_name` = son nom (`users.name`). Une
+    invitation qui ne dit que « adresse inconnue vous invite » + un bouton a la forme
+    d'un hameçonnage, pour un humain comme pour un filtre (invitations rangées en spam,
+    06/11/2026) : l'hôte se nomme, une phrase dit ce qu'est le produit, une autre dit
+    quoi faire d'une invitation inattendue."""
     m = _charte.marque(brand)
     locale = locale or m.langue or None
+    qui = _qui_invite(inviter, inviter_name)
+    nom = _email._esc(m.nom)
     if locale == "en":
-        lead = f"{_email._esc(inviter)} invites you" if inviter else "you're invited"
-        where = (f"<strong>{_email._esc(target_name)}</strong> on {_email._esc(m.nom)}"
-                 if target_name else _email._esc(m.nom))
+        lead = (f"<strong>{_email._esc(qui)}</strong> invites you" if qui
+                else "you're invited")
+        where = (f"<strong>{_email._esc(target_name)}</strong> on {nom}"
+                 if target_name else nom)
         subject = (f"invitation to join {target_name} on {m.nom}" if target_name
                    else f"invitation to join {m.nom}")
-        apercu = (f"{target_name} is waiting for you on {m.nom}" if target_name
-                  else f"your account on {m.nom} is one click away")
+        apercu = (f"{qui} invites you to join {target_name or m.nom}" if qui
+                  else (f"{target_name} is waiting for you on {m.nom}" if target_name
+                        else f"your account on {m.nom} is one click away"))
+        contexte = (f"{nom} is the workspace where "
+                    + (f"the {_email._esc(target_name)} team shares its"
+                       if target_name else "teams share their")
+                    + " data, processes and AI agents.")
+        inattendu = ("not expecting this invitation? you can ignore this email, "
+                     "nothing happens without your click.")
         contenu = (f'<p style="{_charte.PARA}">{lead} to join {where}.</p>'
-                   + _email._bouton(invite_url, "join", brand))
+                   f'<p style="{_charte.PARA}">{contexte}</p>'
+                   + _email._bouton(invite_url, "join", brand)
+                   + f'<p style="{_charte.PARA}">{inattendu}</p>')
     else:
-        lead = f"{_email._esc(inviter)} vous invite" if inviter else "vous êtes invité·e"
+        lead = (f"<strong>{_email._esc(qui)}</strong> vous invite" if qui
+                else "vous êtes invité·e")
         # `m.nom` échappé pour le corps HTML, brut pour le sujet (qui n'est pas du
         # HTML — même traitement que `target_name` ; `_send` neutralise les CRLF).
-        where = (f"<strong>{_email._esc(target_name)}</strong> sur {_email._esc(m.nom)}"
-                 if target_name else _email._esc(m.nom))
+        where = (f"<strong>{_email._esc(target_name)}</strong> sur {nom}"
+                 if target_name else nom)
         subject = (f"invitation à rejoindre {target_name} sur {m.nom}" if target_name
                    else f"invitation à rejoindre {m.nom}")
-        apercu = (f"{target_name} vous attend sur {m.nom}" if target_name
-                  else f"votre compte {m.nom} est à un clic")
+        apercu = (f"{qui} vous invite à rejoindre {target_name or m.nom}" if qui
+                  else (f"{target_name} vous attend sur {m.nom}" if target_name
+                        else f"votre compte {m.nom} est à un clic"))
+        contexte = (f"{nom} est l'espace de travail où l'équipe "
+                    f"{_email._esc(target_name)} partage ses données, ses processus et "
+                    "ses agents IA." if target_name else
+                    f"{nom} est l'espace de travail où les équipes partagent leurs "
+                    "données, leurs processus et leurs agents IA.")
+        inattendu = ("vous n'attendiez pas cette invitation ? ignorez cet email, "
+                     "rien ne se passe sans votre clic.")
         contenu = (f'<p style="{_charte.PARA}">{lead} à rejoindre {where}.</p>'
-                   + _email._bouton(invite_url, "rejoindre", brand))
+                   f'<p style="{_charte.PARA}">{contexte}</p>'
+                   + _email._bouton(invite_url, "rejoindre", brand)
+                   + f'<p style="{_charte.PARA}">{inattendu}</p>')
     return _envoyer(m, to, subject, _charte.page(
         m, contenu, preheader=apercu,
         mention=_charte.mention_transactionnelle(m, locale), locale=locale))

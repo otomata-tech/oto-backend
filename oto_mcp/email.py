@@ -19,8 +19,10 @@ from __future__ import annotations
 import html as _html
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from email.utils import parseaddr
+from html.parser import HTMLParser
 
 from .config import require_env
 
@@ -100,6 +102,82 @@ def _no_crlf(s: str | None) -> str | None:
     return s.replace("\r", "").replace("\n", " ").replace("\x00", "")
 
 
+class _VersionTexte(HTMLParser):
+    """Rend le texte lisible d'un gabarit HTML, pour la partie `text/plain`."""
+    _SAUTS = {"p", "br", "div", "tr", "table", "h1", "h2", "h3", "li"}
+    _MUETS = {"head", "style", "script", "title"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.morceaux: list[str] = []
+        self._pile_cachee: list[str] = []   # balises ouvertes sous un display:none
+        self._muet = 0
+        self._lien: list[tuple[str, int]] = []  # (href, position du début du libellé)
+        self._sep = " : "   # typographie FR ; `<html lang="en">` ⟹ ": "
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "html" and (a.get("lang") or "").lower().startswith("en"):
+            self._sep = ": "
+        if self._pile_cachee:
+            self._pile_cachee.append(tag)
+            return
+        if "display:none" in (a.get("style") or "").replace(" ", ""):
+            self._pile_cachee.append(tag)   # le preheader : invisible, hors du texte
+            return
+        if tag in self._MUETS:
+            self._muet += 1
+        if tag in self._SAUTS:
+            self.morceaux.append("\n")
+        if tag == "a":
+            self._lien.append((a.get("href") or "", len(self.morceaux)))
+
+    def handle_endtag(self, tag):
+        if self._pile_cachee:
+            self._pile_cachee.pop()
+            return
+        if tag in self._MUETS:
+            self._muet = max(0, self._muet - 1)
+        if tag == "a" and self._lien:
+            href, debut = self._lien.pop()
+            libelle = "".join(self.morceaux[debut:]).strip()
+            if href and not href.startswith("mailto:") and href != libelle:
+                self.morceaux.append(f"{self._sep}{href}" if libelle else href)
+        if tag in self._SAUTS:
+            self.morceaux.append("\n")
+
+    def handle_data(self, data):
+        if not self._pile_cachee and not self._muet:
+            self.morceaux.append(data)
+
+
+_INVISIBLES = re.compile("[\u200b\u200c\u200d\u034f\u2060\ufeff\xad]")
+
+
+def version_texte(html: str) -> str:
+    """La partie `text/plain` d'un email de plateforme, tirée de son HTML : un email en
+    HTML SEUL est un signal classique des filtres anti-spam (invitations rangées en
+    spam, 06/11/2026). Liens gardés en clair, preheader caché et caractères invisibles
+    retirés, un paragraphe par bloc."""
+    p = _VersionTexte()
+    try:
+        p.feed(html or "")
+        p.close()
+    # noqa: SILENT — un HTML illisible part sans texte plutôt que de bloquer l'envoi
+    except Exception:
+        return ""
+    texte = _INVISIBLES.sub("", "".join(p.morceaux)).replace("\xa0", " ")
+    lignes = [" ".join(l.split()) for l in texte.split("\n")]
+    out: list[str] = []
+    for l in lignes:
+        precedente = next((x for x in reversed(out) if x), "")
+        if l and l.startswith("http") and precedente.endswith(l):
+            continue   # l'URL que le gabarit répète en clair sous son bouton
+        if l or (out and out[-1]):
+            out.append(l)
+    return "\n".join(out).strip()
+
+
 def _relais_refuse(url: str, depuis: str, detail: str) -> None:
     """Un 403 du relais n'est pas un aléa : l'expéditeur (celui d'un tenant,
     `tenants.brand.expediteur`, ou celui de l'instance) a un domaine hors de son
@@ -169,7 +247,7 @@ def _par_tem(tem: TemInstance, to: str, subject: str, html: str, depuis: str,
         _no_crlf(to), _no_crlf(subject), html, secret_key=tem.secret_key,
         project_id=tem.project_id, region=tem.region, from_email=adresse,
         from_name=nom or None, reply_to=_no_crlf(reply_to),
-        cc=[_no_crlf(a) for a in cc] if cc else None)
+        cc=[_no_crlf(a) for a in cc] if cc else None, text=version_texte(html))
 
 
 def _par_relais(url: str, bearer: str, to: str, subject: str, html: str, depuis: str,
@@ -179,6 +257,11 @@ def _par_relais(url: str, bearer: str, to: str, subject: str, html: str, depuis:
         import httpx
         payload = {"from": _no_crlf(depuis), "to": _no_crlf(to),
                    "subject": _no_crlf(subject), "html": html}
+        texte = version_texte(html)
+        if texte:
+            # Relu par le relais (`text`, oto-auth-mailer) ; un relais plus ancien
+            # l'ignore sans erreur et l'email part en HTML seul, comme avant.
+            payload["text"] = texte
         if reply_to:
             # Le service lit `replyTo` (camelCase) et IGNORE en silence toute autre
             # clé : `reply_to` y a fait perdre l'adresse de réponse sans erreur (oto#148).
@@ -237,7 +320,7 @@ def send_via_resend(to: str, subject: str, html: str, *, api_key: str,
 def send_via_scaleway_tem(to: str, subject: str, html: str, *, secret_key: str,
                           project_id: str, from_email: str, from_name: str | None = None,
                           region: str = "fr-par", reply_to: str | None = None,
-                          cc: list[str] | None = None) -> bool:
+                          cc: list[str] | None = None, text: str | None = None) -> bool:
     """Envoi direct via l'API Scaleway TEM, avec la clé BYO de l'org (secret_key +
     project_id). `from_email` = adresse sur un domaine VÉRIFIÉ dans le compte Scaleway
     de l'org — l'API TEM refuse les domaines non vérifiés (propriété du domaine garantie
@@ -258,6 +341,8 @@ def send_via_scaleway_tem(to: str, subject: str, html: str, *, secret_key: str,
             "html": html,
             "project_id": project_id,
         }
+        if text:
+            payload["text"] = text
         if cc:
             payload["cc"] = [{"email": a} for a in cc]
         if reply_to:

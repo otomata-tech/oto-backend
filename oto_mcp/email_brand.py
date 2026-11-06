@@ -390,12 +390,12 @@ def page(m: Marque, contenu: str, *, preheader: str, mention: Optional[str],
     ÉCHAPPÉS ici, comme tout le reste : aucun appelant n'a le droit d'y passer du
     HTML.
 
-    Le bourrage d'espaces de largeur nulle après le preheader existe parce que Gmail
-    colle à la ligne d'aperçu le texte qui SUIT : sans lui, l'aperçu affiche le
-    preheader puis le début du corps, recollés en une phrase qui n'a pas de sens.
+    Pas de bourrage après le preheader (retiré le 06/11/2026) : 120 caractères de
+    largeur nulle dans un bloc caché sont un signal anti-spam, et des invitations
+    arrivaient en spam. Gmail peut coller au preheader le début du corps ; chaque
+    gabarit en fait donc une phrase complète, qui se lit seule.
     """
     lang = "en" if locale == "en" else "fr"
-    bourrage = "&#8203;&#847;" * 60
     return (
         '<!DOCTYPE html>'
         f'<html lang="{lang}"><head>'
@@ -410,7 +410,7 @@ def page(m: Marque, contenu: str, *, preheader: str, mention: Optional[str],
         f'-webkit-text-size-adjust:100%">'
         f'<div style="display:none;max-height:0;max-width:0;opacity:0;overflow:hidden;'
         f'mso-hide:all;font-size:1px;line-height:1px;color:{m.fond}">'
-        f'{_email._esc(preheader)}{bourrage}</div>'
+        f'{_email._esc(preheader)}</div>'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
         f'border="0" style="width:100%;background:{m.fond}">'
         f'<tr><td align="center" style="padding:32px 12px">'

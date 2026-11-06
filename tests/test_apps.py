@@ -380,7 +380,10 @@ def test_list_sans_projet_rend_les_apps_de_l_org(seams, monkeypatch):
     vus = {}
     monkeypatch.setattr(ownership, "project_list_owners", lambda sub, org: [("org", str(org))])
     monkeypatch.setattr(ownership, "mes_objets_ici", lambda sub, org: (sub, org, False))
-    monkeypatch.setattr(ownership, "principaux_de_liste", lambda sub, org: [("org", str(org))])
+    monkeypatch.setattr(ownership, "proprietaires_collectifs_de_liste",
+                        lambda sub, org: [("org", str(org))])
+    # Partages nominatifs (06/11/2026) : lus à part, puis rangés par org — aucun ici.
+    monkeypatch.setattr(ownership, "partages_a_moi_ici", lambda sub, org, rows, **k: [])
 
     def possedees(owners, archived=False, createur=None):
         vus["owners"], vus["createur"] = owners, createur

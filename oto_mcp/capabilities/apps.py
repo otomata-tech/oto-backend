@@ -292,11 +292,18 @@ def _org_list(ctx: ResolvedCtx, archived: bool) -> tuple[list[dict], set[int]]:
     owned = db.apps.list_for_owners(ownership.project_list_owners(sub, org), archived=archived,
                                     createur=ownership.mes_objets_ici(sub, org))
     writable = {int(r["id"]) for r in owned}
-    granted = []
-    for r in db.apps.list_granted_to(ownership.principaux_de_liste(sub, org), archived=archived):
+    granted, vus = [], {int(o["id"]) for o in owned}
+    # Partagées à l'org ou à mes équipes, puis à moi en personne — rangées dans l'org de
+    # l'app si j'en suis membre, sinon dans ma maison (06/11/2026).
+    recues = (db.apps.list_granted_to(ownership.proprietaires_collectifs_de_liste(sub, org),
+                                      archived=archived)
+              + ownership.partages_a_moi_ici(
+                  sub, org, db.apps.list_granted_to([("user", sub)], archived=archived)))
+    for r in recues:
         if r.get("permission") == "write":
             writable.add(int(r["id"]))
-        if not any(int(o["id"]) == int(r["id"]) for o in owned):
+        if int(r["id"]) not in vus:
+            vus.add(int(r["id"]))
             granted.append({k: v for k, v in r.items() if k != "permission"})
     rows = sorted(owned + granted, key=lambda r: (r["updated_at"], r["id"]), reverse=True)
     return ownership.borner_a_la_vue(sub, APP_RTYPE, rows, lambda r: r["id"]), writable

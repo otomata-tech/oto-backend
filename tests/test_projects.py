@@ -31,6 +31,10 @@ def seams(monkeypatch):
     # L'org PERSO de l'appelant (décision du 28/09/2026) : la 5. Les orgs 99 et 42 des
     # bancs sont des orgs de TRAVAIL — aucun objet perso ne s'y liste ni ne s'y crée.
     monkeypatch.setattr(P.ownership.org_store, "home_org", lambda sub: 5)
+    # Les orgs de l'appelant : un partage nominatif se liste dans son org de rangement
+    # quand il en est membre (06/11/2026, `ownership.projets_partages_a_moi_ici`).
+    monkeypatch.setattr(P.ownership.org_store, "list_orgs_for_user",
+                        lambda sub: [{"org_id": o} for o in (5, 99, 42)])
     rec["list_owners"], rec["createurs"] = [], []
     monkeypatch.setattr(P.db, "list_projects_for_owners",
                         lambda owners, templates_only=False, createur=None, **k: (
@@ -299,22 +303,29 @@ def test_lint_reports_stale_empty_duplicates(seams, monkeypatch):
 
 
 def test_personal_share_listed_in_personal_org_only(seams, monkeypatch):
-    # Un projet partagé PERSONNELLEMENT (principal ('user', sub)) se liste dans mon org
-    # PERSO (décision du 28/09/2026), marqué `shared` — et dans aucune org de travail.
-    perso_share = dict(ROW, id=67, name="Partagé perso", owner_type="org", owner_id="188",
-                       permission="read")
+    # Un projet partagé PERSONNELLEMENT (principal ('user', sub)) d'une org dont je ne
+    # suis PAS membre (188) se liste dans ma maison (décision du 28/09/2026), marqué
+    # `shared` — et dans aucune autre org. Celui d'une org dont je suis membre (42) se
+    # liste dans CETTE org, plus dans la maison (06/11/2026).
+    exterieur = dict(ROW, id=67, name="Partagé perso", owner_type="org", owner_id="188",
+                     permission="read")
+    de_42 = dict(ROW, id=68, name="Partagé de 42", owner_type="org", owner_id="42",
+                 permission="read")
     monkeypatch.setattr(P.db, "list_projects_granted_to",
                         lambda principals: seams["granted"].append(list(principals)) or (
-                            [perso_share] if ("user", "u1") in principals else []))
-    for org in (99, 42):
-        out = P._project(ResolvedCtx(sub="u1", org_id=org), P.ProjectInput(op="list"))
-        assert 67 not in [p["id"] for p in out["projects"]]
+                            [exterieur, de_42] if ("user", "u1") in principals else []))
+    vus = {org: [p["id"] for p in P._project(ResolvedCtx(sub="u1", org_id=org),
+                                              P.ProjectInput(op="list"))["projects"]]
+           for org in (99, 42, 5)}
+    assert 67 not in vus[99] and 67 not in vus[42] and 67 in vus[5]
+    assert 68 in vus[42] and 68 not in vus[99] and 68 not in vus[5]
     out = P._project(ResolvedCtx(sub="u1", org_id=5), P.ProjectInput(op="list"))
     recu = next(p for p in out["projects"] if p["id"] == 67)
     assert recu["shared"] is True and recu["permission"] == "read"
-    # Le principal personnel n'est interrogé que dans l'org perso.
-    assert seams["granted"] == [[("org", "99")], [("org", "42")],
-                                [("org", "5"), ("user", "u1")]]
+    # Le principal personnel est lu à part, puis rangé par org.
+    assert seams["granted"][:6] == [[("org", "99")], [("user", "u1")],
+                                    [("org", "42")], [("user", "u1")],
+                                    [("org", "5")], [("user", "u1")]]
 
 
 @pytest.mark.parametrize("org", [5, 42], ids=["org-perso", "org-de-travail"])

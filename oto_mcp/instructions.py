@@ -151,18 +151,19 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
     projects: list[str] = []
     try:
         # L'org et mes projets PERSONNELS créés dans cette org (décision du 29/09/2026,
-        # `ownership.mes_objets_ici`) ; ce qui m'est partagé en personne, seulement dans
-        # mon org perso (28/09/2026).
-        moi = ownership.perso_de_la_liste(sub, org_id) if sub else []
+        # `ownership.mes_objets_ici`) ; ce qui m'est partagé en personne, dans l'org où
+        # c'est rangé si j'en suis membre, sinon dans ma maison (06/11/2026).
         rows = db.list_projects_for_owners([("org", str(org_id))],
                                            createur=ownership.mes_objets_ici(sub, org_id))
         # + les projets LIVRÉS à cette org (partagés via resource_grants, #52) — c'est
         # l'exposition au handshake : le client ouvre le projet livré en un message.
         seen = {r.get("id") for r in rows}
-        principals = [("org", str(org_id))] + moi
+        # Partagés à l'org, et à moi en personne rangés ici (06/11/2026).
+        recus = db.list_projects_granted_to([("org", str(org_id))]) + (
+            ownership.projets_partages_a_moi_ici(sub, org_id) if sub else [])
         # Vue bornée (oto#270) : un partage personnel reçu n'est pas de l'org consultée.
         rows += [r for r in ownership.borner_a_la_vue(
-                     sub, "project", db.list_projects_granted_to(principals),
+                     sub, "project", recus,
                      rid=lambda r: r["id"])
                  if r.get("id") not in seen]
         projects = [r.get("name") or f"#{r.get('id')}" for r in rows[:5]]

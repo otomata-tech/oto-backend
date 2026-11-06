@@ -280,8 +280,8 @@ def _accessible_namespaces(sub: str, org_id: int) -> list[dict]:
     # (projet partagé) n'en reçoit pas les partages (`ownership.owner_de_portee`).
     oids = [int(p[1]) for p in principals if p[0] == "org"]
     recus = db.list_datastores_granted_to(sub, oids, gids)
-    if ("user", sub) in principals:
-        recus += db.list_datastores_shared_to_user(sub)
+    # Partagés à moi en personne : même règle que la liste (06/11/2026).
+    recus += ownership.partages_a_moi_ici(sub, org_id, db.list_datastores_shared_to_user(sub))
     for r in recus:
         if r["id"] not in seen:
             rows.append(r)

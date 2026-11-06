@@ -39,6 +39,8 @@ def _stub_empty(monkeypatch, **over):
     monkeypatch.setattr(S.ownership, "mes_tableaux_ici", lambda *a: [])
     monkeypatch.setattr(S.db, "list_datastores_for_owners",
                         lambda owners: over.get("tableaux", []))
+    # Partagés à moi en personne (06/11/2026, `ownership.partages_a_moi_ici`).
+    monkeypatch.setattr(S.db, "list_datastores_shared_to_user", lambda sub: [])
     monkeypatch.setattr(S.db, "list_datastores_granted_to",
                         lambda *a: [])
     monkeypatch.setattr(S.db, "project_labels", lambda ids: {1: {

@@ -258,6 +258,80 @@ def projets_possedes_ici(sub: str, org_id: Optional[int], *,
                                        createur=mes_objets_ici(sub, org_id), **kw)
 
 
+def org_de_rangement(row: dict) -> Optional[int]:
+    """L'org où une ressource possédée est RANGÉE, lue sur sa ligne (`owner_type`,
+    `owner_id`, `context_org_id`) : l'org propriétaire, l'org de l'équipe propriétaire,
+    l'org de création d'un objet perso. None quand la ligne n'en dit rien (objet perso
+    sans org de création, plateforme). Vaut pour les projets, tableaux et apps."""
+    ot, oid = row.get("owner_type"), row.get("owner_id")
+    if ot == "org" and oid is not None:
+        return int(oid)
+    if ot == "group" and oid is not None:
+        g = group_store.get_group(int(oid))
+        return int(g["org_id"]) if g and g.get("org_id") is not None else None
+    if ot == "user" and row.get("context_org_id") is not None:
+        return int(row["context_org_id"])
+    return None
+
+
+def partages_a_moi_ici(sub: str, org_id: Optional[int], rows: list[dict],
+                       rang: Callable[[dict], Optional[int]] = org_de_rangement
+                       ) -> list[dict]:
+    """Parmi `rows`, des ressources partagées à `sub` EN PERSONNE, celles qu'une liste
+    rend dans l'org `org_id` (06/11/2026).
+
+    Un partage nominatif se range là où la ressource est rangée (`rang`, par défaut
+    `org_de_rangement`) quand `sub` est membre de cette org : il se liste là, et nulle
+    part ailleurs. La MAISON (`org_perso_de`) ne recueille que ce qui n'a pas d'org où
+    le ranger pour lui : une ressource sans org de rangement, ou celle d'une org dont
+    il n'est pas membre (le collaborateur extérieur). Avant, tout partage nominatif
+    allait à la maison, qui depuis la fin de l'org perso est une org ordinaire : la
+    ressource d'une org A partagée à un membre de A et de B se listait dans B, son org
+    active.
+
+    Un filtre de LISTE, jamais un droit : la lecture par id (`visible_in_org`) ne
+    change pas. Source unique des projets, tableaux, pages et apps reçus."""
+    if org_id is None or not rows:
+        return []
+    maison = org_perso_de(sub, org_id)
+    mes_orgs = {int(o["org_id"]) for o in org_store.list_orgs_for_user(sub)}
+    out = []
+    for r in rows:
+        o = rang(r)
+        # Rangé ici ET membre d'ici — un bénéficiaire HORS de l'org qui y travaille par
+        # un projet partagé (`_project=`) n'en reçoit rien de plus que sa maison.
+        if (o == int(org_id) and o in mes_orgs) or (
+                maison and (o is None or o not in mes_orgs)):
+            out.append(r)
+    return out
+
+
+def projets_partages_a_moi_ici(sub: str, org_id: Optional[int]) -> list[dict]:
+    """Les projets partagés à `sub` en personne qu'une liste rend dans l'org `org_id`
+    (`partages_a_moi_ici`)."""
+    if org_id is None:
+        return []
+    return partages_a_moi_ici(sub, org_id, db.list_projects_granted_to([("user", sub)]))
+
+
+def projets_recus_ici(sub: str, org_id: Optional[int]) -> list[dict]:
+    """Les projets PARTAGÉS qu'une liste rend dans l'org `org_id` : partagés à l'org ou
+    à mes équipes en elle (`proprietaires_collectifs_de_liste`), plus mes partages
+    nominatifs rangés ici (`projets_partages_a_moi_ici`). Une ligne par projet, la
+    meilleure `permission`. Source unique d'`oto_project op=list` et
+    d'`accessible_project_ids` — « cherchable ⇔ lisible »."""
+    par_id: dict[int, dict] = {}
+    for r in (db.list_projects_granted_to(proprietaires_collectifs_de_liste(sub, org_id))
+              + projets_partages_a_moi_ici(sub, org_id)):
+        rid = int(r["id"])
+        prev = par_id.get(rid)
+        if prev is None or (r.get("permission") == "write"
+                            and prev.get("permission") != "write"):
+            par_id[rid] = r
+    return sorted(par_id.values(), key=lambda r: str(r.get("updated_at") or ""),
+                  reverse=True)
+
+
 def accessible_project_ids(sub: str, org_id: Optional[int],
                            want: str = "read") -> list[int]:
     """Ids des projets accessibles DANS l'org active — le scoping ENSEMBLISTE
@@ -272,7 +346,7 @@ def accessible_project_ids(sub: str, org_id: Optional[int],
     if not ids and not project_list_owners(sub, org_id):
         return []
     seen = set(ids)
-    for r in db.list_projects_granted_to(principaux_de_liste(sub, org_id)):
+    for r in projets_recus_ici(sub, org_id):
         rid = int(r["id"])
         if rid in seen:
             continue

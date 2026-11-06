@@ -129,16 +129,18 @@ class ProjectInput(BaseModel):
     instance_ref: Optional[str] = None  # connecteur : ref d'INSTANCE (ADR 0038 B5, grammaire B4 via oto_instance op=list) — le binding désigne exactement CE credential ; la résolution le sert en dur (re-gardé pour l'appelant). Exclusif d'identity_ref (le ref porte déjà le compte). Stocké config.instance_ref.
     # list : la PORTÉE. Omis/`org` = l'org consultée (ses projets, ceux de ses équipes,
     # ce qui est partagé à elle ou à mes équipes en elle, et mes projets perso créés
-    # en elle) — dans mon org PERSO, en plus, mes projets perso sans org de création et
-    # ce qui est partagé à moi (28/09, 29/09 et 07/10/2026) ; `me` = ce qui est partagé à MOI
+    # en elle) — dans ma maison, en plus, mes projets perso sans org de création ; un
+    # projet partagé à moi se liste dans son org de rangement si j'en suis membre, sinon
+    # dans ma maison (28/09, 29/09, 07/10 et 06/11/2026) ; `me` = ce qui est partagé à MOI
     # en personne, servi dans toute org (29/09/2026 : une org perso est une org comme
     # une autre).
     scope: Optional[Literal["org", "me"]] = Field(default=None, description=(
         "list only: `org` (default) = the projects of the organization you act in, of "
         "its teams, those shared with it or with your teams in it, and your personal "
         "projects created in it (visible to you only) — a personal project is listed "
-        "ONLY in the organization where it was created; your PERSONAL org also lists "
-        "everything shared with you as a person; `me` "
+        "ONLY in the organization where it was created; a project shared with you as a "
+        "person is listed in the organization it belongs to when you are a member there, "
+        "otherwise in your active organization; `me` "
         "= only the projects shared with YOU as a person, whatever their "
         "organization — served in any organization."))
     # list : retrouver ce qu'on a RANGÉ (issue `oto`#38) — les projets archivés, et eux
@@ -890,11 +892,9 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                     **({"audit": {**aud, "light": True}} if avec_audit else {})})
             return out
 
-        def _received(principals: list[tuple[str, str]], seen: set) -> list[dict]:
+        def _received(rows: list[dict], seen: set) -> list[dict]:
             # Vue bornée (oto#270) : un partage reçu ne passe que visible dans O.
-            recus = ownership.borner_a_la_vue(sub, RTYPE,
-                                              db.list_projects_granted_to(principals),
-                                              rid=lambda r: r["id"])
+            recus = ownership.borner_a_la_vue(sub, RTYPE, rows, rid=lambda r: r["id"])
             recus = [r for r in recus if r["id"] not in seen]
             grant_counts.update(db.project_grant_counts([r["id"] for r in recus]))
             return [{**v, "permission": r.get("permission")}
@@ -912,15 +912,17 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             # est une org comme une autre ; un partage à une personne n'appartient à
             # aucune org). L'ACCÈS ne dépend pas de la liste : `visible_in_org` honore
             # le partage dans toute org.
-            return _projected(_received([("user", sub)], set()), inp.fields)
+            return _projected(_received(db.list_projects_granted_to([("user", sub)]), set()),
+                              inp.fields)
 
         # La LISTE de l'org consultée (décisions des 28 et 29/09/2026, amendent l'ADR
         # 0030 §8) : ses projets, ceux de ses pôles (ADR 0049 : mes équipes, ou toutes si
         # j'en suis admin), ce qui est partagé à elle ou à mes équipes en elle, marqué
         # `shared` — et MES projets personnels créés dans cette org (`mes_objets_ici`),
         # invisibles des autres membres sauf partage ; dans aucune autre org, même pas
-        # mon org perso (07/10/2026). Aucun partage fait à MOI : il se liste dans mon
-        # org PERSO. Deux seams, les mêmes que la recherche
+        # mon org perso (07/10/2026). Un partage fait à MOI se liste dans l'org où le
+        # projet est rangé si j'en suis membre, sinon dans ma maison
+        # (`ownership.projets_partages_a_moi_ici`, 06/11/2026). Deux seams, les mêmes que la recherche
         # (`accessible_project_ids`) : « cherchable ⇔ lisible »
         # (tripwire `test_search_scope_tripwire`).
         _require(bool(ownership.project_list_owners(sub, ctx.org_id)), "no_active_org",
@@ -929,7 +931,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         grant_counts.update(db.project_grant_counts([r["id"] for r in own_rows]))
 
         own = _enrich(own_rows, False)
-        shared = _received(ownership.principaux_de_liste(sub, ctx.org_id),
+        shared = _received(ownership.projets_recus_ici(sub, ctx.org_id),
                            {p["id"] for p in own})
         return _projected(own + shared, inp.fields)
 
@@ -1826,7 +1828,8 @@ CAPABILITIES += [
             "(ORG-SCOPED: the ACTIVE org's projects, its teams' + projects shared with it "
             "or with your teams in it + YOUR personal projects created in it (visible to "
             "you only) — a personal project is listed ONLY in the org where it was created; "
-            "your PERSONAL org also lists those shared with YOU as a person; pass "
+            "a project shared with YOU as a person is listed in the org it belongs to when "
+            "you are a member there, otherwise in your active org; pass "
             "`_org=<id>` to see another org's; "
             "`scope=\"me\"` lists only the projects shared with you as a person, in any "
             "org; every response echoes the effective org in `_org`. An INDEX: names and `brief_md_length`, NOT the briefs — "

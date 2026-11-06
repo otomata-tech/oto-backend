@@ -108,14 +108,45 @@ def _principaux(sub: str, scope: Optional[str], org_id: Optional[int]) -> list[t
 
     - `None` : l'appelant, toutes ses orgs et toutes ses équipes (vue historique) ;
     - `"me"` : l'appelant SEUL — un partage à une personne n'appartient à aucune org ;
-    - `"org"` : l'org CONSULTÉE et les équipes de l'appelant DANS cette org — et
-      l'appelant lui-même dans son org PERSO seulement (même seam que les listes de
-      projets et de tableaux, `ownership.principaux_de_liste`, décision du 28/09/2026)."""
+    - `"org"` : l'org CONSULTÉE et les équipes de l'appelant DANS cette org (même seam
+      que les listes de projets et de tableaux) ; ses partages nominatifs sont rangés à
+      part par `_pages_recues` (06/11/2026)."""
     if scope == "me":
         return [("user", sub)]
     if scope == "org":
-        return ownership.principaux_de_liste(sub, org_id)
+        return ownership.proprietaires_collectifs_de_liste(sub, org_id)
     return ownership.accessor_scope(sub).principal_pairs()
+
+
+def _pages_recues(sub: str, scope: Optional[str], org_id: Optional[int]) -> list[dict]:
+    """Les pages reçues selon la portée. Pour `scope="org"`, une page partagée à moi en
+    personne se range dans l'org de SON projet si j'en suis membre, sinon dans ma maison
+    (`ownership.partages_a_moi_ici`, 06/11/2026) — comme les projets et les tableaux."""
+    if scope != "org":
+        return db.list_docs_granted_to(_principaux(sub, scope, org_id))
+    collectives = db.list_docs_granted_to(
+        ownership.proprietaires_collectifs_de_liste(sub, org_id))
+    a_moi = db.list_docs_granted_to([("user", sub)])
+    projets: dict[int, Optional[dict]] = {}
+    for r in a_moi:
+        pid = int(r["project_id"])
+        if pid not in projets:
+            projets[pid] = db.get_project_by_id(pid)
+
+    def _rang(r: dict) -> Optional[int]:
+        p = projets.get(int(r["project_id"]))
+        return ownership.org_de_rangement(p) if p else None
+
+    # Une ligne par page, représentée par son grant le plus ancien (même règle que
+    # `list_docs_granted_to`).
+    vus, out = set(), []
+    # À date égale, le partage fait à la personne d'abord (tri stable).
+    for r in sorted(ownership.partages_a_moi_ici(sub, org_id, a_moi, rang=_rang) + collectives,
+                    key=lambda r: str(r.get("granted_at") or "")):
+        if r["id"] not in vus:
+            vus.add(r["id"])
+            out.append(r)
+    return sorted(out, key=lambda r: r["updated_at"], reverse=True)
 
 
 def recus(sub: str, scope: Optional[str] = None, org_id: Optional[int] = None) -> dict:
@@ -123,7 +154,7 @@ def recus(sub: str, scope: Optional[str] = None, org_id: Optional[int] = None) -
     lui, à l'une de ses orgs ou de ses équipes — toutes orgs confondues (un partage reçu
     ne disparaît pas quand on change d'org active) ; `scope="me"` à lui seul ;
     `scope="org"` à l'org consultée (`org_id`) et à ses équipes dans cette org, plus à
-    lui-même quand c'est son org perso (28/09/2026). La
+    lui-même rangé dans l'org de son projet (06/11/2026). La
     réponse nomme la portée appliquée (`scope`, `null` = l'union historique).
 
     Une entrée NOMME la page, elle ne la livre pas : le corps se lit par `op=get`.
@@ -131,7 +162,7 @@ def recus(sub: str, scope: Optional[str] = None, org_id: Optional[int] = None) -
     dans son projet, qu'il ne lit pas (cf. `reads.get`)."""
     # Vue bornée (oto#270) : seules les pages visibles dans O, quelle que soit la portée.
     rows = ownership.borner_a_la_vue(sub, common.DOC_RTYPE,
-                                     db.list_docs_granted_to(_principaux(sub, scope, org_id)),
+                                     _pages_recues(sub, scope, org_id),
                                      rid=lambda r: r["id"])
     noms = db_shell.names_of(r.get("granted_by") for r in rows)
     docs = [{

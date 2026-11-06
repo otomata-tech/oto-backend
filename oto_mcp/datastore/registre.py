@@ -141,9 +141,10 @@ class RegistreMixin:
         ou à MES équipes en elle (tous mes groupes de l'org active, pas seulement le
         groupe actif : un partage d'équipe doit se voir sans basculer), et MES tableaux
         perso créés dans cette org (`ownership.mes_objets_ici`, même règle que les
-        projets, 29/09/2026) — jamais ceux d'un autre membre. Mon org PERSO rend en plus
-        mes tableaux perso sans org de création et ceux partagés à moi en personne
-        (`ownership.perso_de_la_liste`) — plus ceux créés dans une autre org (07/10/2026).
+        projets, 29/09/2026) — jamais ceux d'un autre membre. Ma maison rend en plus mes
+        tableaux perso sans org de création (`ownership.perso_de_la_liste`). Un tableau
+        partagé à moi en personne se liste dans l'org où il est rangé si j'en suis
+        membre, sinon dans ma maison (`ownership.partages_a_moi_ici`, 06/11/2026).
         Dédupliqués par id (priorité possédé). Filtre de LISTE : un tableau s'ouvre
         toujours par son numéro."""
         from .. import access
@@ -173,9 +174,11 @@ class RegistreMixin:
         for n in ownership.mes_tableaux_ici(createur):
             out.setdefault(int(n["id"]), (n, False, None))
         recus = db.list_datastores_granted_to(self.sub, org_ids, group_ids)
-        if moi:
-            # Org perso : ce qui est partagé à MOI en personne s'y liste aussi.
-            recus += db.list_datastores_shared_to_user(self.sub)
+        if self.acting_org is None:
+            # Ce qui est partagé à MOI en personne : dans l'org où le tableau est rangé
+            # si j'en suis membre, sinon dans ma maison (06/11/2026).
+            recus += ownership.partages_a_moi_ici(
+                self.sub, org, db.list_datastores_shared_to_user(self.sub))
         for n in recus:
             out.setdefault(int(n["id"]), (n, True, n.get("permission")))
         lignes = list(out.values())

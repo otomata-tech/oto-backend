@@ -167,7 +167,9 @@ class Servi:
         self.fonctions = {f["name"]: f for f in description["functions"]}
         self.validateurs = {n: Draft202012Validator(f["input"]) for n, f in self.fonctions.items()}
 
-    def _client(self, cle: str):
+    def instance(self, cle: str):
+        """The connector's client holding `cle`. Not a `_client()` factory of one known class: the class is the
+        inscribed one, its methods are the description's functions, checked once at mount (`verifier_client`)."""
         return self.client(**{self.champ: cle})
 
     def valider(self, outil: str, ops: list[str], arguments: dict) -> tuple[dict, dict]:
@@ -195,7 +197,7 @@ class Servi:
         from oto.tools.common.errors import UpstreamHTTPError
 
         cle, _ = access.resolve_api_key(self.nom)
-        methode = getattr(self._client(cle), f["name"])
+        methode = getattr(self.instance(cle), f["name"])
         reponses: list = []
         curseur = None
         for _ in range(serve.page_count(f, args)):
@@ -225,7 +227,7 @@ class Servi:
         sonde = self.description["connector"]["probe"]
         f = self.fonctions[sonde["function"]]
         try:
-            reponse = getattr(self._client(fields.get(CHAMP_DE_CLE)), f["name"])()
+            reponse = getattr(self.instance(fields.get(CHAMP_DE_CLE)), f["name"])()
         except UpstreamHTTPError as e:
             refus = self._refus(f, e)
             if refus is None:

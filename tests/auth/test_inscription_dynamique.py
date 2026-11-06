@@ -23,6 +23,9 @@ LOGTO = "https://auth.example.test"
 MISTRAL = "https://callback.mistral.ai/v1/integrations_auth/oauth2_callback"
 CLAUDE = "https://claude.ai/api/mcp/auth_callback"
 CHATGPT = "https://chatgpt.com/connector/oauth/abc123"
+GEMINI = ("https://oauth-redirect.googleusercontent.com/r/"
+          "user_bound_custom-mcp-112233445566778899-mcp_tulina_ai")
+GEMINI_PREFIXE = "https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-"
 LE_CHAT = {
     "client_name": "Le Chat",
     "redirect_uris": [MISTRAL],
@@ -149,7 +152,20 @@ def test_le_chat_confidentiel_inscrit_en_traditional_avec_secret(client, logto, 
     ("https://callback.mistral.ai.evil.example/v1/integrations_auth/oauth2_callback", False),
     ("https://chatgpt.com/connector/oauthx", False),
     ("https://chatgpt.com/connector_platform_oauth_redirect", False),
+    ("https://chatgpt.com/connector/oauth/", False),
+    ("https://chatgpt.com/connector/oauth/a/../../ailleurs", False),
+    ("https://chatgpt.com/connector/oauth/abc?x=https://evil.example", False),
     ("http://localhost:3000/callback", False),
+    (GEMINI, True),
+    (GEMINI_PREFIXE, False),
+    (f"{GEMINI}/autre", False),
+    (f"{GEMINI}?next=https://evil.example", False),
+    (f"{GEMINI}#x", False),
+    ("https://oauth-redirect.googleusercontent.com/r/autre-chose", False),
+    ("http://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1-x", False),
+    ("https://oauth-redirect.googleusercontent.com.evil.example/r/"
+     "user_bound_custom-mcp-1-x", False),
+    (GEMINI_PREFIXE + "a" * 201, False),
 ])
 def test_liste_fermee(uri, admise):
     assert dcr.retour_admis(uri) is admise
@@ -178,6 +194,17 @@ def test_prefixe_chatgpt_admis(client, logto):
     assert r.json()["redirect_uris"] == [CHATGPT]
     # Sans client_name : l'hôte de la première adresse.
     assert logto.creees[0]["name"] == f"{dcr.PREFIXE_DCR}chatgpt.com"
+
+
+def test_gemini_obtient_un_client_confidentiel(client, logto):
+    r = client.post("/oauth/register",
+                    json={"client_name": "Gemini", "redirect_uris": [GEMINI]})
+    assert r.status_code == 201
+    corps = r.json()
+    assert corps["redirect_uris"] == [GEMINI]
+    assert corps["client_secret"]
+    assert logto.creees[0]["type"] == "Traditional"
+    assert logto.creees[0]["name"] == f"{dcr.PREFIXE_DCR}Gemini"
 
 
 # ── Les métadonnées du client ────────────────────────────────────────────────
@@ -292,6 +319,26 @@ def test_sous_le_plafond_une_adresse_prefixe_passe(client, logto):
                               for i in range(dcr.PLAFOND_VARIABLES - 1))
     r = client.post("/oauth/register", json={"redirect_uris": [CHATGPT]})
     assert r.status_code == 201
+
+
+def test_plafond_chatgpt_n_empeche_pas_gemini(client, logto):
+    logto.applications.extend(_app_dcr(i, [f"https://chatgpt.com/connector/oauth/c{i}"])
+                              for i in range(dcr.PLAFOND_VARIABLES))
+    r = client.post("/oauth/register", json={"redirect_uris": [GEMINI]})
+    assert r.status_code == 201
+
+
+def test_plafond_gemini_a_part(client, logto):
+    logto.applications.extend(_app_dcr(i, [f"{GEMINI_PREFIXE}{i}-mcp_tulina_ai"])
+                              for i in range(dcr.PLAFOND_GEMINI))
+    r = client.post("/oauth/register", json={"redirect_uris": [GEMINI]})
+    assert r.status_code == 400
+    assert "plafond" in r.json()["error_description"]
+    assert client.post("/oauth/register", json={"redirect_uris": [CHATGPT]}).status_code == 201
+    reprise = client.post("/oauth/register",
+                          json={"redirect_uris": [f"{GEMINI_PREFIXE}7-mcp_tulina_ai"]})
+    assert reprise.status_code == 201
+    assert reprise.json()["client_id"] == "ancienne7"
 
 
 # ── Aucune panne masquée ─────────────────────────────────────────────────────

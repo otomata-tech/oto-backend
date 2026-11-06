@@ -57,7 +57,12 @@ def test_a_blanc_rien_n_est_ecrit_et_seuls_des_nombres_sortent(monde, capsys):
     c = _compteurs(sortie)
     assert c["orgs_perso_vivantes"] == 3 and c["orgs_perso_marquees"] == 0
     assert c["orgs_perso_peuplees"] == 0
-    assert c["orgs_perso_vides_archivables"] == 1     # `pleine` a un projet, `seule` rien d'autre
+    # `pleine` a un projet, `seule` n'a pas d'autre org : seule `vide` est archivable.
+    with db._connect() as conn:
+        vides = set(R._vides(conn))
+    assert monde["vide"][1] in vides
+    assert not vides & {monde["pleine"][1], monde["seule"][1]}
+    assert c["orgs_perso_vides_archivables"] == 1
     assert c["projets_a_ranger"] == 1
     # Rien de nominatif : ni compte, ni nom d'org.
     for sub, _oid in (monde["vide"], monde["pleine"], monde["seule"]):
@@ -115,3 +120,59 @@ def test_appliquer_et_archiver(monde):
     with db._connect() as c:
         assert c.execute("SELECT count(*) AS n FROM orgs WHERE personal_of IS NOT NULL"
                          ).fetchone()["n"] == 0
+
+
+def test_archiver_seul_dit_en_clair_qu_il_ne_trouve_rien(monkeypatch, capsys):
+    """Sans base : `--archiver` sur une liste vide le dit, au lieu de passer en silence."""
+    from contextlib import contextmanager
+
+    from scripts import retirer_orgs_perso as R
+
+    class _C:
+        def execute(self, sql, params=None):
+            rows = [] if "SELECT o.id FROM orgs o" in sql else [{"n": 0}]
+            return type("R", (), {"fetchone": lambda s: rows[0] if rows else None,
+                                  "fetchall": lambda s: rows})()
+
+    @contextmanager
+    def _ouvrir():
+        yield _C()
+
+    monkeypatch.setattr(R, "_connect_autocommit", _ouvrir)
+    assert R.main(["--archiver"]) == 0
+    assert "--archiver : aucune org vide à archiver." in capsys.readouterr().out
+
+
+@pytest.fixture(scope="module")
+def deux_passages(live):
+    """Le geste joué en deux temps : `--appliquer` seul a déjà vidé l'étiquette."""
+    from oto_mcp import db, org_store
+    u = uuid.uuid4().hex[:6]
+    vide, pleine, seule = f"usr_rop2_vide_{u}", f"usr_rop2_pleine_{u}", f"usr_rop2_seule_{u}"
+    orgs = {k: _perso_heritee(db, org_store, sub)
+            for k, sub in (("vide", vide), ("pleine", pleine), ("seule", seule))}
+    for sub in (vide, pleine):
+        autre = org_store.create_org(f"Boîte {sub}", created_by=sub)
+        org_store.add_org_member(autre, sub, "org_admin")
+    db.create_project("user", pleine, f"rop2-{u}", created_by=pleine)
+    return orgs
+
+
+def test_archiver_apres_un_appliquer_seul_retrouve_les_ex_orgs_perso(deux_passages):
+    from oto_mcp import db
+    from scripts import retirer_orgs_perso as R
+    assert R.main(["--appliquer"]) == 0
+    for oid in deux_passages.values():
+        o = _org(db, oid)
+        assert o["personal_of"] is None and o["auto_created"] and o["archived_at"] is None
+    # À blanc, sans l'étiquette, le critère retrouve la même org vide, et elle seule.
+    with db._connect() as conn:
+        vides = set(R._vides(conn))
+    assert deux_passages["vide"] in vides
+    assert not vides & {deux_passages["pleine"], deux_passages["seule"]}
+    assert R.main(["--archiver"]) == 0
+    assert _org(db, deux_passages["vide"])["archived_at"] is None   # à blanc : rien écrit
+    assert R.main(["--appliquer", "--archiver"]) == 0
+    assert _org(db, deux_passages["vide"])["archived_at"] is not None
+    assert _org(db, deux_passages["pleine"])["archived_at"] is None
+    assert _org(db, deux_passages["seule"])["archived_at"] is None

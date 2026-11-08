@@ -58,6 +58,25 @@ def test_avec_config_un_post_au_chemin_de_l_org_avec_le_bearer(monkeypatch):
     assert headers == {"Authorization": "Bearer s3cret"} and timeout == hook._TIMEOUT_S
 
 
+def test_le_tenant_primaire_arrive_en_none_et_part(monkeypatch):
+    """`config.tenant_slug_for` rend None pour le tenant primaire : c'est le cas de
+    toute org d'un client, et elle doit être prévenue."""
+    monkeypatch.setenv("OTO_ORG_CREATED_HOOK_URL", "https://svc.example/orgs/{org_id}/enrol")
+    monkeypatch.setenv("OTO_ORG_CREATED_HOOK_TOKEN", "s3cret")
+    calls, done = _spy(monkeypatch)
+    hook.notify(525, None)
+    assert done.wait(2)
+    assert calls[0][0] == "https://svc.example/orgs/525/enrol"
+
+
+def test_un_autre_tenant_ne_part_pas(monkeypatch):
+    monkeypatch.setenv("OTO_ORG_CREATED_HOOK_URL", "https://svc.example/orgs/{org_id}/enrol")
+    monkeypatch.setenv("OTO_ORG_CREATED_HOOK_TOKEN", "s3cret")
+    calls, done = _spy(monkeypatch)
+    hook.notify(9, "un-revendeur")
+    assert not done.wait(0.2) and calls == []
+
+
 def test_une_erreur_reseau_est_avalee(monkeypatch):
     monkeypatch.setenv("OTO_ORG_CREATED_HOOK_URL", "https://svc.example/{org_id}")
     monkeypatch.setenv("OTO_ORG_CREATED_HOOK_TOKEN", "s3cret")

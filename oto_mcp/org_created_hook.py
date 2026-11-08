@@ -57,14 +57,21 @@ def _post(org_id: int, url: str, token: str) -> None:
         logger.error("org-created hook: org=%s failed: %s", org_id, type(e).__name__)
 
 
-def notify(org_id: int, tenant_slug: str) -> None:
+def notify(org_id: int, tenant_slug: "str | None") -> None:
     """Prévient le service configuré que `org_id` existe, si elle relève du tenant
-    primaire. N'attend pas, ne lève pas."""
+    primaire. N'attend pas, ne lève pas.
+
+    `tenant_slug` est ce que `config.tenant_slug_for` rend à `create_org` : **`None`
+    pour le tenant primaire** (le cas de toute org d'un client du tenant primaire),
+    son slug sinon. Le comparer au seul slug primaire laissait passer `None` pour un
+    autre tenant : le crochet ne partait pour aucune org, et une org neuve attendait
+    le prochain passage du service (mesuré le 08/11/2026 : org 525 créée à 17:27:55,
+    clés posées à 17:34 par le passage, aucun POST reçu)."""
     cfg = _config()
     if cfg is None:
         return
     try:
-        if tenant_slug != tenancy.primary_slug():
+        if tenant_slug is not None and tenant_slug != tenancy.primary_slug():
             return
     except tenancy.TenantPrimaireNonDeclare:
         logger.error("org-created hook: tenant primaire non déclaré — org=%s non notifiée", org_id)

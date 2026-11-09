@@ -30,10 +30,10 @@ def test_un_message_n_est_pris_qu_une_fois(live, fil):
 
 
 def test_la_conversation_se_retrouve_par_fil_et_par_personne(live, fil):
-    assert store.slack_fil_existe("T1", "C_T", "1.1") is False
+    assert store.slack_org_du_fil("T1", "C_T", "1.1") is None
     store.slack_lier(fil, "T1", "C_T", "1.1", "ada-sub")
-    assert store.slack_fil_existe("T1", "C_T", "1.1") is True
-    assert store.slack_fil_existe("T1", "C_T", "9.9") is False
+    assert store.slack_org_du_fil("T1", "C_T", "1.1") == 1, "l'org de la conversation"
+    assert store.slack_org_du_fil("T1", "C_T", "9.9") is None
     ligne = store.slack_fil("T1", "C_T", "1.1", "ada-sub")
     assert ligne["thread_id"] == fil and 0 <= ligne["inactif_min"] < 1
     assert store.slack_fil("T1", "C_T", "1.1", "someone-else") is None
@@ -55,7 +55,7 @@ def test_la_conversation_emporte_son_rangement(live, fil):
     store.slack_lier(fil, "T1", "C_T", "1.1", "ada-sub")
     with _connect() as c:
         c.execute("DELETE FROM copilot_threads WHERE id = %s", (fil,))
-    assert store.slack_fil_existe("T1", "C_T", "1.1") is False
+    assert store.slack_org_du_fil("T1", "C_T", "1.1") is None
 
 
 def test_la_purge_retire_les_messages_pris_trop_vieux_et_garde_les_recents(live, fil):
@@ -67,3 +67,12 @@ def test_la_purge_retire_les_messages_pris_trop_vieux_et_garde_les_recents(live,
     store.purger(30)
     assert store.slack_reclamer("C_T", "old") is True, "le vieux a été retiré"
     assert store.slack_reclamer("C_T", "new") is False, "le récent est gardé"
+
+
+def test_une_conversation_rangee_sous_slack_sans_org_leve(live, fil):
+    """Un défaut de rangement, jamais « pas à nous » : la route lirait le réglage d'une
+    org qu'elle ne connaît pas."""
+    store.creer("thr_slack_t3", "ada-sub", None, None, "sys", "m")
+    store.slack_lier("thr_slack_t3", "T1", "C_T", "3.3", "ada-sub")
+    with pytest.raises(RuntimeError, match="without an org"):
+        store.slack_org_du_fil("T1", "C_T", "3.3")

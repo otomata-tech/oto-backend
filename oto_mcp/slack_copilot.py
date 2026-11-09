@@ -22,7 +22,10 @@ this module decides what the agent says and how Slack shows it.
    `copilot_slack_events`, the first event wins.
 3. **The conversation**: `(workspace, channel, thread, member)` → a copilot conversation
    (`copilot_slack_threads`). A mention starts one in the thread under it; the same
-   person's later replies in that thread continue it WITHOUT another mention. Somebody
+   person's later replies in that thread continue it WITHOUT another mention — unless
+   the org set "mention only" (`oto_org_settings domain=slack`, `db/slack_reglage.py`):
+   then only a new mention of the app continues it, and a reply that does not tag the
+   app is dropped by the route before any credential (`slack_events.traiter`). Somebody
    else mentioning the app in the thread opens a conversation of their own — nothing is
    shared between two people. A DM is one rolling conversation per person, a new one after
    30 idle minutes.
@@ -39,9 +42,10 @@ this module decides what the agent says and how Slack shows it.
    same journal as the panel's). A page action does not exist here: no client tool is
    offered, and the prompt says so.
 
-⚠️ A mention in the thread of one of OUR AGENTS' messages is that agent's (the reply event
-restarts it, `slack_events._reponse_a_l_agent`): the copilot ignores it, or the person would
-start two runs with one sentence.
+⚠️ A mention in the thread of one of OUR AGENTS' messages is that agent's
+(`slack_events._reponse_a_l_agent`), never the copilot's: by default the reply's `message`
+event restarts it and the mention is dropped; under "mention only" the mention restarts it
+and the `message` event is dropped — either way one sentence starts one run.
 ⚠️ Never a 5xx for a business reason (Slack retries three times, then switches the endpoint
 off): everything planned is told to the person in Slack.
 """
@@ -106,11 +110,7 @@ def texte_de_demande(texte: str, bot_user: str = "") -> str:
     """What the person asked, from the message as Slack serialised it: the mention of the
     app (the address, not the request) removed, links and names as words, Slack's escapes
     undone. Pure."""
-    t = texte or ""
-    if bot_user:
-        t = re.sub(rf"<@{re.escape(bot_user)}(?:\|[^>]*)?>", " ", t)
-    else:
-        t = re.sub(r"^\s*<@[A-Z0-9]+(?:\|[^>]*)?>", " ", t, count=1)
+    t = slack_events.sans_la_mention(texte or "", bot_user)
     t = _LIEN.sub(lambda m: (f"{m.group(2)} ({m.group(1)})"
                              if m.group(2) and m.group(2) != m.group(1) else m.group(1)), t)
     t = _CANAL.sub(lambda m: f"#{m.group(1)}" if m.group(1) else "a channel", t)
@@ -362,10 +362,10 @@ def cle_de_fil(d: slack_events.Demande) -> str:
     return "" if _dm_sans_fil(d) else d.thread_ts
 
 
-def fil_en_cours(d: slack_events.Demande) -> bool:
-    """Is the thread of this channel reply one that carries a conversation of ours, of
-    anyone? The read before any credential."""
-    return store.slack_fil_existe(d.team_id, d.channel, d.thread_ts)
+def org_du_fil(d: slack_events.Demande) -> Optional[int]:
+    """The org of the conversations of ours the thread of this channel reply carries, of
+    anyone — None when it carries none. The read before any credential."""
+    return store.slack_org_du_fil(d.team_id, d.channel, d.thread_ts)
 
 
 def _coupe(sub: str, org_id: int) -> Optional[str]:

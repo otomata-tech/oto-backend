@@ -99,6 +99,8 @@ from . import (
     demandes_acces,
     # NON aplati : `noter`/`lire`/`purger` sont trop communs — `db.slack_agent_posts.<fn>`.
     slack_agent_posts,
+    # NON aplati : le réglage Slack d'une org (`mention_seule`) — `db.slack_reglage.<fn>`.
+    slack_reglage,
     # NON aplati : `noter`/`lire`/`marquer` sont trop communs — `db.apify_runs.<fn>`.
     apify_runs,
     # NON aplati, même raison — `db.higgsfield_jobs.<fn>`.

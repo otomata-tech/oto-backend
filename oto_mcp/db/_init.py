@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import (_prerequis, org_d_inscription, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, regles_de_comptes,
+from . import (_prerequis, org_d_inscription, slack_reglage, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, regles_de_comptes,
                projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
@@ -1469,6 +1469,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # indifférent entre elles (la révision marque en plus les orgs perso d'avant).
     if _colonne_absente(conn, "orgs", org_d_inscription.COLONNE):
         conn.execute(org_d_inscription.DDL_COLONNE)
+    # Hors d'un DM, l'app Slack ne répond qu'à qui la tague (`db/slack_reglage.py`) — la
+    # même que pose la révision `20261109_2100_slack_mention_only` : ordre indifférent.
+    if _colonne_absente(conn, "orgs", slack_reglage.COLONNE):
+        conn.execute(slack_reglage.DDL_COLONNE)
     # SUSPENSION d'une org (`org_suspension`) : l'org ne peut plus agir — outils,
     # capacités, travaux de fond — et rien de ce qui lui appartient n'est touché.
     # Même forme que `users.suspended_*`. NULL = active.

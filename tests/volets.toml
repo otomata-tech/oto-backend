@@ -477,6 +477,8 @@ sources = [
   "oto_mcp/slack_events.py",
   # Les messages qu'un agent y poste, à qui une réponse dans leur fil revient.
   "oto_mcp/db/slack_agent_posts.py",
+  # Le réglage d'org « mention seule » : qui, hors d'un DM, est une demande.
+  "oto_mcp/db/slack_reglage.py",
   "oto_mcp/db/apify_runs.py",
   "oto_mcp/apify_releve.py",
   "oto_mcp/db/higgsfield_jobs.py",
@@ -502,6 +504,8 @@ tests = [
   "tests/**/test_declencheur*.py",
   "tests/**/test_slack_events.py",
   "tests/**/test_slack_agent_posts_db.py",
+  "tests/**/test_slack_reglage.py",
+  "tests/**/test_migration_20261109_slack_mention_only.py",
   "tests/**/test_slack_post_note_l_agent.py",
   "tests/**/test_portee_runner.py",
   "tests/**/test_trigger*.py",

@@ -149,8 +149,16 @@ def slack(monkeypatch):
     # what its turn does is `tests/test_slack_copilot.py`'s, here only WHO it is routed to.
     vu["copilot_fils"] = set()
     vu["copilot"] = []
-    monkeypatch.setattr(slack_copilot.store, "slack_fil_existe",
-                        lambda team, canal, ts: (team, canal, ts) in vu["copilot_fils"])
+    monkeypatch.setattr(slack_copilot.store, "slack_org_du_fil",
+                        lambda team, canal, ts: ORG if (team, canal, ts) in vu["copilot_fils"]
+                        else None)
+    # The orgs that set "mention only" (`db.slack_reglage`): none unless a test sets it —
+    # every org of before keeps the 29/10 behaviour. An org absent from `orgs_vivantes`
+    # no longer exists.
+    vu["mention_seule"], vu["orgs_vivantes"] = set(), {ORG, 78}
+    monkeypatch.setattr(slack_events.db.slack_reglage, "mention_seule",
+                        lambda org: (org in vu["mention_seule"])
+                        if org in vu["orgs_vivantes"] else None)
     monkeypatch.setattr(slack_copilot, "traiter",
                         lambda client, inst, d: vu["copilot"].append((inst.org_id, d))
                         or {"ok": True, "copilot": True})
@@ -534,6 +542,67 @@ def test_une_reponse_dans_un_fil_de_l_agent_integre_lui_est_passee(slack):
     assert d.thread_ts == "1600.00" and not d.mention and d.reponse
 
 
+# ── réglage d'org « mention seule » (oto_org_settings domain=slack) ────────────
+
+def _sans_mention(channel="C0CHAN", channel_type="channel", thread_ts="1600.00", **ev):
+    """A reply in a thread that does not tag the app — the `message` event."""
+    return {"type": "event_callback", "event_id": "Ev2", "team_id": TEAM, "api_app_id": APP,
+            "event": {"type": "message", "channel_type": channel_type, "user": "U0ASKER",
+                      "channel": channel, "ts": "1601.00", "thread_ts": thread_ts,
+                      "text": "and the other table?", **ev}}
+
+
+def test_SANS_reglage_une_reponse_sans_mention_dans_un_fil_de_l_agent_integre_le_poursuit(slack):
+    """Le défaut est celui du 29/10 : une org qui ne pose rien ne voit aucun changement."""
+    slack["copilot_fils"].add((TEAM, "C0CHAN", "1600.00"))
+    assert _recevoir(_sans_mention())["copilot"] is True
+
+
+@pytest.mark.parametrize("genre", ["channel", "group", "mpim"])
+def test_en_MENTION_SEULE_une_reponse_sans_mention_est_jetee_AVANT_le_coffre(slack, genre):
+    """Ni sous une conversation de l'agent intégré, ni sous un message d'agent : lu et
+    jeté avant de lire l'installation ou un credential."""
+    slack["mention_seule"].add(ORG)
+    slack["copilot_fils"].add((TEAM, "C0CHAN", "1600.00"))
+    slack["posts"][("C0CHAN", "1690.00")] = {"org_id": ORG, "trigger_id": 12,
+                                            "job_id": 5, "text": "hello"}
+    for fil in ("1600.00", "1690.00"):
+        out = _recevoir(_sans_mention(channel_type=genre, thread_ts=fil))
+        assert out["ignored"] == "mention_only"
+    assert slack["copilot"] == [] and slack["enfile"] is None
+    assert slack["installs_lus"] == 0 and "c" not in slack["client"]
+
+
+def test_en_MENTION_SEULE_une_mention_dans_un_fil_de_l_agent_integre_le_poursuit(slack):
+    slack["mention_seule"].add(ORG)
+    slack["copilot_fils"].add((TEAM, "C0CHAN", "1600.00"))
+    assert _recevoir(_sans_mention())["ignored"] == "mention_only"
+    assert _recevoir(_app_mention(thread_ts="1600.00"))["copilot"] is True
+    (_, d), = slack["copilot"]
+    assert d.thread_ts == "1600.00" and d.mention and d.reponse
+
+
+def test_en_MENTION_SEULE_un_DM_ne_change_pas(slack):
+    """Slack n'envoie pas `app_mention` en DM : toute réponse y reste une demande."""
+    slack["mention_seule"].add(ORG)
+    assert _recevoir(_mention())["job_id"] == 900
+
+
+def test_le_reglage_est_celui_de_l_org_du_fil(slack):
+    """Une autre org en « mention seule » ne change rien aux fils de celle-ci."""
+    slack["mention_seule"].add(78)
+    slack["copilot_fils"].add((TEAM, "C0CHAN", "1600.00"))
+    assert _recevoir(_sans_mention())["copilot"] is True
+
+
+def test_le_message_d_une_org_DISPARUE_ne_relance_rien_et_n_ouvre_pas_le_coffre(slack):
+    slack["posts"][("C0CHAN", "1690.00")] = {"org_id": 4242, "trigger_id": 12,
+                                            "job_id": 5, "text": "hello"}
+    assert _recevoir(_sans_mention(thread_ts="1690.00"))["ignored"] == "org_gone"
+    assert _recevoir(_app_mention(thread_ts="1690.00"))["ignored"] == "org_gone"
+    assert slack["installs_lus"] == 0 and slack["enfile"] is None
+
+
 def test_la_PORTE_ne_parle_pas_a_Slack_avant_le_200(slack):
     """`recevoir` vérifie et lit l'événement, rien d'autre : ni Slack, ni membre, ni
     file — ce qui parle à Slack attend l'accusé (Slack coupe à 3 s)."""
@@ -747,6 +816,49 @@ def test_aussi_envoye_au_canal_c_est_encore_une_reponse(poste):
 def test_une_retouche_ou_le_bot_dans_le_fil_ne_relance_RIEN(poste, ev):
     assert _recevoir(_reponse(**ev))["ignored"] == "event"
     assert poste["enfile"] is None
+
+
+def _reponse_taguee(text="ok, send it", channel="C0GTM", thread_ts="1690.00"):
+    """The same reply, tagging the app: Slack sends BOTH events — `message` (above) and
+    `app_mention` (another `event_id`)."""
+    return _app_mention(text=f"<@U0BOT> {text}", channel=channel, thread_ts=thread_ts,
+                        ts="1700.05")
+
+
+def test_SANS_reglage_une_reponse_taguee_dans_le_fil_d_un_agent_fait_UN_run(poste):
+    """Par défaut, l'événement `message` relance l'agent ; son jumeau `app_mention` est
+    jeté avant le coffre — une phrase, un run."""
+    assert _recevoir(_reponse(text="<@U0BOT> ok, send it"))["job_id"] == 900
+    premier, poste["enfile"] = poste["enfile"], None
+    lus = poste["installs_lus"]
+    assert _recevoir(_reponse_taguee())["ignored"] == "agent_thread"
+    assert poste["enfile"] is None and poste["installs_lus"] == lus
+    assert premier["externe"] == "Ev1" and poste["copilot"] == []
+
+
+def test_en_MENTION_SEULE_une_reponse_SANS_mention_dans_le_fil_d_un_agent_est_ignoree(poste):
+    poste["mention_seule"].add(ORG)
+    assert _recevoir(_reponse())["ignored"] == "mention_only"
+    assert poste["enfile"] is None and poste["installs_lus"] == 0
+
+
+def test_en_MENTION_SEULE_la_mention_dans_le_fil_d_un_agent_le_relance_UNE_fois(poste):
+    """Le jumeau `message` est jeté ; la mention EST la réponse, son adresse ôtée du texte
+    que le run lit."""
+    poste["mention_seule"].add(ORG)
+    assert _recevoir(_reponse(text="<@U0BOT> ok, send it"))["ignored"] == "mention_only"
+    assert poste["enfile"] is None
+    assert _recevoir(_reponse_taguee())["job_id"] == 900
+    e = poste["enfile"]
+    assert e["t"]["id"] == 12 and e["externe"] == "Ev9" and poste["copilot"] == []
+    assert "ok, send it" in e["entree"]
+    assert "<@U0BOT>" not in e["entree"], "l'adresse, pas la réponse"
+
+
+def test_en_MENTION_SEULE_une_reponse_en_DM_sous_un_message_d_agent_le_relance(poste):
+    poste["mention_seule"].add(ORG)
+    _recevoir(_reponse(channel="D0DM", channel_type="im"))
+    assert poste["enfile"]["t"]["id"] == 12
 
 
 def test_une_reponse_dans_un_fil_qui_n_est_PAS_d_un_agent_n_ouvre_meme_pas_le_coffre(poste):

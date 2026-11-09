@@ -2047,9 +2047,27 @@ comme `api/hooks.py`), logique dans `slack_events.py`, sans HTTP.
 
 Un agent hébergé qui poste **en tant que l'app** (`slack_post_message(author="app")`),
 **hors d'un fil**, voit son message noté sous lui. Une réponse d'un membre **dans ce fil**
-— DM, canal, canal privé ou DM de groupe — relance **cet agent**. Tous les agents, sans
-interrupteur (décision du 29/10). Même route que les DM (`POST /api/slack/events`,
+— DM, canal, canal privé ou DM de groupe — relance **cet agent**. Tous les agents
+(décision du 29/10). Même route que les DM (`POST /api/slack/events`,
 `slack_events.py`).
+
+- **Réglage d'org « mention seule »** : `oto_org_settings domain=slack` (`get` membre,
+  `set` admin de l'org, `mention_only` true|false ; colonne `orgs.slack_mention_only`,
+  défaut `false`, révision `20261109_2100_slack_mention_only`, `db/slack_reglage.py`).
+  **Par défaut, rien ne change** : une réponse dans le fil relance l'agent sans mention,
+  et la réponse de la même personne dans une conversation de l'agent intégré la poursuit
+  (`docs/copilot.md` §Dans Slack). Posé à `true`, hors d'un DM, l'app ne répond qu'à un
+  message qui la **tague** (`@<app>`), réponses en fil comprises : une réponse sans
+  mention est jetée **avant tout credential** (`ignored: mention_only`) — l'org se lit
+  sur le fil lui-même (`slack_agent_posts.org_id`, ou l'org de la conversation de
+  l'agent intégré, `copilot.slack_org_du_fil`), jamais sur l'installation. Les DM ne
+  changent jamais (Slack n'y envoie pas `app_mention`).
+- **Une phrase, un run** : une réponse qui tague l'app arrive deux fois (`message` et
+  `app_mention`). Par défaut, l'événement `message` relance l'agent et la mention est
+  jetée (`ignored: agent_thread`) ; en « mention seule », la mention relance l'agent —
+  l'adresse `<@app>` ôtée du texte que le run lit (`slack_events.sans_la_mention`) — et
+  l'événement `message` est jeté (`ignored: mention_only`). Les deux décisions se
+  prennent avant tout credential.
 
 - **Noter** : `slack_post_message` (`tools/slack.py`), juste après l'envoi, note **tout**
   message d'un run hébergé — son auteur (`app`/`me`), son fil, chaque partie d'un texte
@@ -2078,7 +2096,8 @@ interrupteur (décision du 29/10). Même route que les DM (`POST /api/slack/even
   les messages de nos agents (`est_note`), puis lit `slack_agent_posts` **avant tout
   credential** : chaque réponse en fil de chaque canal
   où siège le bot arrive ici, et presque aucune n'est sous un des nôtres. Trouvé dans
-  l'org de l'installation → cet agent. Pas trouvé : un DM continue vers l'agent Slack de
+  l'org de l'installation → cet agent (hors DM, selon le réglage « mention seule » de
+  l'org du message, ci-dessus). Pas trouvé : un DM continue vers l'agent Slack de
   l'org comme avant, une réponse en canal est ignorée. Au-delà de 30 jours, la ligne ne
   sert plus (maintenance `slack-agent-posts`, timer quotidien).
 - **Qui répond** : la même vérification qu'un DM (exactement un membre réel, email

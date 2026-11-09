@@ -116,6 +116,7 @@ chemins = [
   "oto_mcp/maintenance.py",
   "oto_mcp/alerte_agents_bloques.py",
   "oto_mcp/medecin_agents.py",
+  "oto_mcp/db/issues_des_travaux.py",
   "oto_mcp/migrer.py",
   "oto_mcp/ferme.py",
   "oto_mcp/scheduler.py",

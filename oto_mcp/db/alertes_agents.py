@@ -6,8 +6,9 @@ vide, son écran le dit « actif », et la panne se découvre en cherchant autre
 personne de prévenu). `usage.agents_en_echec` rend ces pannes LISIBLES ; ce module les
 rend ANNONÇABLES, une fois par épisode (`alerte_agents_bloques`).
 
-**L'épisode** = les travaux morts (`failed`) d'un agent depuis son dernier travail réussi
-(`done`) — donc consécutifs. Il s'ouvre quand il atteint le seuil, il se clôt au premier
+**L'épisode** = les travaux morts d'un agent depuis son dernier travail réussi — donc
+consécutifs ; mort et réussi au sens de `issues_des_travaux` (un `done` que l'agent a
+conclu `blocked` est mort). Il s'ouvre quand il atteint le seuil, il se clôt au premier
 succès. `runner_triggers.echec_annonce_at` dit qu'il a été annoncé : un épisode est
 annoncé si cette date est postérieure à son dernier succès (ou s'il n'y en a aucun).
 Aucune remise à zéro à écrire : le succès suivant suffit à rouvrir la porte.
@@ -20,6 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 from ._conn import _connect
+from . import issues_des_travaux
 
 # La date de l'annonce du dernier épisode de blocage d'un agent : posée par la révision
 # `20261023_1040_echec_annonce` ET par le démarrage, sous garde de catalogue —
@@ -55,14 +57,14 @@ def agents_bloques(seuil: int) -> list[dict[str, Any]]:
               CROSS JOIN LATERAL (
                     SELECT MAX(j.finished_at) AS dernier_succes
                       FROM runner_jobs j
-                     WHERE {_DU_DECLENCHEUR} AND j.status = 'done') s
+                     WHERE {_DU_DECLENCHEUR} AND {issues_des_travaux.reussi()}) s
               CROSS JOIN LATERAL (
                     SELECT COUNT(*)::int AS travaux,
                            MIN(j.finished_at) AS depuis, MAX(j.finished_at) AS dernier,
-                           (array_agg(LEFT(j.last_error, %(tete)s)
+                           (array_agg(LEFT({issues_des_travaux.motif()}, %(tete)s)
                                       ORDER BY j.finished_at DESC))[1] AS motif
                       FROM runner_jobs j
-                     WHERE {_DU_DECLENCHEUR} AND j.status = 'failed'
+                     WHERE {_DU_DECLENCHEUR} AND {issues_des_travaux.mort()}
                        AND j.finished_at > NOW() - make_interval(days => %(fenetre)s)
                        AND (s.dernier_succes IS NULL
                             OR j.finished_at > s.dernier_succes)) f

@@ -714,6 +714,13 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `20261031_0040_agent_preset` : ordre indifférent entre elles.
     if _colonne_absente(conn, "org_members", runner_triggers.COLONNE_PRESET_PARTAGE):
         conn.execute(runner_triggers.DDL_COLONNE_PRESET_PARTAGE)
+    # L'issue que l'agent a conclue de son travail, et sa note (`issues_des_travaux`) —
+    # les mêmes que pose la révision `20261109_2100_issue_des_travaux` : ordre indifférent.
+    from . import issues_des_travaux
+    if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_ISSUE):
+        conn.execute(issues_des_travaux.DDL_COLONNE_ISSUE)
+    if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_NOTE):
+        conn.execute(issues_des_travaux.DDL_COLONNE_NOTE)
     # Les surcharges du temps gagné d'une org — la même que pose la révision `0066` :
     # ordre indifférent entre elles.
     if _colonne_absente(conn, "orgs", runner_jobs.COLONNE_TEMPS_GAGNE):

@@ -307,6 +307,14 @@ _REGLAGES: tuple[Variable, ...] = (
              "seulement les porteurs de l'option `claude_subscription` ; toute autre "
              "valeur lève.",
              ("oto_mcp/capabilities/_abonnement.py:205",)),
+    Variable("OTO_RUNS_BLOQUES_COMPTES", Classe.REGLAGE, "",
+             "Un travail `done` dont l'agent a conclu son run `blocked` ou `failed` "
+             "(`run_finish`) compte comme un travail MORT pour le médecin des agents, "
+             "la guérison et l'alerte au titulaire ; l'issue et sa note sont posées "
+             "sur le travail et servies par les listes (`db/issues_des_travaux.py`). "
+             "`1`, `true`, `yes`, `on` l'allument ; absente, vide ou un non = un "
+             "travail n'est mort que `failed` ; toute autre valeur lève.",
+             ("oto_mcp/db/issues_des_travaux.py:68",)),
     Variable("OTO_REPLI_API_PAR_DEFAUT", Classe.REGLAGE, "",
              "Repli d'un travail d'abonnement Claude épuisé sur la clé API DÉPOSÉE par "
              "son org, pour une org qui ne l'a jamais réglé (`1`, `true`, `yes`, `on`). "

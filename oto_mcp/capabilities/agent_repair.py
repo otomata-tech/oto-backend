@@ -81,7 +81,7 @@ def _episode(inp: AgentRepairInput) -> dict:
 #: son titulaire, le second peut en recopier des morceaux (une trace d'outil, une donnée
 #: lue) — une porte de plateforme sur TOUTES les orgs n'en a pas besoin pour soigner.
 _CHAMPS_DU_TRAVAIL = ("id", "kind", "status", "attempts", "last_error", "finished_at",
-                      "run_id")
+                      "run_id", "run_outcome", "run_note")
 
 
 def _contexte(ep: dict) -> tuple[Optional[dict], Optional[dict]]:

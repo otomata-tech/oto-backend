@@ -287,6 +287,16 @@ class Job(BaseModel):
     due_at: Optional[str] = None
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
+    run_outcome: Optional[Literal["done", "partial", "blocked", "failed"]] = Field(
+        None, description=(
+            "How the AGENT closed its run (`run_finish` under this job's token; the "
+            "gravest wins when it closed several). ⚠️ Independent of `status`: a job is "
+            "`done` when its run ENDED — `done` + `blocked` is an agent that stopped on "
+            "something it could not lift. Null: it declared nothing, or this instance "
+            "does not record it."))
+    run_note: Optional[str] = Field(
+        None, description="The agent's own note with that outcome (bounded). Data, "
+                          "written for the agent — never shown to a client as is.")
 
 
 class SummaryHour(BaseModel):

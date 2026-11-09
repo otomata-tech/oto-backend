@@ -51,6 +51,10 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.215.0 = moteur Python (`oto.connectors.engine`) : une description s'exécute dans la
+    # lib, échanges de jeton compris (`oauth2_jwt_bearer`) ; le lecteur générique l'appelle
+    # (oto-now/connectors#206, lot 4). Le serveur importe le moteur au démarrage. Aucun extra
+    # neuf : le compte de service signe par `google-auth`, déjà dépendance directe d'ici.
     # v1.214.0 = pennylane 2.2.0 (71 fonctions de plus) : banque (un compte et son solde,
     # transactions lues, saisies, rattachées), paiements et rapprochements des factures,
     # référentiel écrit, contacts et particuliers, exports FEC/GL/GLA, abonnements,
@@ -512,7 +516,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.214.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.215.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

@@ -264,10 +264,11 @@ class Connector:
     # Empty (default) = the quota stays optional. The unit is what the tool notes as
     # `units` (e.g. ElevenLabs credits), and the refusal names it.
     grant_quota_unit: str = ""
-    # The library client of a connector served by the GENERIC READER of its description
-    # (`tools/decrits.py`, decided 05/11/2026): `"module:Class"`. Set by `_decrit` only —
-    # empty for every hand-written connector, which keeps its `tools/<name>.py`.
-    client: str = ""
+    # A connector served by the GENERIC READER of its description (`tools/decrits.py`,
+    # decided 05/11/2026), which runs it by the library's engine (09/11/2026). Set by
+    # `_decrit` only — false for every hand-written connector, which keeps its
+    # `tools/<name>.py`.
+    decrit: bool = False
 
     @property
     def org_shareable(self) -> bool:
@@ -587,7 +588,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        personal_cross_org=False, cardinality="", account_axis_static=False,
        account_noun="",
        field_discriminator="", credential_of=None, hosted_channel=None,
-       spends_keys_of=(), grant_quota_unit="", client="") -> Connector:
+       spends_keys_of=(), grant_quota_unit="", decrit=False) -> Connector:
     """Factory for a registry entry — called by `providers/<name>.py`.
 
     Adding a FIELD per connector = adding it to `Connector` AND here, then
@@ -607,26 +608,35 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         account_noun=account_noun, field_discriminator=field_discriminator,
         credential_of=credential_of, hosted_channel=hosted_channel,
         spends_keys_of=tuple(spends_keys_of), grant_quota_unit=grant_quota_unit,
-        client=client,
+        decrit=decrit,
     )
 
 
-def _decrit(name, *, client, help, href, key_help) -> Connector:
+def _decrit(name, *, help, href, key_help) -> Connector:
     """Registry entry of a connector served by the GENERIC READER of its description
-    (`tools/decrits.py`): its label, namespace, modes and key field are READ in the
-    description (`oto.connectors.descriptions`), never written twice; `client` names
-    its library client (`"module:Class"`); `help`, `href` and `key_help` are the
-    catalog's prose. A description the reader cannot serve is refused here, at import
-    (`connectors.descriptions.verifier`)."""
+    (`tools/decrits.py`), which runs it by the library's engine: its label, namespace,
+    modes and credential field are READ in the description (`oto.connectors.descriptions`),
+    never written twice; `help`, `href` and `key_help` are the catalog's prose. A
+    description the reader cannot serve is refused here, at import
+    (`connectors.descriptions.verifier`).
+
+    The credential is one secret. A key (`api_key`, `bearer`) is kept under `key` and
+    resolved by `access.resolve_api_key`. A service account's JSON key file
+    (`oauth2_jwt_bearer`) is kept under the description's field name, as
+    `google_analytics` keeps its own (`secret_kind="fields"`, resolved by
+    `access.resolve_credential_fields`); `whitespace_significant`, because the PEM
+    private key holds spaces that the default cleanup would strip."""
     from ..connectors import descriptions  # lazy: this module stays pure
 
     description = descriptions.charger(name)
     descriptions.verifier(description)
     connecteur = description["connector"]
     secret = descriptions.secret_unique(description)
+    champ = CredentialField(descriptions.champ_du_coffre(description), secret["label"], secret=True,
+                            help=key_help, whitespace_significant=descriptions.compte_de_service(description))
+    cle = not descriptions.compte_de_service(description)
     return _c(
-        name, [connecteur["namespace"]], auth_modes=set(connecteur["modes"]), keyed=True,
-        secret_kind="api_key", label=connecteur["label"], help=help, href=href,
-        credential_fields=(CredentialField("key", secret["label"], secret=True, help=key_help),),
-        client=client,
+        name, [connecteur["namespace"]], auth_modes=set(connecteur["modes"]), keyed=cle,
+        secret_kind="api_key" if cle else "fields", label=connecteur["label"], help=help, href=href,
+        credential_fields=(champ,), decrit=True,
     )

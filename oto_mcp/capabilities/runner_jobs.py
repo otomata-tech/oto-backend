@@ -287,6 +287,22 @@ class Job(BaseModel):
     due_at: Optional[str] = None
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
+    run_outcome: Optional[Literal["done", "partial", "blocked", "failed"]] = Field(
+        None, description=(
+            "How the AGENT closed its run (`run_finish` under this job's token; the "
+            "gravest wins when it closed several). ⚠️ Independent of `status`: a job is "
+            "`done` when its run ENDED — `done` + `blocked` is an agent that stopped on "
+            "something it could not lift. Null: it declared nothing."))
+    run_note: Optional[str] = Field(
+        None, description="The agent's own note with that outcome (bounded). Data, "
+                          "written for the agent — never shown to a client as is.")
+    problem: Optional[dict[str, Any]] = Field(
+        None, description=(
+            "On the last dead job of an agent whose failure EPISODE is open (op=list): "
+            "`{headline, todo, action, link, side}` — the problem in plain words, the "
+            "same text the Slack alert carries. `side`: `client` (only the workspace "
+            "can fix it), `tulina` (Tulina fixes it, or is looking), `platform` (ours, "
+            "nothing to show the client)."))
 
 
 class SummaryHour(BaseModel):
@@ -1501,6 +1517,44 @@ def _resume(ctx: ResolvedCtx, jours: int) -> dict:
             "time_standards": minutes}
 
 
+#: Le côté d'un épisode (`agent_episodes.cote`) dit au front (`problem.side`).
+_COTE_SERVI = {"proprietaire": "client", "plateforme": "platform", "inconnu": "tulina"}
+
+
+def _avec_le_probleme(org_id: Optional[int], jobs: list[dict]) -> list[dict]:
+    """Pose `problem` sur le DERNIER travail mort de chaque agent dont l'épisode de panne
+    est ouvert (`db/alertes_slack.problemes_vivants`) : le texte que l'agent médecin a
+    écrit pour le client, sinon la phrase de la classe (`alertes_slack_agents`). Au
+    mieux : une liste de la file ne tombe jamais pour ça."""
+    if org_id is None or not jobs:
+        return jobs
+    ids = sorted({int(p["trigger_id"]) for j in jobs
+                  if isinstance(p := j.get("payload"), dict)
+                  and str(p.get("trigger_id") or "").isdigit()})
+    try:
+        from .. import alertes_slack_agents
+        from ..db import alertes_slack
+        vivants = alertes_slack.problemes_vivants(int(org_id), ids)
+        if not vivants:
+            return jobs
+        par_job = {int(e["dernier_job_id"]): e for e in vivants.values()
+                   if e.get("dernier_job_id")}
+        langue = alertes_slack_agents._langue(int(org_id))
+        out = []
+        for j in jobs:
+            e = par_job.get(int(j["id"]))
+            if e is not None:
+                pb = alertes_slack_agents.message_du_probleme(int(org_id), e, langue)
+                j = {**j, "problem": {**pb, "side": _COTE_SERVI.get(e["cote"], "tulina")}}
+            out.append(j)
+        return out
+    # noqa: SILENT — dit au journal ; la file se sert sans le problème.
+    except Exception:  # noqa: BLE001
+        logger.warning("runner.jobs : problème des agents illisible (org %s)", org_id,
+                       exc_info=True)
+        return jobs
+
+
 def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
     # Deux principaux, deux files. Un MEMBRE agit sur la file de SON org, et
     # doit en avoir une. Un WORKER de plateforme n'en a aucune : il sonde, et
@@ -1668,6 +1722,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         suite = _curseur(jobs[-1]["id"]) if jobs and len(jobs) >= inp.limit else None
         if not ctx.platform_worker:
             jobs = _acces_agent.masquer_charges(ctx, jobs)
+            jobs = _avec_le_probleme(ctx.org_id, jobs)
         return {"jobs": jobs,
                 "total": db.count_jobs(ctx.org_id, status=inp.status,
                                        source=inp.source, fleet_id=inp.fleet_id,

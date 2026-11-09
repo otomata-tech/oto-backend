@@ -42,6 +42,27 @@ def liberer_les_lignes_du_run(run_id: str) -> int | None:
         return None
 
 
+async def _noter_sur_le_travail(outcome: str, note: str | None) -> None:
+    """Pose l'issue sur le TRAVAIL hébergé dont le jeton fait cet appel
+    (`db/issues_des_travaux.py`) : un `done` dont l'agent conclut `blocked` est un
+    travail mort, et sans cette trace le médecin des agents ne le voyait pas. Hors
+    travail hébergé (une personne, une session MCP), rien. Au mieux : une clôture ne
+    dépend jamais de cette écriture."""
+    from .. import verrou_org
+    v = verrou_org.travail_de_la_requete()
+    if v is None or v.job_id is None:
+        return
+    from starlette.concurrency import run_in_threadpool
+    from ..db import issues_des_travaux
+    try:
+        await run_in_threadpool(issues_des_travaux.noter_issue, int(v.job_id), v.sub,
+                                outcome, note)
+    # noqa: SILENT — dit au journal ; la clôture du run est déjà faite.
+    except Exception:  # noqa: BLE001
+        logger.warning("run_finish : issue non posée sur le travail %s", v.job_id,
+                       exc_info=True)
+
+
 def _run_d_autrui(run_id: str) -> bool:
     """Is `run_id` a run indexed under ANOTHER account than the caller's? The guard of
     `run_finish`'s release (the REST close has its own, `run_thread._clore`).
@@ -252,6 +273,7 @@ def register(mcp: FastMCP) -> None:
         session_org.set_call_run(run_id)
         removed = await dr.pop_run(ctx, run_id)
         await _persist_close(run_id, outcome, note)
+        await _noter_sur_le_travail(outcome, note)
         # THIRD release path of the queue lock (#317): a run that
         # ends no longer works, hence holds nothing anymore — whatever its
         # outcome. This is the answer to the measured case: a vanished worker left its row

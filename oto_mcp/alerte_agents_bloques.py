@@ -146,6 +146,27 @@ def _soignes_par_nous(trigger_ids: list) -> set[int]:
         return set()
 
 
+def _annonces_sur_slack(trigger_ids: list) -> set[int]:
+    """Les agents dont l'épisode vivant a déjà été annoncé sur le Slack de l'org
+    (`alertes_slack_agents`) : le courriel serait le même message, en moins utile. Il
+    reste le filet quand Slack n'est pas réglé ou a refusé (rien n'est alors marqué).
+    Ouvert sur erreur, comme `_soignes_par_nous`."""
+    from .db._conn import _connect
+    if not trigger_ids:
+        return set()
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT trigger_id FROM agent_episodes WHERE statut <> 'clos' "
+                "AND slack_alerte_at IS NOT NULL AND trigger_id = ANY(%s)",
+                ([int(t) for t in trigger_ids],)).fetchall()
+        return {int(r["trigger_id"]) for r in rows}
+    except Exception:  # noqa: BLE001
+        log.warning("alerte agents bloqués : annonces Slack illisibles — aucun agent "
+                    "écarté", exc_info=True)
+        return set()
+
+
 def balayer(maintenant: Optional[datetime] = None) -> dict:
     """Un passage : relève les épisodes à annoncer, écrit un courriel par org, marque ce
     qui est parti. Synchrone (la boucle le pousse hors de l'event loop)."""
@@ -158,6 +179,7 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
         return {"heures_calmes": True}
     bloques = alertes_agents.agents_bloques(SEUIL)
     soignes = _soignes_par_nous([a["trigger_id"] for a in bloques])
+    soignes |= _annonces_sur_slack([a["trigger_id"] for a in bloques])
     par_org: dict[int, list[dict]] = {}
     for a in bloques:
         if int(a["trigger_id"]) in soignes:

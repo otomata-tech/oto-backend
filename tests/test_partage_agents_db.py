@@ -195,6 +195,19 @@ def test_les_outils_plateforme_ne_valent_que_pour_l_agent_au_seul_proprietaire(l
                       granted_by="proprio")
     assert db.outils_plateforme_du_travail(travail(prete)) == [], "prêté à un éditeur"
 
+    # Un éditeur nommé qui est lui-même opérateur plateforme n'emprunte rien : la liste
+    # tient. Qu'il perde ce rôle, et elle se referme au travail suivant.
+    entre_admins = db.create_trigger(ORG, "proprio", procedure="veille", tz="UTC",
+                                     tools=["a", *liste], cron="0 8 * * *", model="sub:sonnet")
+    arme(entre_admins)
+    db.upsert_user("autre-operateur", email="op@example.com")
+    db.set_user_role("autre-operateur", "admin")
+    db.grant_resource("runner_trigger", str(entre_admins["id"]), "user", "autre-operateur",
+                      role="editor", granted_by="proprio")
+    assert db.outils_plateforme_du_travail(travail(entre_admins)) == liste, "éditeur opérateur"
+    db.set_user_role("autre-operateur", "member")
+    assert db.outils_plateforme_du_travail(travail(entre_admins)) == [], "rôle perdu"
+
     collectif = db.create_trigger(ORG, "proprio", procedure="veille", tz="UTC",
                                   tools=["a", *liste], cron="0 8 * * *", model="sub:sonnet")
     arme(collectif)

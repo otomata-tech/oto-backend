@@ -762,6 +762,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "(l'agent relancé), donc production seulement. ÉTEINTE par défaut : `1` "
              "l'allume, chaque instance le décide.",
              ("oto_mcp/boucles_de_fond.py:222",)),
+    Variable("OTO_ALERTES_SLACK_AGENTS_ENABLED", Classe.REGLAGE, "0",
+             "Boucle de fond : prévient une org sur son Slack qu'un de ses agents ne "
+             "fonctionne plus, qu'il a été réparé, qu'il refonctionne "
+             "(`alertes_slack_agents.py`) — AGIT sur un tiers (un message chez le "
+             "client), donc production seulement. ÉTEINTE par défaut : `1` l'allume, "
+             "chaque instance le décide.",
+             ("oto_mcp/boucles_de_fond.py:231",)),
     Variable("OTO_BILLING_RUNNER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : runner de facturation — AGIT sur un tiers "
              "(prélèvement), donc lu aussi par `est_la_production()`.",

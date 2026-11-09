@@ -255,6 +255,9 @@ CLASSEMENT: dict[str, Table] = {
     "runner_hook_deliveries": possedee(ParOrg()),
     "runner_trigger_links": possedee(ParOrg(), comptes=("created_by",)),
     "slack_agent_posts": possedee(ParOrg()),
+    # où l'org est prévenue qu'un agent ne fonctionne plus (canal ou personne Slack) :
+    # un réglage de l'org, il part avec elle.
+    "agent_alert_settings": possedee(ParOrg()),
     "apify_runs": exclue(ParOrg(), "suivi de la clé PLATEFORME de l'instance d'origine : "
                          "ses runs ne se relèvent qu'avec cette clé, et le coût relevé "
                          "part avec le journal"),

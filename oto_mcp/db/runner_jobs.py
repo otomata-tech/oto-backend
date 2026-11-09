@@ -2039,7 +2039,7 @@ def list_jobs(org_id: int, status: Optional[str] = None,
     ou, params = _filtre_de_file(org_id, status, source, fleet_id, trigger_id)
     q = ("SELECT id, kind, run_id, payload, status, attempts, max_attempts, "
          "       claimed_by, lease_until, last_error, attempt_errors, result, "
-         "       due_at, created_at, finished_at, fleet_id, sub "
+         "       due_at, created_at, finished_at, fleet_id, sub, run_outcome, run_note "
          "FROM runner_jobs") + ou
     if before_id is not None:
         q += " AND id < %s"
@@ -2082,7 +2082,7 @@ def get_job(job_id: int, org_id: int) -> Optional[dict]:
         row = conn.execute(
             "SELECT id, kind, run_id, payload, status, attempts, max_attempts, result, "
             "       claimed_by, lease_until, last_error, attempt_errors, due_at, created_at, "
-            "       finished_at, fleet_id, sub "
+            "       finished_at, fleet_id, sub, run_outcome, run_note "
             "FROM runner_jobs WHERE id = %s AND org_id = %s",
             (job_id, org_id),
         ).fetchone()

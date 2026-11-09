@@ -302,7 +302,26 @@ def finish(parsed: dict, body: dict) -> str:
                                      set_by=sub, account=account, meta=meta)
     logger.info("slack: workspace %s installed (org=%s, tier=%s, user_token=%s)",
                 team_id, org_id, parsed["scope"], bool(fields.get("user_token")))
+    if etype == "org":
+        _allumer_les_alertes(int(org_id), body, sub)
     return account
+
+
+def _allumer_les_alertes(org_id: int, body: dict, sub: str) -> None:
+    """Slack connecté pour l'ORG : les alertes d'agents s'allument, en message privé à la
+    personne qui vient de le connecter (`db/alertes_slack.activer_a_la_connexion` — un
+    réglage déjà posé par un admin reste tel quel). Au mieux : une connexion réussie ne
+    dépend jamais de cette écriture."""
+    from ..db import alertes_slack
+    from ..db import users as db_users
+    try:
+        qui = (body.get("authed_user") or {}).get("id") or None
+        nom = (db_users.get_user(sub) or {}).get("name") or None
+        alertes_slack.activer_a_la_connexion(org_id, dm_user=qui, dm_name=nom)
+    # noqa: SILENT — dit au journal ; Slack est connecté, les alertes se règlent à la main.
+    except Exception:  # noqa: BLE001
+        logger.warning("slack: alertes d'agents non allumées pour l'org %s", org_id,
+                       exc_info=True)
 
 
 def _declare_flow() -> None:

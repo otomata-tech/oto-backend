@@ -476,6 +476,58 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > (`publication_field_on_update`, rien d'écrit) plutôt qu'ignorés : ils se redéclarent
 > par `publish_mcp`.
 
+## Rendre privé ce qu'un projet privé lie — `make_private=true` (2026-11-09)
+
+Le défaut constaté : un projet possédé par une personne, partagé à deux collègues, liait
+des procédures et des tableaux possédés par l'ORG. Un autre membre de l'org, sans aucun
+partage du projet, les lisait tous par le catalogue de l'org : le projet était privé, ce
+qu'il liait ne l'était pas, et rien ne le disait.
+
+**Sur demande seulement.** `op=link` sans `make_private` garde son comportement : il ne
+change aucune propriété. Avec `make_private=true` (procédure ou tableau ; ailleurs,
+refus `make_private_not_applicable`), la règle (`capabilities/_liens_prives.py`)
+s'applique : une cible **possédée par l'org** liée à un projet **privé** — possédé par
+une personne ou une équipe, et partagé (partage vivant) à aucune org — est
+**transférée** au propriétaire du projet (`ownership.transfer`, même id, même
+historique, mêmes liens), et chaque bénéficiaire vivant du projet reçoit un accès sur
+elle : sur un tableau, le même (`viewer` → `viewer`, `editor`/`manager` → `editor`) ;
+sur une procédure, `viewer` toujours — une procédure personnelle ne s'écrit que par son
+propriétaire, aucun chemin servi n'édite la copie d'un autre. Un tableau devenu
+personnel se range dans l'org du projet (`context_org_id`). Le journal du projet note
+`project.link_private`.
+
+**Une seule transaction** (`db.transaction_d_ecriture`) : les sondes, le transfert, le
+rangement, les partages et le journal sont validés ensemble ou annulés ensemble. Aucun
+état où la cible est transférée sans ses partages, ou l'inverse. Le lien lui-même est
+posé avant, comme sans `make_private` ; relier rejoue la règle.
+
+Une personne partagée sur le projet APRÈS le transfert ne reçoit rien sur les cibles :
+le geste est `oto_resource op=share resource_type=project cascade=true`.
+
+Relier un lien déjà posé (`link_status: unchanged`) avec `make_private=true` applique la
+même règle : c'est le geste qui ramène un projet d'avant.
+
+La réponse le dit toujours sous `privacy` : `made_private: true` avec `owner`,
+`moved_from` et `shared_with`, ou `made_private: false` avec `reason` (le lien est posé
+dans les deux cas) :
+
+| `reason` | pourquoi |
+|---|---|
+| `project_not_private` | le projet est à l'org, ou partagé à une org |
+| `not_org_owned` | la cible n'est pas à l'org (déjà personnelle ou d'équipe) |
+| `linked_by_other_projects` | un autre projet vivant lie la cible : la rendre privée la lui retirerait |
+| `needs_org_admin` | sortir une ressource de l'org est un transfert (`ownership.can_transfer`) |
+| `agents_depend_on_it` | un agent hébergé ACTIF de l'org lit la cible et ne la lirait plus ; `agents` les liste (`id`, `label`). Même règle pour les deux cibles : tout agent pour un projet d'équipe (palier qu'un agent ne résout jamais), ceux des autres porteurs pour un projet personnel. Procédure : les agents qui l'exécutent (par slug chez leur porteur puis à l'org, `_procedure_du_travail`). Tableau : les agents qui travaillent dans le projet (`_projet_de_l_agent.servis`), dont les slots le désignent |
+| `slug_taken_at_owner` / `name_taken_at_owner` | le propriétaire a déjà une procédure de ce slug (le transfert la suffixerait et ses agents liraient l'autre) ou un tableau de ce nom |
+
+⚠️ **Limite connue** : une procédure atteinte par une CHAÎNE (citée entre accents graves
+par une autre procédure d'un agent), ou un tableau qu'une procédure nomme sans passer
+par un slot du projet, n'est pas cherché ; l'agent d'un autre porteur qui l'atteint
+ainsi ne le lirait plus.
+
+⚠️ `can_access` ne change pas : la règle déplace la propriété, elle n'invente pas d'état
+« à l'org mais caché ».
+
 ## Dossier d'affichage d'un projet — `folder` (2026-10-16)
 
 **Le besoin.** Une org de conseil tient un projet par client ; à quinze projets, la

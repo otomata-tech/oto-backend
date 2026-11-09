@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, field_validator
 from .. import (config, db, deprecations, group_store, org_store, output_projection,
                 ownership, roles, session_org, url_perimeter)
 from ._authz import SUB_ONLY, refus_hors_vue
-from . import _portee, _publication
+from . import _liens_prives, _portee, _publication
 from ._dossier import FOLDER_MAX, dossier_valide
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -158,6 +158,12 @@ class ProjectInput(BaseModel):
     fields: Optional[list[str]] = Field(default=None, description=(
         "list/list_templates: output projection. Omitted returns the INDEX (no "
         "briefs); `[\"*\"]` returns whole records; a list of names picks columns."))
+    make_private: Optional[bool] = Field(default=None, description=(
+        "link only, procedure or table: `true` makes an ORG-owned target private to a "
+        "PRIVATE project (owned by a person or a team, shared with no org): it moves to "
+        "the project's owner, the project's sharees get access to it, and org members "
+        "outside the project stop seeing it. Omitted, link changes no ownership. "
+        "`privacy` in the response says what was done, or why nothing was."))
     slot: Optional[str] = None         # ADR 0035 (B2) : nom de SLOT que ce lien binde — vocabulaire DU PROJET (unicité (projet, slot) → 409 slot_taken). Fait correspondre le lien aux slots déclarés par les procédures (<slot:name>). Binder un slot TABLEAU dont la procédure déclare un `schema` cible provisionne le namespace vierge avec ce schéma (ADR 0046)
 
 
@@ -1264,6 +1270,11 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
         _require(inp.target_type and inp.target_ref, "missing_target",
                  "`target_type` et `target_ref` requis.")
+        _require(not inp.make_private
+                 or (inp.op == "link" and inp.target_type in _liens_prives.CIBLES),
+                 "make_private_not_applicable",
+                 "`make_private` ne vaut que pour op=link d'une procédure ou d'un tableau : "
+                 "rien n'a été modifié.")
         # ADR 0032 « stop using slug » : une procédure est référencée par l'ID STABLE de
         # le guide. On accepte un slug (naturel côté agent) OU un id et on stocke l'id
         # (idem à l'unlink pour matcher les lignes migrées).
@@ -1407,6 +1418,11 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             # Le geste reste idempotent et rejouable ; c'est son compte rendu qui cesse
             # d'être indistinct. `changed_fields` n'apparaît QUE sur une vraie réécriture.
             out["link_status"] = effet["status"]
+            # Sur demande seulement, ce qui était à l'org devient privé (`_liens_prives`).
+            if inp.make_private:
+                out["privacy"] = _liens_prives.rendre_prive(
+                    sub, row, inp.target_type, str(target_ref))
+                out["links"] = db.list_project_links(int(inp.project_id))
             if effet["changed"]:
                 out["changed_fields"] = effet["changed"]
             if effet.get("rewritten_from"):
@@ -1882,7 +1898,17 @@ CAPABILITIES += [
             "Slot names are a PROJECT-wide vocabulary (unique per project → 409 slot_taken; "
             "two linked procedures sharing `sortie` share the binding). "
             "Re-linking preserves every field you omit — label, role, config and slot; "
-            "pass a value to change one. link says WHAT IT DID in `link_status`: `created` "
+            "pass a value to change one. `make_private=true` (procedure or table only) makes an "
+            "ORG-owned target private to a PRIVATE project (owned by a person or a team, "
+            "shared with no org): it moves to the project's owner and the project's sharees "
+            "get access to it — org members outside the project stop seeing it. Without it, "
+            "link changes no ownership. `privacy` in the response says what was done, or why "
+            "not (`reason`: project_not_private, not_org_owned, linked_by_other_projects, "
+            "needs_org_admin, agents_depend_on_it — with `agents`, the active hosted agents "
+            "that would stop reading it —, slug_taken_at_owner, name_taken_at_owner); the "
+            "link is made either way. Re-linking an existing link with make_private=true "
+            "applies the same rule. "
+            "link says WHAT IT DID in `link_status`: `created` "
             "(the binding did not exist), `unchanged` (it was already there and this call "
             "rewrote nothing) or `updated` (it existed and this call changed it — "
             "`changed_fields` then lists which of label/role/slot/config/target_ref "

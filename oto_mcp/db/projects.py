@@ -704,6 +704,18 @@ def _cle_du_proprio(proprio: Optional[dict]) -> Optional[tuple]:
             proprio.get("group_org_id"))
 
 
+def projects_linking(target_type: str, target_ref: str) -> list[int]:
+    """Les projets VIVANTS (non archivés) qui lient `target_type`/`target_ref`, sous son
+    identifiant. Ce que `cross_project` dit d'un lien, en lecture directe."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT l.project_id FROM project_links l "
+            "JOIN projects p ON p.id = l.project_id AND p.archived_at IS NULL "
+            "WHERE l.target_type = %s AND l.target_ref = %s",
+            (target_type, str(target_ref))).fetchall()
+    return [int(r["project_id"]) for r in rows]
+
+
 def refs_dans_la_portee(project_id: int, target_type: str, refs: list) -> set[int]:
     """Les identifiants de `refs` qu'un lien `target_type` du projet peut désigner — la
     règle de `list_project_links`, pour qui doit trancher AVANT de poser un lien.

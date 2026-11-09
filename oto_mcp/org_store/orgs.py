@@ -272,6 +272,7 @@ def archive_org(org_id: int) -> bool:
     credentials, usage restent). Les membres qui l'avaient pour org
     active basculent sur leur plus ancienne org NON archivée restante (miroir
     `remove_org_member`) ; sans org restante → plus d'org active (= perso).
+    Ses agents (`runner_triggers`) sont ÉTEINTS dans la même transaction (sinon chaque run meurt au `run_start`).
     False si l'org est inconnue ou déjà archivée.
 
     Lève `OrgAvecAbonnementActif` si l'org porte un abonnement qui prélève
@@ -305,6 +306,12 @@ def archive_org(org_id: int) -> bool:
             )
             if (cur.rowcount or 0) == 0:
                 return False
+            # Ses agents s'éteignent avec elle (injoignable par `_org=`, cf. docstring).
+            if conn.execute("SELECT to_regclass('runner_triggers') AS t"
+                            ).fetchone()["t"] is not None:
+                conn.execute(
+                    "UPDATE runner_triggers SET enabled = FALSE "
+                    "WHERE org_id = %s AND enabled", (org_id,))
             conn.execute(  # ses clés d'API meurent avec elle (`docs/cles-d-org.md`)
                 "UPDATE user_api_tokens SET revoked_at = now(), revoked_reason = 'org "
                 "archivée' WHERE revoked_at IS NULL AND sub = (SELECT sub FROM "

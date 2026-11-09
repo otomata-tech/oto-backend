@@ -1074,6 +1074,12 @@ def due_triggers(limit: int = 50) -> list[dict]:
             # ferait partir à l'horloge EN PLUS de l'événement. Le genre est la
             # garde ; l'échéance NULL n'est que la conséquence.
             f"WHERE enabled AND kind = 'schedule' AND next_due <= NOW() "
+            # Org ARCHIVÉE : `archive_org` éteint ses agents, mais une org archivée
+            # avant ce geste (09/11/2026) en garde d'allumés — leurs occurrences
+            # mourraient au `run_start`, l'org n'étant plus joignable. Le tick les
+            # ignore ; l'échéance reste due et repart si l'org est désarchivée.
+            f"AND NOT EXISTS (SELECT 1 FROM orgs o WHERE o.id = runner_triggers.org_id "
+            f"AND o.archived_at IS NOT NULL) "
             f"ORDER BY next_due LIMIT %s",
             (limit,),
         ).fetchall()

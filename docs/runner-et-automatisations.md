@@ -1763,6 +1763,13 @@ de cet agent qui attend déjà un worker (`pending`) refuse le second : 409
 vaut que pour un `run_now` SANS `handoff` : un run qui reçoit un contexte n'en double
 aucun autre, et les enchaînements sont bornés par la chaîne (ci-dessous).
 
+**Une org archivée éteint ses agents** (`org_store.archive_org`, même transaction que
+`archived_at`) : n'étant plus joignable par `_org=`, chacune de leurs occurrences
+mourrait au `run_start` et le médecin des agents l'escaladerait comme une panne de
+plateforme. Le tick (`db.due_triggers`) ignore en plus tout agent allumé d'une org
+archivée — le cas d'une archive antérieure à ce geste ; désarchivée, l'org reprend son
+horloge.
+
 **`rerun` relance UN run passé de l'agent** (`oto_trigger op=rerun trigger_id=… job_id=…`,
 04/11/2026) : le bouton « Relancer » de l'écran. Il enfilait à la main une copie de la
 charge SANS son `trigger_id` (l'enfilage à la main le refuse, `trigger_id_server_set`) : le

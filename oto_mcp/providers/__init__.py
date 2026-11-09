@@ -266,6 +266,9 @@ _DECLARATIONS: tuple[str, ...] = (
     # Neighbour of `ahrefs` and `ubersuggest` by trade (SEO), but pay-as-you-go:
     # the only one of the three with a platform key.
     "dataforseo",
+    # Neighbour of the three by trade (SEO), byo only like `ahrefs`: one key for its
+    # Data API (credits) and Project API, served by the generic reader of its description.
+    "seranking",
     "granola",
     "grain",
     "linear",

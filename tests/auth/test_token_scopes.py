@@ -48,6 +48,15 @@ def test_write_token_writes_and_reads():
     assert ts.authorize(WRITABLE, "GET", f"{ns}/rows")      # write ⊃ read
 
 
+def test_write_token_writes_a_batch_in_its_table_only():
+    """`POST …/rows/batch` (upsert par clé) est une écriture de lignes, pas de la
+    gouvernance : ouvert au jeton en écriture, refusé en lecture et hors du tableau."""
+    assert ts.authorize(WRITABLE, "POST", "/api/datastores/204/rows/batch")
+    assert not ts.authorize(READ_ONLY, "POST", "/api/datastores/204/rows/batch")
+    assert not ts.authorize(WRITABLE, "POST", "/api/datastores/317/rows/batch")
+    assert ts.motif_du_refus(READ_ONLY, "POST", "/api/datastores/204/rows/batch")[0] != "geste"
+
+
 # ── Le reste de la plateforme est hors de portée, par défaut ─────────────────
 
 @pytest.mark.parametrize("method,path", [

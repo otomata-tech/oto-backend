@@ -154,6 +154,11 @@ _ID = r"(?P<res>\d+)"
 _ALLOWED: tuple[tuple[re.Pattern, frozenset, str, str], ...] = (
     (re.compile(rf"^/api/datastores/{_RES}/rows$"), frozenset({"GET"}), READ, NAMESPACES),
     (re.compile(rf"^/api/datastores/{_RES}/rows$"), frozenset({"POST"}), WRITE, NAMESPACES),
+    # Le lot (`POST …/rows/batch`, upsert par `key`) écrit les MÊMES lignes du MÊME
+    # tableau que `POST …/rows` — il manquait : un jeton en écriture se prenait le
+    # refus « gouvernance » sur le geste que le guide lui indique pour écrire en lot.
+    (re.compile(rf"^/api/datastores/{_RES}/rows/batch$"),
+     frozenset({"POST"}), WRITE, NAMESPACES),
     (re.compile(rf"^/api/datastores/{_RES}/rows/[^/]+$"),
      frozenset({"GET"}), READ, NAMESPACES),
     (re.compile(rf"^/api/datastores/{_RES}/rows/[^/]+$"),

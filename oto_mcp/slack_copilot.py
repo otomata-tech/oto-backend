@@ -362,12 +362,6 @@ def cle_de_fil(d: slack_events.Demande) -> str:
     return "" if _dm_sans_fil(d) else d.thread_ts
 
 
-def fil_en_cours(d: slack_events.Demande) -> bool:
-    """Is the thread of this channel reply one that carries a conversation of ours, of
-    anyone? The read before any credential."""
-    return store.slack_fil_existe(d.team_id, d.channel, d.thread_ts)
-
-
 def _coupe(sub: str, org_id: int) -> Optional[str]:
     """Why this account may no longer act in this org, or None: the identity guard (a
     paused account, a disabled tenant) then a suspended org — what the panel's REST door
@@ -381,23 +375,20 @@ def _coupe(sub: str, org_id: int) -> Optional[str]:
 
 
 def traiter(client: Any, inst: slack_events.Installation, d: slack_events.Demande) -> dict:
-    """A mention, a follow-up in a thread of ours, or a DM with no Slack agent → a turn of
-    the in-app agent, as the member. Runs in the ACK's worker thread."""
+    """A mention, or a DM with no Slack agent → a turn of the in-app agent, as the member.
+    A mention in a thread of ours carries on its conversation; a reply there that does not
+    tag the app never reaches here (`slack_events.demande_de`). Runs in the ACK's worker
+    thread."""
     from .capabilities.copilot import depense, routes
 
-    suivi = not d.mention and not d.dm
     m, refus = slack_events.membre(client, inst.org_id, d)
     if m is None:
-        # A follow-up is not a request to answer to a stranger: no word. A mention or a
-        # DM is — the reason is the answer.
-        if refus and not suivi:
+        # A mention or a DM is a request: the reason is the answer.
+        if refus:
             slack_events._dire(client, d, refus)
         return {"ok": True, "ignored": "unknown_member"}
     cle = cle_de_fil(d)
     existant = store.slack_fil(d.team_id, d.channel, cle, m.sub)
-    if suivi and existant is None:
-        # A reply from somebody else under a thread of ours: theirs to start with a mention.
-        return {"ok": True, "ignored": "not_your_thread"}
     if (coupe := _coupe(m.sub, inst.org_id)):
         slack_events._dire(client, d, coupe)
         return {"ok": True, "refused": "account_cut"}

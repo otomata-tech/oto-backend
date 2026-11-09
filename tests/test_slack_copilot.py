@@ -409,26 +409,14 @@ def test_les_deux_evenements_d_une_mention_font_UN_tour(mur):
 
 # ── 3. where the conversation lives ──────────────────────────────────────────
 
-def test_la_reponse_du_meme_membre_dans_son_fil_continue_sans_mention(mur):
+def test_la_mention_du_meme_membre_dans_son_fil_continue_sa_conversation(mur):
+    """Hors DM, la suite se demande en taguant l'app (décision du 09/11/2026) : la mention
+    dans son fil reprend SA conversation."""
     mur["base"].lier("thr_old", TEAM, "C0CHAN", "1600.00", "ada-sub")
-    d = _d(ts="1601.00", thread_ts="1600.00", mention=False, bot_user="", texte="and table 2?")
+    d = _d(ts="1601.00", thread_ts="1600.00", texte="<@U0BOT> and table 2?")
     _traiter(mur, d)
     (_, args), = mur["tours"]
     assert args[4:6] == ("and table 2?", "thr_old")
-
-
-def test_la_reponse_de_QUELQU_UN_D_AUTRE_sous_ce_fil_n_est_pas_la_sienne(mur):
-    mur["base"].lier("thr_old", TEAM, "C0CHAN", "1600.00", "someone-else")
-    d = _d(ts="1601.00", thread_ts="1600.00", mention=False, bot_user="", texte="hey")
-    assert _traiter(mur, d)["ignored"] == "not_your_thread"
-    assert mur["tours"] == [] and mur["client"].ephemeres == []
-
-
-def test_un_inconnu_qui_repond_dans_un_fil_n_est_pas_repondu_du_tout(mur):
-    mur["membres"] = set()
-    d = _d(ts="1601.00", thread_ts="1600.00", mention=False, bot_user="", texte="hey")
-    assert _traiter(mur, d)["ignored"] == "unknown_member"
-    assert mur["client"].ephemeres == [] and mur["client"].posts == []
 
 
 def test_la_mention_d_un_autre_membre_dans_le_meme_fil_ouvre_SA_conversation(mur):

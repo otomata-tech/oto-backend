@@ -2047,8 +2047,9 @@ comme `api/hooks.py`), logique dans `slack_events.py`, sans HTTP.
 
 Un agent hébergé qui poste **en tant que l'app** (`slack_post_message(author="app")`),
 **hors d'un fil**, voit son message noté sous lui. Une réponse d'un membre **dans ce fil**
-— DM, canal, canal privé ou DM de groupe — relance **cet agent**. Tous les agents, sans
-interrupteur (décision du 29/10). Même route que les DM (`POST /api/slack/events`,
+relance **cet agent** — en DM toute réponse, en canal, canal privé ou DM de groupe
+seulement une réponse qui **tague `@<app>`** (décision du 09/11/2026 : hors DM, le bot ne
+répond qu'à qui le tague). Tous les agents, sans interrupteur (décision du 29/10). Même route que les DM (`POST /api/slack/events`,
 `slack_events.py`).
 
 - **Noter** : `slack_post_message` (`tools/slack.py`), juste après l'envoi, note **tout**
@@ -2073,13 +2074,13 @@ interrupteur (décision du 29/10). Même route que les DM (`POST /api/slack/even
   (`slack_events._a_nous`). Une réponse plus ancienne ne patiente pas. Vaut aussi pour
   un DM à l'agent Slack de l'org.
 - **Retrouver** : l'événement ne nomme que `channel` et `thread_ts`. `demande_de` ne garde,
-  hors DM, qu'une **réponse dans un fil** (`thread_ts` ≠ `ts`, sans `bot_id`, sous-type
-  absent ou `thread_broadcast`/`file_share`). Après l'accusé, `traiter` écarte d'abord
-  les messages de nos agents (`est_note`), puis lit `slack_agent_posts` **avant tout
-  credential** : chaque réponse en fil de chaque canal
-  où siège le bot arrive ici, et presque aucune n'est sous un des nôtres. Trouvé dans
-  l'org de l'installation → cet agent. Pas trouvé : un DM continue vers l'agent Slack de
-  l'org comme avant, une réponse en canal est ignorée. Au-delà de 30 jours, la ligne ne
+  hors DM, que l'événement **`app_mention`** (sans `bot_id`, sous-type absent ou
+  `thread_broadcast`/`file_share`) — son jumeau `message` est jeté, une phrase ne lance
+  pas deux runs. Après l'accusé, `traiter` écarte d'abord les messages de nos agents
+  (`est_note`), puis lit `slack_agent_posts` **avant tout credential**. Trouvé dans l'org
+  de l'installation → cet agent, la mention ôtée du texte qu'il lit. Pas trouvé : un DM
+  continue vers l'agent Slack de l'org comme avant, une mention en canal va à l'agent
+  intégré. Au-delà de 30 jours, la ligne ne
   sert plus (maintenance `slack-agent-posts`, timer quotidien).
 - **Qui répond** : la même vérification qu'un DM (exactement un membre réel, email
   confirmé). En canal, un refus est **éphémère** (`chat.postEphemeral`, vu de la seule

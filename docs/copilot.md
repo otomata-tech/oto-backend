@@ -371,8 +371,11 @@ garde son chemin d'avant pour ses DM, inchangé.
   l'événement ; en Enterprise Grid, un autre espace de la MÊME entreprise
   (`enterprise_user.enterprise_id` égal à l'`enterprise_id` de l'événement, aucun des deux
   vide). Un `team_id` absent est un refus. L'agent doit
-  être ouvert à ce compte (`OTO_COPILOT_SUBS`) et sous le plafond du jour. Une réponse
-  d'un inconnu sous un fil à nous n'est pas répondue du tout.
+  être ouvert à ce compte (`OTO_COPILOT_SUBS`) et sous le plafond du jour.
+- **Seulement si on le tague** (décision du 09/11/2026) : hors d'un DM, un message qui ne
+  tague pas `@<app>` n'est la demande de personne, même dans un fil à nous ou sous un
+  message d'agent — l'événement `message` est jeté (`slack_events.demande_de`), seul son
+  jumeau `app_mention` compte.
 - **Combien à la fois** : un tour tient un fil du pool du serveur pendant toute sa durée.
   Au plus `OTO_SLACK_COPILOT_MAX_SIMULTANES` tours (défaut 8) dans le processus, et un seul
   par compte (`slack_copilot_places.py`) ; au-delà, la personne lit « déjà occupé,
@@ -385,8 +388,8 @@ garde son chemin d'avant pour ses DM, inchangé.
   l'autre.
 - **Où vit la conversation** : `(workspace, canal, fil, membre)` → conversation
   (`copilot_slack_threads`, clé étrangère vers `copilot_threads`, cascade). La mention ouvre
-  une conversation dans le fil sous elle ; les réponses de la MÊME personne dans ce fil la
-  continuent **sans nouvelle mention**. Un autre membre qui mentionne l'app dans ce fil en
+  une conversation dans le fil sous elle ; une nouvelle mention de la MÊME personne dans ce
+  fil la continue (sans mention, rien ne répond). Un autre membre qui mentionne l'app dans ce fil en
   ouvre une à lui : rien ne se partage entre deux personnes. Un DM est une conversation
   courante par personne (`thread_ts` = ''), renouvelée après 30 minutes d'inactivité.
   Chaque réponse de chaque canal arrive à la route : « un fil porte-t-il une conversation de

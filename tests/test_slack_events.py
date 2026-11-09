@@ -510,28 +510,33 @@ def test_une_mention_ne_prend_ni_un_bot_ni_une_edition(slack):
     assert slack["copilot"] == []
 
 
-def test_une_mention_dans_le_fil_d_un_AGENT_est_la_reponse_a_cet_agent_pas_un_second_run(slack):
-    """Une phrase ne lance pas deux runs : l'événement `message` de la réponse relance
-    l'agent, la mention (même message) est laissée à celui-là."""
+def _sans_mention(channel="C0CHAN", channel_type="channel", thread_ts="1600.00", **ev):
+    """A channel message that does not tag the app — the `message` event Slack also sends."""
+    return {"type": "event_callback", "event_id": "Ev2", "team_id": TEAM, "api_app_id": APP,
+            "event": {"type": "message", "channel_type": channel_type, "user": "U0ASKER",
+                      "channel": channel, "ts": "1601.00", "thread_ts": thread_ts,
+                      "text": "and the other table?", **ev}}
+
+
+@pytest.mark.parametrize("genre", ["channel", "group", "mpim"])
+def test_hors_DM_un_message_SANS_mention_n_est_la_demande_de_personne(slack, genre):
+    """Décision du 09/11/2026 : hors d'un DM, le bot ne répond qu'à qui le tague — ni sous
+    une conversation de l'agent intégré, ni sous un message d'agent. Lu et jeté avant le
+    coffre."""
+    slack["copilot_fils"].add((TEAM, "C0CHAN", "1600.00"))
     slack["posts"][("C0CHAN", "1690.00")] = {"org_id": ORG, "trigger_id": 12,
                                             "job_id": 5, "text": "hello"}
-    out = _recevoir(_app_mention(thread_ts="1690.00"))
-    assert out["ignored"] == "agent_thread" and slack["copilot"] == []
-    assert slack["enfile"] is None
+    for fil in ("1600.00", "1690.00", None):
+        assert _recevoir(_sans_mention(channel_type=genre, thread_ts=fil))["ignored"] == "event"
+    assert slack["copilot"] == [] and slack["enfile"] is None
+    assert slack["installs_lus"] == 0 and "c" not in slack["client"]
 
 
-def test_une_reponse_dans_un_fil_de_l_agent_integre_lui_est_passee(slack):
-    """Une réponse sans mention sous une de NOS conversations est un message suivant :
-    la route lit d'abord, sans coffre, qu'un fil nous appartient — puis lui passe."""
+def test_une_mention_dans_un_fil_de_l_agent_integre_poursuit_sa_conversation(slack):
     slack["copilot_fils"].add((TEAM, "C0CHAN", "1600.00"))
-    corps = {"type": "event_callback", "event_id": "Ev2", "team_id": TEAM,
-             "api_app_id": APP,
-             "event": {"type": "message", "channel_type": "channel", "user": "U0ASKER",
-                       "channel": "C0CHAN", "ts": "1601.00", "thread_ts": "1600.00",
-                       "text": "and the other table?"}}
-    assert _recevoir(corps)["copilot"] is True
+    assert _recevoir(_app_mention(thread_ts="1600.00"))["copilot"] is True
     (_, d), = slack["copilot"]
-    assert d.thread_ts == "1600.00" and not d.mention and d.reponse
+    assert d.thread_ts == "1600.00" and d.mention and d.reponse
 
 
 def test_la_PORTE_ne_parle_pas_a_Slack_avant_le_200(slack):
@@ -687,10 +692,16 @@ _ANNONCE = "3 replies need you: Acme said yes. Reply ok to send the answer."
 
 def _reponse(text="ok, send it", channel="C0GTM", channel_type="channel",
              thread_ts="1690.00", **ev):
-    """A reply in the thread of the message at `thread_ts`."""
-    corps = _mention(text=text)
-    corps["event"].update(channel=channel, channel_type=channel_type,
-                          thread_ts=thread_ts, ts="1700.05", **ev)
+    """A reply in the thread of the message at `thread_ts`: in a DM any message, elsewhere
+    one that tags the app (the `app_mention` event — a reply without it is nobody's)."""
+    if channel_type == "im":
+        corps = _mention(text=text)
+        corps["event"].update(channel=channel, channel_type=channel_type,
+                              thread_ts=thread_ts, ts="1700.05", **ev)
+        return corps
+    corps = _app_mention(text=f"<@U0BOT> {text}", channel=channel, thread_ts=thread_ts,
+                         ts="1700.05", **ev)
+    corps["event_id"] = "Ev1"
     return corps
 
 
@@ -749,11 +760,18 @@ def test_une_retouche_ou_le_bot_dans_le_fil_ne_relance_RIEN(poste, ev):
     assert poste["enfile"] is None
 
 
-def test_une_reponse_dans_un_fil_qui_n_est_PAS_d_un_agent_n_ouvre_meme_pas_le_coffre(poste):
-    """Chaque réponse en fil de chaque canal où siège le bot arrive : la ligne se lit
-    AVANT tout credential, et presque aucune n'est sous un des nôtres."""
-    assert _recevoir(_reponse(thread_ts="1111.11"))["ignored"] == "not_an_agent_thread"
-    assert poste["installs_lus"] == 0 and "c" not in poste["client"]
+def test_une_mention_dans_le_fil_d_un_AGENT_relance_cet_agent_une_seule_fois(poste):
+    """Hors DM, la mention EST la réponse à l'agent ; l'événement `message` du même
+    message est jeté — une phrase ne lance pas deux runs."""
+    assert _recevoir(_sans_mention(channel="C0GTM", thread_ts="1690.00"))["ignored"] == "event"
+    assert poste["enfile"] is None
+    assert _recevoir(_reponse())["job_id"] == 900
+    assert poste["copilot"] == []
+    assert "<@U0BOT>" not in poste["enfile"]["entree"], "l'adresse, pas la réponse"
+
+
+def test_une_mention_dans_un_fil_qui_n_est_PAS_d_un_agent_va_a_l_agent_integre(poste):
+    assert _recevoir(_reponse(thread_ts="1111.11"))["copilot"] is True
     assert poste["enfile"] is None
 
 

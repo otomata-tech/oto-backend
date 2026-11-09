@@ -1220,6 +1220,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_doc": {"lire": "list search get revisions backlinks shared_with_me outline verify", "ecrire": "create update patch move unarchive", "envoyer": "set_public", "detruire": "bulk_create delete revert archive"},
     "oto_doc_app": "lire",
     "oto_connector_app": "lire",
+    "oto_webhook_app": "lire",
     "oto_enable_tool": "ecrire",
     "oto_fleet": {"lire": "list get state", "ecrire": "create update take beat ack_stop", "envoyer": "launch", "detruire": "stop"},
     # `run` executes stored pure code (no network, no secret) and stores its files

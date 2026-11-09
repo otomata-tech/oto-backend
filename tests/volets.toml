@@ -765,6 +765,15 @@ sources = ["oto_mcp/tools/connector_app.py"]
 tests = ["tests/test_connector_app.py", "tests/connectors/test_setup_link.py"]
 
 [[volet]]
+nom = "jeton d'un webhook remis par lien"
+# La carte d'un webhook (`oto_webhook_app`) : sur la face MCP, son jeton ne va jamais à
+# un agent, seulement un lien vers l'écran où une personne le tire (`_secret_par_lien`,
+# transverse comme toute `capabilities/_*.py`, donc dans `[complete]`).
+sources = ["oto_mcp/tools/webhook_app.py"]
+tests = ["tests/test_webhook_app.py", "tests/test_declencheur_webhook.py",
+         "tests/test_aucun_secret_frappe_au_modele.py"]
+
+[[volet]]
 nom = "procédure de diagramme"
 sources = ["oto_mcp/procedure_diagram.py", "oto_mcp/tools/procedure_app.py"]
 tests = ["tests/**/test_procedure_diagram*.py", "tests/test_procedure_app.py"]

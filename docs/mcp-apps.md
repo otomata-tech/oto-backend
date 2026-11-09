@@ -203,3 +203,14 @@ sans nom de produit, un partenaire sert la même carte. Le logo ne se charge que
 `img.logo.dev` (CSP de la ressource, `PrefabAppConfig`) ; ailleurs, l'initiale. ⚠️ `OpenLink` passe par l'hôte
 (`ui/open-link`) : qu'un hôte l'ouvre sans confirmation n'est pas vérifié — à éprouver
 en préprod sur claude.ai.
+
+## La carte d'un webhook — `oto_webhook_app`
+
+La face visuelle de `hook_secret_url` (`tools/webhook_app.py`) : sur la face MCP, `create`
+d'un webhook et `rotate_secret` ne rendent jamais le porteur, et l'agent montre cette
+carte plutôt qu'un lien nu qu'il pourrait résumer ou perdre. Nom de l'agent, pastille
+(Waiting for its token / Receiving events / Set up on its page — lue dans le journal des
+livraisons, SANS les corps), le type de jeton de l'expéditeur, et un bouton `OpenLink` vers
+l'écran guidé (type de lien `webhook`). Mêmes lectures et mêmes droits qu'`oto_trigger
+op=get`/`deliveries` (lecteur et au-delà) ; refus en mots fixes (l'id vient du modèle) ;
+aucun nom de produit ; deux canaux.

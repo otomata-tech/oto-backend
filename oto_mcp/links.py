@@ -86,7 +86,10 @@ DEFAULT_PATHS: dict[str, str] = {
 # `connect` = the page that shows ONE connector and its add form, nothing else
 # (`/org/{org}/connect/{connector}`), where `oto_connector op=setup_link` sends a person;
 # without it, the link falls back to the connectors page (`connector_setup_link`).
-DECLARED_ONLY_KINDS = frozenset({"app", "connect"})
+# `webhook` = the screen where a person gets a webhook agent's token
+# (`/org/{org}/webhook/{id}`): what an AGENT receives instead of the token itself
+# (`capabilities/_secret_par_lien.py`). Undeclared, the agent gets no token and no link.
+DECLARED_ONLY_KINDS = frozenset({"app", "connect", "webhook"})
 
 
 class InstancePathsInvalid(ValueError):

@@ -36,7 +36,7 @@ from . import preset_agents
 from .orgs import partage_par_defaut
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
                _modele, _portee, _procedure_du_travail, _projet_de_l_agent,
-               _source_du_hook, runner_jobs)
+               _secret_par_lien, _source_du_hook, runner_jobs)
 from .. import (db, deprecations, org_store, outils_du_travail, ownership,
                 procedure_retiree, roles, runner_hook, runner_models, runner_tick,
                 session_visibility, tool_alias, tool_registry, verrou_org)
@@ -676,7 +676,16 @@ class TriggerOut(BaseModel):
     #: Le secret en clair — rendu par `create` d'un webhook et par
     #: `rotate_secret`, et par RIEN D'AUTRE. Il n'est pas stocké : seul son haché
     #: l'est. Perdu, il se remplace ; il ne se relit jamais.
+    #: ⚠️ À une PERSONNE seulement (face REST). Sur la face MCP il est `None` : un
+    #: agent reçoit `hook_secret_url`, l'écran où la personne tire le porteur
+    #: (`_secret_par_lien.py`) — le porteur frappé pour lui est jeté, la porte reste
+    #: fermée jusque-là.
     hook_secret: Optional[str] = None
+    hook_secret_url: Optional[str] = None
+    #: Le type de porteur frappé (`bearer` | `body_secret`) — ce que la personne en fera.
+    hook_secret_kind: Optional[str] = None
+    hook_secret_note: Optional[str] = None
+    hook_secret_missing: Optional[str] = None
     #: `connect_source` / `disconnect_source` / `delete` : les webhooks inscrits ou
     #: retirés chez la source, et ceux qu'oto n'a PAS pu retirer (à retirer chez
     #: la source à la main, ou à rejouer). Jamais le porteur.
@@ -1756,7 +1765,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             # Le secret en CLAIR, une seule fois. Il n'est pas stocké — seul son
             # haché l'est — donc ni une relecture ni un incident ne le rendront.
             return {"trigger": _avec_hook(ctx.org_id, t),
-                   "hook_secret": secret, **_a_ajouter(a_ajouter)}
+                    **_secret_par_lien.remettre(ctx, t, secret),
+                    **_a_ajouter(a_ajouter)}
         return {"trigger": t, **_a_ajouter(a_ajouter)}
 
     if inp.op == "default_sharing":
@@ -1848,7 +1858,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                        inp.trigger_id, ctx.org_id, ctx.sub)
         return {"trigger": _avec_hook(ctx.org_id,
                                       db.get_trigger(inp.trigger_id, ctx.org_id)),
-                "hook_secret": secret}
+                **_secret_par_lien.remettre(ctx, t, secret)}
 
     if inp.op in ("connect_source", "disconnect_source"):
         t = db.get_trigger(inp.trigger_id, ctx.org_id)
@@ -3259,6 +3269,11 @@ CAPABILITIES += [
             "more — they lend it themselves (op=lend). The reply says "
             "`kept_previous_owner`, `preset_applied`, `lend_ended` (your lend, ended "
             "by the hand-over) and `handover_note`). "
+            "A webhook's TOKEN never reaches you: `create` (kind=webhook) and "
+            "`rotate_secret` return `hook_secret: null` and `hook_secret_url` — show "
+            "`oto_webhook_app(trigger_id)` (a card with a button to that page), or send "
+            "the link; the person gets the token there, and until then the webhook "
+            "refuses every delivery. "
             "op=connect_source (webhook agent, owner or org admin; `source=lemlist`, "
             "`allo` or `linear`, `events=[…]`, optional `account` when the org holds "
             "several keys of the sender, Lemlist only: optional `campaign_id`, "

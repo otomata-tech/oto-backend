@@ -46,6 +46,9 @@ _KNOWN: dict[str, bool] = {
     # …et la carte « Connecter » d'un connecteur (`connector_app`) : un bouton qui
     # OUVRE un lien, la face REST de la même chose étant `oto_connector op=setup_link`.
     "oto_connector_app": True,
+    # …et la carte d'un webhook (`webhook_app`) : un bouton qui OUVRE l'écran où une
+    # personne tire le porteur — jamais le porteur lui-même.
+    "oto_webhook_app": True,
     # Boucle d'usage (ADR 0017) : la pile de run est session-scopée côté MCP.
     # (`feedback`, lui, est DÉJÀ une capacité — `capabilities/usage.py`.)
     "run_start": True,

@@ -204,6 +204,11 @@ l'administrons) est une autre décision non prise (`tenancy.ForeignTenantDirecto
 >   (`/org/{org}/apps/{id}`) et `connect`, la page d'UN connecteur et de son formulaire
 >   d'ajout (`/org/{org}/connect/{connector}`), où `oto_connector op=setup_link` envoie la
 >   personne ; non déclaré, le lien retombe sur la page des connecteurs, ouverte sur la carte.
+>   Un troisième, `webhook`, est l'écran où une personne tire le jeton d'un agent webhook
+>   (`/org/{org}/webhook/{id}`) : sur la face MCP, `oto_trigger op=create` (webhook) et
+>   `op=rotate_secret` ne rendent que ce lien, jamais le jeton ; non déclaré, l'agent ne
+>   reçoit ni jeton ni lien (`hook_secret_missing`) — la page doit exister sur l'instance
+>   avant qu'un agent crée un webhook.
 > - **Le socle d'instructions suit le tenant** (`guides` scope `tenant`, owner = le slug) :
 >   sinon l'assistant d'un partenaire se présente sous NOTRE marque à chaque session.
 > - **La page publique d'un projet partagé suit la marque de son PROPRIÉTAIRE**

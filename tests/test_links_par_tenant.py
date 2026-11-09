@@ -337,3 +337,20 @@ def test_le_lien_d_un_connecteur_seul_n_existe_que_declare(registre, monkeypatch
         f"{config.dashboard_url()}/org/42/connect/hunter"
     assert links.link_for("connect", sub=None, connector="hunter") is None, \
         "sans org, pas de lien troué"
+
+
+def test_le_lien_de_l_ecran_du_jeton_d_un_webhook_n_existe_que_declare(registre, monkeypatch):
+    """`webhook` (l'écran où une personne tire le jeton d'un agent webhook, seul ce qu'un
+    agent reçoit à la place du jeton) n'a pas de chemin par défaut : pas de lien tant que
+    l'instance ne le déclare pas, et la raison le dit ; déclaré, la garde de démarrage
+    l'accepte et le lien se rend."""
+    monkeypatch.delenv(links.ENV_INSTANCE_PATHS, raising=False)
+    assert "webhook" in links.DECLARED_ONLY_KINDS
+    assert links.link_for("webhook", sub=None, org=42, id=7) is None
+    assert links.raison_sans_lien("webhook", sub=None, org=42, id=7) == \
+        "no webhook page exists in this product"
+    monkeypatch.setenv(links.ENV_INSTANCE_PATHS, '{"webhook": "/org/{org}/webhook/{id}"}')
+    links.verifier_reglages()
+    assert links.link_for("webhook", sub=None, org=42, id=7) == \
+        f"{config.dashboard_url()}/org/42/webhook/7"
+    assert links.link_for("webhook", sub=None, id=7) is None, "sans org, pas de lien troué"

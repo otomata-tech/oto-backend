@@ -676,10 +676,11 @@ class TriggerOut(BaseModel):
     #: Le secret en clair — rendu par `create` d'un webhook et par
     #: `rotate_secret`, et par RIEN D'AUTRE. Il n'est pas stocké : seul son haché
     #: l'est. Perdu, il se remplace ; il ne se relit jamais.
-    #: ⚠️ À une PERSONNE seulement (face REST). Sur la face MCP il est `None` : un
-    #: agent reçoit `hook_secret_url`, l'écran où la personne tire le porteur
-    #: (`_secret_par_lien.py`) — le porteur frappé pour lui est jeté, la porte reste
-    #: fermée jusque-là.
+    #: ⚠️ Sur la face MCP d'une instance qui DÉCLARE l'écran du porteur (type de lien
+    #: `webhook`), il est `None` : un agent reçoit `hook_secret_url`, l'écran où la
+    #: personne tire le porteur (`_secret_par_lien.py`) — le porteur frappé pour lui
+    #: est jeté, la porte reste fermée jusque-là. Sans cet écran, choix d'instance,
+    #: l'agent reçoit le porteur comme une personne.
     hook_secret: Optional[str] = None
     hook_secret_url: Optional[str] = None
     #: Le type de porteur frappé (`bearer` | `body_secret`) — ce que la personne en fera.
@@ -3269,11 +3270,13 @@ CAPABILITIES += [
             "more — they lend it themselves (op=lend). The reply says "
             "`kept_previous_owner`, `preset_applied`, `lend_ended` (your lend, ended "
             "by the hand-over) and `handover_note`). "
-            "A webhook's TOKEN never reaches you: `create` (kind=webhook) and "
-            "`rotate_secret` return `hook_secret: null` and `hook_secret_url` — show "
-            "`oto_webhook_app(trigger_id)` (a card with a button to that page), or send "
-            "the link; the person gets the token there, and until then the webhook "
-            "refuses every delivery. "
+            "A webhook's TOKEN: `create` (kind=webhook) and `rotate_secret` return "
+            "either `hook_secret_url` with `hook_secret: null` — the product has a page "
+            "where the person gets the token: show `oto_webhook_app(trigger_id)` (a card "
+            "with a button to that page), or send the link; until then the webhook "
+            "refuses every delivery — or, on a product without that page, the token "
+            "itself in `hook_secret`, once: hand it to the person who sets up the "
+            "sending app. "
             "op=connect_source (webhook agent, owner or org admin; `source=lemlist`, "
             "`allo` or `linear`, `events=[…]`, optional `account` when the org holds "
             "several keys of the sender, Lemlist only: optional `campaign_id`, "

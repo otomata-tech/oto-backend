@@ -5,7 +5,8 @@ le serveur fabrique (le porteur d'un webhook, un jeton d'API, une clé) se remet
 PERSONNE, sur l'écran de son type — jamais dans la réponse d'un outil, qui finit dans le
 contexte du modèle. Le seul secret qu'une capacité MCP fabrique aujourd'hui est le
 porteur d'un webhook (`oto_trigger op=create` webhook, `op=rotate_secret`), remis par
-lien (`_secret_par_lien`) ; les jetons d'API, les clés d'org, le secret de signature et
+lien sur une instance qui déclare l'écran du porteur, et rendu une fois sur une instance
+qui ne l'a pas — choix d'instance explicite (`_secret_par_lien`) ; les jetons d'API, les clés d'org, le secret de signature et
 l'adresse d'un webhook sans preuve n'ont PAS de face MCP.
 
 Ce test lit les modèles de SORTIE de toutes les capacités qui ont une face MCP. Un champ
@@ -28,7 +29,8 @@ _SECRET = re.compile(r"(?<![a-z])(secret|password|passwd|api_key|bearer|private_
 
 _CONNUS: dict[str, str] = {
     "oto_trigger:TriggerOut.hook_secret":
-        "None sur la face MCP — le porteur se remet par lien (`_secret_par_lien`)",
+        ("None sur la face MCP d'une instance qui déclare l'écran du porteur ; "
+         "sans cet écran, choix d'instance, le porteur une fois (`_secret_par_lien`)"),
     "oto_trigger:TriggerOut.hook_secret_url": "un lien vers l'écran du porteur",
     "oto_trigger:TriggerOut.hook_secret_kind": "le TYPE de porteur (`bearer`/`body_secret`)",
     "oto_trigger:TriggerOut.hook_secret_note": "une consigne",

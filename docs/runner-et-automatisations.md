@@ -1311,16 +1311,25 @@ par `oto_`, donc aucun adaptateur qui teste le préfixe d'un jeton de compte ne
 confond les deux. Seul le **haché** est stocké (`_hash_token`, comme les jetons
 `oto_`), le clair n'est rendu qu'au retour de `create` et de `rotate_secret`.
 
-⚠️ **Et seulement à une PERSONNE** (`capabilities/_secret_par_lien.py`). Sur la face MCP
-(`channel == "mcp"`, explicite), `create` d'un webhook et `rotate_secret` rendent
-`hook_secret: null` et `hook_secret_url` — l'écran où la personne tire le porteur (type
-de lien `webhook`, `/org/{org}/webhook/{id}`, déclaré par instance dans
-`OTO_DASHBOARD_LINK_PATHS`). Le porteur frappé pour l'agent est JETÉ : seul son haché est
-posé, personne ne le détient, la porte reste fermée jusqu'à ce que la personne en tire
-un neuf. Rien n'est stocké en clair, rien n'expire. Sans écran déclaré : ni porteur ni
-lien, `hook_secret_missing` dit pourquoi — jamais de repli sur le clair. C'est le miroir,
-en sortie, de « un secret brut ne passe jamais en argument MCP ».
-La réponse dit aussi le TYPE de porteur frappé (`hook_secret_kind` : `bearer` = en-tête
+⚠️ **À un agent, selon l'instance** (`capabilities/_secret_par_lien.py`). Ce que reçoit
+la face MCP (`channel == "mcp"`, explicite) est un **choix d'instance**, explicite : la
+présence du type de lien `webhook` (`/org/{org}/webhook/{id}`) dans
+`OTO_DASHBOARD_LINK_PATHS` (ou dans les liens du tenant du compte), lue à chaque appel.
+
+- **Déclaré** — l'instance sert un écran où une PERSONNE tire le porteur. `create` d'un
+  webhook et `rotate_secret` rendent `hook_secret: null` et `hook_secret_url`, le lien vers
+  cet écran. Le porteur frappé pour l'agent est JETÉ : seul son haché est posé, personne
+  ne le détient, la porte reste fermée jusqu'à ce que la personne en tire un neuf. Rien
+  n'est stocké en clair, rien n'expire. Un chemin déclaré qui ne se rend pas dans ce
+  contexte (paramètre ou base d'adresse manquants) est une faute dite,
+  `hook_secret_missing`, jamais un repli sur le clair. C'est le miroir, en sortie, de
+  « un secret brut ne passe jamais en argument MCP ».
+- **Non déclaré** — l'instance n'a pas cet écran : l'agent reçoit le porteur dans
+  `hook_secret`, une fois, comme la face REST. Ce n'est pas un repli qui masque une
+  erreur : c'est le seul chemin par lequel la personne l'obtient sur cette instance, et
+  il change dès que l'instance déclare son écran.
+
+Lien déclaré, la réponse dit aussi le TYPE de porteur frappé (`hook_secret_kind` : `bearer` = en-tête
 `Authorization`, `body_secret` = champ `secret` du message) ; l'écran, lui, relit le
 préréglage de l'agent sur le serveur, jamais dans le lien. C'est le SEUL secret qu'une
 capacité MCP fabrique : jetons d'API, clés d'org, secret de signature et adresse d'un

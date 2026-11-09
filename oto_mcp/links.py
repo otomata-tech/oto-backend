@@ -87,8 +87,9 @@ DEFAULT_PATHS: dict[str, str] = {
 # (`/org/{org}/connect/{connector}`), where `oto_connector op=setup_link` sends a person;
 # without it, the link falls back to the connectors page (`connector_setup_link`).
 # `webhook` = the screen where a person gets a webhook agent's token
-# (`/org/{org}/webhook/{id}`): what an AGENT receives instead of the token itself
-# (`capabilities/_secret_par_lien.py`). Undeclared, the agent gets no token and no link.
+# (`/org/{org}/webhook/{id}`). DECLARING it is an instance's choice, not a page to probe:
+# declared, an AGENT receives this link instead of the token itself; undeclared, it
+# receives the token, once (`capabilities/_secret_par_lien.py`, `lien_declare`).
 DECLARED_ONLY_KINDS = frozenset({"app", "connect", "webhook"})
 
 
@@ -244,6 +245,16 @@ def _chemin_pour(kind: str, sub: Optional[str]) -> Optional[str]:
     if entry is None:
         return instance_paths().get(kind)
     return (getattr(entry, "link_paths", None) or {}).get(kind)
+
+
+def lien_declare(kind: str, *, sub: Optional[str] = None) -> bool:
+    """Does this account's product DECLARE a link of type `kind` (the instance's
+    `OTO_DASHBOARD_LINK_PATHS`, or the tenant's patterns)?
+
+    Not "can a link be built" (`link_for`): a declared pattern that cannot be rendered
+    in this context is a fault to report, not the absence of the view. Read by a caller
+    whose BEHAVIOUR depends on the view existing (`_secret_par_lien`)."""
+    return _chemin_pour(kind, sub) is not None
 
 
 def patron_reclame(kind: str, param: str, *, sub: Optional[str] = None) -> bool:

@@ -102,7 +102,12 @@ def test_inconnu_ou_sans_droit_mots_fixes(banc, monkeypatch):
     assert "can't be shown here" in carte and "<script>" not in carte
 
 
-def test_sans_ecran_declare_pas_de_bouton(banc, monkeypatch):
+def test_sans_ecran_declare_pas_de_bouton_et_le_porteur_a_ete_rendu(banc, monkeypatch):
+    """Instance sans écran du porteur : l'agent l'a reçu à `create`/`rotate_secret` —
+    la carte le dit, sans bouton et sans prétendre qu'il ne le voit jamais."""
     monkeypatch.setattr(links, "link_for", lambda *a, **k: None)
     res = banc["fn"](trigger_id=5)
-    assert "openLink" not in _carte(res) and "No link" in res.content[0].text
+    carte, texte = _carte(res), res.content[0].text
+    assert "openLink" not in carte and "No webhook page on this product" in carte
+    assert "returned once" in carte and "never shown to the assistant" not in carte
+    assert "`hook_secret`" in texte and "never see the token" not in texte

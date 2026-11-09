@@ -347,10 +347,12 @@ def test_le_lien_de_l_ecran_du_jeton_d_un_webhook_n_existe_que_declare(registre,
     monkeypatch.delenv(links.ENV_INSTANCE_PATHS, raising=False)
     assert "webhook" in links.DECLARED_ONLY_KINDS
     assert links.link_for("webhook", sub=None, org=42, id=7) is None
+    assert not links.lien_declare("webhook", sub=None)
     assert links.raison_sans_lien("webhook", sub=None, org=42, id=7) == \
         "no webhook page exists in this product"
     monkeypatch.setenv(links.ENV_INSTANCE_PATHS, '{"webhook": "/org/{org}/webhook/{id}"}')
     links.verifier_reglages()
+    assert links.lien_declare("webhook", sub=None)
     assert links.link_for("webhook", sub=None, org=42, id=7) == \
         f"{config.dashboard_url()}/org/42/webhook/7"
     assert links.link_for("webhook", sub=None, id=7) is None, "sans org, pas de lien troué"

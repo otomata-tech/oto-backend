@@ -205,11 +205,12 @@ _IDENTITE: tuple[Variable, ...] = (
              "formulaire d'ajout, ex. `\"/org/{org}/connect/{connector}\"`, où "
              "`oto_connector op=setup_link` envoie la personne ; non déclaré = la page des "
              "connecteurs) et `webhook` (l'écran où une personne tire le jeton d'un agent "
-             "webhook, ex. `\"/org/{org}/webhook/{id}\"` : un agent ne reçoit que ce lien, "
-             "jamais le jeton ; non déclaré = ni jeton ni lien, `hook_secret_missing`). "
+             "webhook, ex. `\"/org/{org}/webhook/{id}\"` ; un choix d'instance : déclaré, un "
+             "agent ne reçoit que ce lien, jamais le jeton ; non déclaré, l'agent reçoit "
+             "le jeton, une fois). "
              "Une déclaration illisible ou un type de lien inconnu refuse le démarrage "
              "(`links.verifier_reglages`).",
-             ("oto_mcp/links.py:109",)),
+             ("oto_mcp/links.py:110",)),
     Variable("OTO_INVITE_BASE_URL", Classe.IDENTITE, None,
              "Base des liens d'invitation d'une org sans front déclaré "
              "(`orgs.front_base_url` gagne quand il est posé).",

@@ -2,9 +2,11 @@
 it already receives events, the kind of token its sender needs, and a button that opens
 the page where the PERSON gets that token.
 
-The visual face of `hook_secret_url` (`capabilities/_secret_par_lien.py`): on the MCP
-face, `oto_trigger op=create` (webhook) and `op=rotate_secret` never return the token —
-the AI shows this card instead of a bare link it might summarise or drop. The button only
+The visual face of `hook_secret_url` (`capabilities/_secret_par_lien.py`): on an instance
+that declares the `webhook` link kind, `oto_trigger op=create` (webhook) and
+`op=rotate_secret` never return the token on the MCP face — the AI shows this card instead
+of a bare link it might summarise or drop. On an instance that does not declare it (an
+instance choice), those ops return the token itself, and the card says so: no button. The button only
 OPENS a link (`OpenLink`, through the host): it calls no tool, carries no secret, and the
 token is minted and shown on the page, once.
 
@@ -74,15 +76,18 @@ def _texte(v: dict) -> str:
     etat = (f"receiving events (last at {v['last_event_at']})" if v["receiving"]
             else "no event received yet")
     lignes = [f"Webhook card shown for “{v['label']}” (agent {v['id']}): {etat}."]
-    if v["token"]:
+    if v["token"] and v["url"]:
         lignes.append(f"Token kind: {_GENRE[v['mode']]}. You never see the token: the "
                       "person gets it on the page and pastes it into the sending app.")
+    elif v["token"]:
+        lignes.append(f"Token kind: {_GENRE[v['mode']]}. On this product the token is "
+                      "returned once, in `hook_secret`, by `oto_trigger op=create` or "
+                      "`op=rotate_secret`; if nobody holds it, rotate it.")
     else:
         lignes.append(f"Mode `{v['mode']}`: no token to paste — the sender proves itself "
                       "another way, set on the agent's page.")
-    lignes.append(f"Link: {v['url']}" if v["url"] else
-                  "No link: this product declares no webhook page — the owner uses the "
-                  "agent's own screen.")
+    if v["url"]:
+        lignes.append(f"Link: {v['url']}")
     return "\n".join(lignes)
 
 
@@ -111,9 +116,9 @@ def register(mcp: FastMCP) -> None:
         receives events, the kind of token its sender needs, and a button that opens the
         page where the PERSON gets the token — READ ONLY, never returns a token.
 
-        Show it right after `oto_trigger op=create` (kind=webhook) or `op=rotate_secret`:
-        their `hook_secret` is null on purpose, and this card is how the person reaches
-        the token. Then wait for them to say it is set up; the card's status (or
+        Show it right after `oto_trigger op=create` (kind=webhook) or `op=rotate_secret`
+        when their `hook_secret` is null: this product hands the token to people only,
+        and this card is how the person reaches it. Then wait for them to say it is set up; the card's status (or
         `oto_trigger op=deliveries`) tells you when the first event arrived. Without a
         rendering client, send `hook_secret_url` as a link instead.
 
@@ -140,10 +145,14 @@ def register(mcp: FastMCP) -> None:
                     with Row(gap=2, align="center"):
                         Text(v["label"], bold=True, css_class="truncate")
                         Badge(pastille, variant=variante)
-                    if v["token"]:
+                    if v["token"] and v["url"]:
                         Muted("The token is never shown to the assistant. Get it on "
                               "the page, then paste it into the app that sends the "
                               "events.")
+                    elif v["token"]:
+                        Muted("The token is returned once, when the webhook is created "
+                              "or its token renewed. Paste it into the app that sends "
+                              "the events.")
                     else:
                         Muted("This webhook's sender proves itself another way "
                               f"(`{v['mode']}`): it's set on its page.")
@@ -155,8 +164,7 @@ def register(mcp: FastMCP) -> None:
                                variant="default" if not v["receiving"] else "outline",
                                size="sm", on_click=OpenLink(v["url"]))
                     else:
-                        Muted("No webhook page for your account: use the agent's own "
-                              "screen.")
+                        Muted("No webhook page on this product.")
                     if v["token"]:
                         Muted(_GENRE[v["mode"]])
         return ToolResult(content=[TextContent(type="text", text=_alias(sub, _texte(v)))],

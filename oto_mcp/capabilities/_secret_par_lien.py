@@ -1,20 +1,25 @@
-"""Le porteur d'un webhook, remis à un AGENT : un lien, jamais le secret.
+"""Le porteur d'un webhook, remis à un AGENT : selon l'instance, un lien ou le porteur.
 
-`oto_trigger op=create` (un webhook) et `op=rotate_secret` frappent un porteur neuf et
-le rendaient EN CLAIR dans la réponse — donc dans le contexte du modèle, l'historique
-du client et ses journaux. C'est le miroir, en SORTIE, de la règle « un secret brut ne
-passe jamais en argument MCP » : un secret frappé par le serveur ne passe pas non plus
-par la réponse d'un outil.
+`oto_trigger op=create` (un webhook) et `op=rotate_secret` frappent un porteur neuf. Le
+rendre EN CLAIR dans la réponse le met dans le contexte du modèle, l'historique du
+client et ses journaux. Une instance qui sert un écran où une PERSONNE tire le porteur
+le dit en déclarant le type de lien `webhook` (`OTO_DASHBOARD_LINK_PATHS`) ; ce choix
+d'instance, explicite, décide de ce que reçoit un agent :
 
-Sur la face MCP (`ctx.channel == "mcp"`, EXPLICITE — jamais « pas rest »), le porteur
-frappé est JETÉ : seul son haché est posé, et personne ne le détient. La porte est donc
-FERMÉE, pas ouverte — toute livraison est refusée tant qu'une personne n'a pas tiré un
-porteur neuf depuis l'écran de l'agent, où le lien rendu mène (type de lien `webhook`,
-déclaré par instance). Rien n'est stocké en clair, rien n'expire, rien n'est à purger :
-le serveur sait refrapper un porteur à la demande, il n'a pas à en garder un.
+- **lien `webhook` déclaré** : sur la face MCP (`ctx.channel == "mcp"`, EXPLICITE —
+  jamais « pas rest »), le porteur frappé est JETÉ : seul son haché est posé, et
+  personne ne le détient. La porte est FERMÉE — toute livraison est refusée tant
+  qu'une personne n'a pas tiré un porteur neuf depuis l'écran, où le lien rendu mène.
+  Rien n'est stocké en clair, rien n'expire, rien n'est à purger. Un chemin déclaré
+  qu'on ne sait pas rendre ici est une faute dite (`hook_secret_missing`), jamais un
+  repli sur le porteur.
+- **lien `webhook` non déclaré** : l'instance n'a pas cet écran, et l'agent reçoit le
+  porteur, une fois, dans `hook_secret` — c'est le seul chemin par lequel une personne
+  l'obtient. Ce n'est pas un repli qui masque une erreur : c'est la configuration de
+  l'instance, lue à chaque appel.
 
-La face REST (l'écran de l'agent) reçoit le porteur comme avant : c'est la personne
-qui le lit, une fois.
+La face REST (l'écran de l'agent) reçoit le porteur dans les deux cas : c'est la
+personne qui le lit, une fois.
 """
 from __future__ import annotations
 
@@ -40,10 +45,11 @@ NOTE = ("The token was NOT returned to you: an AI never holds a webhook's token.
 
 
 def remettre(ctx: ResolvedCtx, agent: dict, secret: str) -> dict:
-    """Les clés à fusionner dans la réponse : le porteur à une personne (REST), un lien
-    à un agent (MCP). `agent` = la ligne du déclencheur (son id, son préréglage). Le
+    """Les clés à fusionner dans la réponse : le porteur à une personne (REST) et à un
+    agent d'une instance sans écran du porteur ; un lien à un agent (MCP) d'une instance
+    qui le déclare. `agent` = la ligne du déclencheur (son id, son préréglage). Le
     secret n'est jamais journalisé ici."""
-    if ctx.channel != "mcp":
+    if ctx.channel != "mcp" or not links.lien_declare("webhook", sub=ctx.sub):
         return {"hook_secret": secret}
     trigger_id = agent["id"]
     genre = agent.get("hook_auth") or "bearer"
@@ -54,12 +60,12 @@ def remettre(ctx: ResolvedCtx, agent: dict, secret: str) -> dict:
     if url is None:
         raison = links.raison_sans_lien("webhook", sub=ctx.sub, org=ctx.org_id,
                                         id=trigger_id)
-        # Sans page déclarée, le texte ne nomme AUCUN écran ni menu : une instance sans
-        # page n'en a pas, et un agent qui renverrait la personne vers un bouton qui
-        # n'existe pas la perdrait. Il dit le vrai : la porte reste fermée.
+        # Le chemin est DÉCLARÉ mais ne se rend pas ici (un paramètre manque, une base
+        # d'adresse absente) : une faute de configuration, dite telle quelle. Le texte ne
+        # nomme aucun écran ni menu — l'agent ne renvoie pas la personne vers un bouton
+        # qu'il n'a pas pu adresser. La porte reste fermée.
         out["hook_secret_missing"] = (
-            f"{raison}. The token cannot be retrieved on this instance for now, so the "
-            "webhook refuses every delivery. Tell the agent's owner; do not retry "
-            "`create` or `rotate_secret`, which would only mint another token nobody "
-            "holds.")
+            f"{raison}. The token cannot be retrieved for now, so the webhook refuses "
+            "every delivery. Tell the agent's owner; do not retry `create` or "
+            "`rotate_secret`, which would only mint another token nobody holds.")
     return out

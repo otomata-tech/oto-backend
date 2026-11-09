@@ -175,10 +175,11 @@ def test_chaque_outil_du_perimetre_dit_son_envoi_et_ses_reponses():
     `reponses`, le règlement se ferait au pire cas. Un outil du périmètre dit les deux."""
     import asyncio
     from _mcp_app import static_mcp
-    outils = {t.name: t.fn for t in asyncio.run(static_mcp().list_tools(
-        run_middleware=False))}
+    # Les outils du lecteur générique (`tools/decrits.py`) n'ont pas de `fn` : seuls ceux du
+    # périmètre, écrits à la main, sont lus.
+    outils = {t.name: t for t in asyncio.run(static_mcp().list_tools(run_middleware=False))}
     manquants = [(nom, f) for nom in credits.perimetre() for f in ("envoi", "reponses")
-                 if not _appelle(outils[nom], f)]
+                 if not _appelle(outils[nom].fn, f)]
     assert not manquants, manquants
 
 

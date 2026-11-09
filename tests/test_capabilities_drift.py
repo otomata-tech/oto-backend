@@ -73,7 +73,7 @@ def test_tools_module_derivation_matches_filesystem():
     from oto_mcp import providers
     derived: set[str] = set()
     for c in providers.REGISTRY.values():
-        if c.kind == "tools" and not c.client:  # un connecteur décrit n'a pas de module : `decrits` le sert
+        if c.kind == "tools" and not c.decrit:  # un connecteur décrit n'a pas de module : `decrits` le sert
             derived |= set(c.modules or (c.name,))
     files = _tools_module_files()
 

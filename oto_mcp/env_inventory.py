@@ -307,6 +307,14 @@ _REGLAGES: tuple[Variable, ...] = (
              "seulement les porteurs de l'option `claude_subscription` ; toute autre "
              "valeur lève.",
              ("oto_mcp/capabilities/_abonnement.py:205",)),
+    Variable("OTO_APPS_LIENS_EXTERIEURS", Classe.REGLAGE, "",
+             "L'hôte des apps de CETTE instance ouvre un lien vers l'extérieur, après "
+             "l'accord du lecteur (message `open-link`, `oto.open(url)`, `docs/apps.md` "
+             "§Liens vers l'extérieur) : `1`, `true`, `yes`, `on`. Un choix d'instance : "
+             "la description d'`oto_apps` ne nomme `open(url)` que s'il est déclaré. "
+             "Absente, vide ou un non = l'hôte ne le gère pas. Toute autre valeur lève "
+             "au démarrage.",
+             ("oto_mcp/capabilities/apps.py:505",)),
     Variable("OTO_REPLI_API_PAR_DEFAUT", Classe.REGLAGE, "",
              "Repli d'un travail d'abonnement Claude épuisé sur la clé API DÉPOSÉE par "
              "son org, pour une org qui ne l'a jamais réglé (`1`, `true`, `yes`, `on`). "

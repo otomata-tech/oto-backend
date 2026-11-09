@@ -14,7 +14,8 @@ qui lance un agent. Capacité `me.app` : outil MCP `oto_apps`, REST `POST /api/m
 - **Du HTML**, exécuté par le front dans un cadre isolé (origine opaque, sans réseau,
   derrière un document-garde qui interdit toute navigation sortante), qui ne parle à
   la plateforme que par le pont exposé sur `window.oto` (`oto.rows()`, `oto.set()`,
-  `oto.upload()`, `oto.files()`, `oto.runAgent()`…). Le serveur ne l'exécute jamais.
+  `oto.upload()`, `oto.files()`, `oto.runAgent()`, `oto.open()`…). Le serveur ne
+  l'exécute jamais.
 - **Une vignette** (image publiée sur le stockage média, ou couleur + emoji, et les
   réglages du dessin qui l'a produite). ⚠️ L'image doit être sous la base publique
   du stockage média de l'instance (`media_store.public_base()`) : la liste l'affiche
@@ -201,6 +202,15 @@ qu'une app demande :
 6. L'hôte n'affiche rien après un geste : l'app dessine son propre retour (`oto:done`,
    `oto.undo`, `oto:undone`).
 
+**Un lien vers l'extérieur** (`open-link`, sans serveur ni jeton : rien n'est écrit ; seulement
+sur un hôte qui le gère, et que l'instance déclare, cf. « Liens vers l'extérieur ») :
+recevoir le message depuis l'iframe de CETTE app ; ne garder qu'une adresse `http(s)`
+sans partie utilisateur, normalisée (`new URL(…).href`, 4 000 caractères au plus) ;
+l'ignorer sans activation (`navigator.userActivation.isActive`) ou si une question est
+déjà ouverte ; afficher l'adresse **entière** dans le chrome de l'hôte ; sur confirmation
+seulement, l'ouvrir dans un nouvel onglet (`noopener,noreferrer`). Voir « Liens vers
+l'extérieur » plus bas.
+
 **Ce que le serveur garantit** : l'app seule, dans son cadre isolé, n'obtient pas de
 jeton (origine `null`, pas de réseau) ; un agent ou un script porteur de clé non plus ;
 un jeton ne sert qu'une fois, deux minutes, au geste résumé — mêmes app, lecteur,
@@ -293,7 +303,41 @@ WebRTC (constructeurs retirés — `webrtc 'block'` est ignoré, une requête ST
 le prefetch DNS, et `<link rel=preconnect>` (WebKit ouvrait une connexion). Restent,
 par construction : les chemins de requête vers les CDN permis et Google Fonts (une
 requête peut y porter des données, mais vers le CDN seul), et ce qu'un LECTEUR tape
-dans un faux formulaire d'une app — seule donnée que l'auteur n'a pas déjà.
+dans un faux formulaire d'une app — seule donnée que l'auteur n'a pas déjà. Et une
+adresse que le lecteur a vue en entier et choisi d'ouvrir (ci-dessous).
+
+#### Liens vers l'extérieur (`oto.open`, 9/11/2026)
+
+**Un choix d'instance.** Tous les hôtes ne gèrent pas `open-link` : sur un hôte qui ne
+le gère pas, `oto.open` n'existe pas dans l'app. L'instance déclare donc que son hôte
+le gère, par `OTO_APPS_LIENS_EXTERIEURS` (`1`, `true`, `yes`, `on` ; absente, vide ou
+un non = non ; toute autre valeur refuse le démarrage). La description servie
+d'`oto_apps` ne nomme `open(url)` que sur une instance qui le déclare
+(`capabilities/apps.py`, `liens_exterieurs`) : sinon, un agent qui la suivrait écrirait
+un appel qui lève. Ce n'est pas un repli : c'est ce que sait faire l'hôte de cette
+instance.
+
+Sur un hôte qui le gère, le cadre ne quitte toujours pas l'app : `window.open` et
+`location.href = …` y restent sans effet (un `target="_blank"` sur un lien `https://`
+est ignoré, le lien passe par la question ci-dessous). Un site hors de l'hôte s'ouvre
+par l'hôte, après l'accord du lecteur :
+
+- **Un lien `<a href="https://…">`** (de préférence) : le pont intercepte le clic, le
+  remet à l'hôte, qui demande s'il faut ouvrir ce site extérieur en montrant l'adresse
+  entière, puis l'ouvre dans un nouvel onglet (`noopener,noreferrer`) si le lecteur
+  confirme. Un `target` sur le lien est ignoré. Un lien ni `http(s)` ni `#` (`mailto:`…)
+  n'est pas pris : il fait quitter la page, le document-garde l'arrête et l'app se ferme
+  — n'en pas mettre.
+- **`oto.open(url)`**, depuis le gestionnaire d'un clic (un bouton) : la même question.
+- **Règles** : `http(s)` seul ; une adresse avec une partie utilisateur
+  (`https://site@autre.site/`) est refusée — le site y est `autre.site`, que le lecteur
+  lirait mal ; seulement juste après un clic ou une touche du lecteur, jamais au
+  chargement, sur un minuteur ni par un `a.click()` du script (`isTrusted`) ; une
+  question à la fois. Une demande refusée ne rend rien à l'app.
+- **Pourquoi l'accord** : une adresse peut porter des données. Le lecteur voit tout ce
+  qui part ; une app garde ses adresses lisibles — pas de données tassées dans la
+  requête (`?q=`) : un lecteur qui ne comprend pas une adresse ne l'ouvre pas.
+- **Pages de l'app** : inchangé — `<a href="#/route">` ou `oto.go("/route")`.
 
 ### Suivre les runs
 

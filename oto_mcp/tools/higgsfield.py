@@ -17,7 +17,10 @@ is known and at most `max_usd`; otherwise nothing is sent. `max_usd` itself is b
 the instance (`OTO_HIGGSFIELD_MAX_USD_PAR_APPEL`): above it, refused before Higgsfield is
 called (`max_usd_above_cap`). Higgsfield answers some
 estimates with a sentence of per-second prices instead of an amount: the amount read
-from it is flagged `approximate`.
+from it is flagged `approximate`. GPT Image 2.5 (`marketing-studio/image/flare`, `/sunburst`)
+gives only per-1M-token rates, and no job reports what it was charged: `price_of` answers the
+charge measured per quality and resolution (no margin), flagged `approximate`, and that price
+is what the shared key bills — not the job's own charge.
 
 **The shared key** (closed, on grant, with a daily quota in micro-dollars of job price).
 Higgsfield charges a job only once it COMPLETES — failed, nsfw and canceled jobs are free —
@@ -366,7 +369,9 @@ def register(mcp: FastMCP) -> None:
         - `estimate` — the price of a generation, free and with no effect: `model` and
           the same `params` as the generation. Answers `usd` (null when no amount can be
           read, `basis` says why), `approximate` (true when read from a per-second price
-          sentence: it prices a 16:9 output before discount) and the raw `estimate`.
+          sentence: it prices a 16:9 output before discount; also true for GPT Image 2.5,
+          `marketing-studio/image/flare|sunburst`, priced at its measured charge per
+          `quality` and `resolution`) and the raw `estimate`.
         - `get_request` — one job (`request_id`): `status` queued, in_progress,
           completed, failed (with `error`), nsfw or canceled. Once completed, `outputs`
           lists every file address and `expires_at` says when they are deleted (seven

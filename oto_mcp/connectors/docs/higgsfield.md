@@ -20,6 +20,7 @@ in the Higgsfield console ([console.higgsfield.ai](https://console.higgsfield.ai
 - `create_generation` **refuses** a job above `max_usd`, or whose price cannot be read: say the price to the person and get their OK before raising it
 - `max_usd` itself has a ceiling set by the instance (`OTO_HIGGSFIELD_MAX_USD_PAR_APPEL`, 5 dollars by default): above it the job is refused (`max_usd_above_cap`) before Higgsfield is called
 - some models are priced by a sentence of per-second rates rather than an amount: the price read from it is marked `approximate` (16:9 output, before discount); a job with a **video as input** on such a model cannot be priced and is refused
+- GPT Image 2.5 (`marketing-studio/image/flare`, `/sunburst`, same price) is priced by the token, and Higgsfield never says what a job cost: the price is the **charge measured per `quality` and `resolution`** (no margin), marked `approximate`, and it is what the shared key bills. Square and 4k are the dearest; each image in `image_urls` adds $0.013. About $0.19 for the default (`quality` high, 4k), $0.03 at low, $0.72 at max
 - Kling and Seedance make **sound by default**: `sound: "off"` / `generate_audio: false` unless sound is wanted, it costs more
 - ⚠️ output files (images, videos) are the provider's **public links**: anyone holding one can read the file for seven days. Download them right away, never paste a link anywhere public
 - a job takes seconds (a still) to minutes (a clip); `failed` and `nsfw` jobs are not charged, and a job still `queued` can be canceled and refunded

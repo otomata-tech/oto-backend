@@ -21,8 +21,16 @@ description ni d'inscription de repli.
 **Jamais une inscription ouverte** : les adresses de retour sont en liste fermée
 (`RETOURS_ADMIS`), une demande dont une seule adresse est hors liste est refusée. Une
 demande de même type et mêmes adresses de retour retrouve la même application (le nom,
-libre, n'entre pas dans la clé) ; seules les adresses admises par préfixe (ChatGPT)
-peuvent multiplier les applications, d'où leur plafond (`PLAFOND_VARIABLES`).
+libre, n'entre pas dans la clé) ; seules les adresses admises par préfixe (ChatGPT,
+Gemini) peuvent multiplier les applications, d'où un plafond PAR préfixe
+(`PREFIXES_ADMIS`).
+
+**Gemini (gemini.google.com, connecteur MCP « + Custom »)** ne s'inscrit pas lui-même :
+il affiche un rappel propre à l'utilisateur
+(`https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-<id Google>-<hôte>`)
+et demande un client_id / client_secret. On les obtient en postant ce rappel ici
+(`POST /oauth/register {"client_name": "Gemini", "redirect_uris": [<rappel>]}`) ; le
+rappel ne mène qu'à Google, l'admettre n'ouvre aucune redirection vers un tiers.
 
 La logique (`lire_demande`, `inscrire`) ne dépend que d'une `Gestion` injectée ;
 `GestionLogto` la branche sur l'API de gestion de NOTRE annuaire (`auth/annuaire.py`).
@@ -30,6 +38,7 @@ La logique (`lire_demande`, `inscrire`) ne dépend que d'une `Gestion` injectée
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -46,12 +55,11 @@ from . import annuaire
 _log = logging.getLogger("oto_mcp.inscription_dynamique")
 _TIMEOUT = 15
 
-#: Les adresses de retour admises : égalité exacte, ou préfixe quand l'entrée finit par `/`.
+#: Les adresses de retour admises par égalité exacte.
 RETOURS_ADMIS: tuple[str, ...] = (
     "https://callback.mistral.ai/v1/integrations_auth/oauth2_callback",
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
-    "https://chatgpt.com/connector/oauth/",
 )
 
 METHODES = ("client_secret_basic", "client_secret_post", "none")
@@ -66,6 +74,21 @@ PREFIXE_DCR = "DCR · "
 #: adresses exactes ne sont jamais plafonnées : un plafond atteint ne bloque pas Le Chat.
 #: Au-delà, refus journalisé ; faire le ménage des applications « DCR · » dans Logto.
 PLAFOND_VARIABLES = 30
+#: Gemini : un rappel PAR utilisateur Google, donc une application par utilisateur.
+PLAFOND_GEMINI = 200
+
+#: Les adresses admises par préfixe, chacune avec SON plafond (Gemini n'épuise pas
+#: ChatGPT). Après le préfixe : UN segment `[A-Za-z0-9_-]` borné, rien d'autre — ni `/`,
+#: ni `?`, ni `..` — jamais un `startswith` sans borne.
+PREFIXES_ADMIS: dict[str, int] = {
+    "https://chatgpt.com/connector/oauth/": PLAFOND_VARIABLES,
+    "https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-": PLAFOND_GEMINI,
+}
+_SUFFIXE = re.compile(r"[A-Za-z0-9_-]{1,200}")
+
+#: Part du plafond à partir de laquelle chaque nouvelle inscription d'un préfixe ALERTE
+#: (journal + Sentry, `_alerte_plafond`) : le ménage se fait avant le premier refus.
+PART_ALERTE = 0.8
 
 
 class RefusDcr(Exception):
@@ -77,13 +100,45 @@ class RefusDcr(Exception):
         self.message = message
 
 
+def _prefixe_de(uri: str) -> str | None:
+    """Le préfixe admis dont `uri` est la forme variable (préfixe + un segment), sinon None."""
+    for prefixe in PREFIXES_ADMIS:
+        if uri.startswith(prefixe) and _SUFFIXE.fullmatch(uri[len(prefixe):]):
+            return prefixe
+    return None
+
+
 def retour_admis(uri: str) -> bool:
-    return any(uri.startswith(a) if a.endswith("/") else uri == a for a in RETOURS_ADMIS)
+    return uri in RETOURS_ADMIS or _prefixe_de(uri) is not None
 
 
-def _retour_variable(uri: str) -> bool:
-    """Vrai si l'adresse n'est admise que par un préfixe (donc variable)."""
-    return uri not in RETOURS_ADMIS
+def _prefixe_inscrit(uri: str) -> str | None:
+    """Le préfixe dont relève une adresse DÉJÀ inscrite, par `startswith` seul : une
+    application créée avant la borne du segment (ChatGPT, adresse à plusieurs segments
+    ou à requête) reste comptée dans le plafond de son préfixe. Le comptage ne prend pas
+    la borne de l'admission (`_prefixe_de`), sinon ces applications sortiraient du
+    plafond sans avoir quitté l'annuaire."""
+    return next((p for p in PREFIXES_ADMIS if uri.startswith(p)), None)
+
+
+def _alerte_plafond(prefixe: str, inscrites: int, plafond: int) -> None:
+    """Le plafond d'un préfixe approche : au journal ET au suivi d'erreurs (Sentry), le
+    canal d'exploitation des autres anomalies hors requête (`tenancy._refus`,
+    `guide_store._alerte`, `medecin_agents._alerte_exploitation`). Le texte ne porte
+    pas le compte : une issue par préfixe, le compte est au journal. Fail-open sur le
+    suivi seulement : l'inscription est déjà faite."""
+    _log.warning("DCR : %d/%d applications inscrites pour %s, faire le ménage des « %s »",
+                 inscrites, plafond, prefixe, PREFIXE_DCR)
+    try:
+        import sentry_sdk
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("oto.dcr_plafond", "approche")
+            sentry_sdk.capture_message(
+                f"DCR : plafond de {plafond} applications bientôt atteint pour {prefixe}",
+                level="warning")
+    # noqa: SILENT — le suivi d'erreurs indisponible n'annule pas une inscription faite
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True)
@@ -146,12 +201,18 @@ def inscrire(gestion: Gestion, demande: Demande, maintenant: float | None = None
     cle = sorted(demande.redirect_uris)
     existante = next((a for a in inscrites if a.get("type") == type_
                       and sorted(set(_retours_de(a))) == cle), None)
-    if existante is None and any(_retour_variable(u) for u in demande.redirect_uris):
-        variables = [a for a in inscrites if any(_retour_variable(u) for u in _retours_de(a))]
-        if len(variables) >= PLAFOND_VARIABLES:
+    prefixes = {p for u in demande.redirect_uris if (p := _prefixe_de(u))}
+    proches: list[tuple[str, int, int]] = []
+    for prefixe in sorted(prefixes) if existante is None else ():
+        plafond = PREFIXES_ADMIS[prefixe]
+        deja = sum(1 for a in inscrites
+                   if any(_prefixe_inscrit(u) == prefixe for u in _retours_de(a)))
+        if deja >= plafond:
             raise RefusDcr(
                 "invalid_client_metadata",
-                f"plafond de {PLAFOND_VARIABLES} applications inscrites atteint")
+                f"plafond de {plafond} applications inscrites atteint pour {prefixe}")
+        if deja + 1 >= plafond * PART_ALERTE:
+            proches.append((prefixe, deja + 1, plafond))
     application = existante or gestion.creer(
         name=f"{PREFIXE_DCR}{demande.nom}"[:64],
         type=type_,
@@ -159,6 +220,8 @@ def inscrire(gestion: Gestion, demande: Demande, maintenant: float | None = None
                      f"{urlsplit(demande.redirect_uris[0]).netloc}"),
         redirect_uris=list(demande.redirect_uris),
     )
+    for prefixe, compte, plafond in proches:
+        _alerte_plafond(prefixe, compte, plafond)
     client: dict = {"client_id": application["id"]}
     if type_ == "Traditional":
         client["client_secret"] = gestion.secret(application["id"])

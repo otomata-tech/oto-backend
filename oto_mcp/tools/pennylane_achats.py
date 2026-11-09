@@ -29,8 +29,10 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def pennylane_supplier_invoice(
         op: Literal["list", "get", "lines", "import", "update", "validate",
-                    "categories", "categorize"] = "list",
+                    "categories", "categorize", "payments", "matched_transactions",
+                    "payment_status", "unmatch_transaction"] = "list",
         invoice_id: Optional[int] = None,
+        transaction_id: Optional[int] = None,
         max_pages: Optional[int] = None,
         file_attachment_id: Optional[int] = None,
         supplier_id: Optional[int] = None,
@@ -46,6 +48,7 @@ def register(mcp: FastMCP) -> None:
         invoice_number: Optional[str] = None,
         label: Optional[str] = None,
         categories: Optional[list] = None,
+        payment_status: Optional[Literal["paid", "to_be_paid"]] = None,
     ) -> dict | list:
         """PURCHASE invoices (supplier invoices received) — the "expenses" side.
 
@@ -84,6 +87,15 @@ def register(mcp: FastMCP) -> None:
           STRING between 0 and 1, the weights of ONE axis sum to 1, axes are
           independent; `[]` removes them all. Ids from `pennylane_ref(kind=
           "categories")`. Reversible: re-send the list read with op="categories".
+        - "payments" (`invoice_id`): the payments recorded on the invoice.
+        - "matched_transactions" (`invoice_id`): the bank transactions matched to it
+          (`pennylane_match`; undo one with op="unmatch_transaction").
+        - "unmatch_transaction" (`invoice_id`, `transaction_id`): undoes
+          `pennylane_match` — the invoice reads unpaid again. Restore it with
+          `pennylane_match`.
+        - "payment_status" (`invoice_id`, `payment_status`): sets it "paid" or
+          "to_be_paid" — e.g. paid with the manager's own card, no transaction to
+          match.
 
         A line's `vat_rate` = Pennylane code: 20 %→"FR_200", 10 %→"FR_100",
         5.5 %→"FR_55", exempt→"exempt". REVERSE-CHARGE codes of the v2
@@ -99,10 +111,10 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             op: "list" (default) | "get" | "lines" | "import" | "update" | "validate"
-                | "categories" | "categorize".
-            invoice_id: required for get / lines / update / validate / categories /
-                categorize.
-            max_pages: op="list" / "lines" — bounds the pagination.
+                | "categories" | "categorize" | "payments" | "matched_transactions" |
+                "payment_status" | "unmatch_transaction".
+            invoice_id: required for every op but list / import.
+            max_pages: list ops — bounds the pagination.
             file_attachment_id: op="import" — id returned by `pennylane_upload_file`.
             supplier_id: op="import" (required) / "update" — existing supplier
                 (`pennylane_supplier`).
@@ -120,6 +132,9 @@ def register(mcp: FastMCP) -> None:
                 `validation_needed`.
             invoice_number / label: supplier number / accounting label.
             categories: op="categorize" — `[{"id", "weight"}]`, replaces everything.
+            payment_status: op="payment_status" — "paid" | "to_be_paid".
+            transaction_id: op="unmatch_transaction" — from
+                op="matched_transactions".
         """
         c = _client()
         if op == "list":
@@ -173,5 +188,22 @@ def register(mcp: FastMCP) -> None:
         if op in ("categories", "categorize"):
             return _analytique(c, op, "supplier_invoice",
                                _need(invoice_id, "invoice_id", op), categories)
+        if op == "payments":
+            return c.list_supplier_invoice_payments(_need(invoice_id, "invoice_id", op),
+                                                    max_pages=max_pages)
+        if op == "matched_transactions":
+            return c.list_supplier_invoice_matched_transactions(
+                _need(invoice_id, "invoice_id", op), max_pages=max_pages)
+        if op == "payment_status":
+            return _ecrit(lambda: c.update_supplier_invoice_payment_status(
+                _need(invoice_id, "invoice_id", op),
+                _need(payment_status, "payment_status", op)),
+                "supplier invoice payment status")
+        if op == "unmatch_transaction":
+            return _ecrit(lambda: c.unmatch_supplier_invoice_transaction(
+                _need(invoice_id, "invoice_id", op),
+                _need(transaction_id, "transaction_id", op)),
+                "removing the bank/invoice match")
         raise _bad("op must be 'list', 'get', 'lines', 'import', 'update', 'validate', "
-                   "'categories' or 'categorize'")
+                   "'categories', 'categorize', 'payments', 'matched_transactions', "
+                   "'payment_status' or 'unmatch_transaction'")

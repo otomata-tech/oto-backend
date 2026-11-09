@@ -779,27 +779,34 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "payfit_meal_voucher": "lire",
     "payfit_payslip": {"lire": "list download overtime"},
     "payfit_worked_time": "lire",
+    # remove_match undoes a reconciliation; delete_customer_contact deletes.
     "pennylane_act": {"envoyer": "send_invoice"},
-    "pennylane_customer": {"lire": "list find", "ecrire": "create update"},
+    # categorize_transaction REPLACES every analytical category.
+    "pennylane_bank": {"lire": "account establishments transaction transaction_categories matched_invoices", "ecrire": "create_transaction update_transaction", "detruire": "categorize_transaction"},
+    "pennylane_customer": {"lire": "list find get contacts contact", "ecrire": "create update create_individual update_individual create_contact update_contact", "detruire": "delete_contact"},
+    # start creates an export at Pennylane (a file, no business record).
+    "pennylane_export": {"ecrire": "start", "lire": "get"},
     "pennylane_firm_companies": "lire",
     "pennylane_firm_create_folder": "ecrire",
     "pennylane_firm_tree": "lire",
     "pennylane_firm_upload_url": "ecrire",
     "pennylane_firm_upload_urls": "ecrire",
-    # categorize REPLACES every analytical category.
-    "pennylane_invoice": {"lire": "list find categories", "ecrire": "create credit_note update finalize", "detruire": "delete categorize"},
+    # categorize REPLACES every analytical category; mark_paid has no way back.
+    "pennylane_invoice": {"lire": "list find get categories payments installments matched_transactions appendices header_fields", "ecrire": "create credit_note update finalize mark_paid mark_installment_paid", "detruire": "delete categorize unmatch_transaction"},
     # update can destroy lines; categorize replaces.
-    "pennylane_ledger_entry": {"lire": "list get lines lettered categories", "ecrire": "create", "detruire": "update categorize"},
+    "pennylane_ledger_entry": {"lire": "list get lines lettered categories search_lines line documents", "ecrire": "create", "detruire": "update categorize"},
     # set adds a lettering (reversible); unset removes it.
     "pennylane_ledger_lettering": {"ecrire": "set", "detruire": "unset"},
     # Writes a reconciliation link.
     "pennylane_match": "ecrire",
     # set_status overwrites the quote status.
-    "pennylane_quote": {"lire": "list get lines pdf", "ecrire": "create to_invoice", "detruire": "set_status"},
+    "pennylane_quote": {"lire": "list get lines pdf appendices", "ecrire": "create to_invoice", "detruire": "set_status"},
     "pennylane_ref": "lire",
-    "pennylane_supplier": {"lire": "list", "ecrire": "create"},
+    # Creations stay (the API deletes none); updates change in place.
+    "pennylane_ref_edit": {"ecrire": "create_category_group update_category_group create_category update_category create_journal create_ledger_account update_ledger_account update_product"},
+    "pennylane_supplier": {"lire": "list get", "ecrire": "create update"},
     # update may delete lines (invoice_lines.delete); categorize replaces.
-    "pennylane_supplier_invoice": {"lire": "list get lines categories", "ecrire": "import validate", "detruire": "update categorize"},
+    "pennylane_supplier_invoice": {"lire": "list get lines categories payments matched_transactions", "ecrire": "import validate payment_status", "detruire": "update categorize unmatch_transaction"},
     "pennylane_bank_accounts": "lire",
     "pennylane_transactions": "lire",
     "pennylane_trial_balance": "lire",
@@ -1405,6 +1412,10 @@ LOTS: dict[str, Lot] = {
     "outlook_calendar_event:create": Lot("attendees"),
     "pennylane_customer:create": Lot("emails"),
     "pennylane_customer:update": Lot("emails"),
+    "pennylane_customer:create_individual": Lot("emails"),
+    "pennylane_customer:update_individual": Lot("emails"),
+    "pennylane_customer:create_contact": Lot("emails"),
+    "pennylane_customer:update_contact": Lot("emails"),
     "pennylane_firm_upload_urls": Lot("items"),
     "productlane_docs:move": Lot("article_ids"),
     "productlane_docs:create_group": Lot("article_ids"),
@@ -1596,6 +1607,7 @@ PAS_UN_LOT: dict[str, str] = {
     "payfit_collaborator": "fields",
     "payfit_contract": "fields",
     "payfit_insurance": "insurance_contract_ids fields",
+    "pennylane_bank": "bank_ids categories",
     "pennylane_invoice": "lines categories",
     "pennylane_ledger_entry": "clauses lines categories",
     "pennylane_ledger_lettering": "line_ids",

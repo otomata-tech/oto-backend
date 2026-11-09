@@ -29,7 +29,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def pennylane_quote(
-        op: Literal["list", "get", "lines", "pdf", "create", "set_status",
+        op: Literal["list", "get", "lines", "pdf", "appendices", "create", "set_status",
                     "to_invoice"] = "list",
         quote_id: Optional[int] = None,
         customer_id: Optional[int] = None,
@@ -51,6 +51,7 @@ def register(mcp: FastMCP) -> None:
         - "get" (`quote_id`): the full quote, including `status`, `quote_number`,
           `public_file_url` (the PDF) and `linked_invoices`.
         - "lines" (`quote_id`): returns `{quote_id, lines: [...]}`, its lines.
+        - "appendices" (`quote_id`): the files appended to it, `{id, filename, url}`.
         - "pdf" (`quote_id`): returns `{quote_id, quote_number, public_file_url,
           filename}` — the PDF link to attach to an email. ⚠️ The link EXPIRES
           (30 minutes): re-read it just before using it, never store it.
@@ -80,9 +81,10 @@ def register(mcp: FastMCP) -> None:
         company, pass `_instance="org:<id>:pennylane"`.
 
         Args:
-            op: "list" (default) | "get" | "lines" | "pdf" | "create" | "set_status"
-                | "to_invoice".
-            quote_id: required for get / lines / pdf / set_status / to_invoice.
+            op: "list" (default) | "get" | "lines" | "pdf" | "appendices" | "create" |
+                "set_status" | "to_invoice".
+            quote_id: required for get / lines / pdf / appendices / set_status /
+                to_invoice.
             customer_id: op="create" (required); op="list" (filter).
             date: op="create" — quote date (YYYY-MM-DD).
             deadline: op="create" — end of validity (YYYY-MM-DD).
@@ -94,7 +96,7 @@ def register(mcp: FastMCP) -> None:
             quote_template_id: op="create" — rendering template of the quote.
             customer_invoice_template_id: op="to_invoice" — template of the invoice.
             status: op="set_status" (required); op="list" (filter).
-            max_pages: op="list" — bounds the pagination.
+            max_pages: op="list" / "appendices" — bounds the pagination.
         """
         if status is not None and status not in _STATUTS:
             raise _bad(f"unknown status: {status!r} — expected: {', '.join(_STATUTS)}")
@@ -107,6 +109,9 @@ def register(mcp: FastMCP) -> None:
         if op == "lines":
             return {"quote_id": quote_id,
                     "lines": c.get_quote_lines(_need(quote_id, "quote_id", op))}
+        if op == "appendices":
+            return c.list_quote_appendices(_need(quote_id, "quote_id", op),
+                                           max_pages=max_pages)
         if op == "pdf":
             devis = c.get_quote(_need(quote_id, "quote_id", op))
             url = (devis or {}).get("public_file_url")
@@ -132,5 +137,5 @@ def register(mcp: FastMCP) -> None:
                 external_reference=external_reference,
                 customer_invoice_template_id=customer_invoice_template_id),
                 "quote invoicing")
-        raise _bad("op must be 'list', 'get', 'lines', 'pdf', 'create', "
+        raise _bad("op must be 'list', 'get', 'lines', 'pdf', 'appendices', 'create', "
                    "'set_status' or 'to_invoice'")

@@ -13,7 +13,11 @@ in `pennylane_achats.py`, `pennylane_supplier_invoice`), plus a single
 chart of accounts, analytical axes and categories, invoice templates, products). The heterogeneous verbs that
 merging would not factor out stay named: `pennylane_transactions`,
 `pennylane_bank_accounts`,
-`pennylane_trial_balance`, `pennylane_match`, `pennylane_upload_file`.
+`pennylane_trial_balance`, `pennylane_match`, `pennylane_upload_file`. Families of their
+own live in sibling modules: the bank (`pennylane_bank`, `pennylane_banque.py`), reference
+data written (`pennylane_ref_edit`, `pennylane_referentiel.py`), exports
+(`pennylane_export`, `pennylane_exports.py`), other records read (`pennylane_records`,
+`pennylane_documents.py`).
 
 Committing writes are **draft-first**: creating an invoice or a
 credit note produces a draft, and **finalizing/sending are separate gestures** that
@@ -89,10 +93,15 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def pennylane_ref(kind: Literal["company", "fiscal_years", "ledger_accounts",
-                                    "journals", "category_groups", "categories",
-                                    "invoice_templates", "products"],
+                                    "ledger_account", "journals", "journal",
+                                    "category_groups", "category_group", "categories",
+                                    "category", "invoice_templates", "products",
+                                    "numberings", "features"],
                       product_id: Optional[int] = None,
                       category_group_id: Optional[int] = None,
+                      category_id: Optional[int] = None,
+                      journal_id: Optional[int] = None,
+                      ledger_account_id: Optional[int] = None,
                       max_pages: Optional[int] = None) -> dict | list:
         """Pennylane reference data, READ-ONLY — what must be resolved BEFORE
         writing (product ids, invoice templates, accounts, categories).
@@ -100,19 +109,24 @@ def register(mcp: FastMCP) -> None:
         `kind`:
         - "company": information about the current account's company.
         - "fiscal_years": fiscal years.
-        - "ledger_accounts": chart of accounts (general ledger accounts).
+        - "ledger_accounts": chart of accounts (general ledger accounts);
+          "ledger_account" (`ledger_account_id`): ONE account.
         - "journals": journals (`{id, code, label, type}` — "HA" purchases, "VT"
           sales, "BQ" bank…). Prerequisite of a general-ledger entry, which
           requires a `journal_id`: these ids are SPECIFIC TO THE COMPANY, resolve them
           here rather than hard-coding them. Scope `journals:*`, distinct from that
-          of entries — a key can read one without the other.
+          of entries — a key can read one without the other. "journal"
+          (`journal_id`): ONE journal.
         - "category_groups": the ANALYTICAL axes `{id, label}` ("Projects",
-          "Cost centres"…). Scope `categories:readonly`.
+          "Cost centres"…). Scope `categories:readonly`. "category_group"
+          (`category_group_id`): ONE axis, with its kind and categories.
         - "categories": the analytical categories, ALL of them (every page) —
           `{id, label, category_group, analytical_code, ledger_account}`; with
           `category_group_id`, those of ONE axis only. The ids to pass to
-          `op="categorize"` of `pennylane_invoice`, `pennylane_supplier_invoice` and
-          `pennylane_ledger_entry`.
+          `op="categorize"` of `pennylane_invoice`, `pennylane_supplier_invoice`,
+          `pennylane_ledger_entry` and `pennylane_bank`. "category" (`category_id`):
+          ONE category. Creating or changing axes, categories, journals, accounts
+          and products is `pennylane_ref_edit`.
         - "invoice_templates": invoicing templates. The template drives the PDF
           RENDERING — notably the "Avoir" (credit note) template (without payment/IBAN block), the only API
           way to get the credit-note rendering: pass its id as
@@ -124,13 +138,22 @@ def register(mcp: FastMCP) -> None:
           product_id: read it here. Beware of near-homonymous labels (e.g.
           two "credit …" products): choose on the full record (price,
           unit), not on the start of the name.
+        - "numberings": the document numbering per type (`kind`, `number_prefix`,
+          `next_number`); a type never set up is absent — finalizing an invoice
+          FAILS without the invoice numbering. Set up in the Pennylane app only.
+        - "features": which gated features the company can use NOW
+          (installments, custom_fields, products_and_services_catalog): read it
+          before an action a feature gates, rather than reading a 403 as a scope.
 
         Args:
             kind: the desired reference data (see above).
             product_id: kind="products" — the record of a single product.
-            category_group_id: kind="categories" — the categories of ONE axis.
+            category_group_id: kind="categories" — the categories of ONE axis;
+                kind="category_group" — that axis.
+            category_id / journal_id / ledger_account_id: kind="category" /
+                "journal" / "ledger_account".
             max_pages: pagination limit (paginated kinds: products,
-                invoice_templates, category_groups, categories).
+                invoice_templates, category_groups, categories, numberings).
         """
         c = _client()
         if kind == "company":
@@ -139,6 +162,18 @@ def register(mcp: FastMCP) -> None:
             return c.get_fiscal_years()
         if kind == "ledger_accounts":
             return c.get_ledger_accounts()
+        if kind == "ledger_account":
+            return c.get_ledger_account(_need(ledger_account_id, "ledger_account_id", kind))
+        if kind == "journal":
+            return c.get_journal(_need(journal_id, "journal_id", kind))
+        if kind == "category_group":
+            return c.get_category_group(_need(category_group_id, "category_group_id", kind))
+        if kind == "category":
+            return c.get_category(_need(category_id, "category_id", kind))
+        if kind == "numberings":
+            return c.list_numberings(max_pages=max_pages)
+        if kind == "features":
+            return c.get_company_features()
         if kind == "journals":
             return c.get_journals(max_pages=max_pages)
         if kind == "category_groups":
@@ -152,17 +187,24 @@ def register(mcp: FastMCP) -> None:
                 return c.get_product(product_id)
             return c.list_products(max_pages=max_pages)
         raise _bad("kind must be 'company', 'fiscal_years', 'ledger_accounts', "
-                   "'journals', 'category_groups', 'categories', 'invoice_templates' "
-                   "or 'products'")
+                   "'ledger_account', 'journals', 'journal', 'category_groups', "
+                   "'category_group', 'categories', 'category', 'invoice_templates', "
+                   "'products', 'numberings' or 'features'")
 
     # --- customers -----------------------------------------------------------
 
     @mcp.tool()
     def pennylane_customer(
-        op: Literal["list", "find", "create", "update"] = "list",
+        op: Literal["list", "find", "get", "create", "update", "create_individual",
+                    "update_individual", "contacts", "contact", "create_contact",
+                    "update_contact", "delete_contact"] = "list",
         customer_id: Optional[int] = None,
+        contact_id: Optional[int] = None,
         external_reference: Optional[str] = None,
         name: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        email: Optional[str] = None,
         address: Optional[str] = None,
         postal_code: Optional[str] = None,
         city: Optional[str] = None,
@@ -171,7 +213,7 @@ def register(mcp: FastMCP) -> None:
         fields: Optional[dict] = None,
         max_pages: Optional[int] = None,
     ) -> dict | list:
-        """Pennylane customers (companies) — list, find, create, complete.
+        """Pennylane customers — companies and individuals — and their contacts.
 
         `op`:
         - "list": id + name + contact details. Used to resolve a `customer_id` from
@@ -182,6 +224,9 @@ def register(mcp: FastMCP) -> None:
           external_reference) makes `op="create"` fail with 422 "External reference
           has already been taken". Call BEFORE creating: if it exists,
           reuse its `id`. Returns the customer or `{"found": false}`.
+        - "get" (`customer_id`): ONE customer, company or individual (the
+          `customer.id` of an invoice) — name, emails, addresses, payment
+          conditions, ledger account.
         - "create": the full billing address is MANDATORY (API v2) —
           `name`, `address`, `postal_code`, `city`, `country_alpha2`. Returns the
           created customer with its `id` (to pass as `customer_id` of
@@ -190,17 +235,44 @@ def register(mcp: FastMCP) -> None:
           reg_no, billing_iban, external_reference… Typical case: Pennylane "knows"
           an imported customer but with no email or identifier — complete before
           creating the credit note.
+        - "create_individual": a PERSON, not a company — `first_name`,
+          `last_name` and the full billing address (`address`, `postal_code`,
+          `city`, `country_alpha2`) are required; `emails`, `external_reference`
+          (look it up first with op="find"), and any other field in `fields`
+          (phone, payment_conditions, billing_iban, billing_language, notes…).
+        - "update_individual" (`customer_id`, `fields`): same fields, only those
+          given change.
+        - "contacts" (`customer_id`) / "contact" (`customer_id`, `contact_id`): the
+          contacts of a customer. ⚠️ A contact is NOT an invoice recipient: invoices
+          go to the customer's `emails` (op="update"), which do not follow the
+          contacts.
+        - "create_contact" (`customer_id`, `first_name`, `last_name`, `email`, and
+          in `fields`: role, telephone_number, mobile_number).
+        - "update_contact" (`customer_id`, `contact_id`, `fields`): only the fields
+          given change; "" clears role or a phone number.
+        - "delete_contact" (`customer_id`, `contact_id`): deletes a contact — no way
+          back but recreating it: read it first (op="contact"). Its address stays
+          among the invoice recipients if it is there.
 
         Args:
-            op: "list" (default) | "find" | "create" | "update".
-            customer_id: required for op="update".
+            op: "list" (default) | "find" | "get" | "create" | "update" |
+                "create_individual" | "update_individual" | "contacts" | "contact" |
+                "create_contact" | "update_contact" | "delete_contact".
+            customer_id: required for every op but list / find / create /
+                create_individual.
+            contact_id: op="contact" / "update_contact" / "delete_contact".
+            first_name / last_name: op="create_individual" / "create_contact".
+            email: op="create_contact".
             external_reference: op="find" (search) or op="create" (source
                 trace / anti-duplicate).
             name / address / postal_code / city / country_alpha2: op="create"
-                (country_alpha2 = ISO alpha-2, default FR).
-            emails: op="create" — invoice recipients.
-            fields: op="update" — fields to update, e.g.
-                {"emails": ["x@y.fr"], "external_reference": "MM-12345"}.
+                (country_alpha2 = ISO alpha-2, default FR); the address also for
+                op="create_individual".
+            emails: op="create" / "create_individual" — invoice recipients.
+            fields: op="update" / "update_individual" / "update_contact" — fields
+                to update, e.g. {"emails": ["x@y.fr"], "external_reference":
+                "MM-12345"}; op="create_individual" / "create_contact" — the
+                optional fields.
             max_pages: op="list" — pagination limit.
         """
         c = _client()
@@ -221,15 +293,60 @@ def register(mcp: FastMCP) -> None:
             return _ecrit(lambda: c.update_customer(_need(customer_id, "customer_id", op),
                                             **(fields or {})),
                           "customer update")
-        raise _bad("op must be 'list', 'find', 'create' or 'update'")
+        if op == "get":
+            return c.get_customer(_need(customer_id, "customer_id", op))
+        if op == "contacts":
+            return c.list_customer_contacts(_need(customer_id, "customer_id", op),
+                                            max_pages=max_pages)
+        if op == "contact":
+            return c.get_customer_contact(_need(customer_id, "customer_id", op),
+                                          _need(contact_id, "contact_id", op))
+        if op == "delete_contact":
+            return _ecrit(lambda: c.delete_customer_contact(
+                _need(customer_id, "customer_id", op), _need(contact_id, "contact_id", op)),
+                "contact deletion")
+        try:
+            if op == "create_individual":
+                adresse = {"address": _need(address, "address", op),
+                           "postal_code": _need(postal_code, "postal_code", op),
+                           "city": _need(city, "city", op), "country_alpha2": country_alpha2}
+                extra = {k: v for k, v in (("emails", emails),
+                                           ("external_reference", external_reference))
+                         if v is not None}
+                return _ecrit(lambda: c.create_individual_customer(
+                    _need(first_name, "first_name", op), _need(last_name, "last_name", op),
+                    adresse, **extra, **(fields or {})), "individual customer creation")
+            if op == "update_individual":
+                return _ecrit(lambda: c.update_individual_customer(
+                    _need(customer_id, "customer_id", op), **_need(fields, "fields", op)),
+                    "individual customer update")
+            if op == "create_contact":
+                return _ecrit(lambda: c.create_customer_contact(
+                    _need(customer_id, "customer_id", op),
+                    _need(first_name, "first_name", op), _need(last_name, "last_name", op),
+                    _need(email, "email", op), **(fields or {})), "contact creation")
+            if op == "update_contact":
+                return _ecrit(lambda: c.update_customer_contact(
+                    _need(customer_id, "customer_id", op), _need(contact_id, "contact_id", op),
+                    **_need(fields, "fields", op)), "contact update")
+        except ValueError as e:      # refused by the client before any call
+            raise _bad(f"op='{op}': {e}") from e
+        raise _bad("op must be 'list', 'find', 'get', 'create', 'update', "
+                   "'create_individual', 'update_individual', 'contacts', 'contact', "
+                   "'create_contact', 'update_contact' or 'delete_contact'")
 
     # --- SALES invoices + credit notes (draft-first, supervision) ------------
 
     @mcp.tool()
     def pennylane_invoice(
-        op: Literal["list", "find", "create", "credit_note", "update",
-                    "finalize", "delete", "categories", "categorize"] = "list",
+        op: Literal["list", "find", "get", "create", "credit_note", "update",
+                    "finalize", "delete", "categories", "categorize", "payments",
+                    "installments", "matched_transactions", "appendices",
+                    "header_fields", "mark_paid", "mark_installment_paid",
+                    "unmatch_transaction"] = "list",
         invoice_id: Optional[int] = None,
+        installment_id: Optional[int] = None,
+        transaction_id: Optional[int] = None,
         customer_id: Optional[int] = None,
         date: Optional[str] = None,
         deadline: Optional[str] = None,
@@ -256,6 +373,22 @@ def register(mcp: FastMCP) -> None:
           filter: EXHAUSTIVE (an invoice's age or archiving does not
           hide it) and reliable — an upstream outage raises instead of reading as
           "none". Returns the invoice or `{"found": false}`.
+        - "get" (`invoice_id`): ONE invoice or credit note — status, `paid`,
+          `remaining_amount_with_tax`, amounts, customer, lines, `public_file_url`.
+        - "payments" / "installments" / "matched_transactions" / "appendices" /
+          "header_fields" (`invoice_id`): the payments recorded on it, its
+          installments by deadline (their `id`s for op="mark_installment_paid"),
+          the bank transactions matched to it (undo one with
+          op="unmatch_transaction"), its appended files, its custom header fields.
+        - "unmatch_transaction" (`invoice_id`, `transaction_id`): undoes
+          `pennylane_match` — the invoice may read unpaid or late again, and
+          Pennylane may remind the customer. Restore it with `pennylane_match`.
+        - "mark_paid" (`invoice_id`) / "mark_installment_paid" (`invoice_id`,
+          `installment_id`): marks the invoice, or one installment, PAID — once
+          every installment is paid, the invoice is. ⚠️ No transaction is matched
+          and the API offers NO way back: when the money is on the bank account,
+          match the transaction instead (`pennylane_match`). Installments need a
+          plan that has them (`pennylane_ref(kind="features")`), else 403.
         - "create": sales invoice as a **draft**. The customer must exist
           (`pennylane_customer`).
         - "credit_note": **standalone** credit note as a draft (v2 convention:
@@ -302,10 +435,16 @@ def register(mcp: FastMCP) -> None:
         `quantity` = number (never a string).
 
         Args:
-            op: "list" (default) | "find" | "create" | "credit_note" | "update" |
-                "finalize" | "delete" | "categories" | "categorize".
-            invoice_id: required for update / finalize / delete /
-                categories / categorize.
+            op: "list" (default) | "find" | "get" | "create" | "credit_note" |
+                "update" | "finalize" | "delete" | "categories" | "categorize" |
+                "payments" | "installments" | "matched_transactions" | "appendices" |
+                "header_fields" | "mark_paid" | "mark_installment_paid" |
+                "unmatch_transaction".
+            invoice_id: required for every op but list / find / create /
+                credit_note.
+            installment_id: op="mark_installment_paid" — from op="installments".
+            transaction_id: op="unmatch_transaction" — from
+                op="matched_transactions".
             customer_id: required for create / credit_note.
             date: issue date of the invoice / credit note (YYYY-MM-DD).
             deadline: due date (YYYY-MM-DD).
@@ -322,7 +461,8 @@ def register(mcp: FastMCP) -> None:
                 set after creation (2nd call), never at create.
             fields: op="update" — fields to update.
             categories: op="categorize" — `[{"id", "weight"}]`, replaces everything.
-            max_pages: op="list" — bounds the pagination (⚠️ see above).
+            max_pages: op="list" — bounds the pagination (⚠️ see above); also the
+                other list ops.
         """
         c = _client()
         if op == "list":
@@ -364,9 +504,34 @@ def register(mcp: FastMCP) -> None:
         if op in ("categories", "categorize"):
             return _analytique(c, op, "customer_invoice",
                                _need(invoice_id, "invoice_id", op), categories)
-        raise _bad("op must be 'list', 'find', 'create', 'credit_note', 'update', "
-                   "'finalize', 'delete', 'categories' or 'categorize' — sending is "
-                   "`pennylane_act`")
+        listes = {"payments": c.list_customer_invoice_payments,
+                  "installments": c.list_customer_invoice_installments,
+                  "matched_transactions": c.list_customer_invoice_matched_transactions,
+                  "appendices": c.list_customer_invoice_appendices,
+                  "header_fields": c.list_customer_invoice_custom_header_fields}
+        if op in listes:
+            return listes[op](_need(invoice_id, "invoice_id", op), max_pages=max_pages)
+        if op == "get":
+            return c.get_customer_invoice(_need(invoice_id, "invoice_id", op))
+        if op == "mark_paid":
+            return _ecrit(lambda: c.mark_customer_invoice_paid(
+                _need(invoice_id, "invoice_id", op)), "marking the invoice paid")
+        if op == "mark_installment_paid":
+            return _ecrit(lambda: c.mark_customer_invoice_installment_paid(
+                _need(invoice_id, "invoice_id", op),
+                _need(installment_id, "installment_id", op)),
+                "marking the installment paid")
+        if op == "unmatch_transaction":
+            return _ecrit(lambda: c.unmatch_customer_invoice_transaction(
+                _need(invoice_id, "invoice_id", op),
+                _need(transaction_id, "transaction_id", op)),
+                "removing the bank/invoice match")
+        raise _bad("op must be 'list', 'find', 'get', 'create', 'credit_note', 'update', "
+                   "'finalize', 'delete', 'categories', 'categorize', 'payments', "
+                   "'installments', 'matched_transactions', 'appendices', "
+                   "'header_fields', 'mark_paid', 'mark_installment_paid' or "
+                   "'unmatch_transaction' — sending "
+                   "is `pennylane_act`")
 
     @mcp.tool(annotations=ACTE)
     def pennylane_act(op: Literal["send_invoice"], invoice_id: int) -> dict:
@@ -388,13 +553,20 @@ def register(mcp: FastMCP) -> None:
     # --- purchases: suppliers + supplier invoices ----------------------------
 
     @mcp.tool()
-    def pennylane_supplier(op: Literal["list", "create"] = "list",
+    def pennylane_supplier(op: Literal["list", "get", "create", "update"] = "list",
+                           supplier_id: Optional[int] = None,
                            name: Optional[str] = None,
                            fields: Optional[dict] = None,
                            max_pages: Optional[int] = None) -> dict | list:
         """Pennylane suppliers.
 
         `op`:
+        - "get" (`supplier_id`): ONE supplier.
+        - "update" (`supplier_id`, `fields`): name, reg_no (SIREN), establishment_no
+          (SIRET), vat_number, postal_address, emails, iban, external_reference,
+          supplier_payment_method, supplier_due_date_delay, supplier_due_date_rule;
+          only the fields given change, null clears establishment_no and the
+          payment settings.
         - "list": id + name. Used to find the `supplier_id` of an EXISTING
           supplier to reuse in `pennylane_supplier_invoice(op="import")` (which
           requires a supplier_id). Paginated.
@@ -402,9 +574,10 @@ def register(mcp: FastMCP) -> None:
           supplier. Returns the created supplier (with its id).
 
         Args:
-            op: "list" (default) | "create".
+            op: "list" (default) | "get" | "create" | "update".
+            supplier_id: op="get" / "update".
             name: op="create" — company name (mandatory).
-            fields: op="create" — other optional Pennylane fields (e.g.
+            fields: op="create" / "update" — other Pennylane fields (e.g.
                 {"vat_number": "FR…", "reg_no": "123456789",
                 "emails": ["compta@exemple.fr"]}).
             max_pages: op="list" — pagination limit.
@@ -415,7 +588,16 @@ def register(mcp: FastMCP) -> None:
         if op == "create":
             return _ecrit(lambda: c.create_supplier(_need(name, "name", op), **(fields or {})),
                           "supplier creation")
-        raise _bad("op must be 'list' or 'create'")
+        if op == "get":
+            return c.get_supplier(_need(supplier_id, "supplier_id", op))
+        if op == "update":
+            try:
+                return _ecrit(lambda: c.update_supplier(
+                    _need(supplier_id, "supplier_id", op), **_need(fields, "fields", op)),
+                    "supplier update")
+            except (ValueError, TypeError) as e:   # unknown field, refused before the call
+                raise _bad(f"op='update': {e}") from e
+        raise _bad("op must be 'list', 'get', 'create' or 'update'")
 
     @mcp.tool()
     def pennylane_upload_file(source: dict, account: Optional[str] = None) -> dict:

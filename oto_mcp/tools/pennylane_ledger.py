@@ -29,7 +29,8 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def pennylane_ledger_entry(
         op: Literal["list", "get", "lines", "lettered", "create",
-                    "update", "categories", "categorize"] = "list",
+                    "update", "categories", "categorize", "search_lines", "line",
+                    "documents"] = "list",
         entry_id: Optional[int] = None,
         line_id: Optional[int] = None,
         clauses: Optional[list] = None,
@@ -71,10 +72,17 @@ def register(mcp: FastMCP) -> None:
                 "categories" — the ANALYTICAL categories of the LINE `line_id`,
                     each with its `weight`;
                 "categorize" — REPLACES all the analytical categories of the LINE
-                    `line_id` with `categories` (see below).
-            entry_id: entry id — required by "get" and "lines".
+                    `line_id` with `categories` (see below);
+                "search_lines" — entry LINES across ALL entries, filtered with
+                    `clauses` on `id`, `journal_id`, `ledger_account_id`,
+                    `ledger_entry_id`, `date` (all operators): the lines of one
+                    account over a period. ⚠️ Without `clauses`, the whole ledger;
+                "line" — ONE line by its `line_id`;
+                "documents" — the documents attached to the entry `entry_id`
+                    (`{id, name, url}`), the receipts it was booked from.
+            entry_id: entry id — required by "get", "lines" and "documents".
             line_id: id of an entry LINE (from op="lines") — required by
-                "lettered", "categories" and "categorize".
+                "lettered", "line", "categories" and "categorize".
             clauses: server-side filter, list of `{"field", "operator", "value"}`.
                 Filterable fields: `id`, `date`, `journal_id`. Operators:
                 `lt`, `lteq`, `gt`, `gteq`, `eq`, `not_eq`, plus `in` and
@@ -129,8 +137,19 @@ def register(mcp: FastMCP) -> None:
         if op in ("categories", "categorize"):
             return _analytique(c, op, "ledger_entry_line",
                                _need(line_id, "line_id", op), categories)
+        if op == "search_lines":
+            try:
+                return c.search_ledger_entry_lines(filter=clauses, max_pages=max_pages)
+            except ValueError as e:      # malformed clauses, refused before the call
+                raise _bad(f"op='search_lines': {e}") from e
+        if op == "line":
+            return c.get_ledger_entry_line(_need(line_id, "line_id", op))
+        if op == "documents":
+            return c.list_ledger_entry_documents(_need(entry_id, "entry_id", op),
+                                                 max_pages=max_pages)
         raise _bad("op must be 'list', 'get', 'lines', 'lettered', 'create', "
-                   "'update', 'categories' or 'categorize'")
+                   "'update', 'categories', 'categorize', 'search_lines', 'line' or "
+                   "'documents'")
 
     @mcp.tool()
     def pennylane_ledger_lettering(

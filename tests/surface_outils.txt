@@ -686,21 +686,25 @@ payfit_payroll	accounting accounting_export gross_by_contract payment_file statu
 payfit_payslip	download list overtime	68946ff7d9ba68cd
 payfit_worked_time	-	9c76b7fe8c251ffc
 pennylane_act	send_invoice	f3d35e44cf6ac888
+pennylane_bank	account categorize_transaction create_transaction establishments matched_invoices transaction transaction_categories update_transaction	43a1f09557c646af
 pennylane_bank_accounts	-	9d4b36579cf375f3
-pennylane_customer	create find list update	fba54f52a5e41ebb
+pennylane_customer	contact contacts create create_contact create_individual delete_contact find get list update update_contact update_individual	1ab6fbff4cb48b3f
+pennylane_export	get start	20e8403ef6938994
 pennylane_firm_companies	-	1c4a387e960cc792
 pennylane_firm_create_folder	-	d6db13cbe52ee25c
 pennylane_firm_tree	-	221ec1de74101035
 pennylane_firm_upload_url	-	fd5a59ae24f1d240
 pennylane_firm_upload_urls	-	a3a802d2464748ff
-pennylane_invoice	categories categorize create credit_note delete finalize find list update	f3a3c05d85bbd3b3
-pennylane_ledger_entry	categories categorize create get lettered lines list update	60666e4ea5428dfc
+pennylane_invoice	appendices categories categorize create credit_note delete finalize find get header_fields installments list mark_installment_paid mark_paid matched_transactions payments unmatch_transaction update	b688130b7e3d5dee
+pennylane_ledger_entry	categories categorize create documents get lettered line lines list search_lines update	38940888aced5922
 pennylane_ledger_lettering	set unset	152e344fa475c998
 pennylane_match	-	5e24820c5984fc85
-pennylane_quote	create get lines list pdf set_status to_invoice	0aa9ee62b479c3d3
-pennylane_ref	-	d6a959efb5f2c77d
-pennylane_supplier	create list	af11225dfa9ed38f
-pennylane_supplier_invoice	categories categorize get import lines list update validate	0bcb3f31641ce3ae
+pennylane_quote	appendices create get lines list pdf set_status to_invoice	c86170759f9a58e1
+pennylane_records	-	bae76035cc1feb6d
+pennylane_ref	-	08faf6bb2ffbd5cd
+pennylane_ref_edit	create_category create_category_group create_journal create_ledger_account update_category update_category_group update_ledger_account update_product	38cf30951a6ed988
+pennylane_supplier	create get list update	27bd24aed76131fe
+pennylane_supplier_invoice	categories categorize get import lines list matched_transactions payment_status payments unmatch_transaction update validate	7298a0e54edb69eb
 pennylane_transactions	-	d270045bd64ca471
 pennylane_trial_balance	-	1ca5da1233f240cb
 pennylane_upload_file	-	9bfb34823fe469c1

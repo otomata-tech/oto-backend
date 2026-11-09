@@ -132,6 +132,18 @@ def _medecin_agents() -> Fonction:
     return medecin_agents.run_medecin_agents_loop
 
 
+def _alertes_slack_agents() -> Fonction:
+    from . import alertes_slack_agents
+    return alertes_slack_agents.run_alertes_slack_loop
+
+
+def _alertes_slack_agents_armee() -> bool:
+    """Le réglage d'instance des alertes Slack d'agents (`alertes_slack_agents.actives`,
+    lu par `interrupteurs.oui_non` : une valeur illisible lève)."""
+    from . import alertes_slack_agents
+    return alertes_slack_agents.actives()
+
+
 def _runner_tick_arme() -> bool:
     from . import runner_tick
     return runner_tick.enabled()
@@ -221,6 +233,11 @@ BOUCLES: tuple[Boucle, ...] = (
     Boucle(nom="medecin_agents", tiers=True,
            armee=_allumee_si_declaree("OTO_MEDECIN_AGENTS_ENABLED"),
            fonction=_medecin_agents),
+    # Prévient une org SUR SLACK qu'un de ses agents ne fonctionne plus, qu'il a été
+    # réparé, qu'il refonctionne (`alertes_slack_agents.py`) : POSTE chez un client, par
+    # l'app Slack de l'org. Éteinte tant qu'elle n'est pas déclarée.
+    Boucle(nom="alertes_slack_agents", tiers=True, armee=_alertes_slack_agents_armee,
+           fonction=_alertes_slack_agents),
     # Échéances d'abonnement, relances, réconciliation, factures (ADR 0043) : PRÉLÈVE
     # via Mollie. Armée par le drapeau billing ET son interrupteur propre.
     Boucle(nom="billing_runner", tiers=True,

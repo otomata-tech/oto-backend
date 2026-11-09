@@ -17,7 +17,8 @@ _INTERRUPTEURS = ("OTO_SCHEDULER_ENABLED", "OTO_EMBED_WORKER_ENABLED",
                   "OTO_FORMULA_BACKFILL_ENABLED", "OTO_TRANSCRIPTION_WORKER_ENABLED",
                   "OTO_RUNNER_TICK_ENABLED", "OTO_BILLING_RUNNER_ENABLED",
                   "OTO_HANG_WATCH_ENABLED", "OTO_CREDITS_ECHEANCES_ENABLED",
-                  "OTO_ALERTE_AGENTS_ENABLED", "OTO_MEDECIN_AGENTS_ENABLED")
+                  "OTO_ALERTE_AGENTS_ENABLED", "OTO_MEDECIN_AGENTS_ENABLED",
+                  "OTO_ALERTES_SLACK_AGENTS_ENABLED")
 _PROD, _PREPROD = config.PROD, config.PREPROD
 
 
@@ -29,6 +30,7 @@ def env(monkeypatch):
     monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
     monkeypatch.setenv("OTO_ALERTE_AGENTS_ENABLED", "1")
     monkeypatch.setenv("OTO_MEDECIN_AGENTS_ENABLED", "1")
+    monkeypatch.setenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", "1")
     monkeypatch.delenv("OTO_ENV", raising=False)
     monkeypatch.delenv("OTO_SENTRY_ENV", raising=False)
     return monkeypatch
@@ -56,11 +58,11 @@ def test_la_preprod_ne_compose_aucune_boucle_tierce(env):
     assert set(composees) == _toutes(tiers=False)
 
 
-def test_la_production_compose_les_treize(env):
+def test_la_production_compose_les_quatorze(env):
     env.setenv("OTO_ENV", _PROD)
     env.setenv("OTO_SENTRY_ENV", "production")
     composees = boucles_de_fond.composer()
-    assert len(composees) == len(boucles_de_fond.BOUCLES) == 13
+    assert len(composees) == len(boucles_de_fond.BOUCLES) == 14
     assert set(composees) == _toutes()
 
 
@@ -99,6 +101,7 @@ def test_sans_boucle_tierce_armee_la_question_nest_pas_posee(env):
     env.setenv("OTO_JEV_JOBS_WORKER_ENABLED", "0")
     env.setenv("OTO_ALERTE_AGENTS_ENABLED", "0")
     env.setenv("OTO_MEDECIN_AGENTS_ENABLED", "0")
+    env.setenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", "0")
     assert set(boucles_de_fond.composer()) == _toutes(tiers=False)
 
 
@@ -129,7 +132,7 @@ def test_les_boucles_qui_touchent_un_tiers_le_declarent():
     # Faits de code, pas de goût : l'une envoie des emails, l'autre prélève, la
     # troisième fige dans la page d'un client le lien de l'environnement qui l'a écrite.
     assert {"scheduler", "billing_runner", "transcription_worker", "jev_jobs_worker",
-            "alerte_agents_bloques", "medecin_agents"} <= {
+            "alerte_agents_bloques", "medecin_agents", "alertes_slack_agents"} <= {
         b.nom for b in boucles_de_fond.BOUCLES if b.tiers}
 
 

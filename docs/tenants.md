@@ -199,7 +199,11 @@ l'administrons) est une autre décision non prise (`tenancy.ForeignTenantDirecto
 >   ne résolvent l'org (`access.current_org`) que si le chemin la réclame
 >   (`patron_reclame`) ; sans org, aucun lien, jamais `/org//…`.
 >   Une déclaration illisible ou un type de lien inconnu refuse le démarrage
->   (`links.verifier_reglages`), jamais nos chemins par défaut en silence.
+>   (`links.verifier_reglages`), jamais nos chemins par défaut en silence. Deux types
+>   n'existent que DÉCLARÉS (`links.DECLARED_ONLY_KINDS`, sans chemin par défaut) : `app`
+>   (`/org/{org}/apps/{id}`) et `connect`, la page d'UN connecteur et de son formulaire
+>   d'ajout (`/org/{org}/connect/{connector}`), où `oto_connector op=setup_link` envoie la
+>   personne ; non déclaré, le lien retombe sur la page des connecteurs, ouverte sur la carte.
 > - **Le socle d'instructions suit le tenant** (`guides` scope `tenant`, owner = le slug) :
 >   sinon l'assistant d'un partenaire se présente sous NOTRE marque à chaque session.
 > - **La page publique d'un projet partagé suit la marque de son PROPRIÉTAIRE**

@@ -321,3 +321,19 @@ def test_le_lien_d_une_app_n_existe_que_declare(registre, monkeypatch):
     links.verifier_reglages()
     assert links.link_for("app", sub=None, org=42, id=6) == f"{config.dashboard_url()}/org/42/apps/6"
     assert links.link_for("app", sub=None, id=6) is None, "sans org, pas de lien troué"
+
+
+def test_le_lien_d_un_connecteur_seul_n_existe_que_declare(registre, monkeypatch):
+    """`connect` (la page d'UN connecteur, où `oto_connector op=setup_link` envoie la
+    personne) n'a pas de chemin par défaut : pas de lien tant que l'instance ne le
+    déclare pas ; déclaré, la garde de démarrage l'accepte et le lien se rend."""
+    monkeypatch.delenv(links.ENV_INSTANCE_PATHS, raising=False)
+    assert "connect" in links.DECLARED_ONLY_KINDS
+    assert links.link_for("connect", sub=None, org=42, connector="hunter") is None
+    monkeypatch.setenv(links.ENV_INSTANCE_PATHS,
+                       '{"connect": "/org/{org}/connect/{connector}"}')
+    links.verifier_reglages()
+    assert links.link_for("connect", sub=None, org=42, connector="hunter") == \
+        f"{config.dashboard_url()}/org/42/connect/hunter"
+    assert links.link_for("connect", sub=None, connector="hunter") is None, \
+        "sans org, pas de lien troué"

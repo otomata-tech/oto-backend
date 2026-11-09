@@ -43,6 +43,9 @@ _KNOWN: dict[str, bool] = {
     "data_review_decide": True,
     # …et le graphe d'une procédure, peint par le bundle d'un front (`procedure_app`).
     "oto_procedure_app": True,
+    # …et la carte « Connecter » d'un connecteur (`connector_app`) : un bouton qui
+    # OUVRE un lien, la face REST de la même chose étant `oto_connector op=setup_link`.
+    "oto_connector_app": True,
     # Boucle d'usage (ADR 0017) : la pile de run est session-scopée côté MCP.
     # (`feedback`, lui, est DÉJÀ une capacité — `capabilities/usage.py`.)
     "run_start": True,

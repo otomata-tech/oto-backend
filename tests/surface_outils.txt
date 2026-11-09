@@ -628,9 +628,10 @@ oto_call	-	6b4ca33383bb0eba
 oto_clear_group	-	fd3168d48576c83d
 oto_clear_org	-	fd3168d48576c83d
 oto_clear_project	-	fd3168d48576c83d
-oto_connector	force list pause recommend select unselect	af850ebd56213abb
+oto_connector	force list pause recommend select setup_link unselect	f2cc853acfe3b154
 oto_connector_access_level	clear get set	ffa2628b78fe842b
 oto_connector_activation	clear list set	7596a92524e0e798
+oto_connector_app	-	ea92db2cbafdb344
 oto_context	-	fd3168d48576c83d
 oto_disable_tool	-	1149380513abd0af
 oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_public shared_with_me unarchive update verify	ee93f6ed6a49cc89

@@ -70,6 +70,12 @@ def register_all(mcp: FastMCP) -> None:
     from . import procedure_app
     procedure_app.register(mcp)
 
+    # Connect card — a connector's name + a Connect button opening its page in the
+    # caller's product (`oto_connector op=setup_link`, visual face). Spine, prefab_ui
+    # import guarded as above.
+    from . import connector_app
+    connector_app.register(mcp)
+
     # Runs (ADR 0017) — run_start/finish verbs (spine). The run_id set in
     # session state is stamped on every tool_call by the calllog sink. No
     # external dependency.

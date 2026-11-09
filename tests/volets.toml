@@ -759,6 +759,12 @@ sources = ["oto_mcp/apollo_receiver.py", "oto_mcp/db/apollo_reveals.py"]
 tests = ["tests/**/test_apollo*.py"]
 
 [[volet]]
+nom = "carte de connexion d'un connecteur"
+# La face visuelle d'`oto_connector op=setup_link` : la carte « Connecter » (app Prefab).
+sources = ["oto_mcp/tools/connector_app.py"]
+tests = ["tests/test_connector_app.py", "tests/connectors/test_setup_link.py"]
+
+[[volet]]
 nom = "procédure de diagramme"
 sources = ["oto_mcp/procedure_diagram.py", "oto_mcp/tools/procedure_app.py"]
 tests = ["tests/**/test_procedure_diagram*.py", "tests/test_procedure_app.py"]

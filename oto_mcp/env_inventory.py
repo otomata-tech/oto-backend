@@ -199,9 +199,14 @@ _IDENTITE: tuple[Variable, ...] = (
              "Chemins des liens servis vers le tableau de bord de CETTE instance, en JSON "
              "`{type: chemin}` fusionné sur `links.DEFAULT_PATHS` (ex. "
              "`{\"table\": \"/org/{org}/tables/{id}\"}`). Vide = les chemins par défaut. "
-             "Une déclaration illisible ou un type de lien inconnu refuse le démarrage "
-             "(`links.verifier_reglages`).",
-             ("oto_mcp/links.py:95",)),
+             "Deux types n'existent que déclarés, sans chemin par défaut "
+             "(`links.DECLARED_ONLY_KINDS`) : `app` (une app plein écran, ex. "
+             "`\"/org/{org}/apps/{id}\"`) et `connect` (la page d'UN connecteur et de son "
+             "formulaire d'ajout, ex. `\"/org/{org}/connect/{connector}\"`, où "
+             "`oto_connector op=setup_link` envoie la personne ; non déclaré = la page des "
+             "connecteurs). Une déclaration illisible ou un type de lien inconnu refuse le "
+             "démarrage (`links.verifier_reglages`).",
+             ("oto_mcp/links.py:106",)),
     Variable("OTO_INVITE_BASE_URL", Classe.IDENTITE, None,
              "Base des liens d'invitation d'une org sans front déclaré "
              "(`orgs.front_base_url` gagne quand il est posé).",

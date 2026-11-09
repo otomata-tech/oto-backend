@@ -322,6 +322,7 @@ CLASSEMENT: dict[str, Table] = {
     # Partage d'une procédure par lien : le lien est à l'org de la procédure, ses
     # lecteurs suivent leur lien, le refus du résumé est à la personne.
     "process_shares": possedee(ParOrg()),
+    "procedure_comments": indirecte(Via("org_instructions", ("instruction_id",), fk=False)),
     "process_share_readers": indirecte(Via("process_shares", ("share_id",)),
                                        "un lecteur part avec le lien qu'il a lu"),
     "process_readers_digest_optouts": possedee(ParSub()),

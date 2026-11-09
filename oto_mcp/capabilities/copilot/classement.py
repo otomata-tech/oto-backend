@@ -89,7 +89,7 @@ OPS_EN_LECTURE: dict[str, frozenset] = {
 OUTILS_EN_LECTURE = frozenset({
     "oto_search", "oto_context", "oto_whoami", "oto_tool_schema", "oto_list_orgs",
     "data_rows", "data_get_schema", "data_list_datastores", "data_aggregate",
-    "data_row_history", "data_row_comments",
+    "data_row_history", "data_row_comments", "oto_procedure_comments",
 })
 #: Writes that may be remembered ("don't ask again"): the person's own workspace
 #: objects. A write to a third party always asks.

@@ -271,6 +271,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `search-and-kb.md` — `oto_search`, RRF, grains
 - `guides.md` — guides & skills d'org, procédure
 - `partages-de-procedure.md` — une procédure partagée par lien : vitrine sans le corps, lecteurs, copie, résumé quotidien
+- `commentaires-de-procedure.md` — les commentaires d'un process, à côté du corps : optionnels (aucune version, aucune écriture ne les exige), jamais servis à `op=get` ni à un agent hébergé
 - `alias-deprecies.md` — noms doublés, date de retrait
 - `onboarding-et-profil.md` — Découverte, `me.profile`
 - `unipile.md` — split compte/canaux, DSN, identités

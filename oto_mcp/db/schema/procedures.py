@@ -167,3 +167,42 @@ CREATE TABLE IF NOT EXISTS process_readers_digest_optouts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
+
+# Commentaires des personnes sur UNE procédure (`docs/commentaires-de-procedure.md`).
+#
+# À CÔTÉ de la procédure, jamais dedans : commenter ne crée pas de version, ne bloque
+# aucune écriture, et `op=get` ne les sert pas — un agent qui EXÉCUTE la procédure ne
+# les lit donc pas. `version` = la version courante au moment du commentaire, à titre
+# d'information : un commentaire ne « périme » rien et ne se résout jamais.
+#
+# Fils à la Notion : un commentaire RACINE porte `quote` — le passage du corps qu'il
+# commente (vide = la procédure entière) — et `quote_prefix`, quelques caractères qui
+# le précèdent pour départager deux occurrences ; une RÉPONSE porte `parent_id` (un
+# seul niveau) et pas de citation. Le passage n'est qu'une ancre d'affichage : un corps
+# réécrit qui ne le contient plus laisse le fil « sur une version antérieure ».
+#
+# ⚠️ `instruction_id` est un lien LOGIQUE, sans clé étrangère, pour la même raison que
+# `process_shares` : `org_instructions.id` naît dans `_init` (ALTER), après cet
+# assemblage. Une procédure supprimée laisse des commentaires orphelins, que toute
+# lecture traite comme introuvables (404). `deleted_at` : retrait doux, l'index des
+# lectures est donc PARTIEL ; l'index sur `auteur_sub` sert la fusion de comptes.
+COMMENTAIRES = """
+CREATE TABLE IF NOT EXISTS procedure_comments (
+    id BIGSERIAL PRIMARY KEY,
+    instruction_id BIGINT NOT NULL,
+    parent_id BIGINT REFERENCES procedure_comments(id) ON DELETE CASCADE,
+    version INTEGER,
+    quote TEXT,
+    quote_prefix TEXT,
+    auteur_sub TEXT,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_procedure_comments_procedure
+    ON procedure_comments (instruction_id, id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_procedure_comments_parent
+    ON procedure_comments (parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_procedure_comments_auteur
+    ON procedure_comments (auteur_sub);
+"""

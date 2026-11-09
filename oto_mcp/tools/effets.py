@@ -1241,6 +1241,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_org_monitoring": {"lire": "summary calls call connectors adoption runs run gaps tool_quality signals export agents_en_echec"},
     "oto_org_settings": {"lire": "get preview", "detruire": "set"},
     "oto_procedure": {"lire": "get list describe library_list library_get share_get share_readers", "ecrire": "create rename unarchive fork", "envoyer": "publish share_publish", "detruire": "set archive delete unpublish share_unpublish share_set"},
+    "oto_procedure_comment": "ecrire",
+    "oto_procedure_comments": "lire",
     "oto_profile": {"lire": "get", "ecrire": "update"},
     "oto_project": {"lire": "list list_templates get activity runs inventory lint", "ecrire": "create update unarchive copy link rank_link", "envoyer": "handoff publish_mcp", "detruire": "archive unlink unpublish_mcp"},
     "oto_project_files": {"lire": "list", "detruire": "delete"},

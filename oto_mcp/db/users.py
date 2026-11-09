@@ -528,6 +528,9 @@ _SUB_COLUMNS = [
     # Qui a publié le lien d'une procédure : le résumé quotidien des lecteurs lui est
     # adressé. Hors PK, sans unicité : UPDATE nu.
     ("process_shares", "created_by"),
+    # Qui a écrit un commentaire de procédure : une signature d'auteur (`mine`, le droit
+    # de retirer le sien), hors PK, indexée, UPDATE nu.
+    ("procedure_comments", "auteur_sub"),
     # l'HISTORIQUE de la personne (dossier du 23/08 — ces lignes survivaient au merge
     # rattachées à un identifiant mort, donc invisibles au compte fusionné : déroulés
     # et activité perdus de vue, déclencheurs orphelins) :

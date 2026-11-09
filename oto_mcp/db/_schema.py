@@ -72,6 +72,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.orgs.INVITATIONS_RESSOURCE,  # partage en attente d'un objet vers une adresse sans compte
     schema.recipes.RECIPES,          # recettes : connecteur → tableau sans modèle
     schema.procedures.PROCESS_SHARES,  # partage d'une procédure par lien, et ses lecteurs
+    schema.procedures.COMMENTAIRES,  # commentaires des personnes sur une procédure
     schema.usage.SIGNAL_OCCURRENCES,  # occurrences rattachées à un signal d'usage en attente
     schema.jev.JEV_JOBS,             # `jev_rows` en tâche de fond : la file des travaux
     schema.orgs.ORG_SERVICE_ACCOUNTS,  # le compte de service d'une org, porteur de ses clés

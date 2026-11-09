@@ -627,6 +627,12 @@ GET,HEAD /api/me/process-shares/{token} -> _handler
 OPTIONS /api/me/process-shares/{token} -> options_handler
 POST /api/me/process-shares/{token}/copy -> _handler
 OPTIONS /api/me/process-shares/{token}/copy -> options_handler
+GET,HEAD /api/me/processes/{guide_id}/comments -> _handler
+OPTIONS /api/me/processes/{guide_id}/comments -> options_handler
+POST /api/me/processes/{guide_id}/comments -> _handler
+OPTIONS /api/me/processes/{guide_id}/comments -> options_handler
+DELETE /api/me/processes/{guide_id}/comments/{comment_id} -> _handler
+OPTIONS /api/me/processes/{guide_id}/comments/{comment_id} -> options_handler
 GET,HEAD /api/orgs/{id}/audit-log/export -> _handler
 OPTIONS /api/orgs/{id}/audit-log/export -> options_handler
 GET,HEAD /api/orgs/{id}/monitoring/summary -> _handler

@@ -634,11 +634,13 @@ sources = [
   "oto_mcp/procedure_*.py",
   "oto_mcp/capabilities/procedure_console.py",
   "oto_mcp/capabilities/partages_procedure.py",
+  "oto_mcp/capabilities/commentaires_procedure.py",
   "oto_mcp/capabilities/node_procedure_ref.py",
   "oto_mcp/db/partages_procedure.py",
+  "oto_mcp/db/procedure_commentaires.py",
   "oto_mcp/db/schema/procedures.py",
 ]
-tests = ["tests/**/test_procedure*.py", "tests/**/test_partages_procedure*.py", "tests/**/test_node_procedure_ref.py"]
+tests = ["tests/**/test_procedure*.py", "tests/**/test_partages_procedure*.py", "tests/**/test_node_procedure_ref.py", "tests/**/test_commentaires_procedure.py"]
 
 [[volet]]
 nom = "projets"

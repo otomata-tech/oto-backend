@@ -258,6 +258,8 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     # O ; la garde org_admin de la capacité s'applique à la cible, comme ailleurs.
     ("GET", "/api/me/instructions/{slug}/share"): None,
     ("GET", "/api/me/instructions/{slug}/share/readers"): None,
+    # Les commentaires d'une procédure : le droit de LECTURE de la procédure.
+    ("GET", "/api/me/processes/{guide_id}/comments"): None,
     # Boîte à outils effective dans O (statuts, jamais un secret).
     ("GET", "/api/me/tools"): None,
     ("GET", "/api/me/tools/registry"): None,

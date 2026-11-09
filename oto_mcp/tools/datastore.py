@@ -622,10 +622,9 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def data_list_datastores() -> dict:
         """List the datastores of the active org: the org's and your teams' tables,
-        and those shared with the org or your teams — never a personal table nor one
-        shared with you as a person. Those are listed in your PERSONAL org only,
-        which also lists ALL your personal tables (whatever org they were created
-        under) and the tables shared with you as a person (`shared: true`).
+        those shared with the org or your teams, and your personal tables created in
+        it. A table shared with you as a person (`shared: true`) is listed in the org
+        it belongs to when you are a member there, otherwise in your active org.
 
         A table missing from this list is not gone: it still opens by its number
         from any org.

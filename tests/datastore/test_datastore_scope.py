@@ -271,15 +271,24 @@ def test_un_tableau_qu_on_vient_de_CREER_se_liste_la_ou_il_est_cree(monkeypatch)
 
 
 def test_dans_une_org_de_TRAVAIL_la_liste_ne_rend_ni_personnel_ni_partage_a_moi(monkeypatch):
-    """Décision du 28/09/2026 : hors de l'org perso, la liste ne demande ni mes
-    tableaux perso ni ceux partagés à moi en personne — le jeu possédé est l'org et
-    mes équipes, et les partages sont ceux faits à l'org ou à mes équipes."""
+    """Décision du 28/09/2026 : hors de l'org perso, la liste ne rend pas mes tableaux
+    perso sans org de création — le jeu possédé est l'org et mes équipes. Depuis le
+    06/11/2026, les partages faits à moi en personne sont LUS dans toute org puis
+    rangés (`ownership.partages_a_moi_ici`) : ici, un tableau d'une org dont je ne
+    suis pas membre ne sort pas."""
     rec = {}
     _wire(monkeypatch, rec, perso=5)
-    D.make_store("u1").list_datastores()
+    monkeypatch.setattr(D.ownership.org_store, "list_orgs_for_user",
+                        lambda sub: [{"org_id": 99}, {"org_id": 5}])
+    monkeypatch.setattr(D.db, "list_datastores_shared_to_user",
+                        lambda sub: rec.setdefault("to_me", []).append(sub) or [
+                            {**GRANTED, "id": 30, "owner_id": "77"},     # org extérieure
+                            {**GRANTED, "id": 31, "owner_id": "99"}])    # rangé ici
+    ids = {e["id"] for e in D.make_store("u1").list_datastores()}
     assert rec["owners"] == [("org", "99"), ("group", "5")]
     assert rec["granted_to"] == ("u1", [99], [5])
-    assert "to_me" not in rec
+    assert rec["to_me"] == ["u1"]
+    assert 31 in ids and 30 not in ids
     # Mes tableaux perso CRÉÉS dans cette org s'y listent pour moi (29/09/2026) : la
     # seconde lecture ne porte que sur moi, filtrée sur l'org de création.
     assert rec["appels"][1:] == [[("user", "u1")]]

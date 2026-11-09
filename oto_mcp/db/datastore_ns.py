@@ -340,7 +340,8 @@ def list_datastores_shared_to_user(sub: str) -> list[dict]:
     s'il s'est posé un droit sur son propre tableau."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT d.id, d.owner_type, d.owner_id, d.namespace AS datastore, d.schema, "
+            "SELECT d.id, d.owner_type, d.owner_id, d.context_org_id, "
+            "       d.namespace AS datastore, d.schema, "
             "       d.created_at, g.permission, g.granted_by "
             "FROM resource_grants g "
             "JOIN user_datastores d ON d.id::text = g.resource_id "

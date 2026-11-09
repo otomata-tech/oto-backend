@@ -32,6 +32,10 @@ def calls(monkeypatch):
     # aucun objet personnel ni partage nominatif n'y entre. Les tests d'org perso
     # passent `org=5`.
     monkeypatch.setattr(ownership.org_store, "home_org", lambda sub: 5)
+    # Mes orgs : 5 (maison) et 7. Les partages nominatifs simulés ne portent pas
+    # d'org de rangement : ils vont à la maison (06/11/2026, `projets_partages_a_moi_ici`).
+    monkeypatch.setattr(ownership.org_store, "list_orgs_for_user",
+                        lambda sub: [{"org_id": 5}, {"org_id": 7}])
     monkeypatch.setattr(ownership.db, "list_projects_granted_to",
                         lambda principals: rec["principals"].append(list(principals)) or
                         [{"id": 20, "permission": "read"},
@@ -53,11 +57,16 @@ def test_scope_parity_with_op_list(calls):
     EXACTEMENT ceux d'`oto_project op=list` (le drift de l'un ferait mentir
     « cherchable ⇔ lisible »)."""
     ownership.accessible_project_ids("u1", 7)
-    search_owners, search_principals = calls["owners"][-1], calls["principals"][-1]
+    search_owners = calls["owners"][-1]
+    # Deux lectures de grants : les principals COLLECTIFS, puis moi en personne (que
+    # `projets_partages_a_moi_ici` range par org) — `projets_recus_ici`, la source
+    # qu'`op=list` lit aussi.
+    search_principals, a_moi = calls["principals"][-2], calls["principals"][-1]
+    assert a_moi == [("user", "u1")]
 
-    # côté op=list : mêmes seams (project_list_owners + principaux_de_liste)
+    # côté op=list : mêmes seams (project_list_owners + projets_recus_ici)
     assert search_owners == ownership.project_list_owners("u1", 7)
-    assert search_principals == ownership.principaux_de_liste("u1", 7)
+    assert search_principals == ownership.proprietaires_collectifs_de_liste("u1", 7)
     assert calls["createurs"][-1] == ownership.mes_objets_ici("u1", 7)
     # org de travail : owners = org active + mes groupes ; principals = org + mes
     # groupes — JAMAIS moi (28/09/2026). Mes projets perso créés ICI passent par
@@ -75,7 +84,7 @@ def test_org_perso_ajoute_moi_comme_proprietaire_et_destinataire(calls):
     ownership.accessible_project_ids("u1", 5)
     assert calls["owners"][-1] == [("org", "5"), ("group", "3")]
     assert calls["createurs"][-1] == ("u1", 5, True)
-    assert calls["principals"][-1] == [("org", "5"), ("user", "u1"), ("group", "3")]
+    assert calls["principals"][-2:] == [[("org", "5"), ("group", "3")], [("user", "u1")]]
 
 
 def test_org_admin_sees_all_org_groups(calls, monkeypatch):
@@ -134,6 +143,10 @@ def test_each_source_gets_its_predicate(monkeypatch):
                         _cap("ds_crees_ici", [{"id": 104, "datastore": "le_mien"}]))
     monkeypatch.setattr(S.db, "list_datastores_shared_to_user",
                         _cap("ds_to_me", [{"id": 103, "datastore": "recu"}]))
+    # Les partages nominatifs passent par LE rangement des listes (06/11/2026).
+    monkeypatch.setattr(S.ownership, "partages_a_moi_ici",
+                        lambda sub, org, rows, **k: rec.setdefault("range", (sub, org))
+                        and list(rows))
     monkeypatch.setattr(S.db, "list_datastores_for_owners",
                         _cap("ds_owners_a", [{"id": 101, "datastore": "prospects"}]))
     monkeypatch.setattr(S.db, "list_datastores_granted_to",
@@ -156,7 +169,7 @@ def test_each_source_gets_its_predicate(monkeypatch):
     # perso) partagés à moi
     assert rec["ds_owners_a"][0] == [("org", "7")]
     assert rec["ds_granted_a"] == ("u1", [7], [])
-    assert rec["ds_to_me"] == ("u1",)
+    assert rec["ds_to_me"] == ("u1",) and rec["range"] == ("u1", 7)
     assert rec["createur"] == ("u1", 7) and rec["ds_crees_ici"] == (("u1", 7, True),)
     # lignes (#67 V2.1) : héritent de l'accès du datastore → scope = ids des
     # datastores accessibles (owners ∪ mes tableaux créés ici ∪ grants), JAMAIS un
@@ -173,3 +186,13 @@ def test_project_scope_restricts_to_one_project(monkeypatch):
     monkeypatch.setattr(S.db, "project_labels", lambda ids: {})
     S.search("u1", 7, "x y", scope="project", project_id=42, kinds=["page"])
     assert rec["pids"] == [42]
+
+
+def test_op_list_lit_la_meme_source_de_partages():
+    """`oto_project op=list` et la recherche lisent les partages reçus par UNE source,
+    `ownership.projets_recus_ici` (06/11/2026) : une seconde lecture dans la capacité
+    serait le drift que ce tripwire existe pour attraper."""
+    import inspect
+    src = inspect.getsource(P)
+    assert "ownership.projets_recus_ici(" in src
+    assert "list_projects_granted_to(ownership.principaux_de_liste" not in src

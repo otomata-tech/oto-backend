@@ -633,7 +633,7 @@ oto_connector_access_level	clear get set	ffa2628b78fe842b
 oto_connector_activation	clear list set	7596a92524e0e798
 oto_context	-	fd3168d48576c83d
 oto_disable_tool	-	1149380513abd0af
-oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_public shared_with_me unarchive update verify	550bb83c4138dacf
+oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_public shared_with_me unarchive update verify	ee93f6ed6a49cc89
 oto_doc_app	-	380bde4997dd0aa4
 oto_enable_tool	-	1149380513abd0af
 oto_fleet	ack_stop beat create get launch list state stop take update	5c192086a0806dea
@@ -654,7 +654,7 @@ oto_org_monitoring	adoption agents_en_echec call calls connectors export gaps ru
 oto_org_settings	get preview set	37968967330ab34e
 oto_procedure	archive create delete describe fork get library_get library_list list publish rename set share_get share_publish share_readers share_set share_unpublish unarchive unpublish	95e5d9b6e91cef3a
 oto_profile	get update	bcb6908e4296dc31
-oto_project	activity archive copy create get handoff inventory link lint list list_templates publish_mcp rank_link runs unarchive unlink unpublish_mcp update	8f37558f99ee9873
+oto_project	activity archive copy create get handoff inventory link lint list list_templates publish_mcp rank_link runs unarchive unlink unpublish_mcp update	d53f31522995698f
 oto_project_files	delete list	21fe316bf162e607
 oto_recipe	create describe get list propose publish run sample test versions	ede9e37c55ae35be
 oto_resource	get list share transfer unshare	40a9d7eaa2b6e5f8

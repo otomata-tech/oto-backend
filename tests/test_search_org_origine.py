@@ -16,9 +16,10 @@ contenu d'une autre org comme appartenant à A, il ment au client. La première 
 
 Base réelle, chemin servi (`me.search`, la capacité derrière `oto_search`).
 
-Depuis la décision du 28/09/2026 (ADR 0030 §9), ce qui est à MOI ou partagé à MOI en
-personne ne se cherche plus que depuis mon org PERSO (`perso`) : les cas qui en
-dépendent y sont rejoués, et l'org d'origine y reste celle de l'objet.
+Depuis la décision du 28/09/2026 (ADR 0030 §9), ce qui est à MOI ne se cherche que depuis
+ma maison (`perso`). Depuis le 06/11/2026, un PROJET partagé à MOI en personne se cherche
+depuis l'org où il est rangé quand j'en suis membre (`ownership.projets_partages_a_moi_ici`) ;
+l'org d'origine reste celle de l'objet.
 """
 from __future__ import annotations
 
@@ -122,31 +123,34 @@ def test_tableau_personnel_ne_d_ici_mais_inconnu(monde):
 
 
 def test_projet_personnel_d_une_autre_org_par_son_context_org(monde):
-    out = _cherche(MOI, monde["perso"], kinds=["page", "brief"])
-    assert _origines(out, "page")[monde["p"]["perso_b"]] == (monde["b"], True)
-    assert _origines(out, "brief")[monde["p"]["perso_b"]] == (monde["b"], True)
-    # Partagé à MOI en personne : il ne se cherche pas depuis l'org A.
-    dans_a = _cherche(MOI, monde["a"], kinds=["page", "brief"])
-    assert monde["p"]["perso_b"] not in _origines(dans_a, "page")
+    """06/11/2026 : un projet partagé à MOI en personne se cherche depuis l'org où il est
+    rangé (B, son `context_org_id`) quand j'en suis membre — plus depuis ma maison, qui
+    est une org ordinaire depuis la fin de l'org perso (`projets_partages_a_moi_ici`)."""
+    out = _cherche(MOI, monde["b"], kinds=["page", "brief"])
+    assert _origines(out, "page")[monde["p"]["perso_b"]] == (monde["b"], False)
+    assert _origines(out, "brief")[monde["p"]["perso_b"]] == (monde["b"], False)
+    for org in (monde["a"], monde["perso"]):
+        ailleurs = _cherche(MOI, org, kinds=["page", "brief"])
+        assert monde["p"]["perso_b"] not in _origines(ailleurs, "page"), org
 
 
 def test_projet_d_un_collegue_de_la_meme_org_partage_reste_d_ici(monde):
+    """Partagé à MOI en personne, le projet d'un collègue de A se cherche depuis A, où
+    il vit (06/11/2026), et y dit qu'il est d'ici — plus depuis ma maison."""
     pages = _origines(_cherche(MOI, monde["a"], kinds=["page"]), "page")
     assert pages[monde["p"]["org_a"]] == (monde["a"], False)
-    # Partagé à MOI en personne : trouvé depuis mon org perso (28/09/2026), et il y
-    # dit toujours l'org où il vit — A, pas l'org d'où on cherche.
-    assert monde["p"]["collegue_a"] not in pages
+    assert pages[monde["p"]["collegue_a"]] == (monde["a"], False)
     pages = _origines(_cherche(MOI, monde["perso"], kinds=["page"]), "page")
-    assert pages[monde["p"]["collegue_a"]] == (monde["a"], True)
+    assert monde["p"]["collegue_a"] not in pages
 
 
 def test_admin_et_membre_lisent_la_meme_org(monde):
-    """Le projet du pôle : partage pour MOI (trouvé depuis mon org perso, 28/09/2026),
-    propriété pour l'admin (depuis A) — la même org d'origine."""
+    """Le projet du pôle : partage pour MOI, propriété pour l'admin — trouvé depuis A
+    par les deux (06/11/2026), avec la même org d'origine."""
     pid = monde["p"]["pole_a"]
-    moi = _origines(_cherche(MOI, monde["perso"], kinds=["page"]), "page")
+    moi = _origines(_cherche(MOI, monde["a"], kinds=["page"]), "page")
     admin = _origines(_cherche(ADMIN, monde["a"], kinds=["page"]), "page")
-    assert moi[pid][0] == admin[pid][0] == monde["a"]
+    assert moi[pid] == admin[pid] == (monde["a"], False)
 
 
 def test_scope_projet_sur_un_projet_recu_d_ailleurs(monde):

@@ -11,7 +11,7 @@ import logging
 import os
 import re
 from datetime import date, datetime, timezone
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 import psycopg
 
@@ -95,6 +95,19 @@ def get_project_by_id(project_id: int) -> Optional[dict]:
             f"SELECT {_PROJECT_COLS} FROM projects WHERE id = %s", (project_id,),
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_projects_by_ids(project_ids: Iterable[int]) -> dict[int, dict]:
+    """`get_project_by_id` pour un LOT — une requête, pas une par projet. Les ids absents
+    manquent au dict (archivés compris, comme `get_project_by_id`)."""
+    ids = sorted({int(i) for i in project_ids})
+    if not ids:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_PROJECT_COLS} FROM projects WHERE id = ANY(%s)", (ids,),
+        ).fetchall()
+        return {int(r["id"]): dict(r) for r in rows}
 
 
 def list_projects_for_owners(owners: list[tuple[str, str]], *,

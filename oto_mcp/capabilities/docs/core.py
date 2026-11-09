@@ -58,8 +58,10 @@ class DocInput(BaseModel):
     # durcit pas en place.
     scope: Optional[Literal["me", "org"]] = Field(default=None, description=(
         "shared_with_me only: `me` = pages shared with YOU as a person; `org` = pages "
-        "shared with the organization you are acting in (and your teams in it) — in "
-        "your PERSONAL org, those shared with you as a person too. Omitted = both, "
+        "shared with the organization you are acting in (and your teams in it), plus "
+        "those shared with you as a person whose project belongs to that organization "
+        "(or, when you are not a member of the project's organization, to your active "
+        "one). Omitted = both, "
         "across all your organizations. Served in any organization."))
     # list (#1087) : True = remontre aussi les pages ARCHIVÉES (retirées par défaut).
     include_archived: Optional[bool] = None

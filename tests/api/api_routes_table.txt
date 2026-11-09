@@ -211,6 +211,14 @@ POST /api/admin/instances/{instance_id:int}/health -> _handler
 OPTIONS /api/admin/instances/{instance_id:int}/health -> options_handler
 GET,HEAD /api/admin/vault/health -> _handler
 OPTIONS /api/admin/vault/health -> options_handler
+GET,HEAD /api/orgs/{id}/agent-alerts -> _handler
+OPTIONS /api/orgs/{id}/agent-alerts -> options_handler
+PUT /api/orgs/{id}/agent-alerts -> _handler
+OPTIONS /api/orgs/{id}/agent-alerts -> options_handler
+GET,HEAD /api/orgs/{id}/agent-alerts/channels -> _handler
+OPTIONS /api/orgs/{id}/agent-alerts/channels -> options_handler
+POST /api/orgs/{id}/agent-alerts/test -> _handler
+OPTIONS /api/orgs/{id}/agent-alerts/test -> options_handler
 GET,HEAD /api/admin/platform-keys/balances -> _handler
 OPTIONS /api/admin/platform-keys/balances -> options_handler
 GET,HEAD /api/admin/platform-keys/model-spend -> _handler

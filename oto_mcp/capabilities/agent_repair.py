@@ -58,6 +58,21 @@ class AgentRepairInput(BaseModel):
     tool: Optional[str] = Field(default=None, max_length=120, description=(
         "add_tool: the ONE tool to give the agent — only a READ tool its procedure or a "
         "published recipe it runs already calls (`missing_tools` on op=get)."))
+    client_headline: Optional[str] = Field(default=None, max_length=300, description=(
+        "diagnose, owner-side: what went wrong, ONE plain sentence for the client in the "
+        "workspace's language — no tool names, codes or ids. Shown on the agent in the "
+        "app and sent on Slack (\"Depuis le 7/11, l'agent ne peut plus ajouter de leads "
+        "dans l'outil d'emailing : la clé API a été créée par un compte qui n'est plus "
+        "dans votre équipe.\"). Only when this instance sends agent alerts."))
+    client_todo: Optional[str] = Field(default=None, max_length=400, description=(
+        "diagnose, owner-side: the exact step the client takes, one or two sentences "
+        "(\"Créez une nouvelle clé API dans l'outil et collez-la dans Connecteurs.\")."))
+    client_link: Optional[str] = Field(default=None, max_length=500, description=(
+        "diagnose: where they do it — a path of the client's dashboard "
+        "(`/org/270/connectors`) or a URL ON that dashboard; any other address is "
+        "refused. Becomes the message's button."))
+    client_action: Optional[Literal["credits", "connectors"]] = Field(default=None, description=(
+        "diagnose: the gesture, when it is one of these."))
     client_note: Optional[str] = Field(default=None, max_length=300, description=(
         "add_tool: what you changed, in ONE plain sentence for the client, in the "
         "workspace's language, no tool names or codes (\"Nous avons ajouté la recherche "
@@ -173,6 +188,27 @@ def _ajouter_un_outil(ctx: ResolvedCtx, ep: dict, inp: AgentRepairInput) -> dict
     return {"episode": ep, "agent": _contexte(ep)[0]}
 
 
+def _valider_le_message_client(ep: dict, client: dict) -> None:
+    """Les champs `client_*` de `diagnose` : seulement si l'instance envoie des alertes
+    d'agents (`alertes_slack_agents.actives`) ; `client_headline` exigé avec les autres ;
+    `client_link` limité au tableau de bord du titulaire de l'agent
+    (`links.lien_de_l_instance`) — un lien qui mène ailleurs est refusé."""
+    from .. import alertes_slack_agents, links
+    if not alertes_slack_agents.actives():
+        raise AuthzDenied(400, "agent_alerts_off",
+                          "`client_*` : cette instance n'envoie pas d'alertes d'agents.")
+    if not client["headline"]:
+        raise AuthzDenied(400, "client_headline_required",
+                          "`client_headline` est requis avec les autres `client_*`.")
+    if client["link"]:
+        t = db.get_trigger(int(ep["trigger_id"]), int(ep["org_id"]))
+        sub = (t or {}).get("sub")
+        if links.lien_de_l_instance(client["link"], sub=sub) is None:
+            raise AuthzDenied(400, "client_link_off_instance",
+                              "`client_link` : un chemin ou une adresse du tableau de bord "
+                              "du client seulement.")
+
+
 def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
     from .. import medecin_agents
     from ..db import episodes_agents
@@ -221,11 +257,20 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
                 "refus": refus}
 
     if inp.op == "diagnose":
-        if not (inp.diagnostic or inp.classe or inp.cote):
+        client = {"headline": inp.client_headline, "todo": inp.client_todo,
+                  "link": inp.client_link, "action": inp.client_action}
+        if not (inp.diagnostic or inp.classe or inp.cote or any(client.values())):
             raise AuthzDenied(400, "nothing_to_record",
-                              "`diagnostic`, `classe` ou `cote` : au moins un.")
-        return {"episode": episodes_agents.poser(
-            int(ep["id"]), diagnostic=inp.diagnostic, classe=inp.classe, cote=inp.cote)}
+                              "`diagnostic`, `classe`, `cote` ou `client_*` : au moins un.")
+        if any(client.values()):
+            _valider_le_message_client(ep, client)
+        if inp.diagnostic or inp.classe or inp.cote:
+            episodes_agents.poser(int(ep["id"]), diagnostic=inp.diagnostic,
+                                  classe=inp.classe, cote=inp.cote)
+        if any(client.values()):
+            from ..db import alertes_slack
+            alertes_slack.poser_message_client(int(ep["id"]), client)
+        return {"episode": episodes_agents.lire(int(ep["id"]))}
 
     if inp.op == "escalate":
         return {"episode": episodes_agents.poser(
@@ -258,7 +303,12 @@ CAPABILITIES += [
             "guard knows whether the dead run already wrote or sent something: a re-run "
             "redoes it) / "
             "diagnose (`diagnostic`, and/or a corrected `classe`/`cote` — kept: the "
-            "loop no longer reclassifies that episode) / escalate (hand "
+            "loop no longer reclassifies that episode; and, when this instance sends "
+            "agent alerts, for what the CLIENT must do: `client_headline` + "
+            "`client_todo` (+ `client_link` — a path or URL of the client's own "
+            "dashboard, anything else refused —, `client_action`): plain sentences in "
+            "the workspace's language, shown on the agent in the app and sent to the "
+            "org's Slack) / escalate (hand "
             "it to a human, with your `diagnostic`) / close (`resolution`). "
             "op=get also serves `missing_tools` ([{tool, called_by, read}]: what its "
             "procedure or a published recipe it runs calls and the agent lacks). ONE "

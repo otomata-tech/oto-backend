@@ -813,3 +813,21 @@ CREATE TABLE IF NOT EXISTS slack_agent_posts (
 CREATE INDEX IF NOT EXISTS idx_slack_agent_posts_created
     ON slack_agent_posts(created_at);
 """
+
+AGENT_ALERT_SETTINGS = """
+-- Où une org est prévenue qu'un de ses agents ne fonctionne plus (`alertes_slack_agents`,
+-- 09/11/2026) : sur Slack, par l'app de l'org (son connecteur Slack), dans un canal
+-- (`channel_id`) ou, sans canal, en message privé à la personne qui a connecté Slack
+-- (`dm_user`, son identifiant Slack). Une ligne par org, posée à la connexion de Slack
+-- (allumée) ou par un admin (Réglages ▸ Alertes). Aucune ligne = jamais configurée :
+-- rien ne part sur Slack, le courriel aux admins reste.
+CREATE TABLE IF NOT EXISTS agent_alert_settings (
+    org_id BIGINT PRIMARY KEY,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    channel_id TEXT,
+    channel_name TEXT,
+    dm_user TEXT,
+    dm_name TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""

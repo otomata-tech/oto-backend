@@ -31,6 +31,8 @@ import textwrap
 
 import pytest
 
+from oto_mcp.tools.decrits import OutilDecrit
+
 _DEBT_FILE = pathlib.Path(__file__).resolve().parent / "tool_output_debt.txt"
 
 # Un de ces paramètres ⟹ l'outil rend une liste par construction.
@@ -73,7 +75,10 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # le brut — `tools/zohodesk.py`).
 # 209 → 208 le 2026-10-27 : linkedin_unipile payé (URL de profil ramenée au slug, fils
 # allégeables — `tools/unipile.py`).
-_PLAFOND = 208
+# 208 → 210 le 2026-11-09, décision d'Alexis : seranking et seranking_act, servis par
+# leur description, entrent avec leur motif (cf. `tool_output_debt.txt`). Ce n'est pas un
+# critère qui blanchissait : c'est une exception tranchée, la seule à ce jour.
+_PLAFOND = 210
 
 
 def _debt() -> set[str]:
@@ -148,10 +153,23 @@ def _fields_projette(tool) -> bool:
 def _projette(tool) -> bool:
     if "full" in (tool.parameters or {}).get("properties", {}) or _fields_projette(tool):
         return True
+    if isinstance(tool, OutilDecrit):
+        return _decrit_projette(tool)
     appeles = _appeles(tool.fn)
     if appeles is None:
         return False
     return any(marqueur in cible for cible in appeles for marqueur in _PROJECTION_APPELS)
+
+
+def _decrit_projette(tool) -> bool:
+    """Un outil servi par le lecteur générique (`tools/decrits.py`) n'a pas de corps à
+    lire : sa sortie est dite par sa description. Il projette si CHAQUE fonction qui
+    pagine déclare `output.projection` (les clés gardées de chaque enregistrement,
+    appliquées par la lib). `strip` ne compte pas : il retire une adresse ou un secret,
+    pas le poids d'une liste."""
+    paginent = [f for f in tool.fonctions
+                if _PAGINATION & set(f.get("input", {}).get("properties", {}))]
+    return all("projection" in (f.get("output") or {}) for f in paginent)
 
 
 def _sans_projection(tools) -> set[str]:
@@ -165,7 +183,8 @@ def test_un_outil_neuf_qui_pagine_declare_sa_projection():
         "chaque enregistrement tel que l'amont le livre, et un agent paie ce poids à "
         "chaque tour. Deux issues : exposer `full: bool = False` et resserrer le "
         "défaut (cf. `tools/aiark.py::_shape`), ou appeler `output_projection.project` "
-        "/ `summarize` dans le corps de l'outil. Ne PAS l'ajouter à "
+        "/ `summarize` dans le corps de l'outil, ou, pour un outil servi par sa description, "
+        "déclarer `output.projection` sur chaque fonction qui pagine. Ne PAS l'ajouter à "
         "`tool_output_debt.txt` : la dette ne grossit pas.")
 
 
@@ -274,3 +293,30 @@ def test_un_fields_homonyme_n_est_pas_une_projection():
                                 fields={"type": "string"})), (
         "un homonyme déclaré ne projette pas, même sous la forme d'une chaîne de noms")
     assert _projette(_Outil(_liste_brute, full={"type": "boolean"}))
+
+
+def test_un_outil_decrit_projette_par_sa_description():
+    """Le lecteur générique n'a pas de corps à lire : c'est `output.projection` de
+    chaque fonction qui pagine qui en tient lieu. Sans elle, la liste sort telle que
+    l'amont la livre, et l'outil est jugé comme un outil écrit à la main qui ne
+    projette pas."""
+    from fastmcp import FastMCP
+
+    import _decrit_d_essai as essai
+    from oto_mcp.connectors import verify as connector_verify
+    from oto_mcp.tools import decrits
+
+    def lecteur(description):
+        try:
+            outils = {t.name: t for t in decrits.monter(FastMCP("essai"), "essai", description)}
+        finally:
+            connector_verify._REGISTRY.pop("essai", None)
+            connector_verify._COUVERTURE.pop("essai", None)
+        return outils["essai"]
+
+    assert _pagine(lecteur(essai.description()))
+    assert _projette(lecteur(essai.description())), "list_things déclare sa projection"
+    sans = essai.description()
+    for f in sans["functions"]:
+        (f.get("output") or {}).pop("projection", None)
+    assert not _projette(lecteur(sans)), "strip seul ne retire pas le poids d'une liste"

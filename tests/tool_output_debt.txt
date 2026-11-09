@@ -205,6 +205,13 @@ sante_finess_search
 searchapi_search
 sellsy_ref
 sellsy_search
+# seranking, seranking_act (2026-11-09, décision d'Alexis) : servis par le lecteur générique.
+# Leurs éléments sont déjà courts (5 à 16 champs plats, presque tous promis par le texte de
+# l'outil) : `output.projection` n'en retirerait que 1 à 4. Elle ferait perdre le `total` des
+# recherches de mots-clés (`items` déballe la liste). Et `domain_keywords` rend une liste à la
+# racine, que le format ne sait pas projeter. Le poids se règle par `limit`.
+seranking
+seranking_act
 serpapi_search
 serper_maps_sample
 slack_read_history

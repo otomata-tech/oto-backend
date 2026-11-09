@@ -145,9 +145,23 @@ def _fields_projette(tool) -> bool:
     return not any(v.get("type") == "object" for v in variantes)
 
 
+def _decrit_projette(tool) -> bool:
+    """Un outil du lecteur générique (`tools/decrits.py`) n'a pas de corps à lire : ce
+    qu'il retire est écrit dans sa DESCRIPTION. Chacune de ses ops qui pagine déclare
+    `output.projection` (les clés gardées) ou `output.strip` (les clés retirées), que le
+    moteur applique avant de rendre (`oto.connectors.serve.shaped`) ; une seule qui
+    n'en déclare pas rend l'enregistrement tel que l'amont le livre."""
+    ops = tool.parameters["properties"]["op"]["enum"]
+    paginent = [f for f in (tool.servi.fonctions[op] for op in ops)
+                if _PAGINATION & set(f["input"]["properties"])]
+    return all({"projection", "strip"} & set(f.get("output") or {}) for f in paginent)
+
+
 def _projette(tool) -> bool:
     if "full" in (tool.parameters or {}).get("properties", {}) or _fields_projette(tool):
         return True
+    if getattr(tool, "servi", None) is not None:
+        return _decrit_projette(tool)
     appeles = _appeles(tool.fn)
     if appeles is None:
         return False
@@ -165,7 +179,9 @@ def test_un_outil_neuf_qui_pagine_declare_sa_projection():
         "chaque enregistrement tel que l'amont le livre, et un agent paie ce poids à "
         "chaque tour. Deux issues : exposer `full: bool = False` et resserrer le "
         "défaut (cf. `tools/aiark.py::_shape`), ou appeler `output_projection.project` "
-        "/ `summarize` dans le corps de l'outil. Ne PAS l'ajouter à "
+        "/ `summarize` dans le corps de l'outil ; pour un outil du lecteur générique, "
+        "déclarer `output.projection` (ou `strip`) sur chaque op qui pagine, dans sa "
+        "description de la lib. Ne PAS l'ajouter à "
         "`tool_output_debt.txt` : la dette ne grossit pas.")
 
 
@@ -274,3 +290,26 @@ def test_un_fields_homonyme_n_est_pas_une_projection():
                                 fields={"type": "string"})), (
         "un homonyme déclaré ne projette pas, même sous la forme d'une chaîne de noms")
     assert _projette(_Outil(_liste_brute, full={"type": "boolean"}))
+
+
+class _Decrit:
+    """Un outil décrit minimal : `_decrit_projette` lit `parameters` (l'`op`) et
+    `servi.fonctions` (la description de chaque op)."""
+
+    def __init__(self, **fonctions):
+        self.name = "decrit_de_banc"
+        self.parameters = {"properties": {"op": {"enum": list(fonctions)}, "limit": {}}}
+        self.servi = type("Servi", (), {"fonctions": {
+            n: {"name": n, "input": {"properties": props}, **({"output": out} if out else {})}
+            for n, (props, out) in fonctions.items()}})()
+
+
+def test_un_outil_decrit_se_juge_sur_sa_description():
+    """Pas de corps, pas de `fn` : la projection d'un outil décrit est celle que sa
+    description déclare, op par op — et une op qui pagine sans rien déclarer suffit
+    à le laisser rendre le brut."""
+    projetee = ({"limit": {}}, {"projection": ["id"]})
+    nue = ({"page": {}}, None)
+    sans_page = ({"id": {}}, None)
+    assert _projette(_Decrit(liste=projetee, fiche=sans_page))
+    assert not _projette(_Decrit(liste=projetee, autre=nue))

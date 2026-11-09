@@ -89,6 +89,9 @@ QUOTA_AUTORISE = {
     "elevenlabs",
     # `tests/test_pipecorn_tools.py::test_sonde` (un solde `credits.enrichment` à 0)
     "pipecorn",
+    # `tests/test_decrits.py::test_se_ranking_a_dry_account_is_a_quota_refusal_not_auth`
+    # (connecteur décrit : `subscription_info.units_left` à 0, et le 400 « Insufficient funds »)
+    "seranking",
 }
 
 

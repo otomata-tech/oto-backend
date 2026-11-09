@@ -5,7 +5,8 @@ On a described connector of test (`_decrit_d_essai`), against a fake vendor (the
 mounted on an adapter, no network): the pair and its schemas, the call with the caller's key, the named refusal,
 `strip` and `projection`, the pages, the probe, the effects and batches derived (`effect: send` and `destroy`
 included), recipes and the call log, the inscription that changes nothing else; then the real Search Console
-description, its service account key and its probe.
+description, its service account key and its probe; the real SE Ranking description, a key on both sides of the
+pair and its probe with a balance.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from oto_mcp.connectors import verify as connector_verify
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.recipes import effets as effets_recette
 from oto_mcp.tools import decrits, effets
-from oto_mcp.tools.lecture import ACTE, SIMULATION
+from oto_mcp.tools.lecture import ACTE, LECTURE, SIMULATION
 from oto.connectors import engine
 from oto.tools.common.errors import UpstreamHTTPError
 
@@ -358,7 +359,7 @@ def test_nothing_is_inscribed_but_what_decrit_builds():
     for c in providers.REGISTRY.values():
         assert (c in descriptions.inscrits()) == c.decrit, c.name
     inscrits = {c.name for c in descriptions.inscrits()}
-    assert "google_search_console" in inscrits and "amplemarket" not in inscrits
+    assert {"google_search_console", "seranking"} <= inscrits and "amplemarket" not in inscrits
 
 
 def test_the_real_amplemarket_description_is_judged():
@@ -468,3 +469,99 @@ def test_search_console_refuses_a_key_that_is_not_json(search_console, vendeur):
     with pytest.raises(engine.Refused, match="service_account_key_not_json"):
         connector_verify.probe_for("google_search_console")({"service_account_key": "not json"}, {})
     assert vendeur.requests == []
+
+
+# --- SE Ranking: one key, read and act, a probe with a balance -------------------------------------------------
+
+
+@pytest.fixture
+def se_ranking(vendeur, monkeypatch):
+    """The real description mounted as the registry inscribes it, the caller's key resolved from the vault."""
+    resolus = []
+
+    def resoudre(nom, *a, **k):
+        resolus.append(nom)
+        return "key-not-real", False
+    monkeypatch.setattr(decrits.access, "resolve_api_key", resoudre)
+    outils = {t.name: t for t in decrits.monter(FastMCP("ser"), "seranking", descriptions.charger("seranking"))}
+    yield outils, resolus
+    connector_verify._REGISTRY.pop("seranking", None)
+    connector_verify._COUVERTURE.pop("seranking", None)
+
+
+def test_se_ranking_is_inscribed_with_one_key_for_a_person_or_an_org():
+    c = providers.REGISTRY["seranking"]
+    assert (c.namespaces, c.auth_modes, c.secret_kind, c.keyed, c.decrit) == (
+        ("seranking",), frozenset({"byo_user", "byo_org"}), "api_key", True, True)
+    assert [(f.name, f.secret, f.whitespace_significant) for f in c.secret_fields] == [("key", True, False)]
+    assert "API > Dashboard" in c.secret_fields[0].help
+    assert (providers._CATEGORY_BY_CONNECTOR["seranking"], providers._LOGO_DOMAIN_BY_CONNECTOR["seranking"]) == (
+        "Marketing", "seranking.com")
+    assert descriptions.refus_de_montage(descriptions.charger("seranking")) == []
+
+
+def test_se_ranking_reads_free_and_acts_on_credits(se_ranking):
+    """What spends Data API credits, rechecks positions or starts an audit is on `seranking_act`; the rest reads."""
+    outils, _ = se_ranking
+    assert set(outils) == {"seranking", "seranking_act"}
+    d = descriptions.charger("seranking")
+    lecture = outils["seranking"].parameters["properties"]["op"]["enum"]
+    acte = outils["seranking_act"].parameters["properties"]["op"]["enum"]
+    assert {"get_subscription", "list_sites", "get_site_positions", "get_audit_report"} <= set(lecture)
+    assert {"domain_overview", "keyword_metrics", "recheck_positions", "create_audit"} <= set(acte)
+    assert len(lecture) + len(acte) == len(d["functions"]) and not set(lecture) & set(acte)
+    assert outils["seranking"].annotations == LECTURE and outils["seranking_act"].annotations == ACTE
+    assert descriptions.effets(d) == {"seranking_act": {"envoyer": " ".join(acte)}}
+
+
+def test_se_ranking_sends_the_key_as_a_token(se_ranking, vendeur):
+    outils, resolus = se_ranking
+    vendeur.answers.append((200, [{"id": 7, "name": "example.com", "guest_link": "https://share.example.test/x"}]))
+    rendu = _appel(outils["seranking"], op="list_sites")
+    assert resolus == ["seranking"]
+    assert "guest_link" not in json.dumps(rendu)
+    envoyee = essai.envoyee(vendeur.requests[0])
+    assert (envoyee["method"], envoyee["url"]) == ("GET", "https://api.seranking.com/v1/project-management/sites")
+    assert envoyee["headers"]["authorization"] == "Token key-not-real"
+
+
+def test_se_ranking_validates_each_op_against_its_own_schema(se_ranking, vendeur):
+    """`oneOf` and `dependentRequired` of an op's input are judged before anything is sent."""
+    outils, _ = se_ranking
+    with pytest.raises(McpError, match="recheck_positions"):
+        _appel(outils["seranking_act"], op="recheck_positions", site_id=1)
+    with pytest.raises(McpError, match="domain_keywords"):
+        _appel(outils["seranking_act"], op="domain_keywords", source="fr", domain="example.com", year=2026)
+    assert vendeur.requests == []
+
+
+def test_se_ranking_names_credits_exhausted(se_ranking, vendeur):
+    outils, _ = se_ranking
+    vendeur.answers.append((400, {"message": "Insufficient funds"}))
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["seranking_act"], op="domain_overview", source="fr", domain="example.com")
+    assert (refus.value.code, refus.value.status_code, refus.value.marks_account) == (
+        "credits_exhausted", 400, "quota_exhausted")
+
+
+def test_se_ranking_probe_reads_the_credits_left(se_ranking, vendeur):
+    sonde = connector_verify.probe_for("seranking")
+    assert connector_verify.couverture("seranking") == connector_verify.AUTH_QUOTA
+    vendeur.answers.append((200, {"subscription_info": {"status": "active", "units_left": 4200}}))
+    assert sonde({"key": "key-not-real"}, {}) == {"quota": {"restant": 4200, "unite": "credits", "seuil": 1}}
+    assert essai.envoyee(vendeur.requests[0])["headers"]["authorization"] == "Token key-not-real"
+    vendeur.answers.append((403, {"message": "Incorrect token"}))
+    with pytest.raises(connector_verify.NonAutorise):
+        sonde({"key": "key-not-real"}, {})
+
+
+def test_se_ranking_a_dry_account_is_a_quota_refusal_not_auth(se_ranking, vendeur):
+    """The proof `test_verify_coverage_oto57.QUOTA_AUTORISE` cites: the probe promises the quota (`AUTH_QUOTA`), so a
+    dry account RAISES — no credit left, or SE Ranking's own "Insufficient funds" — and never as a refused key."""
+    sonde = connector_verify.probe_for("seranking")
+    vendeur.answers.append((200, {"subscription_info": {"status": "active", "units_left": 0}}))
+    with pytest.raises(connector_verify.QuotaEpuise):
+        sonde({"key": "key-not-real"}, {})
+    vendeur.answers.append((400, {"message": "Insufficient funds"}))
+    with pytest.raises(connector_verify.QuotaEpuise):
+        sonde({"key": "key-not-real"}, {})

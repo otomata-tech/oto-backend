@@ -54,6 +54,15 @@ class _FakeResponse:
     def raise_for_status(self):
         return None
 
+    # Le moteur de la lib (`oto.connectors.engine`, qui sert les connecteurs décrits)
+    # lit le corps par morceaux, borné, puis ferme la réponse : sans ces deux-là, la
+    # première sonde décrite qui envoie sa requête trébuchait ici, pas sur un champ.
+    def iter_content(self, chunk_size=1):
+        yield b'{"access_token": "faux-jeton-de-banc", "expires_in": 3600}'
+
+    def close(self):
+        return None
+
 
 def _fake_fields(connector: str) -> dict:
     """Ce que `unpack_secret` rendrait pour une vraie clé de CE connecteur —

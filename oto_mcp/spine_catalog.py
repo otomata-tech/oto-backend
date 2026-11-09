@@ -146,11 +146,12 @@ SPINE_FAMILIES: tuple[SpineFamily, ...] = (
         "suit un run hébergé, `feedback` remonte un manque ou un défaut",
     ),
     SpineFamily(
-        "oto_fleet / oto_trigger",
-        ("oto_fleet", "oto_trigger"),
+        "oto_fleet / oto_trigger / oto_webhook_app",
+        ("oto_fleet", "oto_trigger", "oto_webhook_app"),
         "agents hébergés DE L'ORG (flotte oto, clé de l'org) : ce que fait passer une "
-        "flotte, sur quel tableau, et ses déclencheurs — pas les routines que "
-        "l'assistant planifie pour lui-même (→ guide `procedure-en-routine`)",
+        "flotte, sur quel tableau, et ses déclencheurs (la carte d'un webhook mène à "
+        "l'écran de son jeton) — pas les routines que l'assistant planifie pour "
+        "lui-même (→ guide `procedure-en-routine`)",
     ),
     SpineFamily(
         "oto_function",

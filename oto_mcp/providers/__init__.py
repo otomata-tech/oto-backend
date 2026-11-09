@@ -274,6 +274,9 @@ _DECLARATIONS: tuple[str, ...] = (
     # Neighbour of `posthog` by trade (audience measurement): the two cards
     # read together.
     "google_analytics",
+    # Same publisher and access (a service account), search rather than audience:
+    # the first connector served by the generic reader of its description.
+    "google_search_console",
     # Same family (product analytics) as `posthog`, read only — wired 2026-10-02.
     "amplitude",
     "snitcher",

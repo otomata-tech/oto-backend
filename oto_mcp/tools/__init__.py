@@ -92,7 +92,7 @@ def register_all(mcp: FastMCP) -> None:
 
     loaded: set[str] = set()
     for c in providers.REGISTRY.values():
-        if c.kind != "tools" or c.client:
+        if c.kind != "tools" or c.decrit:
             continue
         for mod_name in (c.modules or (c.name,)):
             if mod_name in loaded:
@@ -106,10 +106,9 @@ def register_all(mcp: FastMCP) -> None:
 
     # Described connectors (`providers._model._decrit`, decided 05/11/2026): no
     # `tools/<name>.py`, the GENERIC READER mounts their pair from the description.
-    # Outside the try/except on purpose: a description it cannot serve, or a client
-    # that does not follow it, is refused at mount — never a connector gone quiet.
-    # Imported only when one is inscribed: the reader needs the library's served
-    # descriptions (`oto.connectors.descriptions`).
-    if any(c.client for c in providers.REGISTRY.values()):
+    # Outside the try/except on purpose: a description it cannot serve is refused at
+    # mount — never a connector gone quiet. Imported only when one is inscribed: the
+    # reader needs the library's served descriptions and engine (`oto.connectors`).
+    if any(c.decrit for c in providers.REGISTRY.values()):
         from . import decrits
         decrits.register(mcp)

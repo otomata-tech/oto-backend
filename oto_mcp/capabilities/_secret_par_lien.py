@@ -54,7 +54,12 @@ def remettre(ctx: ResolvedCtx, agent: dict, secret: str) -> dict:
     if url is None:
         raison = links.raison_sans_lien("webhook", sub=ctx.sub, org=ctx.org_id,
                                         id=trigger_id)
+        # Sans page déclarée, le texte ne nomme AUCUN écran ni menu : une instance sans
+        # page n'en a pas, et un agent qui renverrait la personne vers un bouton qui
+        # n'existe pas la perdrait. Il dit le vrai : la porte reste fermée.
         out["hook_secret_missing"] = (
-            f"{raison}. The agent's owner (or an org admin) gets the token from the "
-            "agent's own screen in the product: Webhook ▸ Regenerate.")
+            f"{raison}. The token cannot be retrieved on this instance for now, so the "
+            "webhook refuses every delivery. Tell the agent's owner; do not retry "
+            "`create` or `rotate_secret`, which would only mint another token nobody "
+            "holds.")
     return out

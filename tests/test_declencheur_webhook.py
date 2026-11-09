@@ -892,6 +892,8 @@ def test_sans_ecran_declare_ni_porteur_ni_lien_et_la_raison(monkeypatch, pose):
     out = _appel_agent(op="create", kind="webhook", procedure="veille", tools=["a"])
     assert out["hook_secret"] is None and out["hook_secret_url"] is None
     assert out["hook_secret_missing"].startswith("no webhook page")
+    # Sans page déclarée, le refus ne renvoie vers aucun écran ni menu : l'instance n'en a pas.
+    assert "▸" not in out["hook_secret_missing"] and "screen" not in out["hook_secret_missing"]
     assert runner_hook.HOOK_SECRET_PREFIX not in json.dumps(out, default=str)
 
 

@@ -717,6 +717,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # L'issue que l'agent a conclue de son travail, et sa note (`issues_des_travaux`) —
     # les mêmes que pose la révision `20261109_2100_issue_des_travaux` : ordre indifférent.
     from . import issues_des_travaux
+    # La réparation dite au client (`runner_triggers.noter_reparation_pour_le_client`) —
+    # la même que pose la révision `20261109_2110_note_de_reparation` : ordre indifférent.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_REPARATION):
+        conn.execute(runner_triggers.DDL_COLONNE_REPARATION)
     if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_ISSUE):
         conn.execute(issues_des_travaux.DDL_COLONNE_ISSUE)
     if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_NOTE):

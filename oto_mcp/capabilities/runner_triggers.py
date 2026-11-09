@@ -455,6 +455,9 @@ class Trigger(BaseModel):
     #: l'org partagées en écriture, sous le modèle actuel ? `false` dès que le modèle a
     #: changé. Le prêt nommé (à une personne) ne s'y lit pas : `can_edit` le dit.
     subscription_lent: Optional[bool] = None
+    #: La dernière réparation du médecin des agents, pour le client : `{at, what}`
+    #: (`what` = une phrase simple). Servie sept jours, puis `null`.
+    repair: Optional[dict] = None
     #: Ce que ce déclencheur a PERDU : des occurrences enfilées que personne n'est
     #: venu prendre dans leur cycle, et que le tick a périmées.
     #: ⚠️ Servi avec le déclencheur parce que c'est là qu'on le cherche. Compté à

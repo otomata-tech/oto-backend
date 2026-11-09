@@ -188,7 +188,11 @@ _COLS = ("id, org_id, sub, label, folder, procedure, project_id, tools, "
          # Le prêt VIVANT, pas la colonne : un prêt caduc (modèle changé) se sert
          # `false`, comme aucun prêt.
          "(forfait_prete_model IS NOT NULL AND forfait_prete_model = model) "
-         "AS subscription_lent")
+         "AS subscription_lent, "
+         # La dernière réparation faite par le médecin des agents, dite au client
+         # (`noter_reparation_pour_le_client`) — servie sept jours, puis tue.
+         "CASE WHEN repair_note IS NOT NULL AND (repair_note->>'at')::timestamptz "
+         "  > NOW() - INTERVAL '7 days' THEN repair_note END AS repair")
 
 #: ⚠️ `hook_secret_hash` n'est PAS dans `_COLS`, et c'est la garde : un haché servi
 #: à une lecture partirait dans la réponse de `op=list`, donc dans un transcript
@@ -1125,3 +1129,24 @@ def consume_due(trigger_id: int, seen_next_due, new_next_due) -> bool:
             (new_next_due, trigger_id),
         )
         return bool(cur.rowcount)
+
+
+# --- La réparation faite par le médecin des agents, dite au client (09/11/2026) -----
+# Posée par la révision `20261109_2110_note_de_reparation` ET par le démarrage, sous
+# garde de catalogue — même DDL. `{at, what}` : quand, et ce qui a été changé, en une
+# phrase pour le client (« Nous avons ajouté la recherche web à l'agent »). Servie `repair` sept
+# jours (`_COLS`). Ce n'est PAS une écriture de configuration : elle ne date pas l'agent.
+COLONNE_REPARATION = "repair_note"
+DDL_COLONNE_REPARATION = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS "
+                          f"{COLONNE_REPARATION} JSONB")
+
+
+def noter_reparation_pour_le_client(trigger_id: int, org_id: int, what: str) -> bool:
+    """Pose `{at, what}` sur l'agent. Rend True si l'agent existe dans cette org."""
+    with _connect() as conn:
+        cur = conn.execute(
+            f"UPDATE runner_triggers SET {COLONNE_REPARATION} = jsonb_build_object("
+            "  'at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), "
+            "  'what', %s::text) WHERE id = %s AND org_id = %s",
+            ((what or "")[:300], int(trigger_id), int(org_id)))
+        return (cur.rowcount or 0) > 0

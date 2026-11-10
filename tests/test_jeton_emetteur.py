@@ -243,7 +243,7 @@ def test_un_emetteur_ne_nait_pas_sans_echeance(monkeypatch, socle, cle, pp):
     assert code == 400 and out["error"] == "issuer_ttl_required", out
     code, out = call(cle, path_params=pp,
                      body={"scopes": {"issue": {"namespaces": {"clients": "write"}}},
-                           "ttl_days": 365})
+                           "ttl_days": 90})
     assert code in (200, 201), out
     assert out["scopes"] == {"issue": {"namespaces": {"12": "write"}}}, (
         "le plafond se range par identifiant, comme une portée")
@@ -335,7 +335,7 @@ def test_l_emetteur_d_org_n_atteint_ni_le_personnel_ni_l_inconnu(plafond_d_org, 
 def test_un_plafond_d_org_exige_d_en_etre_membre(socle, monkeypatch, membre, attendu):
     monkeypatch.setattr(at.roles, "is_org_member", lambda sub, org: membre)
     code, out = call("me.token.create",
-                     body={"scopes": {"issue": _PLAFOND_ORG}, "ttl_days": 180})
+                     body={"scopes": {"issue": _PLAFOND_ORG}, "ttl_days": 90})
     assert code == attendu, out
     if not membre:
         assert out["error"] == "unknown_org" and socle == []

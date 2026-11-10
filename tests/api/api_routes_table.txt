@@ -941,6 +941,7 @@ POST /api/hooks/{trigger_id} -> fire
 OPTIONS /api/hooks/{trigger_id} -> options_handler
 POST /api/receivers/apollo/phones/{token} -> apollo_phones
 OPTIONS /api/receivers/apollo/phones/{token} -> options_handler
+POST /api/logto/webhook -> logto_webhook
 GET,HEAD /api/datastore/namespaces -> alias_deprecie
 OPTIONS /api/datastore/namespaces -> options_handler
 POST /api/datastore/namespaces -> alias_deprecie

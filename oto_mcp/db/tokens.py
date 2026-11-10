@@ -24,6 +24,31 @@ from .users import upsert_user
 
 _TOKEN_PREFIX = "oto_"
 
+#: La durée de vie MAXIMALE d'un jeton `oto_` neuf, en jours — et celle que reçoit un
+#: jeton demandé sans échéance. Un jeton sans échéance survivait à tout : un mot de
+#: passe changé ne le coupait pas, et qui l'avait émis depuis une session volée gardait
+#: l'accès indéfiniment. Les jetons émis AVANT ce plafond gardent leur `expires_at`
+#: (NULL compris) : les toucher est une décision à part.
+TTL_MAX_JOURS = 90
+
+
+class EcheanceTropLointaine(ValueError):
+    """Une échéance demandée au-delà de `TTL_MAX_JOURS` : refusée, jamais rabotée — un
+    jeton plus court que demandé cesserait de fonctionner sans que rien ne l'ait dit."""
+
+    code = "token_ttl_too_long"
+
+
+def echeance_bornee(ttl_days: Optional[int]) -> int:
+    """L'échéance, en jours, d'un jeton neuf : celle demandée si elle tient sous le
+    plafond, `TTL_MAX_JOURS` si aucune ne l'est (absente, nulle ou négative). Lève
+    `EcheanceTropLointaine` au-delà. LA règle, partagée par le store et les capacités
+    qui émettent : une seule lecture du plafond."""
+    if ttl_days is not None and ttl_days > TTL_MAX_JOURS:
+        raise EcheanceTropLointaine(
+            f"ttl_days={ttl_days} : un jeton vit au plus {TTL_MAX_JOURS} jours")
+    return ttl_days if ttl_days and ttl_days > 0 else TTL_MAX_JOURS
+
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
@@ -60,9 +85,10 @@ def create_api_token(sub: str, label: str = "cli", ttl_days: Optional[int] = Non
                      created_by: Optional[str] = None) -> str:
     """Génère un token, persiste son hash, renvoie le plaintext une seule fois.
 
-    `ttl_days` : si fourni (>0), le token expire après ce délai et est rejeté
-    par `verify_api_token`. None = non-expirant (défaut — token CLI long-lived
-    stocké en SOPS). La révocation explicite est `revoke_api_token`.
+    `ttl_days` : le token expire après ce délai et est rejeté par
+    `verify_api_token`. Au plus `TTL_MAX_JOURS` (au-delà : `EcheanceTropLointaine`) ;
+    absent, il vaut `TTL_MAX_JOURS` — plus aucun jeton neuf n'est non-expirant
+    (`echeance_bornee`). La révocation explicite est `revoke_api_token`.
 
     `job_id` / `verrou_org` / `verrou_org_id` : un jeton de DÉLÉGATION porte son
     travail et l'org de ce travail — toute résolution du porteur hors de cette org est
@@ -80,22 +106,24 @@ def create_api_token(sub: str, label: str = "cli", ttl_days: Optional[int] = Non
     `created_by` : qui a émis le jeton quand ce n'est pas son porteur — l'admin d'une
     clé d'org (`kind='org'`, porteur = le compte de service de l'org).
     """
+    # ⚠️ `ttl_seconds` gagne sur `ttl_days` : un jeton de délégation vit le temps
+    # d'un bail (quelques minutes), pas d'une journée. Sans lui, le plus court
+    # exprimable était 1 jour — soit ~90 fois la durée du besoin, pour un jeton
+    # qui porte l'identité de quelqu'un d'autre. Le plafond vaut pour les deux, et
+    # se juge AVANT toute écriture (`upsert_user` compris).
+    if ttl_seconds and ttl_seconds > 0:
+        if ttl_seconds > TTL_MAX_JOURS * 86_400:
+            raise EcheanceTropLointaine(
+                f"ttl_seconds={ttl_seconds} : un jeton vit au plus {TTL_MAX_JOURS} jours")
+        expires = f"NOW() + INTERVAL '{int(ttl_seconds)} seconds'"
+    else:
+        expires = f"NOW() + INTERVAL '{echeance_bornee(ttl_days)} days'"
     # ⚠️ `upsert_user` CRÉE le compte s'il n'existe pas. Pour un jeton émis au nom
     # d'un tiers (délégation d'un travail programmé), l'existence du compte se
     # vérifie donc AVANT d'appeler ici — sinon on ressusciterait silencieusement
     # un compte supprimé, et on lui délivrerait un accès dans la foulée.
     upsert_user(sub)
     token = _TOKEN_PREFIX + secrets.token_urlsafe(32)
-    # ⚠️ `ttl_seconds` gagne sur `ttl_days` : un jeton de délégation vit le temps
-    # d'un bail (quelques minutes), pas d'une journée. Sans lui, le plus court
-    # exprimable était 1 jour — soit ~90 fois la durée du besoin, pour un jeton
-    # qui porte l'identité de quelqu'un d'autre.
-    if ttl_seconds and ttl_seconds > 0:
-        expires = f"NOW() + INTERVAL '{int(ttl_seconds)} seconds'"
-    elif ttl_days and ttl_days > 0:
-        expires = f"NOW() + INTERVAL '{int(ttl_days)} days'"
-    else:
-        expires = "NULL"
     with _connect() as conn:
         conn.execute(
             f"INSERT INTO user_api_tokens (sub, label, token_hash, expires_at, "

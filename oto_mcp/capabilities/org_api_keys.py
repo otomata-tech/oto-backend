@@ -33,7 +33,8 @@ from ..auth import token_scopes
 from ._authz import ORG_ADMIN_OF, ORG_ADMIN_OF_LIVE
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .api_tokens import (_INCLURE_REVOQUES, _LABEL_MAX, _MOTIF, ApiToken,
-                         ApiTokenCreated, TokenDeleted, _echeance_d_emetteur, _entier,
+                         ApiTokenCreated, TokenDeleted, _echeance_d_emetteur,
+                         _echeance_plafonnee, _entier,
                          _jours, _libelle, _motif, _orgs_du_plafond, _par_identifiant,
                          _portee)
 from .registry import CAPABILITIES
@@ -61,8 +62,9 @@ class OrgApiKeyCreateInput(BaseModel):
                            "un plafond d'émission (`{\"issue\": {\"orgs\": {\"<cette "
                            "org>\": \"write\"}}}`)."))
     ttl_days: Union[int, str, None] = Field(
-        None, description=("Jours avant échéance. Requis pour une clé émettrice. Absent "
-                           "ailleurs ⇒ la clé n'expire PAS."))
+        None, description=("Jours avant échéance, au plus 90 (au-delà : 400 "
+                           "`token_ttl_too_long`). Requis pour une clé émettrice. "
+                           "Absent ailleurs ⇒ 90 jours."))
 
 
 class OrgApiKeyDeleteInput(BaseModel):
@@ -117,6 +119,7 @@ def _create(ctx: ResolvedCtx, inp: OrgApiKeyCreateInput) -> dict:
         verrou_org.lever(jeton)
     _echeance_d_emetteur(scopes, ttl_days)
     _orgs_du_plafond(sub, scopes)
+    ttl_days = _echeance_plafonnee(ttl_days)
     token = db.create_api_token(sub, label=label, ttl_days=ttl_days, scopes=scopes,
                                 kind="org", verrou_org=True, verrou_org_id=ctx.org_id,
                                 created_by=ctx.sub)

@@ -117,6 +117,7 @@ def _app_par_jeton(statuts: dict, defaut: int = 401, *, verifie: bool = True):
     ("POST", "/api/hooks/42", True, "webhook"),
     ("POST", "/api/receivers/apollo/phones/abc", False, "webhook"),
     ("POST", "/api/billing/webhook", False, "webhook"),
+    ("POST", "/api/logto/webhook", False, "webhook"),
 ])
 def test_classer(methode, chemin, jeton, classe):
     assert ld.classer(methode, chemin, jeton) == classe

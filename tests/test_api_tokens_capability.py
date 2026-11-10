@@ -344,15 +344,15 @@ def test_une_cle_inconnue_est_un_404(monkeypatch, socle, super_admin):
 
 @pytest.mark.parametrize("brut,attendu", [
     (30, 30), ("30", 30),
-    (-1, None),          # str(-1) n'est pas fait de chiffres → ignoré
-    ("abc", None),
-    (None, None),
+    (-1, 90),            # str(-1) n'est pas fait de chiffres → ignoré → plafond
+    ("abc", 90),
+    (None, 90),
 ])
 def test_ttl_days_n_accepte_que_des_chiffres(monkeypatch, socle, super_admin,
                                              brut, attendu):
-    """Un `-1` ou un texte donnent « pas d'expiration » plutôt qu'une erreur : c'est le
-    comportement servi. Le figer évite qu'un jeton censé expirer devienne éternel APRÈS
-    un durcissement de la validation… ou l'inverse."""
+    """Un `-1` ou un texte donnent « pas d'échéance demandée » plutôt qu'une erreur :
+    c'est le comportement servi — et depuis le plafond, cela vaut 90 jours, jamais un
+    jeton éternel."""
     corps = {} if brut is None else {"ttl_days": brut}
     code, out = call("platform.token.create", path_params={"sub": "u-9"}, body=corps)
     assert code == 200 and out["ttl_days"] == attendu
@@ -440,16 +440,15 @@ def test_le_palier_MEMBRE_pose_une_echeance(monkeypatch, socle, super_admin):
 
 
 def test_l_echeance_membre_se_LIT_a_la_creation_ou_jamais(monkeypatch, socle, super_admin):
-    """Sans échéance : `null`, et le jeton n'expire pas. Le rendre explicitement plutôt
-    que de l'omettre, parce que c'est le SEUL instant où l'information est lisible — la
-    liste ne rend pas le secret, et le porteur ne saura jamais de lui-même quand son
-    jeton cesse de fonctionner."""
+    """Sans échéance demandée : le plafond (90 jours), RENDU et ÉCRIT — c'est le SEUL
+    instant où l'information est lisible : la liste ne rend pas le secret, et le
+    porteur ne saura jamais de lui-même quand son jeton cesse de fonctionner."""
     code, out = call("me.token.create", body={})
-    assert code == 201 and out["ttl_days"] is None
-    assert "ttl_days" in out, "omettre la clé laisserait deviner ; on la rend à null"
+    assert code == 201 and out["ttl_days"] == 90
+    assert socle[0][3] == 90, "le plafond doit atteindre l'écriture, pas seulement l'écho"
 
 
-@pytest.mark.parametrize("brut,attendu", [(30, 30), ("30", 30), (-1, None), ("abc", None)])
+@pytest.mark.parametrize("brut,attendu", [(30, 30), ("30", 30), (-1, 90), ("abc", 90)])
 def test_les_DEUX_paliers_lisent_l_echeance_pareil(monkeypatch, socle, super_admin,
                                                    brut, attendu):
     """⚠️ La même tolérance des deux côtés, et c'est le point du lot : la règle vivait
@@ -457,8 +456,9 @@ def test_les_DEUX_paliers_lisent_l_echeance_pareil(monkeypatch, socle, super_adm
     fait deux lectures d'un même champ — elles auraient divergé au premier durcissement,
     et le contrat servi aurait dépendu du palier appelé. Une seule fonction (`_jours`).
 
-    On garde `-1` → « pas d'expiration » : c'est le comportement déjà servi côté admin,
-    et le lot ouvre un palier, il ne durcit pas l'autre."""
+    On garde `-1` → « pas d'échéance demandée » (donc le plafond de 90 jours) : c'est
+    la lecture déjà servie côté admin, et le lot ouvre un palier, il ne durcit pas
+    l'autre."""
     membre = call("me.token.create", body={"ttl_days": brut})[1]
     admin = call("platform.token.create", path_params={"sub": "u-9"},
                  body={"ttl_days": brut})[1]
@@ -556,3 +556,24 @@ def test_les_revoques_ne_sont_listes_que_sur_demande(monkeypatch, socle, super_a
     call(cle, path_params=pp)
     call(cle, path_params=pp, query=b"include_revoked=true")
     assert [v[2] for v in socle if v[0] == "list"] == [False, True]
+
+
+# --- 8. Le plafond de 90 jours ------------------------------------------------
+
+@pytest.mark.parametrize("cle,pp", [("me.token.create", None),
+                                    ("platform.token.create", {"sub": "u-9"})])
+def test_une_echeance_au_dela_du_plafond_est_refusee_nommement(monkeypatch, socle,
+                                                               super_admin, cle, pp):
+    """91 jours : 400 `token_ttl_too_long`, rien n'est émis — jamais un jeton raboté,
+    qui cesserait de fonctionner avant la date que son porteur croit."""
+    code, out = call(cle, path_params=pp, body={"ttl_days": 91})
+    assert code == 400 and out["error"] == "token_ttl_too_long", out
+    assert not [e for e in socle if e[0] == "create"]
+
+
+@pytest.mark.parametrize("cle,pp", [("me.token.create", None),
+                                    ("platform.token.create", {"sub": "u-9"})])
+def test_le_plafond_lui_meme_est_accepte(monkeypatch, socle, super_admin, cle, pp):
+    code, out = call(cle, path_params=pp, body={"ttl_days": 90})
+    assert code in (200, 201) and out["ttl_days"] == 90
+    assert socle[-1][3] == 90

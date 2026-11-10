@@ -916,6 +916,14 @@ _REGLAGES: tuple[Variable, ...] = (
              "Région Scaleway du TEM de l'instance (`fr-par`) — voir "
              "`OTO_TEM_SECRET_KEY`.",
              ("oto_mcp/email.py:52",)),
+    Variable("OTO_LOGTO_WEBHOOK_SIGNING_KEY", Classe.REGLAGE, None,
+             "Clé de signature du webhook Logto (console Logto → Webhooks) qui reçoit "
+             "`PostResetPassword` et `User.Data.Updated` sur `POST /api/logto/webhook` : "
+             "un mot de passe changé révoque les jetons `oto_` du compte et ferme ses "
+             "sessions Logto (Management API, credential `OTO_MCP_LOGTO_M2M`). Absente, "
+             "la route refuse toute livraison (`503 logto_webhook_not_configured`) — "
+             "jamais une acceptation non signée.",
+             ("oto_mcp/auth/revocation_mot_de_passe.py:80",)),
     Variable("MOLLIE_API_KEY", Classe.REGLAGE, None,
              "Clé Mollie plateforme (ADR 0043).", ("oto_mcp/mollie_client.py:58",)),
     Variable("OTO_MCP_S3_PUBLIC_BASE_URL", Classe.REGLAGE, None,

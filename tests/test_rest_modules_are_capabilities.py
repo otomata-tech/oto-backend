@@ -76,6 +76,10 @@ _KNOWN: dict[str, str] = {
     # Slack POSTe un formulaire (`payload=<json>`), signé par le même secret d'app
     # (`X-Slack-Signature`), aucun JWT — même nature que la ligne au-dessus.
     "/api/slack/interactions": NATURE,
+    # Le webhook LOGTO (10/11/2026) : Logto POSTe quand un mot de passe change. Corps
+    # libre (la forme de Logto), signé HMAC sur les octets bruts
+    # (`logto-signature-sha-256`), aucun JWT — même nature que les deux au-dessus.
+    "/api/logto/webhook": NATURE,
     # Le RECEVEUR des téléphones Apollo (28/09/2026) : Apollo POSTe le résultat d'un
     # reveal qu'oto a commandé. Corps libre (la forme d'Apollo, pas la nôtre) et
     # aucun JWT : l'autorisation est le jeton du chemin, propre à une commande.

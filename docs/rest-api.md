@@ -48,6 +48,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 | `POST` d'un fichier de projet, `/api/me/projects/{id}/export` | `api/projects.py` | **multipart / ZIP** → hors du moule (classé `NATURE`) |
 | `POST /api/me/projects/{id}/transcriptions/upload` (audio à transcrire) | `api/transcription.py` | **multipart** → hors du moule (classé `NATURE`) ; la forme par référence est une capacité |
 | `/api/upload/{token}` (PUT/POST/GET) | `api/uploads.py` | **pas de JWT** : le jeton de l'URL fait foi |
+| `POST /api/logto/webhook` | `api/logto_webhook.py` | **pas de JWT** : HMAC-SHA256 du corps brut (`logto-signature-sha-256`, clé `OTO_LOGTO_WEBHOOK_SIGNING_KEY`) ; un mot de passe changé révoque les jetons `oto_` et ferme les sessions Logto (classé `NATURE`, `docs/auth-logto.md` §Mot de passe changé) |
 | SIRENE (`api/sirene.py`), accords (`api/accords.py`), webhook Mollie (`api/billing.py`), **callbacks OAuth** zoho/google/salesforce (`api/{zoho,datastore,salesforce}.py`) | `api/<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres. ⚠️ `api/atlassian.py` et `api/folk.py` ont porté les deux callbacks fédérés jusqu'au **2026-09-09** : partis avec la fédération MCP (**ADR 0069**). ⚠️ **Le datastore n'y est plus** depuis le 2026-08-12 (#302) : ses 24 chemins sont des capacités (bloc ci-dessous) ; `api/datastore.py` est un nom vestige qui ne porte QUE le callback Google |
 
 - `GET /api/me` + `GET /api/me/calls` + `GET /api/me/activity-summary` — **le compte**,
@@ -423,8 +424,11 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   la création membre rend **201** et l'admin **200** ; le `DELETE` membre rend `{ok}` et
   l'admin `{ok, id}` ; seul le palier MEMBRE refuse un tableau que l'émetteur ne voit pas
   (`400 unknown_datastore` — sinon le jeton serait muet et on le croirait branché), et
-  seul le palier ADMIN accepte un `ttl_days` (qui n'est retenu que s'il est fait de
-  chiffres : `-1` ou un texte donnent « pas d'expiration »).
+  `ttl_days` est accepté aux deux paliers (n'est retenu que s'il est fait de chiffres) ;
+  ⚠️ **depuis le 10/11/2026, au plus 90 jours** (`400 token_ttl_too_long` au-delà), et
+  une demande sans échéance — `-1` ou un texte compris — reçoit 90 jours, rendus dans
+  `ttl_days` : plus aucun jeton neuf n'est non-expirant (`docs/auth-logto.md` §Durée de
+  vie). Les jetons d'avant gardent leur échéance, NULL compris.
   **Révoquer ne supprime plus la ligne** (#523, 23/09/2026) : le `DELETE …/{token_id}`
   pose `revoked_at`/`revoked_by` (l'APPELANT)/`revoked_reason` (corps facultatif
   `{"reason": "…"}`, 500 caractères au plus, `400 reason_too_long` au-delà — jamais
@@ -1245,7 +1249,7 @@ lire en base, et lui fait payer un seau à jetons (débit régulier, rafale = la
 |---|---|---|---|
 | `jeton` | la requête porte `Authorization` | empreinte du jeton | 1 200 |
 | `sensible` | sans jeton : secret dans le chemin (`/api/invitations/*`, `/api/public/*`, `/p/d/*`, `/o/{u,d,r}/*`) ou geste d'auth interactif (`/api/mcp/auth_callback`, `*/oauth/callback`) | adresse | 60 |
-| `webhook` | `/api/hooks/*`, `/api/receivers/*`, `/api/billing/webhook` | (adresse, chemin), plus un plafond par adresse à 10 × ce débit (`webhook_adresse`) | 300 |
+| `webhook` | `/api/hooks/*`, `/api/receivers/*`, `/api/billing/webhook`, `/api/logto/webhook` | (adresse, chemin), plus un plafond par adresse à 10 × ce débit (`webhook_adresse`) | 300 |
 | `anonyme` | tout le reste sans jeton (`/.well-known/*`, inscription du shim anonyme d'un projet publié — un client hébergé s'inscrit à chaque connexion, depuis sa sortie partagée —, `/mcp` avant connexion, upload signé, relais) | adresse | 600 |
 | `echecs` | chaque 401/403 (et 404 sur `sensible`) en consomme un ; épuisé, l'adresse voit refuser ses jetons **inconnus** et ses requêtes `sensible` | adresse | 120 |
 

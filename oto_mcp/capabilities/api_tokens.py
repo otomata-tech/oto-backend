@@ -121,12 +121,15 @@ class TokenCreateInput(BaseModel):
     # borner devait passer par un opérateur — la précaution existait sans être à sa
     # portée, exactement le motif de cette issue.
     # ⚠️ MÊME tolérance que le palier admin, à dessein : nombre ou texte, et ce qui
-    # n'est pas un entier positif écrit en chiffres vaut « pas d'expiration ». Durcir
-    # ici et pas là ferait deux contrats pour un même geste.
+    # n'est pas un entier positif écrit en chiffres vaut « pas d'échéance demandée »,
+    # donc le plafond (`db.TTL_MAX_JOURS`). Durcir ici et pas là ferait deux contrats
+    # pour un même geste.
     ttl_days: Union[int, str, None] = Field(
         None,
-        description=("Nombre de jours avant échéance. Absent ou non numérique ⇒ le "
-                     "jeton n'expire PAS — et rien ne le rappellera ensuite."))
+        description=("Nombre de jours avant échéance, au plus 90 (au-delà : 400 "
+                     "`token_ttl_too_long`). Absent ou non numérique ⇒ 90 jours : "
+                     "aucun jeton neuf n'est non-expirant. La réponse rend l'échéance "
+                     "retenue."))
 
 
 class TokenDeleteInput(BaseModel):
@@ -148,8 +151,8 @@ class AdminTokenCreateInput(BaseModel):
         description=("Comment reconnaître ce jeton plus tard — au plus 32 caractères, "
                      "au-delà : 400 `label_too_long`, jamais une coupe. Absent ⇒ 'cli'."))
     # Accepté en nombre OU en texte, et IGNORÉ s'il n'est pas un entier positif écrit en
-    # chiffres (`str(x).isdigit()`) : un `-1` ou un booléen donnent « pas d'expiration »,
-    # ce qui est le comportement servi.
+    # chiffres (`str(x).isdigit()`) : un `-1` ou un booléen donnent « pas d'échéance
+    # demandée », donc le plafond de 90 jours (`db.TTL_MAX_JOURS`).
     ttl_days: Union[int, str, None] = None
     scopes: Any = None
 
@@ -209,7 +212,10 @@ class ApiTokenCreated(BaseModel):
     token: str
     label: Optional[str] = None
     scopes: Optional[dict] = None
-    # `null` = le jeton n'expire pas. Rendu aux DEUX paliers depuis #514 lot (d) : une
+    # L'échéance RETENUE, en jours (au plus `db.TTL_MAX_JOURS`, qui est aussi celle d'un
+    # jeton demandé sans échéance). `null` ne sort plus d'une création depuis le
+    # plafond ; le type reste pour ne pas changer le schéma servi. Rendu aux DEUX
+    # paliers depuis #514 lot (d) : une
     # échéance qu'on pose sans la voir revenir ne se vérifie qu'en attendant qu'elle
     # tombe. C'est le seul instant où elle est lisible — la liste ne rend pas le secret,
     # et le porteur ne saura jamais de lui-même quand il cesse de fonctionner.
@@ -276,7 +282,8 @@ def _portee(brut: Any) -> Optional[dict]:
 
 def _jours(brut: Any) -> Optional[int]:
     """`ttl_days` tel que la surface l'accepte : nombre OU texte, et tout ce qui n'est
-    pas un entier positif écrit en chiffres vaut « pas d'expiration ».
+    pas un entier positif écrit en chiffres vaut « pas d'échéance demandée » (None) —
+    que `_echeance_plafonnee` change ensuite en plafond.
 
     ⚠️ Extrait pour être PARTAGÉ par les deux paliers (#514 lot d) : la même règle
     vivait en une ligne dans le seul handler admin, et l'ouvrir au membre en la
@@ -285,6 +292,24 @@ def _jours(brut: Any) -> Optional[int]:
     Cette tolérance est CONSERVÉE telle quelle, y compris pour `-1` ou un booléen qui
     donnent « pas d'expiration » : c'est le comportement déjà servi côté admin."""
     return int(brut) if isinstance(brut, (int, str)) and str(brut).isdigit() else None
+
+
+def _echeance_plafonnee(ttl_days: Optional[int]) -> int:
+    """L'échéance ÉCRITE d'un jeton neuf (`db.echeance_bornee`) : celle demandée, ou le
+    plafond (`db.TTL_MAX_JOURS`) quand aucune ne l'est. Au-delà du plafond : 400
+    `token_ttl_too_long`, jamais un rabotage — et c'est elle que la réponse rend, pour
+    que le porteur sache quand son jeton cessera de fonctionner.
+
+    Appelée APRÈS les gardes qui lisent l'absence d'échéance (`issuer_ttl_required`,
+    `issued_token_ttl`) : un émetteur sans échéance reste refusé, il ne reçoit pas le
+    plafond en silence."""
+    try:
+        return db.echeance_bornee(ttl_days)
+    except db.EcheanceTropLointaine as e:
+        raise AuthzDenied(400, e.code,
+                          f"Un jeton vit au plus {db.TTL_MAX_JOURS} jours : demande "
+                          f"`ttl_days` ≤ {db.TTL_MAX_JOURS}, ou omets-le pour "
+                          f"{db.TTL_MAX_JOURS} jours.")
 
 
 def _cible_connue(target_sub: str) -> str:
@@ -464,6 +489,7 @@ def _my_create(ctx: ResolvedCtx, inp: TokenCreateInput) -> dict:
     else:
         _echeance_d_emetteur(scopes, ttl_days)
         _orgs_du_plafond(ctx.sub, scopes)
+    ttl_days = _echeance_plafonnee(ttl_days)
     # Ce qu'émet une clé d'org reste enfermé dans son org, comme elle (`org_api_keys`).
     org = org_store.org_du_compte_de_service(ctx.sub) if em else None
     token = db.create_api_token(ctx.sub, label=label, ttl_days=ttl_days, scopes=scopes,
@@ -497,6 +523,7 @@ def _admin_create(ctx: ResolvedCtx, inp: AdminTokenCreateInput) -> dict:
     scopes = _par_identifiant(cible, _portee(inp.scopes))
     _echeance_d_emetteur(scopes, ttl_days)
     _orgs_du_plafond(cible, scopes)
+    ttl_days = _echeance_plafonnee(ttl_days)
     token = db.create_api_token(cible, label=label, ttl_days=ttl_days,
                                 scopes=scopes)
     return {"token": token, "label": label, "ttl_days": ttl_days, "scopes": scopes}
@@ -575,7 +602,9 @@ _D_CREATE = ("Émet un jeton API. ⚠️ Le secret n'est rendu QU'UNE FOIS. `sco
              "muet et on le croirait branché. `{\"issue\": <plafond>}` fait un jeton "
              "ÉMETTEUR, qui émet à son tour sans session : `ttl_days` y est requis, et ce "
              "qu'il émet est une portée incluse dans le plafond (tableaux et projets), "
-             "au plus 90 jours, révoquée avec lui. Réservé à une session interactive, "
+             "au plus 90 jours, révoquée avec lui. Tout jeton vit au plus 90 jours "
+             "(`ttl_days`, `token_ttl_too_long` au-delà) ; sans `ttl_days`, 90 jours. "
+             "Réservé à une session interactive, "
              "ou à un jeton émetteur.")
 _D_DELETE = ("Révoque un de mes jetons : il cesse de fonctionner, et la révocation est "
              "GARDÉE (qui, quand, `reason` facultatif) — la liste la montre avec "
@@ -586,7 +615,8 @@ _D_DELETE = ("Révoque un de mes jetons : il cesse de fonctionner, et la révoca
 _D_A_LIST = ("Les jetons émis pour un compte TIERS ; les révoqués avec "
              "`include_revoked`. Réservé à une session interactive.")
 _D_A_CREATE = ("Émet un jeton POUR UN COMPTE TIERS. ⚠️ Le secret n'est rendu qu'une "
-               "fois. `ttl_days` borne sa durée de vie (absent = pas d'expiration). Pas "
+               "fois. `ttl_days` borne sa durée de vie : au plus 90 jours "
+               "(`token_ttl_too_long` au-delà), absent = 90 jours. Pas "
                "de contrôle de visibilité des tableaux ici : le catalogue visé n'est pas "
                "celui de l'émetteur. Réservé à une session interactive.")
 _D_A_DELETE = ("Révoque un jeton d'un compte tiers, en gardant la trace (qui, quand, "

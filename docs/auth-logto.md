@@ -149,6 +149,62 @@ Procédure côté utilisateur = guide plateforme `claude-tag` (+ template public
 `otomata-tech/oto-claude-tag-template`, Claude Tag n'acceptant qu'un dépôt privé
 comme source de plugins).
 
+### Durée de vie : 90 jours au plus (10/11/2026)
+
+Un jeton `oto_` NEUF vit au plus **90 jours** (`db.tokens.TTL_MAX_JOURS`) : une demande
+au-delà est refusée `400 token_ttl_too_long` (jamais rabotée), une demande sans échéance
+reçoit 90 jours, que la réponse rend (`ttl_days`). La règle vit au store
+(`db.echeance_bornee`, appelée par `create_api_token`) et les capacités la lisent au
+même endroit — membre, admin, clé d'org, et `scripts/issue_token.py`. Les jetons de
+délégation (`ttl_seconds`, la durée d'un bail) sont sous le plafond par construction.
+⚠️ **Les jetons émis avant le plafond gardent leur `expires_at`, NULL compris** : les
+borner est une décision à part. ⚠️ Une **clé d'org** sans échéance (intégration tierce)
+et un jeton du script de bootstrap expirent désormais à 90 jours : leur porteur doit
+les renouveler.
+
+## Mot de passe changé — révocation par webhook Logto (10/11/2026)
+
+Logto ne ferme rien quand un mot de passe change : ni sessions, ni autorisations
+(grants, qui portent les jetons de rafraîchissement des clients OAuth), et un jeton
+`oto_` ne dépend pas de Logto. Qui avait tenu une session pouvait s'émettre un jeton
+`oto_` qui survivait au changement. `POST /api/logto/webhook`
+(`api/logto_webhook.py` → `auth/revocation_mot_de_passe.py`) reçoit les webhooks
+Logto et, pour un mot de passe changé :
+
+1. révoque tous les jetons `oto_` actifs du compte (natures `user` et `delegation`,
+   par le geste unique `db.revoke_api_token`, trace `revoked_by = logto-webhook`) ;
+2. ferme toutes ses sessions Logto, autorisations comprises
+   (`DELETE /api/users/{id}/sessions/{uid}?revokeGrantsTarget=all`), puis révoque les
+   autorisations qui survivent à leur session (`GET /api/users/{id}/grants`,
+   `DELETE …/grants/{grantId}`) — `annuaire.fermer_sessions`, sous le credential de
+   management existant `OTO_MCP_LOGTO_M2M_ID`/`_SECRET` (ressource Management API,
+   scope `all`, le seul que Logto OSS déclare).
+
+**Ce qui déclenche** : `PostResetPassword` (« mot de passe oublié ») et
+`User.Data.Updated` émis par `PATCH /users/:userId/password` (le corps porte `method`
+et `matchedRoute`). Tout autre événement signé rend `200 {ignored: true}`.
+⚠️ **Le changement par l'Account API (`POST /api/my-account/password`) n'est PAS
+reconnu** : Logto 1.44 l'annonce par un `User.Data.Updated` qui ne porte que
+l'entité utilisateur, sans route ni champ « mot de passe » — trait pour trait la
+livraison d'un changement d'email, de profil ou de MFA. Le tableau de bord d'oto ne
+change pas de mot de passe par cette voie aujourd'hui.
+
+**La preuve** : HMAC-SHA256 du corps BRUT avec la clé de signature du webhook, digest
+hexadécimal dans `logto-signature-sha-256`, comparé à temps constant. Clé déclarée par
+`OTO_LOGTO_WEBHOOK_SIGNING_KEY` (secret, réglage d'instance) ; absente, toute livraison
+est refusée `503 logto_webhook_not_configured`. La signature n'a pas d'horodatage :
+le `createdAt` signé doit tomber à moins d'une heure (`400 stale_event`).
+Réponses : `401 invalid_signature`, `400 invalid_event`, `502 logto_sessions_not_closed`
+(jetons coupés, Logto pas entièrement fermé ; Logto retente, le geste est idempotent),
+`500 logto_webhook_failed`. Classe `webhook` de la limite de débit.
+
+**Brancher une instance** : console Logto → Webhooks → endpoint
+`https://<instance>/api/logto/webhook`, événements `PostResetPassword` et
+`User.Data.Updated` ; recopier la clé de signature dans
+`OTO_LOGTO_WEBHOOK_SIGNING_KEY`. Le credential M2M doit porter le rôle de Management API
+(scope `all`). Seul l'annuaire PRIMAIRE est couvert : un tenant à annuaire propre
+n'envoie pas ses webhooks ici.
+
 ## Identité de service — un client machine, pas un compte (#1068, 24/09/2026)
 
 Un service consommateur de l'API (le commerce, ADR 0070 §7.4(b)) parle au cœur sous

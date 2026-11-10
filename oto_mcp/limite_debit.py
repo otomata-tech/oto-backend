@@ -22,8 +22,8 @@ régulier `par_minute`, rafale `par_minute / 2`), et sa clé :
   d'énumération. L'inscription du shim anonyme (`/register`, `/oauth/register` d'un
   projet publié) n'y est PAS : un client hébergé s'inscrit à chaque connexion
   d'utilisateur, depuis sa sortie partagée — elle est `anonyme` ;
-- `webhook` — un tiers qui déclenche (`/api/hooks/*`, `/api/receivers/*`, webhook de
-  facturation) : clé = (adresse, chemin), pour qu'un envoyeur partagé (une plateforme
+- `webhook` — un tiers qui déclenche (`/api/hooks/*`, `/api/receivers/*`, webhooks de
+  facturation et de Logto) : clé = (adresse, chemin), pour qu'un envoyeur partagé (une plateforme
   d'automatisation sert mille clients depuis ses adresses) ne s'épuise pas d'un crochet
   sur l'autre ; plus un plafond par adresse, tous chemins confondus, à dix fois ce
   débit — sans lui, faire tourner le chemin (`/api/hooks/<deviné>`) rendrait un seau
@@ -139,7 +139,7 @@ _SENSIBLES_EXACTS = frozenset({"/api/mcp/auth_callback"})
 _SENSIBLES_SUFFIXES = ("/oauth/callback",)
 
 _WEBHOOKS_PREFIXES = ("/api/hooks/", "/api/receivers/")
-_WEBHOOKS_EXACTS = frozenset({"/api/billing/webhook"})
+_WEBHOOKS_EXACTS = frozenset({"/api/billing/webhook", "/api/logto/webhook"})
 
 #: Le plafond d'une adresse sur TOUS ses crochets, en multiple du débit par crochet.
 _WEBHOOK_ADRESSE_FACTEUR = 10

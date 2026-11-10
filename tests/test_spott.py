@@ -60,7 +60,7 @@ def test_spott_is_keyed_byo_only_connector():
     # byo-only : pas de clé plateforme partagée pour un ATS client.
     assert "platform" not in c.auth_modes
     assert "spott" in providers.KEY_PROVIDERS
-    assert c.category == "Recruiting"
+    assert c.category == "HR & recruiting"
 
 
 def test_spott_has_onboarding_doc():

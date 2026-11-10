@@ -31,7 +31,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Documents & signature"
+CATEGORY = "Workspace"
 PUBLISHER = "Zoho"
 LOGO_DOMAIN = "zoho.com"
 

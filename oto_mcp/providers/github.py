@@ -57,7 +57,7 @@ CONNECTOR = _c(
     href="https://github.com",
 )
 
-CATEGORY = "Dev"
+CATEGORY = "Product & data"
 PUBLISHER = "GitHub"
 LOGO_DOMAIN = "github.com"
 

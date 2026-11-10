@@ -43,7 +43,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "CRM"
 PUBLISHER = "Salesforce"
 LOGO_DOMAIN = "salesforce.com"
 

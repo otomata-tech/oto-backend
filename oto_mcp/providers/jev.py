@@ -31,7 +31,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "AI models"
+CATEGORY = "AI & automation"
 PUBLISHER = "TypeSafe"
 LOGO_DOMAIN = "typesafe.ai"
 

@@ -36,7 +36,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Workspace"
 PUBLISHER = "LightOn"
 LOGO_DOMAIN = "lighton.ai"
 

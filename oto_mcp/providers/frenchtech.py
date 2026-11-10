@@ -12,7 +12,7 @@ CONNECTOR = _c(
     label="French Tech", help="ecosystem directory of a French Tech capital (startups/organizations/service providers) + events, calls for projects, funding + French Tech Central (open data, default Aix-Marseille)",
 )
 
-CATEGORY = "French data"
+CATEGORY = "Public data"
 PUBLISHER = "La French Tech (open data)"
 DESCRIPTION = (
     "The ecosystem of a French Tech capital (default Aix-Marseille): "

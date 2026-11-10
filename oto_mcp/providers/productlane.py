@@ -8,7 +8,7 @@ from __future__ import annotations
 from ._model import _c
 
 # productlane: customer feedback (threads, contacts, companies), public roadmap
-# and help center. Neighbor of `linear` — same "Business apps" category — and it is not
+# and help center. Neighbor of `linear` — same "Product & data" category — and it is not
 # just a thematic kinship: **Productlane's roadmap IS backed by Linear**.
 # Projects and issues are created in Linear first, then mirrored here. An org
 # that has both connectors therefore sees the same objects through two doors, and that
@@ -31,7 +31,7 @@ CONNECTOR = _c(
     href="https://productlane.com",
 )
 
-CATEGORY = "Business apps"
+CATEGORY = "Product & data"
 PUBLISHER = "Productlane"
 LOGO_DOMAIN = "productlane.com"
 

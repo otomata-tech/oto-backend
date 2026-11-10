@@ -18,7 +18,7 @@ CONNECTOR = _c(
     href="https://www.dropcontact.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "Dropcontact"
 LOGO_DOMAIN = "dropcontact.com"
 

@@ -51,7 +51,7 @@ CONNECTOR = _c(
     href="https://www.leexi.ai",
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Leexi"
 LOGO_DOMAIN = "leexi.ai"
 

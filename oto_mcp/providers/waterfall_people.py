@@ -29,7 +29,7 @@ CONNECTOR = _c(
 # providers under their own connectors, each of which names its own publisher.
 PUBLISHER = "Otomata"
 SANS_LOGO_DE_MARQUE = True
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 
 DESCRIPTION = (
     "Finds the people working at a company — its decision-makers when you give roles — "

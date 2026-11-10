@@ -24,7 +24,7 @@ CONNECTOR = _decrit(
              "Search Console property",
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "Google"
 LOGO_DOMAIN = "search.google.com"
 

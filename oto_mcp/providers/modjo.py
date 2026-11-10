@@ -40,7 +40,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Modjo"
 LOGO_DOMAIN = "modjo.ai"
 

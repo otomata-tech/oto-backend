@@ -23,7 +23,7 @@ CONNECTOR = _c(
     href="https://linear.app",
 )
 
-CATEGORY = "Business apps"
+CATEGORY = "Product & data"
 PUBLISHER = "Linear"
 LOGO_DOMAIN = "linear.app"
 

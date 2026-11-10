@@ -71,7 +71,7 @@ def test_snitcher_is_keyed_byo_only_connector():
     assert c.default_active is False
     assert c.default_quota == 0
     assert "snitcher" in providers.KEY_PROVIDERS
-    assert c.category == "Prospecting"
+    assert c.category == "Lead & company data"
     assert c.publisher_name == "Snitcher"
     assert c.label == "Snitcher"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["snitcher"] == "snitcher.com"

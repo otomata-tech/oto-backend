@@ -19,7 +19,7 @@ CONNECTOR = service(
     href="https://learn.microsoft.com/graph/outlook-mail-concept-overview",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Communication"
 LOGO_DOMAIN = "outlook.com"
 
 DESCRIPTION = (

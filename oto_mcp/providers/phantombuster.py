@@ -14,7 +14,7 @@ CONNECTOR = _c(
     href="https://phantombuster.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Outreach"
 PUBLISHER = "Phantombuster"
 LOGO_DOMAIN = "phantombuster.com"
 

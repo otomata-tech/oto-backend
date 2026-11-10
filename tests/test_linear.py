@@ -66,7 +66,7 @@ def test_linear_is_keyed_byo_user_and_byo_org_connector():
     assert c.default_active is False
     assert c.default_quota == 0
     assert "linear" in providers.KEY_PROVIDERS
-    assert c.category == "Business apps"
+    assert c.category == "Product & data"
     assert c.publisher_name == "Linear"
     assert c.label == "Linear"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["linear"] == "linear.app"

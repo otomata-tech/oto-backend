@@ -24,7 +24,7 @@ CONNECTOR = _c(
          "public image from its URL",
 )
 
-CATEGORY = "Web"
+CATEGORY = "Web search & scraping"
 # Publisher: BARE in-house capability — our cascade provides the service, and none
 # of its tiers is a service the caller chooses. DECLARED, not derived from a
 # default: since 2026-09-02 there is none (`Connector.publisher_name`).

@@ -34,7 +34,7 @@ CONNECTOR = _c(
     href="https://www.withallo.com",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Allo"
 LOGO_DOMAIN = "withallo.com"
 

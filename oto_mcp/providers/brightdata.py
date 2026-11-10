@@ -18,7 +18,7 @@ CONNECTOR = _c(
     href="https://brightdata.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Web search & scraping"
 PUBLISHER = "Bright Data"
 LOGO_DOMAIN = "brightdata.com"
 

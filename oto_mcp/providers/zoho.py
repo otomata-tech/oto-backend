@@ -61,7 +61,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "CRM"
 PUBLISHER = "Zoho"
 LOGO_DOMAIN = "zoho.com"
 

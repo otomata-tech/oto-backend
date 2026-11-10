@@ -23,7 +23,7 @@ CONNECTOR = _c(
     href="https://neilpatel.com/ubersuggest/",
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "Ubersuggest"
 LOGO_DOMAIN = "neilpatel.com"
 

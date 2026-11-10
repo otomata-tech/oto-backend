@@ -170,6 +170,25 @@ def _famille_servie(panne: dict) -> bool:
     return famille in (db.runner_arme(int(panne["org_id"])).get("families") or [])
 
 
+def _instant(v) -> Optional[datetime]:
+    """`finished_at` en datetime CONSCIENT. La boucle le lit en datetime
+    (`pannes_en_cours`), mais `oto_admin_agent_repair op=rerun` le reçoit de
+    `db.get_job`, dont les lignes rendent les horodatages en CHAÎNES naïves
+    (`_str_dict_row`, heure UTC de la base) : `maintenant - "2026-11-09 08:51:38"`
+    levait `TypeError`, servi en « Internal server error » à chaque relance manuelle.
+    Illisible → None ; `relancer` le refuse alors (âge inconnu ≠ âge permis)."""
+    if v is None or isinstance(v, datetime):
+        dt = v
+    else:
+        try:
+            dt = datetime.fromisoformat(str(v).strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt is not None and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def relancer(panne: dict, episode: dict, *, acteur: str = ACTEUR,
              maintenant: Optional[datetime] = None) -> Optional[str]:
     """Relance le dernier travail mort de l'agent, sous toutes les gardes. Rend None si
@@ -184,7 +203,10 @@ def relancer(panne: dict, episode: dict, *, acteur: str = ACTEUR,
         return "aucun travail mort à relancer"
     if _deja_relance(episode, job_id):
         return REFUS_DEJA_RELANCE
-    fini = panne.get("dernier")
+    brut = panne.get("dernier")
+    fini = _instant(brut)
+    if brut is not None and fini is None:
+        return "horodatage du travail mort illisible : âge inconnu, pas de relance"
     if fini is not None and maintenant - fini > AGE_MAX:
         return "travail mort trop ancien : son occurrence est passée"
     file = db.file_du_declencheur(int(panne["trigger_id"]), int(panne["org_id"]))

@@ -21,7 +21,7 @@ CONNECTOR = service(
     href="https://learn.microsoft.com/graph/teams-concept-overview",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Communication"
 LOGO_DOMAIN = "microsoft.com"
 
 DESCRIPTION = (

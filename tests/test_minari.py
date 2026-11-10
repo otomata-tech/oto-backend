@@ -86,7 +86,7 @@ def test_pas_de_cle_plateforme_le_journal_dappels_est_celui_du_client():
 
 def test_les_recouvrements_de_catalogue_sont_cures():
     c = providers.REGISTRY["minari"]
-    assert c.category == "Prospecting"
+    assert c.category == "Calls & meetings"
     assert c.publisher_name == "Minari"
     assert c.label == "Minari"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["minari"] == "minari.ai"

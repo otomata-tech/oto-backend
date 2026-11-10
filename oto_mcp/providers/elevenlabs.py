@@ -40,7 +40,7 @@ CONNECTOR = _c(
     href="https://elevenlabs.io",
 )
 
-CATEGORY = "AI models"
+CATEGORY = "AI & automation"
 PUBLISHER = "ElevenLabs"
 LOGO_DOMAIN = "elevenlabs.io"
 

@@ -28,7 +28,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "HR"
+CATEGORY = "HR & recruiting"
 PUBLISHER = "Lucca"
 LOGO_DOMAIN = "lucca.fr"
 

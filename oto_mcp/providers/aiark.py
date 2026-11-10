@@ -39,7 +39,7 @@ CONNECTOR = _c(
     href="https://ai-ark.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "AI Ark"
 LOGO_DOMAIN = "ai-ark.com"
 

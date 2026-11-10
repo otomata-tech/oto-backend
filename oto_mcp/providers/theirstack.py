@@ -22,7 +22,7 @@ CONNECTOR = _c(
     href="https://theirstack.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "TheirStack"
 LOGO_DOMAIN = "theirstack.com"
 

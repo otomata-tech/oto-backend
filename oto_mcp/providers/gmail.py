@@ -18,7 +18,7 @@ CONNECTOR = service(
     href="https://mail.google.com",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Communication"
 LOGO_DOMAIN = "gmail.com"
 DESCRIPTION = (
     "Your Gmail inbox, on your Google account: search and read messages, draft or send, archive, move to trash, read an attachment. A consent that only asks for the Gmail scope."

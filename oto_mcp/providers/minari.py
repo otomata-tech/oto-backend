@@ -26,7 +26,7 @@ CONNECTOR = _c(
     href="https://minari.ai",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Minari"
 LOGO_DOMAIN = "minari.ai"
 

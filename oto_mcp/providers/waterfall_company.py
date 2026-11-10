@@ -29,7 +29,7 @@ CONNECTOR = _c(
 # providers under their own connectors, each of which names its own publisher.
 PUBLISHER = "Otomata"
 SANS_LOGO_DE_MARQUE = True
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 
 DESCRIPTION = (
     "Finds a company's legal name, SIREN, size, industry and revenue — the free French registry first, then AI Ark, Pipecorn, Apollo, TheirStack, Cognism — stopping at the first match."

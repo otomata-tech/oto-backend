@@ -24,7 +24,7 @@ CONNECTOR = service(
     href="https://learn.microsoft.com/graph/api/resources/users",
 )
 
-CATEGORY = "Business apps"
+CATEGORY = "Product & data"
 LOGO_DOMAIN = "microsoft.com"
 
 DESCRIPTION = (

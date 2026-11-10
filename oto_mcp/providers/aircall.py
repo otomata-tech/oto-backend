@@ -40,7 +40,7 @@ CONNECTOR = _c(
     href="https://aircall.io",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Aircall"
 LOGO_DOMAIN = "aircall.io"
 

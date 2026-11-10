@@ -33,7 +33,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "CMS"
+CATEGORY = "Marketing & SEO"
 LOGO_DOMAIN = "webflow.com"
 
 DESCRIPTION = (

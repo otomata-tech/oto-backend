@@ -845,3 +845,121 @@ def test_la_sortie_typee_accepte_ce_qui_est_servi():
                     "deliveries_24h": 0, "deliveries_refused_24h": 0},
         "deliveries": [{"id": 1, "outcome": "queued", "job_id": 900}],
         "hook_secret": "otoh_x"})
+
+
+# ── 1 bis. à un AGENT, un lien — jamais le porteur (`_secret_par_lien`) ────────
+
+def _appel_agent(**kw):
+    """Le même appel, sur la face MCP (`channel="mcp"`) : un agent parle."""
+    if kw.get("op") == "create":
+        kw.setdefault("model", "claude-sonnet-5")
+    ctx = ResolvedCtx(sub="alexis", org_id=ORG, channel="mcp")
+    return asyncio.run(RT._triggers(ctx, RT.TriggerInput(**kw)))
+
+
+@pytest.fixture
+def ecran(monkeypatch):
+    """L'instance DÉCLARE l'écran du porteur (type de lien `webhook`)."""
+    from oto_mcp import links
+    monkeypatch.setenv(links.ENV_INSTANCE_PATHS, '{"webhook": "/org/{org}/webhook/{id}"}')
+
+
+@pytest.fixture
+def sans_ecran(monkeypatch):
+    """L'instance ne déclare PAS l'écran du porteur."""
+    from oto_mcp import links
+    monkeypatch.delenv(links.ENV_INSTANCE_PATHS, raising=False)
+
+
+def test_a_un_agent_la_creation_rend_un_lien_pas_le_porteur(pose, ecran):
+    out = _appel_agent(op="create", kind="webhook", procedure="veille", tools=["a"])
+    assert out["hook_secret"] is None
+    assert out["hook_secret_url"].endswith(f"/org/{ORG}/webhook/5")
+    assert "never holds" in out["hook_secret_note"]
+    # Un haché est posé (la porte est FERMÉE) et aucun porteur ne sort, nulle part.
+    assert pose["hash_pose"]
+    assert runner_hook.HOOK_SECRET_PREFIX not in json.dumps(out, default=str)
+
+
+def test_a_un_agent_la_rotation_rend_un_lien_pas_le_porteur(monkeypatch, pose, ecran):
+    monkeypatch.setattr(RT.db, "get_trigger",
+                        lambda i, o: {"id": i, "kind": "webhook", "org_id": o,
+                                      "sub": "alexis"})
+    out = _appel_agent(op="rotate_secret", trigger_id=5)
+    assert out["hook_secret"] is None and out["hook_secret_url"].endswith("/webhook/5")
+    assert runner_hook.HOOK_SECRET_PREFIX not in json.dumps(out, default=str)
+
+
+def test_sans_ecran_declare_l_agent_recoit_le_porteur_a_la_creation(pose, sans_ecran):
+    """Choix d'instance : sans écran du porteur, l'agent le reçoit, une fois — c'est le
+    seul chemin par lequel la personne l'obtient. Ni lien, ni consigne de lien."""
+    out = _appel_agent(op="create", kind="webhook", procedure="veille", tools=["a"])
+    assert out["hook_secret"].startswith(runner_hook.HOOK_SECRET_PREFIX)
+    assert pose["hash_pose"] == runner_hook.hacher(out["hook_secret"])
+    assert not {"hook_secret_url", "hook_secret_note", "hook_secret_missing"} & set(out)
+
+
+def test_sans_ecran_declare_l_agent_recoit_le_porteur_a_la_rotation(monkeypatch, pose,
+                                                                    sans_ecran):
+    monkeypatch.setattr(RT.db, "get_trigger",
+                        lambda i, o: {"id": i, "kind": "webhook", "org_id": o,
+                                      "sub": "alexis"})
+    out = _appel_agent(op="rotate_secret", trigger_id=5)
+    assert out["hook_secret"].startswith(runner_hook.HOOK_SECRET_PREFIX)
+    assert pose["hash_pose"] == runner_hook.hacher(out["hook_secret"])
+    assert "hook_secret_url" not in out
+
+
+def test_ecran_declare_mais_irrealisable_ni_porteur_ni_lien_et_la_raison(monkeypatch, pose,
+                                                                         ecran):
+    """Déclaré mais impossible à rendre ici : une faute dite, jamais un repli sur le
+    porteur en clair."""
+    from oto_mcp import links
+    monkeypatch.setattr(links, "link_for", lambda *a, **k: None)
+    monkeypatch.setattr(links, "raison_sans_lien", lambda *a, **k: "no address could be built")
+    out = _appel_agent(op="create", kind="webhook", procedure="veille", tools=["a"])
+    assert out["hook_secret"] is None and out["hook_secret_url"] is None
+    assert out["hook_secret_missing"].startswith("no address could be built")
+    # Le refus ne renvoie vers aucun écran ni menu : le lien n'a pas pu être adressé.
+    assert "▸" not in out["hook_secret_missing"] and "screen" not in out["hook_secret_missing"]
+    assert runner_hook.HOOK_SECRET_PREFIX not in json.dumps(out, default=str)
+
+
+def test_la_face_REST_rend_toujours_le_porteur_a_la_personne(pose):
+    ctx = ResolvedCtx(sub="alexis", org_id=ORG, channel="rest")
+    out = asyncio.run(RT._triggers(ctx, RT.TriggerInput(
+        op="create", kind="webhook", procedure="veille", tools=["a"],
+        model="claude-sonnet-5")))
+    assert out["hook_secret"].startswith(runner_hook.HOOK_SECRET_PREFIX)
+    assert "hook_secret_url" not in out
+
+
+def test_le_type_de_lien_webhook_se_declare_par_instance(monkeypatch):
+    from oto_mcp import links
+    monkeypatch.setenv(links.ENV_INSTANCE_PATHS, '{"webhook": "/org/{org}/webhook/{id}"}')
+    assert links.instance_paths()["webhook"] == "/org/{org}/webhook/{id}"
+
+
+@pytest.mark.parametrize("mode, genre", [(None, "bearer"), ("bearer", "bearer"),
+                                         ("body_secret", "body_secret")])
+def test_a_un_agent_le_lien_dit_le_TYPE_de_porteur(monkeypatch, pose, ecran, mode, genre):
+    """La page relit le préréglage sur le serveur ; la réponse le dit aussi au modèle,
+    pour qu'il annonce à la personne ce qu'elle va coller (en-tête ou champ `secret`)."""
+    monkeypatch.setattr(RT.db, "get_trigger",
+                        lambda i, o: {"id": i, "kind": "webhook", "org_id": o,
+                                      "sub": "alexis", "hook_auth": mode})
+    out = _appel_agent(op="rotate_secret", trigger_id=5)
+    assert out["hook_secret_kind"] == genre
+    assert out["hook_secret"] is None and out["hook_secret_url"].endswith("/webhook/5")
+
+
+def test_un_agent_signe_ne_frappe_aucun_porteur(monkeypatch, pose, ecran):
+    """Un préréglage à signature n'a pas de porteur : la rotation est refusée, rien
+    n'est frappé, aucun lien n'est promis."""
+    monkeypatch.setattr(RT.db, "get_trigger",
+                        lambda i, o: {"id": i, "kind": "webhook", "org_id": o,
+                                      "sub": "alexis", "hook_auth": "standard_webhooks"})
+    with pytest.raises(AuthzDenied) as e:
+        _appel_agent(op="rotate_secret", trigger_id=5)
+    assert e.value.code == "signature_mode"
+    assert "hash_pose" not in pose

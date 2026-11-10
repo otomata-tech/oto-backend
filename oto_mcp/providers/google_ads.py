@@ -24,7 +24,7 @@ CONNECTOR = service(
     href="https://ads.google.com",
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 LOGO_DOMAIN = "ads.google.com"
 DESCRIPTION = (
     "Google Ads, on your Google account: list the ad accounts you can open, read "

@@ -20,7 +20,7 @@ CONNECTOR = _c(
     href="https://app.folk.app",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "CRM"
 PUBLISHER = "Folk"
 LOGO_DOMAIN = "folk.app"
 

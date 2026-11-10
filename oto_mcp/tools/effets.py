@@ -1181,7 +1181,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_account_access": {"lire": "list", "envoyer": "grant", "detruire": "revoke"},
     "oto_admin_access_shadow": {"lire": "read"},
     "oto_admin_account": {"ecrire": "resume", "detruire": "suspend"},
-    "oto_admin_agent_repair": {"lire": "list get diagnose", "ecrire": "close", "envoyer": "rerun escalate"},
+    "oto_admin_agent_repair": {"lire": "list get diagnose", "ecrire": "close add_tool", "envoyer": "rerun escalate"},
     # dark-launched capabilities (feature flag): declared before they mount
     "oto_admin_cancel_contract": "detruire",
     # free-string `op`
@@ -1220,6 +1220,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_doc": {"lire": "list search get revisions backlinks shared_with_me outline verify", "ecrire": "create update patch move unarchive", "envoyer": "set_public", "detruire": "bulk_create delete revert archive"},
     "oto_doc_app": "lire",
     "oto_connector_app": "lire",
+    "oto_webhook_app": "lire",
     "oto_enable_tool": "ecrire",
     "oto_fleet": {"lire": "list get state", "ecrire": "create update take beat ack_stop", "envoyer": "launch", "detruire": "stop"},
     # `run` executes stored pure code (no network, no secret) and stores its files

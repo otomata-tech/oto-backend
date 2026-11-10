@@ -20,7 +20,7 @@ CONNECTOR = service(
     href="https://learn.microsoft.com/graph/outlook-calendar-concept-overview",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Workspace"
 LOGO_DOMAIN = "outlook.com"
 
 DESCRIPTION = (

@@ -38,7 +38,7 @@ CONNECTOR = _c(
     href="https://www.mux.com",
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "Mux"
 LOGO_DOMAIN = "mux.com"
 

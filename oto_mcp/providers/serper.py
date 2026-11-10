@@ -19,7 +19,7 @@ CONNECTOR = _c(
     href="https://serper.dev",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Web search & scraping"
 PUBLISHER = "Serper"
 LOGO_DOMAIN = "serper.dev"
 

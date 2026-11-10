@@ -20,7 +20,7 @@ CONNECTOR = service(
     href="https://console.cloud.google.com/bigquery",
 )
 
-CATEGORY = "Dev"
+CATEGORY = "Product & data"
 LOGO_DOMAIN = "cloud.google.com"
 DESCRIPTION = (
     "Google BigQuery, on your Google account: browse projects, datasets and schemas, "

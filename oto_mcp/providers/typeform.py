@@ -45,7 +45,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Business apps"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "Typeform"
 LOGO_DOMAIN = "typeform.com"
 

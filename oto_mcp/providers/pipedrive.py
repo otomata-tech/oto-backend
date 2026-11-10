@@ -24,7 +24,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "CRM"
 PUBLISHER = "Pipedrive"
 LOGO_DOMAIN = "pipedrive.com"
 

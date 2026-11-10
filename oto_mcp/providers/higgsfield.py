@@ -43,7 +43,7 @@ CONNECTOR = _c(
     href="https://higgsfield.ai",
 )
 
-CATEGORY = "AI models"
+CATEGORY = "AI & automation"
 PUBLISHER = "Higgsfield"
 LOGO_DOMAIN = "higgsfield.ai"
 

@@ -37,7 +37,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "PromptWatch"
 LOGO_DOMAIN = "promptwatch.com"
 

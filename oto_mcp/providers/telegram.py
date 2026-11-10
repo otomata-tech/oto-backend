@@ -25,7 +25,7 @@ CONNECTOR = channel(
     href="https://telegram.org",
 )
 
-CATEGORY = "Messaging"
+CATEGORY = "Communication"
 LOGO_DOMAIN = "telegram.org"
 DESCRIPTION = (
     "Your Telegram account: list your conversations, read a thread and send "

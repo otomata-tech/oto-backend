@@ -16,7 +16,7 @@ CONNECTOR = _c(
     label="Attio", help="CRM", href="https://app.attio.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "CRM"
 PUBLISHER = "Attio"
 LOGO_DOMAIN = "attio.com"
 

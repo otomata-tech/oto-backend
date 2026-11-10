@@ -21,7 +21,7 @@ CONNECTOR = service(
     href="https://learn.microsoft.com/rest/api/power-bi/",
 )
 
-CATEGORY = "Data"
+CATEGORY = "Product & data"
 LOGO_DOMAIN = "powerbi.com"
 
 DESCRIPTION = (

@@ -28,7 +28,7 @@ CONNECTOR = _c(
     href="https://cognism.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "Cognism"
 LOGO_DOMAIN = "cognism.com"
 

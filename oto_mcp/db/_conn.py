@@ -252,7 +252,9 @@ def reuse_connection() -> Iterator[None]:
     La portée porte aussi la mémoire des lectures décorées par `lecture_d_appel`
     (#1148) : une par arguments, effacée à la sortie du bloc — la lecture seule est ce
     qui la rend juste."""
-    if _emprunt_partage.get() is not None:
+    # Dans une `transaction_d_ecriture()`, ses lectures passent par SA connexion, et
+    # aucune mémoire de lecture (`lecture_d_appel`) ne doit survivre à une écriture.
+    if _emprunt_partage.get() is not None or _transaction_partagee.get() is not None:
         yield
         return
     emprunt = _EmpruntParesseux()
@@ -270,11 +272,76 @@ def reuse_connection() -> Iterator[None]:
 _duree_bornee_ms: ContextVar[Optional[int]] = ContextVar("_duree_bornee_ms", default=None)
 
 
+# La connexion d'une `transaction_d_ecriture()` en cours — vide en temps normal.
+_transaction_partagee: ContextVar[Optional[psycopg.Connection]] = ContextVar(
+    "_transaction_partagee", default=None)
+
+
+class TransactionEnEchec(RuntimeError):
+    """Une requête du bloc `transaction_d_ecriture()` a échoué sans que l'erreur
+    remonte : la transaction est annulée, et le dit."""
+
+
+class TransactionDansUneLecture(RuntimeError):
+    """`transaction_d_ecriture()` ouverte dans une portée `reuse_connection()` : celle-ci
+    est en autocommit et en lecture seule, elle n'offre aucune transaction à partager."""
+
+
+@contextmanager
+def transaction_d_ecriture() -> Iterator[None]:
+    """UNE transaction PostgreSQL pour toutes les écritures du bloc : chaque `_connect()`
+    imbriqué — d'un module `db`, d'`org_store` ou d'`ownership` — réutilise la même
+    connexion au lieu d'en emprunter une au pool et de valider seul. Tout est validé à
+    la sortie du bloc, ou tout est annulé si le bloc lève : aucun état intermédiaire
+    n'est jamais visible d'une autre connexion.
+
+    Pour un geste fait de plusieurs écritures qui ne valent qu'ensemble (transférer un
+    objet ET poser ses partages, `_liens_prives`). Chaque `_connect()` du bloc ouvre un
+    point de sauvegarde (une erreur attrapée par une fonction n'annule que sa part), et
+    les `conn.transaction()` des fonctions appelées en deviennent d'autres, sans changer
+    leur code. Une transaction restée en échec lève `TransactionEnEchec`.
+
+    Ré-entrant : un bloc imbriqué rejoint la transaction englobante. Refusé dans une
+    portée `reuse_connection()` (`TransactionDansUneLecture`)."""
+    if _transaction_partagee.get() is not None:
+        yield
+        return
+    if _emprunt_partage.get() is not None:
+        raise TransactionDansUneLecture(
+            "transaction_d_ecriture() dans une portée reuse_connection() (autocommit, "
+            "lecture seule)")
+    _hors_boucle.verifier()
+    with _get_pool().connection() as conn:
+        with conn.transaction():
+            duree = _duree_bornee_ms.get()
+            if duree is not None:
+                conn.execute(f"SET LOCAL statement_timeout = {int(duree)}")
+            jeton = _transaction_partagee.set(conn)
+            try:
+                yield
+            finally:
+                _transaction_partagee.reset(jeton)
+            # Une transaction en échec ne se valide pas : PostgreSQL répondrait ROLLBACK
+            # au COMMIT, et le geste se croirait écrit.
+            if conn.info.transaction_status == psycopg.pq.TransactionStatus.INERROR:
+                raise TransactionEnEchec(
+                    "transaction_d_ecriture() : une requête a échoué dans le bloc, rien "
+                    "n'est écrit")
+
+
 @contextmanager
 def _connect() -> Iterator[psycopg.Connection]:
     # Avant TOUT (y compris le prêt partagé de `reuse_connection`) : chaque requête
     # s'exécute dans le thread appelant, c'est donc chaque `_connect()` qui peut geler.
     _hors_boucle.verifier()
+    partagee = _transaction_partagee.get()
+    if partagee is not None:
+        # Un point de sauvegarde par `_connect()` : une requête en erreur qu'une
+        # fonction attrape (un journal « best-effort ») n'annule que SA part, comme
+        # quand elle avait sa propre connexion — jamais toute la transaction en silence.
+        with partagee.transaction():
+            yield partagee
+        return
     emprunt = _emprunt_partage.get()
     if emprunt is not None:
         yield emprunt.obtenir()

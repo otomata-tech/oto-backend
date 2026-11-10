@@ -50,7 +50,7 @@ def test_tavily_is_keyed_with_open_platform_key():
     assert c.platform_key_open is True
     assert c.default_quota == 100
     assert "tavily" in providers.KEY_PROVIDERS
-    assert c.category == "Prospecting"
+    assert c.category == "Web search & scraping"
     assert c.publisher_name == "Tavily"
 
 

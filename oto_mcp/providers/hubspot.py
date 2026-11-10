@@ -24,7 +24,7 @@ CONNECTOR = _c(
     modules=("hubspot", "hubspot_lignes", "hubspot_pipelines", "hubspot_visits"),
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "CRM"
 PUBLISHER = "HubSpot"
 LOGO_DOMAIN = "hubspot.com"
 

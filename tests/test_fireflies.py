@@ -63,7 +63,7 @@ def test_fireflies_is_keyed_byo_only_connector():
     assert c.default_active is False
     assert c.default_quota == 0
     assert "fireflies" in providers.KEY_PROVIDERS
-    assert c.category == "Knowledge"
+    assert c.category == "Calls & meetings"
     assert c.publisher_name == "Fireflies.ai"
     assert c.label == "Fireflies"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["fireflies"] == "fireflies.ai"

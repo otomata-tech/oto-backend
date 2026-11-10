@@ -26,7 +26,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Workspace"
 PUBLISHER = "Airtable"
 DESCRIPTION = (
     "Airtable bases, read AND write: list and filter "

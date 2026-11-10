@@ -603,7 +603,7 @@ osm_pois	-	485c2d67473c59a3
 oto_account_access	grant list revoke	e61dc66d7a63346a
 oto_admin_access_shadow	read	870877d4d2d3f931
 oto_admin_account	resume suspend	0c85c3eeb402068b
-oto_admin_agent_repair	close diagnose escalate get list rerun	0e44972675ac0834
+oto_admin_agent_repair	add_tool close diagnose escalate get list rerun	e63e2844f4db5fac
 oto_admin_connector_setting	-	73541a3b652d11e2
 oto_admin_guide	delete get list set	930751362a9526d9
 oto_admin_guides_semis	-	fd3168d48576c83d
@@ -652,12 +652,12 @@ oto_node_edit	create delete move update	e8856bdb2454bfca
 oto_node_rows	-	047893f7d081bd5b
 oto_org	accept_invite archive create invite list_invites list_loans reject_invite update	5c434083bbbc6421
 oto_org_monitoring	adoption agents_en_echec call calls connectors export gaps run runs signals summary tool_quality	68b48d4595668b72
-oto_org_settings	get preview set	37968967330ab34e
+oto_org_settings	get preview set	261a0fa5bd0f2658
 oto_procedure	archive create delete describe fork get library_get library_list list publish rename set share_get share_publish share_readers share_set share_unpublish unarchive unpublish	95e5d9b6e91cef3a
 oto_procedure_comment	-	147f9e0286ed060e
 oto_procedure_comments	-	f9d839e28803009d
 oto_profile	get update	bcb6908e4296dc31
-oto_project	activity archive copy create get handoff inventory link lint list list_templates publish_mcp rank_link runs unarchive unlink unpublish_mcp update	d53f31522995698f
+oto_project	activity archive copy create get handoff inventory link lint list list_templates publish_mcp rank_link runs unarchive unlink unpublish_mcp update	557c693caa57fdb9
 oto_project_files	delete list	21fe316bf162e607
 oto_recipe	create describe get list propose publish run sample test versions	ede9e37c55ae35be
 oto_resource	get list share transfer unshare	40a9d7eaa2b6e5f8
@@ -672,6 +672,7 @@ oto_upload_url	create update	c4038cd6d5c823e4
 oto_use_group	-	e83286e86451c199
 oto_use_org	-	5c64f85f3092fc23
 oto_use_project	-	e0eac4aa79eaf494
+oto_webhook_app	-	02cdc6938d4bf44a
 oto_whoami	-	99334726611ccf58
 outlook	attachment draft drafts folders get search	6aa0b861a91ab308
 outlook_act	archive move send trash	e0f842df4621b772

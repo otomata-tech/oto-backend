@@ -18,7 +18,7 @@ CONNECTOR = _c(
     href="https://grain.com",
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Grain"
 LOGO_DOMAIN = "grain.com"
 

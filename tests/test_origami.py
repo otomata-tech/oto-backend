@@ -75,7 +75,7 @@ def test_origami_is_keyed_byo_only_connector():
     assert c.default_active is False               # deny-by-default
     assert c.default_quota == 0
     assert "origami" in providers.KEY_PROVIDERS
-    assert c.category == "Prospecting"
+    assert c.category == "Outreach"
     assert c.publisher_name == "Origami"
     assert c.label == "Origami"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["origami"] == "origami.chat"

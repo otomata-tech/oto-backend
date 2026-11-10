@@ -199,14 +199,21 @@ _IDENTITE: tuple[Variable, ...] = (
              "Chemins des liens servis vers le tableau de bord de CETTE instance, en JSON "
              "`{type: chemin}` fusionné sur `links.DEFAULT_PATHS` (ex. "
              "`{\"table\": \"/org/{org}/tables/{id}\"}`). Vide = les chemins par défaut. "
-             "Deux types n'existent que déclarés, sans chemin par défaut "
+             "Cinq types n'existent que déclarés, sans chemin par défaut "
              "(`links.DECLARED_ONLY_KINDS`) : `app` (une app plein écran, ex. "
-             "`\"/org/{org}/apps/{id}\"`) et `connect` (la page d'UN connecteur et de son "
+             "`\"/org/{org}/apps/{id}\"`), `connect` (la page d'UN connecteur et de son "
              "formulaire d'ajout, ex. `\"/org/{org}/connect/{connector}\"`, où "
              "`oto_connector op=setup_link` envoie la personne ; non déclaré = la page des "
-             "connecteurs). Une déclaration illisible ou un type de lien inconnu refuse le "
-             "démarrage (`links.verifier_reglages`).",
-             ("oto_mcp/links.py:106",)),
+             "connecteurs), `webhook` (l'écran où une personne tire le jeton d'un agent "
+             "webhook, ex. `\"/org/{org}/webhook/{id}\"` ; un choix d'instance : déclaré, un "
+             "agent ne reçoit que ce lien, jamais le jeton ; non déclaré, l'agent reçoit "
+             "le jeton, une fois), `agent` et `agent_repair` (la page d'UN agent hébergé, "
+             "et la même ouverte sur sa réparation, ex. `\"/org/{org}/agents?agent={id}\"` "
+             "et `\"/org/{org}/agents?agent={id}&fix=1\"` : les boutons d'une alerte "
+             "d'agent ; non déclarés, l'alerte part sans eux). "
+             "Une déclaration illisible ou un type de lien inconnu refuse le démarrage "
+             "(`links.verifier_reglages`).",
+             ("oto_mcp/links.py:113",)),
     Variable("OTO_INVITE_BASE_URL", Classe.IDENTITE, None,
              "Base des liens d'invitation d'une org sans front déclaré "
              "(`orgs.front_base_url` gagne quand il est posé).",
@@ -317,6 +324,22 @@ _REGLAGES: tuple[Variable, ...] = (
              "seulement les porteurs de l'option `claude_subscription` ; toute autre "
              "valeur lève.",
              ("oto_mcp/capabilities/_abonnement.py:205",)),
+    Variable("OTO_APPS_LIENS_EXTERIEURS", Classe.REGLAGE, "",
+             "L'hôte des apps de CETTE instance ouvre un lien vers l'extérieur, après "
+             "l'accord du lecteur (message `open-link`, `oto.open(url)`, `docs/apps.md` "
+             "§Liens vers l'extérieur) : `1`, `true`, `yes`, `on`. Un choix d'instance : "
+             "la description d'`oto_apps` ne nomme `open(url)` que s'il est déclaré. "
+             "Absente, vide ou un non = l'hôte ne le gère pas. Toute autre valeur lève "
+             "au démarrage.",
+             ("oto_mcp/capabilities/apps.py:505",)),
+    Variable("OTO_RUNS_BLOQUES_COMPTES", Classe.REGLAGE, "",
+             "Un travail `done` dont l'agent a conclu son run `blocked` ou `failed` "
+             "(`run_finish`) compte comme un travail MORT pour le médecin des agents, "
+             "la guérison et l'alerte au titulaire ; l'issue et sa note sont posées "
+             "sur le travail et servies par les listes (`db/issues_des_travaux.py`). "
+             "`1`, `true`, `yes`, `on` l'allument ; absente, vide ou un non = un "
+             "travail n'est mort que `failed` ; toute autre valeur lève.",
+             ("oto_mcp/db/issues_des_travaux.py:68",)),
     Variable("OTO_REPLI_API_PAR_DEFAUT", Classe.REGLAGE, "",
              "Repli d'un travail d'abonnement Claude épuisé sur la clé API DÉPOSÉE par "
              "son org, pour une org qui ne l'a jamais réglé (`1`, `true`, `yes`, `on`). "
@@ -772,6 +795,15 @@ _REGLAGES: tuple[Variable, ...] = (
              "(l'agent relancé), donc production seulement. ÉTEINTE par défaut : `1` "
              "l'allume, chaque instance le décide.",
              ("oto_mcp/boucles_de_fond.py:222",)),
+    Variable("OTO_ALERTES_SLACK_AGENTS_ENABLED", Classe.REGLAGE, "",
+             "Alertes d'agents sur le Slack des orgs (`alertes_slack_agents.py`) : la "
+             "boucle qui prévient une org qu'un agent ne fonctionne plus, qu'il a été "
+             "réparé, qu'il refonctionne — AGIT sur un tiers (un message chez le "
+             "client), donc production seulement —, les routes Réglages ▸ Alertes, "
+             "l'allumage à la connexion de Slack, `problem` sur la file des travaux et "
+             "les champs `client_*` du médecin. `1`, `true`, `yes`, `on` l'allument ; "
+             "absente, vide ou un non l'éteignent ; toute autre valeur lève.",
+             ("oto_mcp/alertes_slack_agents.py:79",)),
     Variable("OTO_BILLING_RUNNER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : runner de facturation — AGIT sur un tiers "
              "(prélèvement), donc lu aussi par `est_la_production()`.",

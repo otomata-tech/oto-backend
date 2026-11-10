@@ -1,7 +1,8 @@
 """Les ÉPISODES de panne d'un agent hébergé — relevé, ouverture, guérison, réparations.
 
-Un épisode = les travaux morts (`failed`) d'un agent ALLUMÉ depuis son dernier travail
-réussi (`done`), donc consécutifs — la même définition que l'alerte au titulaire
+Un épisode = les travaux morts d'un agent ALLUMÉ depuis son dernier travail réussi, donc
+consécutifs — mort et réussi au sens de `issues_des_travaux` (un `done` que l'agent a
+conclu `blocked` est mort, 09/11/2026) — la même définition que l'alerte au titulaire
 (`db/alertes_agents.py`), mais dès le PREMIER travail mort : soigner commence avant
 d'annoncer. La ligne `agent_episodes` est la source unique de la panne : la boucle
 `medecin_agents` l'ouvre et la range, l'agent médecin (`oto_admin_agent_repair`) la lit
@@ -20,6 +21,7 @@ from typing import Any, Optional
 
 from ._conn import _connect
 from .alertes_agents import FENETRE_JOURS, MOTIF_TETE, _DU_DECLENCHEUR
+from . import issues_des_travaux
 
 #: Les statuts d'un épisode qui n'est pas clos — lus par l'index unique partiel.
 VIVANTS = ("ouvert", "en_soin", "escalade")
@@ -39,24 +41,24 @@ def pannes_en_cours() -> list[dict[str, Any]]:
             f"""
             SELECT t.id AS trigger_id, t.org_id, t.model,
                    COALESCE(NULLIF(t.label, ''), t.procedure) AS libelle,
-                   f.travaux, d.id AS job_id, LEFT(d.last_error, %(tete)s) AS motif,
+                   f.travaux, d.id AS job_id, LEFT(d.motif, %(tete)s) AS motif,
                    d.kind, d.payload, d.sub, d.finished_at AS dernier
               FROM runner_triggers t
               CROSS JOIN LATERAL (
                     SELECT MAX(j.finished_at) AS dernier_succes
                       FROM runner_jobs j
-                     WHERE {_DU_DECLENCHEUR} AND j.status = 'done') s
+                     WHERE {_DU_DECLENCHEUR} AND {issues_des_travaux.reussi()}) s
               CROSS JOIN LATERAL (
                     SELECT COUNT(*)::int AS travaux
                       FROM runner_jobs j
-                     WHERE {_DU_DECLENCHEUR} AND j.status = 'failed'
+                     WHERE {_DU_DECLENCHEUR} AND {issues_des_travaux.mort()}
                        AND j.finished_at > NOW() - make_interval(days => %(fenetre)s)
                        AND (s.dernier_succes IS NULL
                             OR j.finished_at > s.dernier_succes)) f
               CROSS JOIN LATERAL (
-                    SELECT j.id, j.last_error, j.kind, j.payload, j.sub, j.finished_at
+                    SELECT j.id, {issues_des_travaux.motif()} AS motif, j.kind, j.payload, j.sub, j.finished_at
                       FROM runner_jobs j
-                     WHERE {_DU_DECLENCHEUR} AND j.status = 'failed'
+                     WHERE {_DU_DECLENCHEUR} AND {issues_des_travaux.mort()}
                        AND j.finished_at > NOW() - make_interval(days => %(fenetre)s)
                      ORDER BY j.finished_at DESC LIMIT 1) d
              WHERE t.enabled AND f.travaux >= 1
@@ -114,7 +116,7 @@ def clore_les_gueris() -> list[dict[str, Any]]:
                       WHERE j.org_id = t.org_id
                         AND j.payload->>'trigger_id' ~ '^[0-9]+$'
                         AND j.payload->>'trigger_id' = t.id::text
-                        AND j.status = 'done' AND j.finished_at > e.ouvert_at))
+                        AND {issues_des_travaux.reussi()} AND j.finished_at > e.ouvert_at))
             RETURNING {", ".join("e." + c.strip() for c in _COLONNES.split(","))}
             """).fetchall()]
 

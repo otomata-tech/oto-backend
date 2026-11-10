@@ -22,7 +22,7 @@ CONNECTOR = _c(
     href="https://app.tavily.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Web search & scraping"
 PUBLISHER = "Tavily"
 LOGO_DOMAIN = "tavily.com"
 

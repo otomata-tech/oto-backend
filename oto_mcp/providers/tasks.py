@@ -18,7 +18,7 @@ CONNECTOR = service(
     href="https://tasks.google.com",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Workspace"
 LOGO_DOMAIN = "google.com"
 DESCRIPTION = (
     "Google Tasks, on your Google account: list your task lists, create, update and complete a task. A consent that asks only for the Tasks scope."

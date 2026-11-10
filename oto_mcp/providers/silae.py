@@ -25,7 +25,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Finance"
+CATEGORY = "HR & recruiting"
 PUBLISHER = "Silae"
 LOGO_DOMAIN = "silae.fr"
 

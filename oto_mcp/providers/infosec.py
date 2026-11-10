@@ -14,7 +14,7 @@ CONNECTOR = _c(
     label="Infosec", help="domain check: email deliverability (SPF/DMARC/DKIM, blocklists, score + recommendations), whois/RDAP, DNS, subdomains (CT), TLS, security headers (passive recon)",
 )
 
-CATEGORY = "Infosec"
+CATEGORY = "Product & data"
 PUBLISHER = "Otomata (OSINT)"
 DESCRIPTION = (
     "Domain check, passive read-only: email deliverability "

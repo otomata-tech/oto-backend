@@ -410,6 +410,25 @@ def delete_datastore_by_id(ns_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def datastore_name_taken(owner_type: str, owner_id: str, namespace: str) -> bool:
+    """Le propriétaire `(owner_type, owner_id)` a-t-il déjà un tableau de ce nom ? La
+    sonde de `reparent_datastore`, lue AVANT de tenter le transfert."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM user_datastores WHERE owner_type = %s AND owner_id = %s "
+            "AND namespace = %s", (owner_type, str(owner_id), namespace),
+        ).fetchone() is not None
+
+
+def ranger_tableau(ns_id: int, org_id: int) -> None:
+    """Pose l'org de RANGEMENT (`context_org_id`) d'un tableau devenu personnel : celle
+    où il vit (oto#160). Sans effet sur un tableau qui n'est pas à une personne."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE user_datastores SET context_org_id = %s "
+            "WHERE id = %s AND owner_type = 'user'", (int(org_id), int(ns_id)))
+
+
 def reparent_datastore(ns_id: int, new_owner_type: str, new_owner_id: str) -> None:
     """Re-parente un namespace vers un nouveau propriétaire (cœur du transfert).
     Lève si le destinataire possède déjà un namespace de ce nom."""

@@ -53,7 +53,7 @@ def test_registry_entry():
     c = providers.REGISTRY["amplemarket"]
     assert c.keyed and c.secret_kind == "api_key"
     assert c.auth_modes == {"byo_user", "byo_org"}
-    assert c.category == "Prospecting"
+    assert c.category == "Outreach"
 
 
 def test_the_pair_is_served_with_descriptions_and_annotations():

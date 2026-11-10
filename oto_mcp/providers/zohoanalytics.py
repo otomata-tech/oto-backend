@@ -30,7 +30,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Product & data"
 PUBLISHER = "Zoho"
 LOGO_DOMAIN = "zoho.com"
 

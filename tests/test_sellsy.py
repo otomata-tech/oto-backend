@@ -58,7 +58,7 @@ def test_sellsy_is_a_multi_field_byo_connector():
     assert all(f.secret for f in c.credential_fields)
     # byo-only : un compte Sellsy est celui d'une entreprise, rien à partager.
     assert c.auth_modes == frozenset({"byo_user", "byo_org"})
-    assert c.category == "Prospecting"
+    assert c.category == "CRM"
     assert c.publisher_name == "Sellsy"
 
 

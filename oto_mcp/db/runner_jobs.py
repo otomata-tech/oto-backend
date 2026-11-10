@@ -2011,6 +2011,14 @@ def _filtre_de_file(org_id: int, status: Optional[str],
     return q, params
 
 
+def _issue_servie() -> str:
+    """Les colonnes de l'issue que l'agent a conclue (`issues_des_travaux`), servies
+    seulement quand l'instance compte les runs bloqués : éteint, la fiche d'un travail
+    est celle d'avant."""
+    from . import issues_des_travaux
+    return ", run_outcome, run_note" if issues_des_travaux.compte_les_bloques() else ""
+
+
 def list_jobs(org_id: int, status: Optional[str] = None,
               limit: int = 50, before_id: Optional[int] = None,
               source: Optional[str] = None,
@@ -2039,8 +2047,8 @@ def list_jobs(org_id: int, status: Optional[str] = None,
     ou, params = _filtre_de_file(org_id, status, source, fleet_id, trigger_id)
     q = ("SELECT id, kind, run_id, payload, status, attempts, max_attempts, "
          "       claimed_by, lease_until, last_error, attempt_errors, result, "
-         "       due_at, created_at, finished_at, fleet_id, sub "
-         "FROM runner_jobs") + ou
+         "       due_at, created_at, finished_at, fleet_id, sub" + _issue_servie() +
+         " FROM runner_jobs") + ou
     if before_id is not None:
         q += " AND id < %s"
         params.append(int(before_id))
@@ -2082,8 +2090,8 @@ def get_job(job_id: int, org_id: int) -> Optional[dict]:
         row = conn.execute(
             "SELECT id, kind, run_id, payload, status, attempts, max_attempts, result, "
             "       claimed_by, lease_until, last_error, attempt_errors, due_at, created_at, "
-            "       finished_at, fleet_id, sub "
-            "FROM runner_jobs WHERE id = %s AND org_id = %s",
+            "       finished_at, fleet_id, sub" + _issue_servie() +
+            " FROM runner_jobs WHERE id = %s AND org_id = %s",
             (job_id, org_id),
         ).fetchone()
     return dict(row) if row else None

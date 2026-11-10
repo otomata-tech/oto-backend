@@ -124,6 +124,14 @@ def copy_instruction_to_owner(instruction_id: int, owner_type: str, owner_id: in
             "owner_id": oid, "org_id": created["org_id"]}
 
 
+def instruction_slug_libre(owner_type: str, owner_id: int | str, slug: str) -> bool:
+    """Le slug est-il libre TEL QUEL chez `(owner_type, owner_id)` — table vivante,
+    historique et guides compris ? La sonde de `move_instruction`, lue AVANT de
+    déplacer : un déplacement qui suffixerait le slug changerait ce que ses agents lisent."""
+    with _connect() as conn:
+        return _free_instruction_slug(conn, owner_type, owner_id, slug) == slug
+
+
 def move_instruction(instruction_id: int, new_owner_type: str,
                      new_owner_id: int | str) -> str:
     """DÉPLACE une procédure d'un palier à l'autre — org ↔ équipe (#681).

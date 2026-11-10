@@ -77,7 +77,7 @@ def test_hellostock_is_a_personal_token_connector_off_by_default():
     assert c.kind == "tools" and c.keyed and c.secret_kind == "api_key"
     assert c.auth_modes == frozenset({"byo_user"})
     assert c.default_active is False
-    assert c.publisher_name == "HelloStock" and c.category == "Business apps"
+    assert c.publisher_name == "HelloStock" and c.category == "Custom & industry apps"
     assert [f.name for f in c.secret_fields] == ["key"]
     assert "hs_" in c.secret_fields[0].label
     assert {s.kind for s in c.doc_sections} >= {"prerequisite", "usage", "note"}

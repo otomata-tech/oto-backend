@@ -1311,6 +1311,32 @@ par `oto_`, donc aucun adaptateur qui teste le préfixe d'un jeton de compte ne
 confond les deux. Seul le **haché** est stocké (`_hash_token`, comme les jetons
 `oto_`), le clair n'est rendu qu'au retour de `create` et de `rotate_secret`.
 
+⚠️ **À un agent, selon l'instance** (`capabilities/_secret_par_lien.py`). Ce que reçoit
+la face MCP (`channel == "mcp"`, explicite) est un **choix d'instance**, explicite : la
+présence du type de lien `webhook` (`/org/{org}/webhook/{id}`) dans
+`OTO_DASHBOARD_LINK_PATHS` (ou dans les liens du tenant du compte), lue à chaque appel.
+
+- **Déclaré** — l'instance sert un écran où une PERSONNE tire le porteur. `create` d'un
+  webhook et `rotate_secret` rendent `hook_secret: null` et `hook_secret_url`, le lien vers
+  cet écran. Le porteur frappé pour l'agent est JETÉ : seul son haché est posé, personne
+  ne le détient, la porte reste fermée jusqu'à ce que la personne en tire un neuf. Rien
+  n'est stocké en clair, rien n'expire. Un chemin déclaré qui ne se rend pas dans ce
+  contexte (paramètre ou base d'adresse manquants) est une faute dite,
+  `hook_secret_missing`, jamais un repli sur le clair. C'est le miroir, en sortie, de
+  « un secret brut ne passe jamais en argument MCP ».
+- **Non déclaré** — l'instance n'a pas cet écran : l'agent reçoit le porteur dans
+  `hook_secret`, une fois, comme la face REST. Ce n'est pas un repli qui masque une
+  erreur : c'est le seul chemin par lequel la personne l'obtient sur cette instance, et
+  il change dès que l'instance déclare son écran.
+
+Lien déclaré, la réponse dit aussi le TYPE de porteur frappé (`hook_secret_kind` : `bearer` = en-tête
+`Authorization`, `body_secret` = champ `secret` du message) ; l'écran, lui, relit le
+préréglage de l'agent sur le serveur, jamais dans le lien. C'est le SEUL secret qu'une
+capacité MCP fabrique : jetons d'API, clés d'org, secret de signature et adresse d'un
+webhook sans preuve n'ont pas de face MCP, et `tests/test_aucun_secret_frappe_au_modele.py`
+casse la CI si une sortie MCP gagne un champ nommé comme un secret — un nouveau type se
+remet par lien vers l'écran de son type, comme celui-ci.
+
 ⚠️ Le haché est comparé **dans le WHERE**, avec l'id, en une requête : une lecture
 par id suivie d'une comparaison en Python distinguerait « id inconnu » de « mauvais
 secret » par le temps de réponse. Et les deux rendent le **même 404, mot pour
@@ -1763,6 +1789,13 @@ de cet agent qui attend déjà un worker (`pending`) refuse le second : 409
 vaut que pour un `run_now` SANS `handoff` : un run qui reçoit un contexte n'en double
 aucun autre, et les enchaînements sont bornés par la chaîne (ci-dessous).
 
+**Une org archivée éteint ses agents** (`org_store.archive_org`, même transaction que
+`archived_at`) : n'étant plus joignable par `_org=`, chacune de leurs occurrences
+mourrait au `run_start` et le médecin des agents l'escaladerait comme une panne de
+plateforme. Le tick (`db.due_triggers`) ignore en plus tout agent allumé d'une org
+archivée — le cas d'une archive antérieure à ce geste ; désarchivée, l'org reprend son
+horloge.
+
 **`rerun` relance UN run passé de l'agent** (`oto_trigger op=rerun trigger_id=… job_id=…`,
 04/11/2026) : le bouton « Relancer » de l'écran. Il enfilait à la main une copie de la
 charge SANS son `trigger_id` (l'enfilage à la main le refuse, `trigger_id_server_set`) : le
@@ -2047,9 +2080,27 @@ comme `api/hooks.py`), logique dans `slack_events.py`, sans HTTP.
 
 Un agent hébergé qui poste **en tant que l'app** (`slack_post_message(author="app")`),
 **hors d'un fil**, voit son message noté sous lui. Une réponse d'un membre **dans ce fil**
-— DM, canal, canal privé ou DM de groupe — relance **cet agent**. Tous les agents, sans
-interrupteur (décision du 29/10). Même route que les DM (`POST /api/slack/events`,
+— DM, canal, canal privé ou DM de groupe — relance **cet agent**. Tous les agents
+(décision du 29/10). Même route que les DM (`POST /api/slack/events`,
 `slack_events.py`).
+
+- **Réglage d'org « mention seule »** : `oto_org_settings domain=slack` (`get` membre,
+  `set` admin de l'org, `mention_only` true|false ; colonne `orgs.slack_mention_only`,
+  défaut `false`, révision `20261109_2100_slack_mention_only`, `db/slack_reglage.py`).
+  **Par défaut, rien ne change** : une réponse dans le fil relance l'agent sans mention,
+  et la réponse de la même personne dans une conversation de l'agent intégré la poursuit
+  (`docs/copilot.md` §Dans Slack). Posé à `true`, hors d'un DM, l'app ne répond qu'à un
+  message qui la **tague** (`@<app>`), réponses en fil comprises : une réponse sans
+  mention est jetée **avant tout credential** (`ignored: mention_only`) — l'org se lit
+  sur le fil lui-même (`slack_agent_posts.org_id`, ou l'org de la conversation de
+  l'agent intégré, `copilot.slack_org_du_fil`), jamais sur l'installation. Les DM ne
+  changent jamais (Slack n'y envoie pas `app_mention`).
+- **Une phrase, un run** : une réponse qui tague l'app arrive deux fois (`message` et
+  `app_mention`). Par défaut, l'événement `message` relance l'agent et la mention est
+  jetée (`ignored: agent_thread`) ; en « mention seule », la mention relance l'agent —
+  l'adresse `<@app>` ôtée du texte que le run lit (`slack_events.sans_la_mention`) — et
+  l'événement `message` est jeté (`ignored: mention_only`). Les deux décisions se
+  prennent avant tout credential.
 
 - **Noter** : `slack_post_message` (`tools/slack.py`), juste après l'envoi, note **tout**
   message d'un run hébergé — son auteur (`app`/`me`), son fil, chaque partie d'un texte
@@ -2078,7 +2129,8 @@ interrupteur (décision du 29/10). Même route que les DM (`POST /api/slack/even
   les messages de nos agents (`est_note`), puis lit `slack_agent_posts` **avant tout
   credential** : chaque réponse en fil de chaque canal
   où siège le bot arrive ici, et presque aucune n'est sous un des nôtres. Trouvé dans
-  l'org de l'installation → cet agent. Pas trouvé : un DM continue vers l'agent Slack de
+  l'org de l'installation → cet agent (hors DM, selon le réglage « mention seule » de
+  l'org du message, ci-dessus). Pas trouvé : un DM continue vers l'agent Slack de
   l'org comme avant, une réponse en canal est ignorée. Au-delà de 30 jours, la ligne ne
   sert plus (maintenance `slack-agent-posts`, timer quotidien).
 - **Qui répond** : la même vérification qu'un DM (exactement un membre réel, email

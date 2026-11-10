@@ -16,7 +16,7 @@ CONNECTOR = _c(
     logo_url="https://www.kaspr.io/hubfs/2023%20-%20Kaspr%20Brand%20Logos/favicon.png",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "Kaspr"
 LOGO_DOMAIN = "kaspr.io"
 

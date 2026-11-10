@@ -36,7 +36,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "DataForSEO"
 LOGO_DOMAIN = "dataforseo.com"
 

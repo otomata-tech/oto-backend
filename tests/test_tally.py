@@ -107,7 +107,7 @@ def test_tally_is_keyed_byo_only_connector():
     assert c.default_active is False
     assert c.default_quota == 0
     assert "tally" in providers.KEY_PROVIDERS
-    assert c.category == "Business apps"
+    assert c.category == "Marketing & SEO"
     assert c.publisher_name == "Tally"
     assert c.label == "Tally"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["tally"] == "tally.so"

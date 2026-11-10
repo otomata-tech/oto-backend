@@ -196,8 +196,8 @@ class _Base:
     def fil(self, team, channel, ts, sub):
         return self.fils.get((team, channel, ts, sub))
 
-    def existe(self, team, channel, ts):
-        return any(k[:3] == (team, channel, ts) for k in self.fils)
+    def org_du_fil(self, team, channel, ts):
+        return ORG if any(k[:3] == (team, channel, ts) for k in self.fils) else None
 
     def lier(self, thread_id, team, channel, ts, sub):
         self.liens.append((thread_id, team, channel, ts, sub))
@@ -238,7 +238,7 @@ def mur(monkeypatch):
     b = vu["base"]
     monkeypatch.setattr(slack_copilot.store, "slack_reclamer", b.reclamer)
     monkeypatch.setattr(slack_copilot.store, "slack_fil", b.fil)
-    monkeypatch.setattr(slack_copilot.store, "slack_fil_existe", b.existe)
+    monkeypatch.setattr(slack_copilot.store, "slack_org_du_fil", b.org_du_fil)
     monkeypatch.setattr(slack_copilot.store, "slack_lier", b.lier)
     monkeypatch.setattr(slack_copilot.store, "slack_de", b.de)
     monkeypatch.setenv("OTO_COPILOT_SUBS", "*")

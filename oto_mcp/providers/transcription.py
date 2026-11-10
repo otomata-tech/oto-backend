@@ -49,7 +49,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Mistral AI"
 LOGO_DOMAIN = "mistral.ai"
 

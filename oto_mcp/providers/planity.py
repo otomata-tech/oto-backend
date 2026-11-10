@@ -41,7 +41,7 @@ CONNECTOR = _c(
     href="https://pro.planity.com",
 )
 
-CATEGORY = "Business apps"
+CATEGORY = "Custom & industry apps"
 # Declared, not left to the default: "Otomata" is also what the ABSENCE of a
 # constant returns, and an oversight must not be confused with this choice.
 PUBLISHER = "Otomata"

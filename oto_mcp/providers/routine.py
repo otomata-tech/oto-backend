@@ -39,6 +39,7 @@ CONNECTOR = _c(
     ),
 )
 
+CATEGORY = "AI & automation"
 LOGO_DOMAIN = "anthropic.com"
 
 DESCRIPTION = (

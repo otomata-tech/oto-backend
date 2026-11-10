@@ -56,7 +56,7 @@ def test_theirstack_is_keyed_connector_platform_grant_only():
     assert c.default_active is False               # deny-by-default
     assert c.default_quota == 0
     assert "theirstack" in providers.KEY_PROVIDERS
-    assert c.category == "Prospecting"
+    assert c.category == "Lead & company data"
     assert c.publisher_name == "TheirStack"
     assert c.label == "TheirStack"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["theirstack"] == "theirstack.com"

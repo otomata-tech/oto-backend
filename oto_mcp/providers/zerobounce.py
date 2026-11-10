@@ -14,7 +14,7 @@ CONNECTOR = _c(
     help="email deliverability verification", href="https://www.zerobounce.net",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "ZeroBounce"
 LOGO_DOMAIN = "zerobounce.net"
 

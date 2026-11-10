@@ -14,7 +14,7 @@ CONNECTOR = _c(
     href="https://www.notion.so",
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Workspace"
 PUBLISHER = "Notion"
 LOGO_DOMAIN = "notion.so"
 

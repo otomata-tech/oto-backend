@@ -262,14 +262,26 @@ def slack_reclamer(channel: str, ts: str) -> bool:
     return row is not None
 
 
-def slack_fil_existe(team_id: str, channel: str, thread_ts: str) -> bool:
-    """Un fil de Slack porte-t-il une conversation, de qui que ce soit ? La lecture bon
-    marché, avant tout identifiant : chaque réponse de chaque canal où l'app siège arrive
-    ici, et presque aucune n'est sous une de nos conversations."""
+def slack_org_du_fil(team_id: str, channel: str, thread_ts: str) -> Optional[int]:
+    """L'org des conversations qu'un fil de Slack porte, de qui que ce soit, ou `None`
+    s'il n'en porte aucune. La lecture bon marché, avant tout identifiant : chaque
+    réponse de chaque canal où l'app siège arrive ici, et presque aucune n'est sous une
+    de nos conversations ; l'org dit si une réponse sans mention y est une demande
+    (`db/slack_reglage.py`). Une conversation rangée sous Slack sans org est un défaut
+    de rangement : levé (`slack_lier` ne range que des conversations nées en Slack, au
+    nom de l'org de l'installation)."""
     with _connect() as conn:
-        return conn.execute(
-            "SELECT 1 FROM copilot_slack_threads WHERE team_id = %s AND channel = %s "
-            "AND thread_ts = %s LIMIT 1", (team_id, channel, thread_ts)).fetchone() is not None
+        row = conn.execute(
+            "SELECT t.org_id FROM copilot_slack_threads s "
+            "JOIN copilot_threads t ON t.id = s.thread_id "
+            "WHERE s.team_id = %s AND s.channel = %s AND s.thread_ts = %s LIMIT 1",
+            (team_id, channel, thread_ts)).fetchone()
+    if row is None:
+        return None
+    if row["org_id"] is None:
+        raise RuntimeError(f"copilot: a Slack thread of team {team_id} files a "
+                           "conversation without an org")
+    return int(row["org_id"])
 
 
 def slack_fil(team_id: str, channel: str, thread_ts: str, sub: str) -> Optional[dict]:

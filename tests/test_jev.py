@@ -78,7 +78,7 @@ def test_registry_no_personal_key_no_free_tier():
     assert c.platform_key_open is False
     assert c.cardinality == "mono"
     assert "jev" in providers.KEY_PROVIDERS
-    assert c.category == "AI models" and c.publisher_name == "TypeSafe"
+    assert c.category == "AI & automation" and c.publisher_name == "TypeSafe"
 
 
 def test_org_shareable_because_it_is_the_tenant_rung_door():

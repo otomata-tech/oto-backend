@@ -27,7 +27,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Communication"
 PUBLISHER = "Slack"
 LOGO_DOMAIN = "slack.com"
 

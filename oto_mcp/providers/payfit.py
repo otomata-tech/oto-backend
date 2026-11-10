@@ -40,7 +40,7 @@ CONNECTOR = _c(
     account_noun="société",
 )
 
-CATEGORY = "HR"
+CATEGORY = "HR & recruiting"
 PUBLISHER = "PayFit"
 LOGO_DOMAIN = "payfit.com"
 

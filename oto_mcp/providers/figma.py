@@ -14,7 +14,7 @@ CONNECTOR = _c(
     href="https://www.figma.com",
 )
 
-CATEGORY = "Design"
+CATEGORY = "Workspace"
 PUBLISHER = "Figma"
 LOGO_DOMAIN = "figma.com"
 

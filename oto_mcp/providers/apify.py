@@ -22,7 +22,7 @@ CONNECTOR = _c(
     modules=("apify", "apify_actors"),
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Web search & scraping"
 PUBLISHER = "Apify"
 LOGO_DOMAIN = "apify.com"
 

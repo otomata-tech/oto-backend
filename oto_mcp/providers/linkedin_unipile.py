@@ -39,7 +39,7 @@ CONNECTOR = channel(
     modules=("unipile",),
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Outreach"
 LOGO_DOMAIN = "linkedin.com"
 DESCRIPTION = (
     "Your LinkedIn session, operated for you: search for people and "

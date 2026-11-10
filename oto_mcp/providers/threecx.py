@@ -44,7 +44,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "3CX"
 LOGO_DOMAIN = "3cx.com"
 

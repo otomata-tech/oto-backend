@@ -109,7 +109,7 @@ def test_signwell_is_keyed_byo_only_connector():
     assert c.default_quota == 0
     assert c.modules == ("signwell", "signwell_envois")
     assert "signwell" in providers.KEY_PROVIDERS
-    assert c.category == "Business apps"
+    assert c.category == "Workspace"
     assert c.publisher_name == "SignWell"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["signwell"] == "signwell.com"
 

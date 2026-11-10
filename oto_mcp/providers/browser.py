@@ -25,6 +25,8 @@ CONNECTOR = _c(
          "runs at Browserbase",
 )
 
+CATEGORY = "Web search & scraping"
+
 # Publisher: the connector is OURS — we wrote it, and we are the ones receiving
 # the call (the site's cookie lives in our vault; the session runs on our Browserbase
 # account, an infrastructure, not a gateway that would hold the person's account).

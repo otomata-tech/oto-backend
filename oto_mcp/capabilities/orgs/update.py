@@ -211,7 +211,8 @@ CAPABILITIES += [
         errors=ERREURS_ARCHIVAGE,
         description=("Archive (delete) an organization you administer: it disappears "
                      "from every listing and its members fall back to their other "
-                     "orgs. Reversible in DB, data is kept. You must be org_admin. "
+                     "orgs; its hosted agents are switched off. Reversible in DB, "
+                     "data is kept. You must be org_admin. "
                      "Refused (409 `org_has_active_subscription`) while the org has an "
                      "active subscription: cancel it first, then archive. "
                      "You may archive YOUR OWN personal space — never someone else's. "

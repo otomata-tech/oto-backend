@@ -19,7 +19,7 @@ CONNECTOR = _c(
     href="https://ahrefs.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "Ahrefs"
 LOGO_DOMAIN = "ahrefs.com"
 

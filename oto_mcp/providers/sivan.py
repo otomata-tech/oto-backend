@@ -33,7 +33,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "HR"
+CATEGORY = "HR & recruiting"
 PUBLISHER = "Sivan"
 LOGO_DOMAIN = "sivan.io"
 

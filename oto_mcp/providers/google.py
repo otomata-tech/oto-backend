@@ -44,7 +44,7 @@ CONNECTOR = _c(
     modules=("google",),
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Workspace"
 PUBLISHER = "Google"
 LOGO_DOMAIN = "google.com"
 

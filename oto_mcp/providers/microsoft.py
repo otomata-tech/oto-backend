@@ -43,7 +43,7 @@ CONNECTOR = _c(
     href="https://learn.microsoft.com/graph/overview",
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Workspace"
 PUBLISHER = "Microsoft"
 LOGO_DOMAIN = "microsoft.com"
 

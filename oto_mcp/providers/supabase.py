@@ -14,7 +14,7 @@ CONNECTOR = _c(
     href="https://supabase.com",
 )
 
-CATEGORY = "Dev"
+CATEGORY = "Product & data"
 PUBLISHER = "Supabase"
 LOGO_DOMAIN = "supabase.com"
 

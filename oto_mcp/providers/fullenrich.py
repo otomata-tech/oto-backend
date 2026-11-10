@@ -25,7 +25,7 @@ CONNECTOR = _c(
     label="FullEnrich", help="waterfall enrichment", href="https://app.fullenrich.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "FullEnrich"
 LOGO_DOMAIN = "fullenrich.com"
 

@@ -18,7 +18,7 @@ CONNECTOR = service(
     href="https://calendar.google.com",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Workspace"
 LOGO_DOMAIN = "google.com"
 DESCRIPTION = (
     "Google Calendar, on your Google account: list your calendars, read and create events, edit or delete them. A consent that only requests the Calendar scope."

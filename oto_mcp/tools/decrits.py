@@ -229,6 +229,11 @@ class OutilDecrit(Tool):
     def servi(self) -> Servi:
         return self._servi
 
+    @property
+    def fonctions(self) -> list[dict]:
+        """The described functions this tool serves, in the order of its `op` enum."""
+        return [self._servi.fonctions[op] for op in self._ops]
+
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         f, args = self._servi.valider(self.name, self._ops, arguments)
         return self.convert_result(await asyncio.to_thread(self._servi.appeler, f, args))

@@ -33,7 +33,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "CMS"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "WordPress"
 LOGO_DOMAIN = "wordpress.org"
 

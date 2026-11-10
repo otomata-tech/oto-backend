@@ -20,6 +20,6 @@ DESCRIPTION = (
 # French State open data (Géoportail de l'urbanisme, Géorisques, INSEE…), not an
 # in-house connector: the publisher used to fall back to "Otomata" and the card was filed
 # under "Other" — same family as `foncier` (2026-09-02).
-CATEGORY = "French data"
+CATEGORY = "Public data"
 PUBLISHER = "French State (open data)"
 LOGO_DOMAIN = "geoportail-urbanisme.gouv.fr"

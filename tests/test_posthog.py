@@ -81,7 +81,7 @@ def test_region_is_a_config_field_because_us_and_eu_are_separate_deployments():
 
 def test_posthog_catalogue_overlays_are_curated():
     c = providers.REGISTRY["posthog"]
-    assert c.category == "Dev"
+    assert c.category == "Product & data"
     assert c.publisher_name == "PostHog"
     assert c.label == "PostHog"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["posthog"] == "posthog.com"

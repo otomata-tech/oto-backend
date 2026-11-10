@@ -58,7 +58,7 @@ def test_waalaxy_is_keyed_byo_only_connector():
     assert c.auth_modes == frozenset({"byo_user", "byo_org"})
     assert c.default_active is False
     assert "waalaxy" in providers.KEY_PROVIDERS
-    assert c.category == "Prospecting"
+    assert c.category == "Outreach"
     assert c.publisher_name == "Waalaxy"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["waalaxy"] == "waalaxy.com"
     assert [f.name for f in c.credential_fields] == ["key"]

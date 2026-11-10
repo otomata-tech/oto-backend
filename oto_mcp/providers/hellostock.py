@@ -42,7 +42,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Business apps"
+CATEGORY = "Custom & industry apps"
 PUBLISHER = "HelloStock"
 LOGO_DOMAIN = "hellostock.fr"
 

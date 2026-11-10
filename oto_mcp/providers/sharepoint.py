@@ -22,7 +22,7 @@ CONNECTOR = service(
     href="https://learn.microsoft.com/graph/api/resources/sharepoint",
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Workspace"
 LOGO_DOMAIN = "microsoft.com"
 
 DESCRIPTION = (

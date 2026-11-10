@@ -18,7 +18,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Automation"
+CATEGORY = "AI & automation"
 PUBLISHER = "Make"
 LOGO_DOMAIN = "make.com"
 

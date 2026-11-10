@@ -20,7 +20,7 @@ CONNECTOR = _c(
 # "Greece" nor "companies" appeared, and the type filter carried a line for it
 # alone. Filed (2026-09-02) where the European company registers already live —
 # hithorizons, topograph.
-CATEGORY = "Prospecting"
+CATEGORY = "Public data"
 PUBLISHER = "GEMI / VIES"
 SANS_LOGO_DE_MARQUE = True
 

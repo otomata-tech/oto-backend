@@ -21,7 +21,7 @@ CONNECTOR = service(
     href="https://learn.microsoft.com/graph/integrate-with-onenote",
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Workspace"
 LOGO_DOMAIN = "onenote.com"
 
 DESCRIPTION = (

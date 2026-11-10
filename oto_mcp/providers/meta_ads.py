@@ -28,7 +28,7 @@ CONNECTOR = _c(
     href="https://www.facebook.com/business/ads",
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 # Who receives the call: Meta — its official API, its consent dialog.
 PUBLISHER = "Meta"
 LOGO_DOMAIN = "facebook.com"

@@ -18,7 +18,7 @@ CONNECTOR = _c(
     href="https://granola.ai",
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Granola"
 LOGO_DOMAIN = "granola.ai"
 

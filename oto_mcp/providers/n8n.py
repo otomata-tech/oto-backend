@@ -25,7 +25,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Automation"
+CATEGORY = "AI & automation"
 PUBLISHER = "n8n"
 LOGO_DOMAIN = "n8n.io"
 

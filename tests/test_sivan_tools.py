@@ -52,7 +52,7 @@ def test_registry_entry():
     c = providers.REGISTRY["sivan"]
     assert c.keyed and c.secret_kind == "api_key"
     assert c.auth_modes == {"byo_user", "byo_org"}
-    assert c.category == "HR"
+    assert c.category == "HR & recruiting"
 
 
 def test_six_tools_served_with_descriptions():

@@ -27,7 +27,7 @@ CONNECTOR = _c(
     href="https://www.bodacc.fr/pages/api-bodacc/",
 )
 
-CATEGORY = "French data"
+CATEGORY = "Public data"
 PUBLISHER = "DILA"
 DESCRIPTION = (
     "The French official bulletin of civil and commercial notices (BODACC), as "

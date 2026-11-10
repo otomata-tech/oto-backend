@@ -46,7 +46,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "Klaviyo"
 LOGO_DOMAIN = "klaviyo.com"
 

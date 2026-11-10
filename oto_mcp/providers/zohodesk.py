@@ -42,7 +42,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Communication"
 PUBLISHER = "Zoho"
 LOGO_DOMAIN = "zoho.com"
 

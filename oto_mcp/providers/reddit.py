@@ -31,7 +31,7 @@ CONNECTOR = _c(
     href="https://redditapis.com",
 )
 
-CATEGORY = "Web"
+CATEGORY = "Web search & scraping"
 PUBLISHER = "redditapis.com (third-party gateway)"
 # Not Reddit's logo: the service rendered is not theirs. And redditapis.com
 # is not a brand the user would recognize — monogram on the UI side.

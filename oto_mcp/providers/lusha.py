@@ -19,7 +19,7 @@ CONNECTOR = _c(
     publisher="Lusha", href="https://www.lusha.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 LOGO_DOMAIN = "lusha.com"
 
 DESCRIPTION = (

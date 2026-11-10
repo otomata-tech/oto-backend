@@ -44,7 +44,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Documents & signature"
+CATEGORY = "Workspace"
 PUBLISHER = "Zeendoc"
 LOGO_DOMAIN = "zeendoc.com"
 

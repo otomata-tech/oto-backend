@@ -56,7 +56,7 @@ def test_sans_page_connecteurs_l_issue_reste_nommee_sans_lien(monkeypatch):
 
 def test_le_connecteur_se_presente_en_custom_api():
     c = providers.REGISTRY["http"]
-    assert c.label == "Custom API" and c.category == "Custom"
+    assert c.label == "Custom API" and c.category == "Custom & industry apps"
     assert "never in a chat" in c.help
     assert _ligne("http")["name"] == "http"
 

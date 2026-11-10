@@ -47,7 +47,7 @@ CONNECTOR = _c(
     href="https://www.instagram.com",
 )
 
-CATEGORY = "Business apps"
+CATEGORY = "Marketing & SEO"
 # Who receives the call (`docs/connector-vault.md` §"What the card SAYS"): Meta.
 # It is THEIR official API, THEIR consent dialog, and it is they who decide
 # what the token opens. The contrast with `planity` — declared "Otomata" because the

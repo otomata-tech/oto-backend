@@ -267,3 +267,28 @@ def test_un_tenant_illisible_ecarte_l_org(monkeypatch, file):
                         lambda **kw: pytest.fail("aucun épisode sur un tenant illisible"))
     assert M.balayer(_MAINTENANT)["tenant_tiers_ecartes"] == 1
     assert file["enfiles"] == []
+
+
+@pytest.mark.parametrize("dernier", ["2026-11-09 08:51:38", "2026-11-09T08:51:38+00:00"])
+def test_un_horodatage_en_chaine_ne_casse_pas_la_relance(file, dernier):
+    """`oto_admin_agent_repair op=rerun` passe `finished_at` tel que `db.get_job` le
+    rend : une CHAÎNE (`_str_dict_row`). `maintenant - str` levait `TypeError` →
+    « Internal server error » à chaque relance manuelle."""
+    from datetime import datetime as _dt
+    maintenant = _dt(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
+    assert M.relancer(_panne(dernier=dernier), _episode(), maintenant=maintenant) is None
+    assert len(file["enfiles"]) == 1
+
+
+def test_un_horodatage_en_chaine_trop_ancien_refuse(file):
+    from datetime import datetime as _dt
+    maintenant = _dt(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+    assert "trop ancien" in M.relancer(_panne(dernier="2026-11-09 08:51:38"), _episode(),
+                                       maintenant=maintenant)
+    assert file["enfiles"] == []
+
+
+def test_un_horodatage_illisible_refuse_la_relance(file):
+    assert "illisible" in M.relancer(_panne(dernier="pas une date"), _episode(),
+                                     maintenant=_MAINTENANT)
+    assert file["enfiles"] == []

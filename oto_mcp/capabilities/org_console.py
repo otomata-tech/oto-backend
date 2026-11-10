@@ -90,7 +90,7 @@ def _org(ctx: ResolvedCtx, inp: OrgInput) -> dict:
 class OrgSettingsInput(BaseModel):
     op: Literal["get", "set", "preview"]
     domain: Literal["email", "mfa", "field_filters", "model_subscriptions", "time_saved",
-                    "partage_par_defaut", "apify_charge_cap"]
+                    "partage_par_defaut", "apify_charge_cap", "slack"]
     org_id: int
     # email (set) :
     connector: Optional[str] = None          # scaleway | resend
@@ -122,6 +122,8 @@ class OrgSettingsInput(BaseModel):
     partage: Optional[dict[str, str]] = None
     # apify_charge_cap (set) : le plafond par lancement Apify de l'org, en dollars.
     usd: Optional[float] = None
+    # slack (set) : hors d'un DM, l'app Slack ne répond qu'à qui la tague.
+    mention_only: Optional[bool] = None
 
 
 def _temps_gagne(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
@@ -179,6 +181,25 @@ def _partage_par_defaut(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     return rep
 
 
+def _slack(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
+    """Le réglage Slack de l'org (`db/slack_reglage.py`) : hors d'un DM, l'app ne répond
+    qu'à qui la tague (`mention_only`). Défaut : FALSE, une réponse dans le fil d'un
+    message d'agent le relance sans mention (`slack_events.py`)."""
+    from .. import db
+    if inp.op not in ("get", "set"):
+        raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
+    if inp.op == "set":
+        if inp.mention_only is None:
+            raise AuthzDenied(400, "missing_mention_only",
+                              "`mention_only` (true|false) requis pour set.")
+        if not db.slack_reglage.poser_mention_seule(inp.org_id, inp.mention_only):
+            raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    seule = db.slack_reglage.mention_seule(inp.org_id)
+    if seule is None:
+        raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    return {"org_id": inp.org_id, "mention_only": seule}
+
+
 def _plafond_apify(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     """Le plafond par lancement Apify de l'org (`connectors/apify_charge_cap.py`)."""
     cc = connectors_apify_charge_cap
@@ -197,6 +218,8 @@ def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
         return _plafond_apify(ctx, inp)
     if inp.domain == "time_saved":
         return _temps_gagne(ctx, inp)
+    if inp.domain == "slack":
+        return _slack(ctx, inp)
     if inp.domain == "partage_par_defaut":
         return _partage_par_defaut(ctx, inp)
     if inp.domain == "model_subscriptions":
@@ -420,7 +443,12 @@ CAPABILITIES += [
             "org's ceiling per Apify run, $25 by default: set takes `usd`; at most the "
             "platform maximum without an Apify key of the org's own, at most the "
             "platform's safety bound with one; get also returns the bound and the "
-            "ceiling in force on each key). "
+            "ceiling in force on each key) | slack (the org's Slack app: set takes "
+            "`mention_only` true|false; default false = a reply in the thread of a "
+            "message an agent posted as the app restarts that agent, and a reply in a "
+            "conversation with the in-app agent continues it, without tagging the app; "
+            "true = outside a direct message, the app answers only a message that tags "
+            "it, replies included; direct messages are never affected). "
             "op=get is member, set is org admin."),
         mcp="oto_org_settings",
     ),

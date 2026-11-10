@@ -53,7 +53,11 @@ CREATE TABLE IF NOT EXISTS orgs (
     -- (`org_store.ensure_home_org`) : une org ordinaire, la marque est permanente
     -- (`db/org_d_inscription.py`). Base existante : révision
     -- `20261105_1700_orgs_auto_created`.
-    auto_created BOOLEAN NOT NULL DEFAULT FALSE
+    auto_created BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Hors d'un DM, l'app Slack ne répond qu'à qui la tague (`db/slack_reglage.py`).
+    -- FALSE = une réponse dans un fil d'agent le relance sans mention. Base existante :
+    -- révision `20261109_2100_slack_mention_only`.
+    slack_mention_only BOOLEAN NOT NULL DEFAULT FALSE
 );
 """
 

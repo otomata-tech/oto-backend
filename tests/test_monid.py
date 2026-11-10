@@ -179,7 +179,7 @@ def test_monid_is_a_keyed_connector_with_a_grant_only_platform_key():
     assert c.auth_modes == frozenset({"byo_user", "byo_org", "platform"})
     assert c.platform_key_open is False and c.default_quota == 0
     assert "monid" in providers.KEY_PROVIDERS
-    assert c.publisher_name == "Monid" and c.category == "Prospecting"
+    assert c.publisher_name == "Monid" and c.category == "Web search & scraping"
     assert [f.name for f in c.secret_fields] == ["key"] and c.secret_fields[0].secret
     assert c.default_active is False
     # `help` est servi dans la carte des namespaces de TOUTES les sessions

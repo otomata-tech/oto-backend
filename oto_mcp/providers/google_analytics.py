@@ -39,7 +39,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "Google"
 LOGO_DOMAIN = "analytics.google.com"
 

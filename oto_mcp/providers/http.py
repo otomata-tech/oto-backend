@@ -108,7 +108,7 @@ CONNECTOR = _c(
 # from a default: since 2026-09-02 there is none (`Connector.publisher_name`).
 PUBLISHER = "Otomata"
 # Its own shelf: what a person browses when their tool has no card of its own.
-CATEGORY = "Custom"
+CATEGORY = "Custom & industry apps"
 SANS_LOGO_DE_MARQUE = True
 
 DESCRIPTION = (

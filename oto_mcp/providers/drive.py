@@ -18,7 +18,7 @@ CONNECTOR = service(
     href="https://drive.google.com",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Workspace"
 LOGO_DOMAIN = "google.com"
 DESCRIPTION = (
     "Your Google Drive, on your Google account: list and read files and folders, move or delete them, control who has access. A consent that only asks for the Drive scope."

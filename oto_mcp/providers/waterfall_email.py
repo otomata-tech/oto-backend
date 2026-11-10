@@ -29,7 +29,7 @@ CONNECTOR = _c(
 # providers under their own connectors, each of which names its own publisher.
 PUBLISHER = "Otomata"
 SANS_LOGO_DE_MARQUE = True
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 
 DESCRIPTION = (
     "Finds a person's work email by trying your connected providers in turn — Pipecorn, Hunter, AI Ark, Apollo, Kaspr, Lusha, Forager, Dropcontact, lemlist, FullEnrich — and stopping at the first hit. Each is billed on its own key."

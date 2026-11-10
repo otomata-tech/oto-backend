@@ -24,7 +24,7 @@ CONNECTOR = _c(
     href="https://www.claap.io",
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Claap"
 LOGO_DOMAIN = "claap.io"
 

@@ -48,7 +48,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Communication"
 PUBLISHER = "Crisp"
 LOGO_DOMAIN = "crisp.chat"
 

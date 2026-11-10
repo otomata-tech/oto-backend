@@ -38,11 +38,12 @@ agent en MCP, pas par un script porteur de clé.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .. import db, ownership
+from .. import db, interrupteurs, ownership
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .apps_html import avertissements
@@ -484,10 +485,40 @@ def _update(sub: str, row: dict, expected_rev: Optional[str], **fields) -> dict:
     return out
 
 
-CAPABILITIES += [
-    Capability(
-        key="me.app", handler=_app, Input=AppInput, Output=AppOut, authz=SUB_ONLY,
-        description=(
+# ── Liens vers l'extérieur : un choix d'instance ──────────────────────────────
+#
+# L'hôte qui affiche une app peut ouvrir, après l'accord du lecteur, un site hors de
+# l'app (`oto.open(url)`, ou un `<a href="https://…">` que le pont lui remet : message
+# `open-link`, `docs/apps.md` §Liens vers l'extérieur). Tous les hôtes ne le font pas :
+# sur un hôte qui ne gère pas `open-link`, `oto.open` n'existe pas, et un agent qui
+# suivrait la description écrirait un appel qui lève. L'instance le DÉCLARE donc,
+# explicitement, et la description d'`oto_apps` ne nomme `open(url)` que dans ce cas.
+# Ce n'est pas un repli : c'est ce que sait faire l'hôte de CETTE instance. Lu au
+# chargement du module (la description d'un outil est figée au démarrage) ; une valeur
+# illisible lève, l'instance refuse de démarrer.
+ENV_LIENS_EXTERIEURS = "OTO_APPS_LIENS_EXTERIEURS"
+
+
+def liens_exterieurs() -> bool:
+    """L'hôte des apps de cette instance ouvre-t-il un lien vers l'extérieur ?"""
+    return interrupteurs.oui_non(ENV_LIENS_EXTERIEURS,
+                                 os.environ.get(ENV_LIENS_EXTERIEURS))
+
+
+_PONT_LIENS_EXTERIEURS = (
+    " (or a link <a href=\"#/route\">) / open(url): a site outside the app, from a "
+    "click handler — or just a plain <a href=\"https://…\">, preferred. The viewer is shown the whole address and it "
+    "opens in a new tab once they confirm (a target on the link is ignored); http(s) "
+    "only — a mailto: or other non-http(s), non-# link closes the app; no user part "
+    "(https://a@b/); only right after a viewer's click or key, never on load or a "
+    "timer. Never window.open or location.href (they do nothing in the sandbox); keep "
+    "addresses readable, no data packed in the query.")
+
+
+def description_app(liens: bool) -> str:
+    """La description servie d'`oto_apps` ; `liens` = l'instance déclare que son hôte
+    ouvre un lien vers l'extérieur (`liens_exterieurs`)."""
+    return (
             "Apps: screens people build on the platform — dashboards, review queues. "
             "Before building or changing one, read the guide: oto_guide op=read "
             "slug=build-apps. "
@@ -529,13 +560,21 @@ CAPABILITIES += [
             "download(fileId) (opens the viewer's own file) / "
             "runAgent(agent, {input, files: [ids]}) → {jobId} — the run gets each file's "
             "text and reads it in full with op=read_file / job(jobId) / runs(agent) / "
-            "go(route). A click in the app does NOT approve anything: every set, add, "
+            "go(route)"
+            + (_PONT_LIENS_EXTERIEURS if liens else ".") + " "
+            "A click in the app does NOT approve anything: every set, add, "
             "upload and runAgent is shown by the HOST screen (outside the app) with what "
             "it writes, and runs only once the viewer confirms there — cancelled, it "
             "rejects. Ask for one gesture at a time, from a click. One run of "
             "an agent waits at a time (`run_already_queued`): collect files, then one "
             "runAgent with files: [...]."
-        ),
+    )
+
+
+CAPABILITIES += [
+    Capability(
+        key="me.app", handler=_app, Input=AppInput, Output=AppOut, authz=SUB_ONLY,
+        description=description_app(liens_exterieurs()),
         mcp="oto_apps",
         rest=RestBinding("POST", "/api/me/apps", allow_api_token=False),
     ),

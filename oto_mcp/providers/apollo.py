@@ -15,7 +15,7 @@ CONNECTOR = _c(
     href="https://app.apollo.io",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "Apollo"
 LOGO_DOMAIN = "apollo.io"
 

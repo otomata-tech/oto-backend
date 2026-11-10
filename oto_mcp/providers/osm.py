@@ -12,6 +12,8 @@ CONNECTOR = _c(
     label="OpenStreetMap", help="OSM points of interest by tag over an area (parking lots, facilities, shops) — exhaustive census via Overpass (open data)",
 )
 
+CATEGORY = "Public data"
+
 # Third-party public data: the publisher used to fall back to the default "Otomata" while
 # the card already carries the openstreetmap.org logo (fixed on 2026-09-02).
 PUBLISHER = "OpenStreetMap"

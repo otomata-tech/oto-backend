@@ -98,6 +98,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.copilot.SLACK,            # l'agent intégré dans Slack : où vit sa conversation, messages déjà pris
     schema.guides.GUIDE_REVISIONS,   # versions gardées des guides et readmes, et leur rétention
     schema.connectors.ACCOUNT_RULES,  # règles d'accès des comptes de connecteur, et leur journal
+    schema.runs.AGENT_ALERT_SETTINGS,  # où une org est prévenue qu'un agent ne fonctionne plus
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

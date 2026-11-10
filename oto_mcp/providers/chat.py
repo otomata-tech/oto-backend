@@ -18,7 +18,7 @@ CONNECTOR = service(
     href="https://chat.google.com",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Communication"
 LOGO_DOMAIN = "google.com"
 DESCRIPTION = (
     "Google Chat, on your Google account: list the spaces (rooms and DMs) you belong to, read their messages and post to them. A consent that only asks for the Chat scopes."

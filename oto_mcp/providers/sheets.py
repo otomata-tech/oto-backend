@@ -18,7 +18,7 @@ CONNECTOR = service(
     href="https://docs.google.com/spreadsheets",
 )
 
-CATEGORY = "Comms"
+CATEGORY = "Workspace"
 LOGO_DOMAIN = "google.com"
 DESCRIPTION = (
     "Google Sheets, on your Google account: read and write a spreadsheet's cells, create an empty one, copy a template tab and format cells, columns and drop-downs. A consent that only asks for the Sheets scope."

@@ -42,6 +42,25 @@ def liberer_les_lignes_du_run(run_id: str) -> int | None:
         return None
 
 
+async def _noter_sur_le_travail(outcome: str, note: str | None) -> None:
+    """Pose l'issue sur le TRAVAIL hébergé dont le jeton fait cet appel
+    (`db/issues_des_travaux.py`) : un `done` dont l'agent conclut `blocked` est un
+    travail mort, et sans cette trace le médecin des agents ne le voit pas. Seulement
+    quand l'instance compte les runs bloqués (`issues_des_travaux.compte_les_bloques`) ;
+    hors travail hébergé (une personne, une session MCP), rien. Une écriture ratée LÈVE :
+    l'appelant l'a placée après la clôture et la libération des lignes, qui sont faites."""
+    from starlette.concurrency import run_in_threadpool
+    from ..db import issues_des_travaux
+    if not issues_des_travaux.compte_les_bloques():
+        return
+    from .. import verrou_org
+    v = verrou_org.travail_de_la_requete()
+    if v is None or v.job_id is None:
+        return
+    await run_in_threadpool(issues_des_travaux.noter_issue, int(v.job_id), v.sub,
+                            outcome, note)
+
+
 def _run_d_autrui(run_id: str) -> bool:
     """Is `run_id` a run indexed under ANOTHER account than the caller's? The guard of
     `run_finish`'s release (the REST close has its own, `run_thread._clore`).
@@ -272,5 +291,8 @@ def register(mcp: FastMCP) -> None:
             liberees = 0
         else:
             liberees = await run_in_threadpool(liberer_les_lignes_du_run, run_id)
+        # Après la clôture ET la libération : une issue non posée lève sans retenir de
+        # ligne ni laisser le run ouvert.
+        await _noter_sur_le_travail(outcome, note)
         return {"ok": True, "run_id": run_id, "outcome": outcome,
                 "was_open": removed is not None, "rows_released": liberees}

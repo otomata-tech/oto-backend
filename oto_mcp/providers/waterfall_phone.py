@@ -29,7 +29,7 @@ CONNECTOR = _c(
 # providers under their own connectors, each of which names its own publisher.
 PUBLISHER = "Otomata"
 SANS_LOGO_DE_MARQUE = True
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 
 DESCRIPTION = (
     "Finds a person's phone number by trying your connected providers in turn — Pipecorn, Kaspr, Lusha, Forager, Apollo, lemlist, Dropcontact, FullEnrich — and stopping at the first hit. Each is billed on its own key."

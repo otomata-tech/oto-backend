@@ -35,7 +35,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "Forager.ai"
 LOGO_DOMAIN = "forager.ai"
 

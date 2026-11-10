@@ -60,7 +60,7 @@ def test_registry_entry():
     c = providers.REGISTRY["malibou"]
     assert c.secret_kind == "fields"
     assert c.auth_modes == {"byo_user", "byo_org"}
-    assert c.category == "HR"
+    assert c.category == "HR & recruiting"
     fields = {f.name: f.secret for f in c.credential_fields}
     assert fields == {"api_key": True, "organization_id": False}
 

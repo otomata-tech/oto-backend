@@ -33,6 +33,7 @@ CONNECTOR = _c(
     publisher="Resend", href="https://resend.com",
 )
 
+CATEGORY = "Product & data"
 LOGO_DOMAIN = "resend.com"
 
 DESCRIPTION = (

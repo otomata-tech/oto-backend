@@ -27,6 +27,6 @@ CONNECTOR = _c(
     href="https://console.mistral.ai/api-keys",
 )
 
-CATEGORY = "AI models"
+CATEGORY = "AI & automation"
 PUBLISHER = "Mistral AI"
 LOGO_DOMAIN = "mistral.ai"

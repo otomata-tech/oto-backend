@@ -21,7 +21,7 @@ CONNECTOR = _c(
     href="https://firecrawl.dev",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Web search & scraping"
 PUBLISHER = "Firecrawl"
 LOGO_DOMAIN = "firecrawl.dev"
 

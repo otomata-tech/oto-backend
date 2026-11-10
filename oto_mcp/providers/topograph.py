@@ -22,7 +22,7 @@ CONNECTOR = _c(
     href="https://www.topograph.co",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 # The displayed publisher fell back to the default "Otomata" while the card
 # carries the topograph.co logo — two contradicting claims in the same place.
 PUBLISHER = "Topograph"

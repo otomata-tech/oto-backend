@@ -19,7 +19,7 @@ CONNECTOR = _c(
     href="https://serpapi.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Web search & scraping"
 PUBLISHER = "SerpApi"
 LOGO_DOMAIN = "serpapi.com"
 

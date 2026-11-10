@@ -25,6 +25,7 @@ CONNECTOR = _c(
     ),
 )
 
+CATEGORY = "Product & data"
 LOGO_DOMAIN = "scaleway.com"
 
 DESCRIPTION = (

@@ -29,7 +29,7 @@ CONNECTOR = _c(
 # providers under their own connectors, each of which names its own publisher.
 PUBLISHER = "Otomata"
 SANS_LOGO_DE_MARQUE = True
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 
 DESCRIPTION = (
     "Finds a person's current title, company and location — your LinkedIn first, then Pipecorn, AI Ark, Apollo, Forager, Cognism, Lusha, lemlist — stopping at the first match."

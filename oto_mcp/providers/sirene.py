@@ -25,7 +25,7 @@ CONNECTOR = _c(
     href="https://api.insee.fr", modules=("fr", "fr_stock", "fr_groupe"),
 )
 
-CATEGORY = "French data"
+CATEGORY = "Public data"
 # The publisher is NOT INSEE: of the 25 tools, public procurement (BOAMP),
 # aids, company agreements and Egapro come from other administrations.
 # The label and publisher said "INSEE SIRENE" until 2026-09-02 — a

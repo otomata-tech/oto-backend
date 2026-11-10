@@ -75,7 +75,7 @@ def test_registry_entry():
     assert [(f.name, f.secret) for f in c.secret_fields] == [("login", False),
                                                             ("password", True)]
     assert c.modules == ("dataforseo", "dataforseo_insights", "dataforseo_site")
-    assert c.category == "Marketing"
+    assert c.category == "Marketing & SEO"
     assert c.publisher_name == "DataForSEO"
 
 

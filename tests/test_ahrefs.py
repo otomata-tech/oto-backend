@@ -83,7 +83,7 @@ def test_ahrefs_is_keyed_byo_only_connector():
     assert c.default_active is False
     assert c.default_quota == 0
     assert "ahrefs" in providers.KEY_PROVIDERS
-    assert c.category == "Prospecting"
+    assert c.category == "Marketing & SEO"
     assert c.publisher_name == "Ahrefs"
     assert c.label == "Ahrefs"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["ahrefs"] == "ahrefs.com"

@@ -39,7 +39,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Dev"
+CATEGORY = "Product & data"
 PUBLISHER = "Amplitude"
 LOGO_DOMAIN = "amplitude.com"
 

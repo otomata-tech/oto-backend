@@ -287,6 +287,25 @@ class Job(BaseModel):
     due_at: Optional[str] = None
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
+    run_outcome: Optional[Literal["done", "partial", "blocked", "failed"]] = Field(
+        None, description=(
+            "How the AGENT closed its run (`run_finish` under this job's token; the "
+            "gravest wins when it closed several). ⚠️ Independent of `status`: a job is "
+            "`done` when its run ENDED — `done` + `blocked` is an agent that stopped on "
+            "something it could not lift. Null: it declared nothing, or this instance "
+            "does not record it."))
+    run_note: Optional[str] = Field(
+        None, description="The agent's own note with that outcome (bounded). Data, "
+                          "written for the agent — never shown to a client as is.")
+    problem: Optional[dict[str, Any]] = Field(
+        None, description=(
+            "On the last dead job of an agent whose failure EPISODE is open (op=list), "
+            "when this instance sends agent alerts: `{headline, todo, action, link, "
+            "side}` — the problem in plain words, the same text the Slack alert carries; "
+            "`link` is an address of the caller's own dashboard, or null. `side`: "
+            "`client` (only the workspace can fix it), `operator` (the operator of the "
+            "agents fixes it, or is looking), `platform` (ours, nothing to show the "
+            "client)."))
 
 
 class SummaryHour(BaseModel):
@@ -1501,6 +1520,42 @@ def _resume(ctx: ResolvedCtx, jours: int) -> dict:
             "time_standards": minutes}
 
 
+#: Le côté d'un épisode (`agent_episodes.cote`) dit au tableau de bord (`problem.side`).
+_COTE_SERVI = {"proprietaire": "client", "plateforme": "platform", "inconnu": "operator"}
+
+
+def _avec_le_probleme(ctx: ResolvedCtx, jobs: list[dict]) -> list[dict]:
+    """Pose `problem` sur le DERNIER travail mort de chaque agent dont l'épisode de panne
+    est ouvert (`db/alertes_slack.problemes_vivants`) : le texte que l'agent médecin a
+    écrit pour le client, sinon la phrase de la classe (`alertes_slack_agents`), les
+    liens pris au tableau de bord de l'appelant. Seulement si l'instance a allumé les
+    alertes d'agents ; sinon la file est celle d'avant."""
+    from .. import alertes_slack_agents
+    if ctx.org_id is None or not jobs or not alertes_slack_agents.actives():
+        return jobs
+    from ..db import alertes_slack
+    org_id = int(ctx.org_id)
+    ids = sorted({int(p["trigger_id"]) for j in jobs
+                  if isinstance(p := j.get("payload"), dict)
+                  and str(p.get("trigger_id") or "").isdigit()})
+    vivants = alertes_slack.problemes_vivants(org_id, ids)
+    if not vivants:
+        return jobs
+    par_job = {int(e["dernier_job_id"]): e for e in vivants.values()
+               if e.get("dernier_job_id")}
+    langue = alertes_slack_agents.langue(org_id)
+    marque = alertes_slack_agents.marque_de_l_org(org_id).nom
+    out = []
+    for j in jobs:
+        e = par_job.get(int(j["id"]))
+        if e is not None:
+            pb = alertes_slack_agents.message_du_probleme(org_id, e, langue, marque=marque,
+                                                          sub=ctx.sub)
+            j = {**j, "problem": {**pb, "side": _COTE_SERVI[e["cote"]]}}
+        out.append(j)
+    return out
+
+
 def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
     # Deux principaux, deux files. Un MEMBRE agit sur la file de SON org, et
     # doit en avoir une. Un WORKER de plateforme n'en a aucune : il sonde, et
@@ -1668,6 +1723,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         suite = _curseur(jobs[-1]["id"]) if jobs and len(jobs) >= inp.limit else None
         if not ctx.platform_worker:
             jobs = _acces_agent.masquer_charges(ctx, jobs)
+            jobs = _avec_le_probleme(ctx, jobs)
         return {"jobs": jobs,
                 "total": db.count_jobs(ctx.org_id, status=inp.status,
                                        source=inp.source, fleet_id=inp.fleet_id,

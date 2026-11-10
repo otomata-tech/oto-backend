@@ -65,7 +65,7 @@ def test_grain_is_keyed_byo_only_connector():
     assert c.default_active is False
     assert c.default_quota == 0
     assert "grain" in providers.KEY_PROVIDERS
-    assert c.category == "Knowledge"
+    assert c.category == "Calls & meetings"
     assert c.publisher_name == "Grain"
     assert c.label == "Grain"
     assert providers._LOGO_DOMAIN_BY_CONNECTOR["grain"] == "grain.com"

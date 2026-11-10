@@ -31,7 +31,7 @@ CONNECTOR = _c(
     href="https://luma.com",
 )
 
-CATEGORY = "Marketing"
+CATEGORY = "Marketing & SEO"
 PUBLISHER = "Luma"
 LOGO_DOMAIN = "luma.com"
 

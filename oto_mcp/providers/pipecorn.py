@@ -42,7 +42,7 @@ CONNECTOR = _c(
     href="https://www.pipecorn.com",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "Pipecorn"
 LOGO_DOMAIN = "pipecorn.com"
 

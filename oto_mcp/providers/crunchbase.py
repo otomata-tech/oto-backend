@@ -21,7 +21,7 @@ CONNECTOR = _c(
     href="https://www.crunchbase.com/",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 PUBLISHER = "Crunchbase"
 LOGO_DOMAIN = "crunchbase.com"
 

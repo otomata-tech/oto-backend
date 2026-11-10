@@ -25,7 +25,7 @@ CONNECTOR = channel(
     href="https://www.instagram.com",
 )
 
-CATEGORY = "Messaging"
+CATEGORY = "Communication"
 LOGO_DOMAIN = "instagram.com"
 DESCRIPTION = (
     "The private messages of your Instagram account: list your conversations, "

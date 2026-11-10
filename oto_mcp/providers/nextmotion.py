@@ -36,7 +36,7 @@ CONNECTOR = _c(
              "nextmotion_analyse"),
 )
 
-CATEGORY = "Business apps"
+CATEGORY = "Custom & industry apps"
 PUBLISHER = "Nextmotion"
 LOGO_DOMAIN = "nextmotion.net"
 

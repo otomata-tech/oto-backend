@@ -45,7 +45,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "HR"
+CATEGORY = "HR & recruiting"
 PUBLISHER = "Malibou"
 LOGO_DOMAIN = "malibou.com"
 

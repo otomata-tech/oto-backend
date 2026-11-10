@@ -32,7 +32,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Documents & signature"
+CATEGORY = "Workspace"
 PUBLISHER = "Yousign"
 LOGO_DOMAIN = "yousign.com"
 

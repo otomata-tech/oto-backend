@@ -19,7 +19,7 @@ CONNECTOR = _c(
     href="https://fireflies.ai",
 )
 
-CATEGORY = "Knowledge"
+CATEGORY = "Calls & meetings"
 PUBLISHER = "Fireflies.ai"
 LOGO_DOMAIN = "fireflies.ai"
 

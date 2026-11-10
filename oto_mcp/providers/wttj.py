@@ -18,7 +18,7 @@ CONNECTOR = _c(
     href="https://developers.welcomekit.co",
 )
 
-CATEGORY = "Recruiting"
+CATEGORY = "HR & recruiting"
 PUBLISHER = "Welcome to the Jungle"
 LOGO_DOMAIN = "welcometothejungle.com"
 

@@ -32,7 +32,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Outreach"
 PUBLISHER = "Amplemarket"
 LOGO_DOMAIN = "amplemarket.com"
 

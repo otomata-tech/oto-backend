@@ -86,7 +86,14 @@ DEFAULT_PATHS: dict[str, str] = {
 # `connect` = the page that shows ONE connector and its add form, nothing else
 # (`/org/{org}/connect/{connector}`), where `oto_connector op=setup_link` sends a person;
 # without it, the link falls back to the connectors page (`connector_setup_link`).
-DECLARED_ONLY_KINDS = frozenset({"app", "connect"})
+# `webhook` = the screen where a person gets a webhook agent's token
+# (`/org/{org}/webhook/{id}`). DECLARING it is an instance's choice, not a page to probe:
+# declared, an AGENT receives this link instead of the token itself; undeclared, it
+# receives the token, once (`capabilities/_secret_par_lien.py`, `lien_declare`).
+# `agent` = the page of ONE hosted agent (`/org/{org}/agents?agent={id}`), and
+# `agent_repair` = the same page opened on its repair flow — where an agent alert sends a
+# person (`alertes_slack_agents`); without them, the alert carries no such button.
+DECLARED_ONLY_KINDS = frozenset({"app", "connect", "webhook", "agent", "agent_repair"})
 
 
 class InstancePathsInvalid(ValueError):
@@ -243,6 +250,16 @@ def _chemin_pour(kind: str, sub: Optional[str]) -> Optional[str]:
     return (getattr(entry, "link_paths", None) or {}).get(kind)
 
 
+def lien_declare(kind: str, *, sub: Optional[str] = None) -> bool:
+    """Does this account's product DECLARE a link of type `kind` (the instance's
+    `OTO_DASHBOARD_LINK_PATHS`, or the tenant's patterns)?
+
+    Not "can a link be built" (`link_for`): a declared pattern that cannot be rendered
+    in this context is a fault to report, not the absence of the view. Read by a caller
+    whose BEHAVIOUR depends on the view existing (`_secret_par_lien`)."""
+    return _chemin_pour(kind, sub) is not None
+
+
 def patron_reclame(kind: str, param: str, *, sub: Optional[str] = None) -> bool:
     """Does this account's link pattern for `kind` carry `{param}`?
 
@@ -285,6 +302,31 @@ def raison_sans_lien(kind: str, *, sub: Optional[str] = None, **params: Any) -> 
                 + ", ".join(f"`{m}`" for m in manquants) + ", which this context does not carry"
                 + (" — pass `_org=` to set it" if "org" in manquants else ""))
     return "no address could be built: the declared pattern is unreadable"
+
+
+def lien_de_l_instance(lien: Optional[str], *, sub: Optional[str] = None) -> Optional[str]:
+    """`lien` rendu absolu s'il mène au tableau de bord de CE compte — la base de
+    l'instance, ou celle de son tenant (`link_for("home")`) —, sinon **None**.
+
+    Un chemin (`/org/12/connectors`) se pose sous cette base. Une URL absolue n'est
+    gardée que si elle a le même schéma, le même hôte et le même début de chemin que la
+    base. Tout le reste (un autre domaine, `//hôte`, `javascript:`, une base absente)
+    rend None : l'appelant refuse ou omet le lien — un texte écrit par un agent ne doit
+    pas pouvoir envoyer une personne ailleurs que dans son produit."""
+    lien = (lien or "").strip()
+    base = link_for("home", sub=sub)
+    if not lien or not base:
+        return None
+    base = base.rstrip("/")
+    if lien.startswith("/") and not lien.startswith("//"):
+        return base + lien
+    b, u = urlsplit(base), urlsplit(lien)
+    if (u.scheme, u.netloc) != (b.scheme, b.netloc) or not u.netloc:
+        return None
+    chemin_base = b.path.rstrip("/")
+    if chemin_base and not (u.path == chemin_base or u.path.startswith(chemin_base + "/")):
+        return None
+    return lien
 
 
 def redirect_for(kind: str, *, sub: Optional[str] = None, **params: Any) -> str:

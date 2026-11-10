@@ -29,7 +29,7 @@ CONNECTOR = _c(
 # providers under their own connectors, each of which names its own publisher.
 PUBLISHER = "Otomata"
 SANS_LOGO_DE_MARQUE = True
-CATEGORY = "Prospecting"
+CATEGORY = "Lead & company data"
 
 DESCRIPTION = (
     "Finds what a company's website runs and what its job postings name — DataForSEO, a live Apify crawl of the site, Apollo and AI Ark's company records, TheirStack, then Pipecorn's company record — stopping at the first match, or at the first that detects the tools you ask about."

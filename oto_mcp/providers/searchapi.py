@@ -20,7 +20,7 @@ CONNECTOR = _c(
     href="https://www.searchapi.io",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Web search & scraping"
 PUBLISHER = "SearchApi"
 LOGO_DOMAIN = "searchapi.io"
 

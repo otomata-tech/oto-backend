@@ -34,7 +34,7 @@ CONNECTOR = _c(
     ),
 )
 
-CATEGORY = "Dev"
+CATEGORY = "Product & data"
 PUBLISHER = "PostHog"
 LOGO_DOMAIN = "posthog.com"
 

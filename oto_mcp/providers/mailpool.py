@@ -20,7 +20,7 @@ CONNECTOR = _c(
     href="https://www.mailpool.ai",
 )
 
-CATEGORY = "Prospecting"
+CATEGORY = "Outreach"
 PUBLISHER = "Mailpool"
 LOGO_DOMAIN = "mailpool.ai"
 

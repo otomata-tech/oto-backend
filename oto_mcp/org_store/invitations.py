@@ -353,16 +353,11 @@ def accept_invitation(token: str, sub: str) -> Optional[dict]:
 
 
 def invitation_hors_droit(inv: dict) -> bool:
-    """Une invitation plateforme qui porte une org n'est honorée que si son émetteur
-    est super admin : c'est la règle de son émission (`_authz.PLATFORM_INVITE`),
-    rejugée à l'acceptation pour qu'une ligne émise sans ce droit ne fasse entrer
-    personne dans l'org, quel que soit le chemin (lien, adresse, signup)."""
-    if inv.get("source") != "platform_admin" or inv.get("org_id") is None:
-        return False
-    # Import paresseux : `access` importe org_store au niveau module (cycle).
-    from .. import access
-    invited_by = inv.get("invited_by")
-    return not (invited_by and access.is_super_admin(invited_by))
+    """Invitation plateforme portant une org, émise par un non-super admin : la règle
+    de l'émission (`_authz.PLATFORM_INVITE`), rejugée sur tout chemin d'acceptation."""
+    from .. import access  # paresseux : `access` importe org_store (cycle)
+    return (inv.get("source") == "platform_admin" and inv.get("org_id") is not None
+            and not (inv.get("invited_by") and access.is_super_admin(inv["invited_by"])))
 
 
 def _accept_invitation_row(inv: dict, sub: str, *,

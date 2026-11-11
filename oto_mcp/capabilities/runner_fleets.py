@@ -60,7 +60,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import (_abonnement, _cle_exigee, _descriptions_outils, _instruction,
+from . import (_abonnement, _acces_agent, _cle_exigee, _descriptions_outils, _instruction,
                _limites_du_run, _lignes_de_campagne, _lignes_reservables, _modele,
                _ordonnanceur_de_campagne, _outils_manquants, _outils_plateforme)
 from .. import (db, deprecations, output_projection, runner_models, session_org,
@@ -434,6 +434,26 @@ def _agent_declarant(org_id: int) -> Optional[int]:
     return db.agent_du_travail(v.job_id, org_id)
 
 
+def _exiger_de_modifier(ctx: ResolvedCtx, fleet_id: int) -> dict:
+    """Modifier une automatisation est réservé à son propriétaire (celui qui l'a
+    déclarée, `runner_fleets.sub`) et aux admins de son org — les niveaux des agents
+    (`_acces_agent`). Elle s'exécute sous l'identité de son propriétaire : la
+    retoucher, c'est agir en son nom. Une automatisation ne se partage pas : aucun
+    autre membre n'y a de niveau d'écriture. La LIRE reste ouvert à tout membre."""
+    f = db.get_fleet(fleet_id, ctx.org_id)
+    if not f:
+        raise AuthzDenied(404, "fleet_not_found", "automatisation inconnue")
+    n = _acces_agent.niveaux_d_objets(ctx.sub, ctx.org_id, [f], None)[int(f["id"])]
+    if n not in _acces_agent.ECRIRE:
+        raise AuthzDenied(
+            403, "fleet_edit_forbidden",
+            "modifier une automatisation est réservé à la personne qui l'a déclarée "
+            "et aux admins de l'org : elle s'exécute sous l'identité de cette "
+            "personne. La lire et l'ARRÊTER restent ouverts à tout membre ; une "
+            "autre configuration, c'est une automatisation que tu déclares.")
+    return f
+
+
 def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
     if not ctx.org_id:
         raise AuthzDenied(400, "org_required", "les automatisations sont org-scopées")
@@ -746,10 +766,11 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
             "champs se déclarent à la création et ne se retouchent pas — une autre "
             "valeur, c'est une autre automatisation. Les champs modifiables sont : "
             f"{', '.join(f'`{c}`' for c in db.CHAMPS_MODIFIABLES)}.")
+    # Le droit par objet, une fois l'entrée jugée : un refus de forme ne lit rien.
+    actuelle = _exiger_de_modifier(ctx, inp.fleet_id)
     # `tools` reste modifiable, `descriptions_outils` non : une allowlist qui retirerait un
     # outil que le réglage nomme le rendrait inerte sans un mot (oto#241).
     if inp.tools is not None:
-        actuelle = db.get_fleet(inp.fleet_id, ctx.org_id)
         # Depuis un agent hébergé, la liste d'une campagne ne s'élargit pas (#1499) :
         # chaque passage relit SA liste (`campagne_a_servir`), donc une campagne armée
         # par une personne s'élargissait au passage suivant. Même règle qu'un agent ;
@@ -757,10 +778,9 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # la pose pas) : la liste servie ne bouge que par `tools`. Lancer ou armer une
         # campagne plus outillée que le travail appelant reste permis (relais) : sa
         # liste, elle, est posée par une personne.
-        if actuelle:
-            _outils_plateforme.exiger_aucun_ajout_d_agent(actuelle, inp.tools)
+        _outils_plateforme.exiger_aucun_ajout_d_agent(actuelle, inp.tools)
         retires = _descriptions_outils.outils_nommes_retires(
-            (actuelle or {}).get("descriptions_outils"), inp.tools)
+            actuelle.get("descriptions_outils"), inp.tools)
         if retires:
             raise AuthzDenied(
                 400, _descriptions_outils.CODE,
@@ -836,6 +856,9 @@ CAPABILITIES += [
                           "seul tableau"),
             DeclaredError(404, "fleet_not_found",
                           "automatisation inconnue dans l'org du porteur"),
+            DeclaredError(403, "fleet_edit_forbidden",
+                          "`update` d'une automatisation par un membre qui n'en est "
+                          "ni le déclarant ni un admin de l'org"),
             DeclaredError(409, "not_launchable",
                           "`launch` d'une automatisation déjà armée ou en cours"),
             DeclaredError(409, "max_rows_reached",

@@ -648,6 +648,52 @@ def test_un_simple_membre_ARRÊTE(client, org, simple_membre):
     assert rr.json()["fleet"]["status"] == "stopping"
 
 
+# ── le droit par objet : modifier est au déclarant et aux admins de l'org ─────
+
+def _declarer(client, sub: str, label: str) -> int:
+    r = client.post(ROUTE, headers=_h(sub), json={
+        "op": "create", "model": MODELE_SERVI, "label": label, "procedure": "p",
+        "tools": ["oto_kb"], "max_tokens_per_row": 50_000})
+    assert r.status_code == 200, r.text
+    return r.json()["fleet"]["id"]
+
+
+def test_un_simple_membre_ne_MODIFIE_pas_celle_d_un_autre(client, org, simple_membre):
+    """Refusé sur la consigne comme sur les outils, et rien n'est écrit. La lire reste
+    ouvert."""
+    fid = _declarer(client, org["membre"], "a-l-admin")
+    for champs in ({"label": "autre"}, {"input": "autre consigne"},
+                   {"tools": ["oto_kb", "data_write"]}):
+        rr = client.post(ROUTE, headers=_h(simple_membre),
+                         json={"op": "update", "fleet_id": fid, **champs})
+        assert (rr.status_code, rr.json().get("error")) == (403, "fleet_edit_forbidden")
+    lu = client.post(ROUTE, headers=_h(simple_membre), json={"op": "get", "fleet_id": fid})
+    assert lu.status_code == 200, lu.text
+    assert (lu.json()["fleet"]["label"], lu.json()["fleet"]["tools"]) == ("a-l-admin", ["oto_kb"])
+
+
+def test_le_declarant_modifie_la_sienne_et_l_admin_celle_d_un_autre(
+        client, org, simple_membre):
+    fid = _declarer(client, simple_membre, "au-membre")
+    r = client.post(ROUTE, headers=_h(simple_membre),
+                    json={"op": "update", "fleet_id": fid, "label": "par-le-declarant"})
+    assert r.status_code == 200, r.text
+    r = client.post(ROUTE, headers=_h(org["membre"]),
+                    json={"op": "update", "fleet_id": fid, "label": "par-l-admin"})
+    assert r.status_code == 200, r.text
+    assert r.json()["fleet"]["label"] == "par-l-admin"
+
+
+def test_lancer_reste_aux_admins_meme_pour_le_declarant(client, org, simple_membre):
+    """Le plancher de `launch` est plus haut que le droit par objet : il suit ce que le
+    geste ENGAGE. Le déclarant non admin ne lance pas la sienne ; l'admin la lance."""
+    fid = _declarer(client, simple_membre, "a-lancer")
+    rr = client.post(ROUTE, headers=_h(simple_membre), json={"op": "launch", "fleet_id": fid})
+    assert (rr.status_code, rr.json().get("error")) == (403, "org_admin_required")
+    rr = client.post(ROUTE, headers=_h(org["membre"]), json={"op": "launch", "fleet_id": fid})
+    assert rr.status_code == 200, rr.text
+
+
 # ── LE CYCLE COMPLET : l'intention devient un fait, et par qui ───────────────
 #
 # ⚠️ C'est ce cycle qui rend `op=stop` RÉEL. Sans lui, l'arrêt est une écriture

@@ -264,6 +264,7 @@ def declares() -> tuple[IndexConcurrent, ...]:
     from . import (access_shadow, contraintes_create_table, index_releve, runner_jobs,
                    search, valeurs_servies)
     return (index_releve.RELEVE, *index_releve.OUVERTURES, index_releve.GESTES_DE_LIGNE,
+            index_releve.OUVERTURE_PAR_RUN,
             *search.INDEX_VALEURS, access_shadow.CLE_ORIGINE,
             *(cle.index for cle in contraintes_create_table.CLES),
             *valeurs_servies.INDEX, runner_jobs.INDEX_DECLENCHEURS,

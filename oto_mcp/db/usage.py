@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import secrets
+import time
 from datetime import date, datetime, timezone
 from typing import Any, Iterator, NamedTuple, Optional
 
@@ -22,7 +23,7 @@ from .. import deprecations
 from ..journal_secrets import masquer_urls, masquer_urls_des_valeurs
 from . import journal_calls, journal_jour
 from ._conn import _connect
-from .index_releve import PREDICAT_OUVERTURE
+from .index_releve import OUVERTURE_PAR_RUN, PREDICAT_OUVERTURE
 from .lecture_bornee import lecture_d_agregat
 
 
@@ -213,7 +214,7 @@ _ARGS_PROCEDURE_OK = ("slug", _ARG_PROCEDURE)
 _VERBES_USAGE = {"oto_procedure": "slug", "run_start": _ARG_PROCEDURE}
 
 
-def _runs_from_journal(extra: str = "") -> str:
+def _runs_from_journal(extra: str = "", *, ouvertures: Optional[str] = None) -> str:
     """Le run RECONSTRUIT depuis ses faits : l'ouverture (`run_start`) porte label,
     guide, acteur, org et date de début ; la clôture porte l'issue, sa note et la date
     de fin.
@@ -227,7 +228,14 @@ def _runs_from_journal(extra: str = "") -> str:
     L'index `idx_tool_calls_run` sert le LATERAL.
 
     `extra` = prédicats supplémentaires sur l'alias `s` (la ligne d'ouverture),
-    TOUJOURS des littéraux de ce module — jamais une entrée d'appelant."""
+    TOUJOURS des littéraux de ce module — jamais une entrée d'appelant.
+
+    `ouvertures` = d'où viennent les lignes d'ouverture `s` : omis, du journal entier
+    filtré par `extra` ; sinon la sous-requête littérale (alias `r`, colonne `run_id`)
+    des runs dont on veut les ouvertures, et chaque run est SONDÉ à part
+    (`_sonde_des_ouvertures`). Mêmes colonnes, mêmes LATERAL ensuite."""
+    source = ("tool_calls s" if ouvertures is None
+              else _sonde_des_ouvertures(ouvertures))
     return f"""
             SELECT s.run_id, s.sub, s.org_id,
                    s.args->>'label'             AS label,
@@ -239,12 +247,32 @@ def _runs_from_journal(extra: str = "") -> str:
                    f.args->>'note'              AS note,
                    GREATEST(s.created_at,
                             COALESCE(v.last_call_at, s.created_at)) AS last_seen_at
-              FROM tool_calls s{_run_closure("s")}
+              FROM {source}{_run_closure("s")}
               LEFT JOIN LATERAL (
                   SELECT max(c.created_at) AS last_call_at
                     FROM tool_calls c WHERE c.run_id = s.run_id
               ) v ON TRUE
              WHERE s.tool = 'run_start' AND s.run_id IS NOT NULL{extra}"""
+
+
+def _sonde_des_ouvertures(runs_sql: str) -> str:
+    """Les lignes d'ouverture `s` des runs de `runs_sql`, une SONDE par run.
+
+    `runs_sql` (littéral de ce module, alias `r`) nomme les runs ; chaque run cherche
+    ses ouvertures `run_start` par son `run_id`, derrière une barrière d'optimisation
+    (`OFFSET 0`) que le planificateur ne peut pas aplatir en jointure. Le prédicat est
+    celui de l'index `idx_tool_calls_run_start_run` (`index_releve.OUVERTURE_PAR_RUN`),
+    qui sert la sonde : une entrée d'index et une page de tas par ouverture. À n'employer
+    que quand cet index est valide (`_ouverture_par_run_prete`) : sans lui, la sonde
+    croise `idx_tool_calls_run` et l'index d'outil, et fait pire que la semi-jointure
+    (mesuré en production : 4 s). Toutes les ouvertures d'un run sont rendues, comme
+    par la semi-jointure : un run ouvert deux fois a deux lignes."""
+    return (f"({runs_sql}) r\n"
+            "              CROSS JOIN LATERAL (\n"
+            "                  SELECT t.* FROM tool_calls t\n"
+            "                   WHERE t.run_id = r.run_id AND t.tool = 'run_start'\n"
+            "                     AND t.run_id IS NOT NULL\n"
+            "                  OFFSET 0) s")
 
 
 def _derniers_runs(portee: str = "") -> str:
@@ -539,6 +567,11 @@ reconstruisait encore TOUS les runs du projet — 86 000 pour le plus gros.
 
 Littéral de ce module, comme tout `extra` (les `%s` sont liés, jamais interpolés)."""
 
+#: Les runs récents d'UN projet, d'où partent les sondes par run (`_sonde_des_ouvertures`)
+#: — les mêmes que `_PROJECT_SCOPE`, mêmes paramètres (`project_id`, borne).
+_RUNS_RECENTS_DU_PROJET = ("SELECT run_id FROM runs WHERE project_id = %s"
+                           " ORDER BY started_at DESC LIMIT %s")
+
 
 def project_run_tools(project_id: int, limit: int = 200) -> list[str]:
     """Outils réellement APPELÉS par les runs RÉCENTS d'un projet — la part « usage
@@ -578,10 +611,14 @@ def project_runs(project_id: int, guide: Optional[str] = None,
     guide_clause = " AND j.doctrine = %s" if guide is not None else ""
     params: list = ([project_id, PROJET_RUNS_RECENTS, project_id]
                     + ([guide] if guide is not None else []) + [limit])
+    # Index des ouvertures par run valide : une sonde par run, depuis les runs récents
+    # du projet (mêmes paramètres, même place) ; sinon la semi-jointure d'avant.
+    j_sql = (_runs_from_journal(ouvertures=_RUNS_RECENTS_DU_PROJET)
+             if _ouverture_par_run_prete() else _runs_from_journal(_PROJECT_SCOPE))
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             f"""
-            WITH j AS ({_runs_from_journal(_PROJECT_SCOPE)})
+            WITH j AS ({j_sql})
             SELECT j.run_id, j.label, j.doctrine, j.outcome, j.note, j.started_at,
                    j.finished_at, j.last_seen_at
               FROM runs x JOIN j ON j.run_id = x.run_id
@@ -590,6 +627,58 @@ def project_runs(project_id: int, guide: Optional[str] = None,
             """,
             tuple(params),
         ).fetchall()]
+
+
+#: Le prédicat d'ouverture sur l'alias `s` — celui de l'index partiel, que la sonde
+#: par run doit impliquer pour s'en servir.
+_PREDICAT_OUVERTURE_S = "s.tool = 'run_start' AND s.run_id IS NOT NULL"
+
+#: Relu au plus toutes les 60 s par processus (patron de `valeurs_servies.pretes`) : le
+#: geste manuel qui pose l'index se voit dans la minute, sans une requête au catalogue
+#: par lecture.
+DUREE_CACHE_INDEX_S = 60.0
+_cache_ouverture_par_run: dict = {"pret": None, "lu_a": 0.0}
+
+
+def _ouverture_par_run_prete() -> bool:
+    """`True` quand `idx_tool_calls_run_start_run` est posé ET valide."""
+    maintenant = time.monotonic()
+    c = _cache_ouverture_par_run
+    if c["pret"] is not None and maintenant - c["lu_a"] < DUREE_CACHE_INDEX_S:
+        return c["pret"]
+    with _connect() as conn:
+        ligne = conn.execute(OUVERTURE_PAR_RUN.sql_validite).fetchone()
+    c.update(pret=bool(ligne and ligne["indisvalid"]), lu_a=maintenant)
+    return c["pret"]
+
+
+def oublier_ouverture_par_run() -> None:
+    """Relit le catalogue au prochain appel (bancs, et après le geste manuel)."""
+    _cache_ouverture_par_run.update(pret=None, lu_a=0.0)
+
+
+def sql_project_run_stats(*, par_run: bool) -> str:
+    """Le SQL de `project_run_stats` (paramètres : `project_id`, borne de runs). `par_run`
+    = la sonde par run, servie par `idx_tool_calls_run_start_run` ; sinon la semi-jointure."""
+    if par_run:
+        return f"""
+            SELECT count(*) AS n,
+                   array_agg(DISTINCT o.proc) FILTER (WHERE o.proc IS NOT NULL) AS procs
+              FROM (SELECT run_id FROM runs WHERE project_id = %s
+                     ORDER BY started_at DESC LIMIT %s) r
+              CROSS JOIN LATERAL (
+                    SELECT s.args->>'{_ARG_PROCEDURE}' AS proc
+                      FROM tool_calls s
+                     WHERE s.run_id = r.run_id AND {_PREDICAT_OUVERTURE_S}
+                    OFFSET 0) o
+            """
+    return f"""
+            SELECT count(*) AS n,
+                   array_agg(DISTINCT s.args->>'{_ARG_PROCEDURE}')
+                       FILTER (WHERE s.args->>'{_ARG_PROCEDURE}' IS NOT NULL) AS procs
+              FROM tool_calls s
+             WHERE {_PREDICAT_OUVERTURE_S}{_PROJECT_SCOPE}
+            """
 
 
 def project_run_stats(project_id: int) -> dict:
@@ -601,19 +690,24 @@ def project_run_stats(project_id: int) -> dict:
     posée étant « cette procédure a-t-elle SERVI » ; `runs` vaut donc au plus cette
     borne, et une procédure déroulée seulement avant elle se lit inerte. Ni la clôture
     ni le dernier signe de vie ne servent ici : la lecture ne reconstruit pas le run
-    (`_runs_from_journal`), elle lit son ouverture — deux LATERAL de moins par run."""
+    (`_runs_from_journal`), elle lit son ouverture — deux LATERAL de moins par run.
+
+    ⚠️ **Deux formes, la même réponse** — choisies par la présence d'`idx_tool_calls_run_start_run`
+    (`index_releve.OUVERTURE_PAR_RUN`, révision `20261111_1400_ouvertures_par_run`, geste
+    manuel sur la base servie). Index valide : une sonde par run (`LATERAL … OFFSET 0`,
+    que le planificateur ne peut pas aplatir). Sans lui, la semi-jointure d'avant. Mesuré
+    en production le 11/11/2026, projet de 2 218 runs : la semi-jointure lit TOUTES les
+    ouvertures de la plateforme (~21 000 : 60 ms juste après un échauffement, 3,3 s dix minutes plus tard, 33 s à froid), le planificateur
+    les estimant à quelques centaines ; et la sonde par run SANS l'index fait pire (4 s :
+    `idx_tool_calls_run` croisé avec l'index d'outil). L'index seul ne suffit pas non plus :
+    sur la semi-jointure, le planificateur, sur la même estimation, parcourt ce nouvel index
+    en entier au lieu de l'autre (banc local, estimation périmée). D'où la forme liée à
+    l'index, relue au plus toutes les `DUREE_CACHE_INDEX_S` secondes par processus :
+    l'ordre entre le code et le geste reste indifférent."""
+    sql = sql_project_run_stats(par_run=_ouverture_par_run_prete())
     with _connect() as conn:
-        row = conn.execute(
-            f"""
-            SELECT count(*) AS n,
-                   array_agg(DISTINCT s.args->>'{_ARG_PROCEDURE}')
-                       FILTER (WHERE s.args->>'{_ARG_PROCEDURE}' IS NOT NULL) AS doctrines
-              FROM tool_calls s
-             WHERE s.tool = 'run_start' AND s.run_id IS NOT NULL{_PROJECT_SCOPE}
-            """,
-            (project_id, PROJET_RUNS_RECENTS),
-        ).fetchone()
-    return {"runs": int(row["n"] or 0), "doctrines": list(row["doctrines"] or [])}
+        row = conn.execute(sql, (project_id, PROJET_RUNS_RECENTS)).fetchone()
+    return {"runs": int(row["n"] or 0), "doctrines": list(row["procs"] or [])}
 
 
 #: Fenêtre pendant laquelle un signalement STRICTEMENT identique du même auteur

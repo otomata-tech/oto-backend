@@ -815,6 +815,8 @@ GET,HEAD /api/datastores/{datastore}/rows/{row_id}/activity -> _handler
 OPTIONS /api/datastores/{datastore}/rows/{row_id}/activity -> options_handler
 GET,HEAD /api/datastores/{datastore}/activity -> _handler
 OPTIONS /api/datastores/{datastore}/activity -> options_handler
+GET,HEAD /api/datastores/{datastore}/column-sources -> _handler
+OPTIONS /api/datastores/{datastore}/column-sources -> options_handler
 POST /api/datastores/{datastore}/claim_next -> _handler
 OPTIONS /api/datastores/{datastore}/claim_next -> options_handler
 POST /api/datastores/{datastore}/rows/{row_id}/claim -> _handler
@@ -984,6 +986,8 @@ POST /api/datastore/namespaces/{namespace}/rows/batch -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/rows/batch -> options_handler
 POST /api/datastore/namespaces/{namespace}/drop_column -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/drop_column -> options_handler
+GET,HEAD /api/datastore/namespaces/{namespace}/column-sources -> alias_deprecie
+OPTIONS /api/datastore/namespaces/{namespace}/column-sources -> options_handler
 GET,HEAD /api/datastore/namespaces/{namespace}/comments/counts -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/comments/counts -> options_handler
 POST /api/datastore/namespaces/{namespace}/rows/update_where -> alias_deprecie

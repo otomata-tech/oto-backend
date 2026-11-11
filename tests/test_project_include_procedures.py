@@ -288,7 +288,7 @@ def projet_lisible(store, monkeypatch):
     monkeypatch.setattr(cap, "_require_active_org_visible", lambda ctx, row: None)
     from oto_mcp import project_audit
     monkeypatch.setattr(project_audit, "audit_project",
-                        lambda pid, links, light=False: {})
+                        lambda pid, links, **_k: {})
 
 
 @pytest.mark.asyncio

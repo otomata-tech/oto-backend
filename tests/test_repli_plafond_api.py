@@ -153,12 +153,12 @@ def test_repli_personnel_plafond_futur(live):
 
     assert row is not None, "un plafond FUTUR, sans autre obstacle, se replie"
     assert row["id"] == jid
-    assert row["payload"]["model"] == "claude-sonnet-5"
+    assert row["payload"]["model"] == "claude-sonnet-5-5"
     assert row["payload"]["model_family"] == "anthropic"
     repli = row["payload"]["_plateforme"]["repli"]
     assert repli["from_model"] == "sub:sonnet"
     assert repli["from_family"] == "claude_subscription"
-    assert repli["to_model"] == "claude-sonnet-5"
+    assert repli["to_model"] == "claude-sonnet-5-5"
     assert repli["to_family"] == "anthropic"
     assert repli["mode"] == "personnel"
     assert repli["reason"] == "paused_limit"
@@ -577,7 +577,7 @@ def test_une_cle_illisible_a_la_remise_DEFAIT_le_repli(live, monkeypatch):
     assert remis["payload"]["model_family"] == "claude_subscription"
     assert "repli" not in remis["payload"]["_plateforme"], "le repli est défait"
     defait = remis["payload"]["_plateforme"]["repli_defait"]
-    assert defait["to_model"] == "claude-sonnet-5", "mais il reste TRAÇABLE"
+    assert defait["to_model"] == "claude-sonnet-5-5", "mais il reste TRAÇABLE"
     assert "illisible" in defait["raison"]
     assert vraie_lecture is not None
 
@@ -604,12 +604,14 @@ def test_un_coffre_illisible_ne_DECIDE_plus_le_repli(live, monkeypatch):
     assert reste["payload"]["model"] == "sub:sonnet", "jamais touché"
 
 
-# ── 13. Haiku part sans effort, et le repli défait le lui retire (D3) ─────
+# ── 13. le repli emporte la charge ENTIÈRE du modèle d'arrivée (D3) ─────
 
 def test_un_repli_haiku_emporte_la_charge_de_son_modele(live):
-    """`claude-haiku-4-5` répond 400 à `output_config.effort` (mesuré le 14/09) : le
-    catalogue le déclare `effort="none"`, et le travail replié doit l'emporter — la
-    prise réécrit toute la charge du modèle d'arrivée, pas seulement son nom."""
+    """La prise réécrit toute la charge du modèle d'arrivée
+    (`runner_models.charge(to_model)`), pas seulement son nom. `sub:haiku` se replie
+    sur Haiku 5.5 (premier Haiku du catalogue depuis le 11/11/2026), qui ne déclare pas
+    l'`effort="none"` de Haiku 4.5 : la charge du travail replié est la sienne, à la clé."""
+    from oto_mcp import runner_models
     oid = _org("p18", "p18-dem")
     _abonne("p18-dem", statut="paused_limit", reset=_futur())
     jid = _travail(oid, "p18-dem", model="sub:haiku")
@@ -618,8 +620,11 @@ def test_un_repli_haiku_emporte_la_charge_de_son_modele(live):
     row = _repli(oid)
 
     assert row is not None and row["id"] == jid
-    assert row["payload"]["model"] == "claude-haiku-4-5"
-    assert row["payload"]["effort"] == "none", "sans lui, Anthropic répond 400"
+    attendu = runner_models.charge("claude-haiku-5-5")
+    assert {k: row["payload"].get(k) for k in ("model", "model_family", "effort",
+                                               "max_output_tokens")} == {
+        "model": "claude-haiku-5-5", "model_family": "anthropic",
+        "effort": attendu.get("effort"), "max_output_tokens": attendu.get("max_output_tokens")}
 
 
 def test_defaire_un_repli_rend_la_charge_d_avant_a_l_octet(live):

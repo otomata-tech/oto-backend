@@ -476,6 +476,77 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > (`publication_field_on_update`, rien d'écrit) plutôt qu'ignorés : ils se redéclarent
 > par `publish_mcp`.
 
+## Profondeur de l'audit d'`op=get` — `audit="links"` (2026-11-11)
+
+**Le besoin.** L'écran qui ouvre un projet lit `op=get` à chaque ouverture et n'utilise de
+l'audit que les liens morts (il cache les procédures mortes de ses comptes). Il payait
+pourtant l'audit complet : 0,45 à 0,75 s mesurées dans le navigateur, en production, sur
+un projet d'org de 81 liens (44 procédures, 32 tableaux, 5 connecteurs) et 2 218 runs.
+Mesuré en production (lecture seule) : un aller-retour vers la base coûte 2,4 à 5,8 ms, et
+la seule lecture de l'inertie (`project_run_stats`), chronométrée seule : 60 ms juste après un
+échauffement, 3,3 s dix minutes plus tard (la table, très écrite, sort vite du cache), 33 s à
+froid (ci-dessous) — compatible avec les appels de 10 à 66 s relevés ce jour-là sur la route,
+sans le prouver (l'op n'y est pas journalisée). Prédit par un banc local de forme voisine (86 liens : 48 / 33 / 5,
+4 équipes, aucun connecteur résolu au niveau de l'org — le cas le plus cher, non mesuré
+en production) : 71 requêtes par lecture, dont 53 pour `unresolvable_connectors` — une
+lecture par équipe **et** par connecteur lié (un connecteur que l'org résout s'arrête avant
+ce parcours) — ; et les corps des procédures relus pour n'en garder que slug et slots.
+
+**Ce qui change pour tous, sans rien changer à la réponse.** L'audit complet lit les
+équipes qui détiennent une clé EN LOT (`group_store.groups_holding`, deux requêtes par
+connecteur distinct quel que soit le nombre d'équipes), juge un connecteur lié sous
+plusieurs identités une seule fois, lit des procédures leur slug et leurs slots seulement
+(`org_store.get_instruction_slots_by_ids`), et réutilise la ligne du projet déjà lue. Mêmes
+quatre listes, mêmes valeurs (`tests/test_project_get_audit_depth.py`).
+
+**Le choix offert à un lecteur.** `audit="links"` (MCP et `POST /api/me/projects`, ou
+`GET /api/me/projects/{id}?audit=links`) rend `dead_links` seul — et tous, procédures
+comprises : une procédure est morte quand `list_project_links` ne lui a pas posé de
+`procedure_id`, ce que l'audit complet juge aussi, l'existence ayant été lue par la requête
+des titres. Aucune requête de plus que les liens. Les trois autres listes sont ABSENTES,
+pas vides — vides, elles se liraient « rien à signaler » —, et `checked: ["dead_links"]` le
+dit. Omis (ou `full`), l'audit complet, tel qu'il a toujours été servi : aucun appelant
+existant ne voit sa réponse changer. ⚠️ Un backend d'avant ce lot REFUSE le champ en
+REST (400 `unknown_fields`) : un écran ne l'envoie qu'une fois ce backend servi. Hors
+`op=get`, le champ est refusé (`unsupported_audit`).
+
+**L'inertie : un index, et une lecture qui s'en sert.** `project_run_stats` cherche les
+ouvertures `run_start` des 500 derniers runs du projet par une semi-jointure
+`run_id IN (…)`. Aucun index ne partait du `run_id` d'une ouverture : le planificateur,
+qui estimait les ouvertures à 740 (il y en a ~21 000 sur ~15 M lignes de journal), lisait
+TOUTES celles de la plateforme par `idx_tool_calls_run_start`, une par page de tas, puis
+les hachait — 19 877 buffers ; 60 ms juste après un échauffement, 3,3 s dix minutes plus
+tard, 33 s à froid (production, 11/11/2026). Les
+réécritures sans index faisaient pire (sonde par run : 4 s ; jointure qui écarte l'index
+d'outil : plus de 15 s). Remède en deux pièces, livrées ensemble :
+- `idx_tool_calls_run_start_run (run_id) WHERE tool = 'run_start' AND run_id IS NOT NULL`
+  (`index_releve.OUVERTURE_PAR_RUN`, révision `20261111_1400_ouvertures_par_run`,
+  CONCURRENTLY — geste manuel sur la base servie, `oto-mcp maintenance index-concurrents
+  20261111_1400_ouvertures_par_run`) ;
+- une sonde par run (`LATERAL … OFFSET 0`, que le planificateur ne peut pas aplatir),
+  employée SEULEMENT quand cet index est là et valide (`usage._ouverture_par_run_prete`,
+  relu au plus toutes les 60 s) : l'index seul ne suffit pas — sur la semi-jointure, à
+  estimation égale, le planificateur parcourt le nouvel index en entier au lieu de l'autre
+  —, et la sonde sans l'index est pire que la semi-jointure. L'ordre entre le code et le
+  geste reste donc indifférent. Banc local aux proportions de la production (10,4 M lignes,
+  3,9 % portant un `run_id`, 0,2 % d'ouvertures, 19 appels par run, dispersés) et à ses
+  statistiques (`n_distinct` de `run_id` forcé à 1 382 : ~290 lignes estimées par run, 732
+  ouvertures estimées pour 21 300) : semi-jointure ~21 300 buffers, avec ou sans l'index ;
+  sonde par run SANS l'index 290 ms (le croisement `idx_tool_calls_run` × index d'outil,
+  celui des 4 s de production) ; sonde par run AVEC l'index, 1 551 buffers, 0,4 ms.
+- `audit="links"` saute cette lecture : l'écran qui ouvre le projet ne la paie plus du
+  tout. L'index sert les agents et tout lecteur de l'audit complet.
+- Les runs d'un projet (`op=runs` avec `project_id`, `usage.project_runs`) faisaient le même
+  parcours de toutes les ouvertures (semi-jointure `_PROJECT_SCOPE`). Ils passent à la même
+  sonde par run, sous la même garde (`_runs_from_journal(ouvertures=…)`), la clôture
+  (`idx_tool_calls_run_finish_ref`) et le dernier signe de vie (`idx_tool_calls_run`)
+  restant des sondes par run. Mêmes lignes, même ordre. Banc (mêmes proportions et
+  statistiques) : 25 964 buffers (19 808 lus), 39 ms → 6 055 buffers, 2,3 ms ; la sonde
+  sans l'index, 264 ms. Les autres listes (`recent_runs`, `list_runs`) choisissent déjà
+  leur page par les index d'ouvertures (infra#9) ; `my_runs` (mes runs, toutes orgs)
+  reconstruit tous les runs du compte, par `idx_tool_calls_run_start_sub` — borné par le
+  compte, pas par la plateforme, à traiter à part pour un compte très actif.
+
 ## Rendre privé ce qu'un projet privé lie — `make_private=true` (2026-11-09)
 
 Le défaut constaté : un projet possédé par une personne, partagé à deux collègues, liait

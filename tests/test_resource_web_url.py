@@ -126,7 +126,7 @@ def test_un_projet_rend_son_adresse(monkeypatch):
     monkeypatch.setattr(P, "_require_active_org_visible", lambda ctx, row: None)
     from oto_mcp import project_audit
     monkeypatch.setattr(project_audit, "audit_project",
-                        lambda pid, links, light=False: {
+                        lambda pid, links, **_k: {
                             "dead_links": [], "unbound_slots": [], "inert_procedures": [],
                             "stale_docs": []})
     out = P._project(CTX, P.ProjectInput(op="get", project_id=153))

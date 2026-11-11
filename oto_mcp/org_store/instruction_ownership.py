@@ -68,6 +68,20 @@ def get_instructions_by_ids(instruction_ids: list[int]) -> dict[int, dict]:
     return {int(r["id"]): dict(r) for r in rows}
 
 
+def get_instruction_slots_by_ids(instruction_ids: list[int]) -> dict[int, dict]:
+    """`{id: {id, slug, slots}}` pour plusieurs ids, en une requête — ce que l'audit des
+    liens d'un projet lit d'une procédure, et rien d'autre. Sans `body_md` : un projet de
+    quarante-quatre procédures relisait leurs quarante-quatre corps pour n'en garder que le slug."""
+    if not instruction_ids:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, slug, slots FROM org_instructions WHERE id = ANY(%s)",
+            (sorted({int(i) for i in instruction_ids}),),
+        ).fetchall()
+    return {int(r["id"]): dict(r) for r in rows}
+
+
 def _free_instruction_slug(conn, owner_type: str, owner_id: int | str, slug: str) -> str:
     """Slug libre chez `(owner_type, owner_id)` : le slug tel quel, sinon suffixé
     (-2, -3…). On ne remplace JAMAIS une procédure existante de la cible.

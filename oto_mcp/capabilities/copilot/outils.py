@@ -155,7 +155,8 @@ async def executer(b: Boite, sub: str, name: str, args: dict, *, org: Optional[i
     try:
         async with Context(fastmcp=instance()):
             with auth_hooks.sub_override(sub), \
-                    geste.portee(geste.AGENT, sub, geste_id or geste.nouvel_identifiant()):
+                    geste.portee(geste.AGENT, sub, geste_id or geste.nouvel_identifiant(),
+                                 outil=target):
                 issue = await meta.executer_cible(tool, sub, target, target, pinned)
     except McpError as e:
         return Issue(False, str(getattr(getattr(e, "error", None), "message", "") or e))

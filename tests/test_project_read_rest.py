@@ -40,7 +40,7 @@ def wired(monkeypatch):
     monkeypatch.setattr(P.ownership, "visible_in_org", lambda sub, org, rt, rid: True)
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, rt, rid, perm: True)
     from oto_mcp import project_audit
-    monkeypatch.setattr(project_audit, "audit_project", lambda pid, links: {})
+    monkeypatch.setattr(project_audit, "audit_project", lambda pid, links, **_k: {})
 
 
 # ── Le descripteur : une URL qui nomme sa cible, et pas de doublon MCP ────────

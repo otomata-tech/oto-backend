@@ -349,7 +349,7 @@ def test_audit_project(monkeypatch):
         {"target_type": "procedure", "target_ref": "43"},                          # morte
         {"target_type": "connecteur", "target_ref": "nexiste"},                    # mort
     ]
-    monkeypatch.setattr(org_store_mod, "get_instructions_by_ids",
+    monkeypatch.setattr(org_store_mod, "get_instruction_slots_by_ids",
                         lambda ids: {i: {"slug": "prospection",
                                          "slots": [{"name": "sortie", "type": "tableau"},
                                                    {"name": "crm", "type": "connecteur"}]}

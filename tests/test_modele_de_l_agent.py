@@ -116,6 +116,30 @@ def test_haiku_part_sans_effort():
     assert runner_models.charge("claude-haiku-4-5")["effort"] == "none"
 
 
+def test_haiku_5_5_part_sans_effort_force():
+    """Haiku 5.5 accepte `output_config.effort` (`low` à `max`) : rien n'est imposé, le
+    worker envoie le sien ou aucun."""
+    assert "effort" not in runner_models.charge("claude-haiku-5-5")
+
+
+def test_la_generation_5_5_passe_DEVANT_et_la_5_reste_servie():
+    """11/11/2026 : chaque modèle 5.5 précède son prédécesseur (le défaut proposé, le
+    repli d'abonnement) ; les ids d'avant restent au catalogue, routés — la base peut
+    encore les nommer tant que la révision n'est pas jouée."""
+    anthropic = [m.id for m in runner_models.MODELES if m.family == "anthropic"]
+    assert anthropic == ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5",
+                         "claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5"]
+    for ancien in ("claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5"):
+        assert runner_models.famille(ancien) == "anthropic", ancien
+
+
+@pytest.mark.parametrize("abonnement,api", [("sub:sonnet", "claude-sonnet-5-5"),
+                                            ("sub:opus", "claude-opus-5-5"),
+                                            ("sub:haiku", "claude-haiku-5-5")])
+def test_le_repli_d_un_abonnement_va_au_modele_5_5_de_son_tier(abonnement, api):
+    assert runner_models.repli_api(abonnement) == api
+
+
 def test_un_modele_qui_raisonne_declare_son_plafond_de_completion():
     """Le raisonnement partage le plafond de complétion avec la réponse, et le worker
     lève sur un effort sans plafond. La garde porte sur le catalogue ENTIER : un modèle
@@ -136,8 +160,8 @@ def test_le_plafond_part_avec_le_travail_seulement_s_il_est_declare():
 @pytest.mark.parametrize("familles, attendu", [
     ((), None),
     (("mistral",), "mistral-large-2512"),
-    (("anthropic",), "claude-sonnet-5"),
-    (("anthropic", "mistral"), "claude-sonnet-5"),
+    (("anthropic",), "claude-sonnet-5-5"),
+    (("anthropic", "mistral"), "claude-sonnet-5-5"),
 ])
 def test_le_defaut_propose_est_le_premier_modele_SERVI_et_aucun_sans_famille(
         familles, attendu):
@@ -314,14 +338,16 @@ def test_list_sert_le_catalogue_marque(monkeypatch):
     runner = _declencher(op="list")["runner"]
     assert runner["families"] == ["anthropic"]
     servis = {m["id"]: m["served"] for m in runner["models"]}
-    assert servis == {"claude-sonnet-5": True, "claude-opus-5": True,
+    assert servis == {"claude-sonnet-5-5": True, "claude-opus-5-5": True,
+                      "claude-haiku-5-5": True,
+                      "claude-sonnet-5": True, "claude-opus-5": True,
                       "claude-haiku-4-5": True, "mistral-large-2512": False,
                       "mistral-medium-2604": False, "mistral-small-2603": False,
                       # L'abonnement personnel (OTO-130) est un dépôt comme un
                       # autre pour le catalogue : servi quand un worker de cette
                       # famille sonde la file, et jamais proposé par défaut ici.
                       "sub:sonnet": False, "sub:opus": False, "sub:haiku": False}
-    assert [m["id"] for m in runner["models"] if m["default"]] == ["claude-sonnet-5"]
+    assert [m["id"] for m in runner["models"] if m["default"]] == ["claude-sonnet-5-5"]
     # Servi par la seule famille des workers de production : le défaut la suit.
     _runner(monkeypatch, familles=("mistral",))
     runner = _declencher(op="list")["runner"]

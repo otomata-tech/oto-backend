@@ -121,7 +121,7 @@ def _tranche(job: dict) -> str:
     cursor = None if job.get("final_pass") else job.get("cursor")
     try:
         with auth_hooks.sub_override(job["sub"]), \
-                geste.portee(geste.AGENT, job["sub"], geste_id):
+                geste.portee(geste.AGENT, job["sub"], geste_id, outil="jev_rows"):
             axes = [(session_org.reset_call_trace, session_org.set_call_trace(trace))]
             echec: Optional[BaseException] = None
             try:

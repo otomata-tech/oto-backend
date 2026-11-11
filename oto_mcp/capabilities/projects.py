@@ -119,6 +119,17 @@ class ProjectInput(BaseModel):
         "adds each project's LIGHT audit — op=get's keys plus `light: true`: dead "
         "tableaux and connectors missing from the registry only; dead procedures and "
         "unresolvable connectors are checked by op=get alone."))
+    # get : PROFONDEUR de l'audit. Omis/`full` = l'audit complet, tel qu'il a toujours été
+    # servi. `links` = les liens morts seuls (procédures comprises), sans une requête de
+    # plus que les liens — pour l'écran qui ouvre le projet et n'en lit pas davantage.
+    # ⚠️ Un backend d'AVANT le refuse en REST (400 `unknown_fields`, garde de l'adaptateur) :
+    # un écran ne l'envoie qu'à un backend qui le sert (`GET /api/version`).
+    audit: Optional[Literal["full", "links"]] = Field(default=None, description=(
+        "get only: how deep the `audit` goes. Omitted or `full` = the complete audit "
+        "(dead_links, unbound_slots, unresolvable_connectors, inert_procedures). "
+        "`links` = dead_links only — every dead link, procedures included — at no extra "
+        "cost; the three other lists are then ABSENT (not empty) and `audit.checked` "
+        "names what was checked."))
     from_doc: Optional[int] = None     # enraciner l'épine sur un nœud (drill)
     depth: Optional[int] = None        # profondeur (défaut 2)
     target_ref: Optional[str] = None   # datastore.id | guide slug | connecteur name | doc.id (page Documents)
@@ -804,6 +815,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
              "`archived` ne s'applique qu'à op=list. Retire-le.")
     _require(inp.confirm is None or inp.op == "archive", "unsupported_confirm",
              "`confirm` ne s'applique qu'à op=archive. Retire-le.")
+    _require(inp.audit is None or inp.op == "get", "unsupported_audit",
+             "`audit` ne s'applique qu'à op=get. Retire-le.")
 
     if inp.op == "create":
         _require(inp.name and inp.name.strip(), "missing_name", "`name` requis.")
@@ -1000,8 +1013,11 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                "links": links,
                # B5 : liens vérifiés comme des refs — le lien mort remonte à l'agent
                # qui LIT le projet (brief), pas seulement à op=inventory (curation).
-               # `links` réutilisé : pas de double chargement.
-               "audit": project_audit.audit_project(int(inp.project_id), links)}
+               # `links` et la ligne du projet réutilisés : pas de double chargement.
+               # `audit="links"` : les liens morts seuls (l'écran qui ouvre le projet).
+               "audit": project_audit.audit_project(
+                   int(inp.project_id), links, project=row,
+                   links_only=(inp.audit == "links"))}
         # ÉPINE (lot 3 Ship 2) — opt-in, bornée, enracinable : l'arbre des pages dans
         # l'ordre curé avec chapôs (fallback dérivé). C'est la CARTE que l'agent lit
         # pour se repérer, puis oto_doc(op=get) la page — jamais op=list de tout.
@@ -1654,6 +1670,8 @@ class ProjectReadInput(BaseModel):
     # le champ était DÉCLARÉ ; ils décrivaient l'intention, pas le montage.
     # Même patron que `node_rows.filter`, pour la même raison.
     include: Optional[list[str] | str] = None
+    # `?audit=links` : la profondeur de l'audit, celle d'`oto_project op=get`.
+    audit: Optional[Literal["full", "links"]] = None
 
     @field_validator("include", mode="after")
     @classmethod
@@ -1675,7 +1693,10 @@ class ProjectAudit(BaseModel):
     """Santé des LIENS du projet — un contrôle, pas un blocage : un projet dont
     l'audit est plein reste parfaitement lisible et utilisable.
 
-    **Les quatre listes sont toujours présentes, vides quand il n'y a rien.** Mais
+    **Les quatre listes sont présentes, vides quand il n'y a rien** — sauf quand la
+    lecture a demandé `audit="links"` : seule `dead_links` est alors servie, les trois
+    autres sont ABSENTES (non vérifiées, ce qui ne vaut pas « rien à signaler ») et
+    `checked` nomme ce qui l'a été. Mais
     « vide » ne prouve pas « sain » : l'audit est best-effort, chaque vérification
     est enveloppée et un lien qui fait lever la sienne est simplement SAUTÉ (log
     serveur, pas d'erreur ici). Un audit tout vert peut donc être un audit partiel —
@@ -1692,16 +1713,19 @@ class ProjectAudit(BaseModel):
     dead_links: list[dict]
     # Procédure liée dont des slots ne sont bindés par aucun lien de CE projet —
     # elle est exécutable mais incomplète. `{procedure, ref, slots}`.
-    unbound_slots: list[dict]
+    unbound_slots: Optional[list[dict]] = None
     # Connecteur lié qu'AUCUN credential de l'org ne résoudrait aujourd'hui.
     # Calculé seulement pour un projet possédé par une ORG (le seul cas où « l'org »
     # désigne quelqu'un) : toujours vide sur un projet perso ou d'équipe — ce n'est
     # donc pas un signal d'absence de problème. `{target_ref, why}`.
-    unresolvable_connectors: list[dict]
+    unresolvable_connectors: Optional[list[dict]] = None
     # Slugs de procédures liées que les runs du projet n'ont jamais empruntées.
     # ⚠️ Reste vide tant que le projet n'a AUCUN run : sans historique, « inerte »
     # ne veut rien dire (un projet jeune n'est pas un projet mort).
-    inert_procedures: list[str]
+    inert_procedures: Optional[list[str]] = None
+    # Présent SEULEMENT quand l'audit n'est pas complet (`audit="links"`) : les listes
+    # vérifiées, `["dead_links"]`. Absent = l'audit complet.
+    checked: Optional[list[str]] = None
 
 
 class ProjectRead(BaseModel):
@@ -1801,7 +1825,7 @@ def _project_read(ctx: ResolvedCtx, inp: ProjectReadInput) -> dict:
     déjà dans l'URL.
     """
     return _project(ctx, ProjectInput(op="get", project_id=inp.project_id,
-                                      include=inp.include))
+                                      include=inp.include, audit=inp.audit))
 
 
 CAPABILITIES += [
@@ -1819,7 +1843,9 @@ CAPABILITIES += [
             "a reader can render the summary instead of the whole body, and see the rule that produced a "
             "record; omitted, the response is byte-for-byte unchanged. Ask for "
             "several with ONE comma-separated value (?include=spine,procedures) — "
-            "repeating the parameter keeps only the last one."
+            "repeating the parameter keeps only the last one. "
+            "Optional ?audit=links serves dead_links only in `audit` (procedures "
+            "included), skipping the costlier checks; omitted, the full audit."
         ),
         mcp=None,
         # `:int` et non `{project_id}` nu : le motif de portée (`token_scopes`)
@@ -1857,7 +1883,8 @@ CAPABILITIES += [
             "get (project + its links + an `audit` of those links: dead_links / unbound_slots / "
             "unresolvable_connectors (a linked connector no org credential would resolve — "
             "org-owned projects only, always empty otherwise) / "
-            "inert_procedures — a linked entity that no longer resolves surfaces HERE, act on it) / "
+            "inert_procedures — a linked entity that no longer resolves surfaces HERE, act on it; "
+            "`audit=\"links\"` serves dead_links alone, cheaper, the other lists then ABSENT) / "
             "update (name, icon = an emoji shown in the lists and headers (\"\" clears it), folder = a display "
             "label the lists group projects under (\"\" clears it), position = the project's rank "
             "within its folder in lists (lower first, fractions allowed; clear_position=true "

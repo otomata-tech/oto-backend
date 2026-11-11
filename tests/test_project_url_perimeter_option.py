@@ -39,7 +39,7 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(P.ownership, "accessor_scope", lambda sub, rt, rid: True)
     monkeypatch.setattr("oto_mcp.project_audit.audit_project",
-                        lambda pid, links=None, *, light=False: {"dead_links": [],
+                        lambda pid, links=None, **_k: {"dead_links": [],
                                                                  "unbound_slots": [],
                                                                  "inert_procedures": []})
     return store

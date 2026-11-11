@@ -20,6 +20,18 @@ EXACT du `ORDER BY created_at DESC, id DESC` de la page — un parcours d'index 
 s'arrête au `LIMIT`. Leur prédicat est celui de `_derniers_runs`, mot pour mot : un
 prédicat d'index que la requête n'implique pas ne sert aucune lecture.
 
+**`OUVERTURE_PAR_RUN`** — l'ouverture d'un run DONNÉ (révision
+`20261111_1400_ouvertures_par_run`). `usage.project_run_stats` (l'inertie de l'audit de
+liens, lue par `oto_project op=get`) cherche les ouvertures des ≤ 500 derniers runs d'un
+projet, par une sonde par run que cet index sert (la forme de la lecture suit sa
+présence, `usage._ouverture_par_run_prete`). Aucun
+index ne partait du `run_id` d'une ouverture : PostgreSQL lisait TOUTES les ouvertures de
+la plateforme par `idx_tool_calls_run_start` puis les hachait contre les runs du projet
+— mesuré en production le 11/11/2026 sur un projet de 2 218 runs : 19 877 buffers, 60 ms
+juste après un échauffement, 3,3 s dix minutes plus tard, 33 s à froid ; les réécritures sans index (LATERAL par run, jointure
+qui écarte l'index d'outil) faisaient pire, 4 s et plus de 15 s. Partiel sur le prédicat
+des ouvertures, il ne porte que ~21 000 lignes.
+
 **`GESTES_DE_LIGNE`** — le parcours d'UNE ligne de datastore (révision 0054).
 `usage.datastore_row_activity` cherche les gestes `data_*` qui portent l'`id` de la
 ligne. `idx_tool_calls_ns` ne connaît que le tableau : sur un tableau très actif, une
@@ -60,6 +72,16 @@ OUVERTURES: tuple[IndexConcurrent, ...] = (
     IndexConcurrent(nom="idx_tool_calls_run_start_sub", table="tool_calls",
                     forme=f"(sub, org_id, created_at DESC, id DESC) WHERE {PREDICAT_OUVERTURE}",
                     revision=REVISION_OUVERTURES),
+)
+
+#: La révision qui pose l'index des ouvertures par run.
+REVISION_OUVERTURE_PAR_RUN = "20261111_1400_ouvertures_par_run"
+
+#: L'ouverture d'un run donné (`usage.project_run_stats`, `usage._PROJECT_SCOPE`).
+OUVERTURE_PAR_RUN = IndexConcurrent(
+    nom="idx_tool_calls_run_start_run", table="tool_calls",
+    forme=f"(run_id) WHERE {PREDICAT_OUVERTURE}",
+    revision=REVISION_OUVERTURE_PAR_RUN,
 )
 
 #: La révision qui pose l'index des gestes d'une ligne.

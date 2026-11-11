@@ -231,12 +231,14 @@ def test_un_agent_heberge_ne_pose_pas_l_authentification(monkeypatch, depuis_un_
     assert (e.value.status, e.value.code) == (403, "hook_door_human_only")
 
 
-def test_un_agent_heberge_cree_encore_un_agent_programme(monkeypatch, pose,
-                                                        depuis_un_travail):
+def test_un_agent_heberge_ne_cree_pas_non_plus_d_agent_programme(monkeypatch, pose,
+                                                                depuis_un_travail):
+    """Sans porte à poser, créer reste un geste de personne (`agents_human_only`)."""
     monkeypatch.setattr(RT.db, "create_trigger",
-                        lambda org, sub, **kw: {"id": 6, "sub": sub, **kw})
-    out = _appel(op="create", procedure="veille", tools=["a"], cron="0 8 * * *")
-    assert "hook_secret" not in out
+                        lambda org, sub, **kw: pytest.fail("rien n'est créé"))
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op="create", procedure="veille", tools=["a"], cron="0 8 * * *")
+    assert (e.value.status, e.value.code) == (403, "agents_human_only")
 
 
 # ── 2. le LISSAGE et la PÉREMPTION ────────────────────────────────────────────

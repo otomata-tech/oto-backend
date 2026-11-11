@@ -12,7 +12,7 @@ Le client déclaré par la session (`client_name`) n'entre pas en compte : il se
 il ne s'oppose pas."""
 from __future__ import annotations
 
-from .. import verrou_org
+from ._personne_seule import depuis_un_agent_heberge
 from ._types import AuthzDenied, DeclaredError
 
 CODE = "code_human_only"
@@ -25,7 +25,7 @@ REFUS = DeclaredError(
 
 def exiger_une_personne(op: str) -> None:
     """Lève `code_human_only` sous un jeton de délégation ; hors de lui, rien ne change."""
-    if verrou_org.travail_de_la_requete() is not None:
+    if depuis_un_agent_heberge():
         raise AuthzDenied(403, "code_human_only",
                           f"op={op} runs or decides unpublished code: a person does it, "
                           "from their own account, never a hosted agent.")

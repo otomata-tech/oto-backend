@@ -290,8 +290,8 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   corps cite (`source.tool`, chaque `oto.call("<nom>"` littéral), et une recette-code dont
   un outil cité manque est refusée avant le premier appel, en un reçu qui les nomme TOUS
   (`code: tool_not_in_job`, `missing_tools`, `fix` = l'`oto_trigger op=update` qu'une
-  personne joue : un agent hébergé n'élargit aucune liste ni ne crée un agent plus
-  outillé que lui, `tools_human_only`) —
+  personne joue : un agent hébergé n'élargit aucune liste, `tools_human_only`, ni ne crée
+  d'agent, `agents_human_only`) —
   plutôt qu'un outil découvert par exécution, après des écritures. Le même calcul sert
   l'agent, avant le run : `missing_tools` et les avertissements `not_granted` de
   `oto_trigger` (`docs/runner-et-automatisations.md`). Un nom construit à l'exécution

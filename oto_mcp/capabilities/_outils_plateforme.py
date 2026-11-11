@@ -1,34 +1,32 @@
 """Ce qu'un agent hébergé ne pose pas lui-même : ses outils d'admin exercés avec le rôle
 plateforme de son porteur (`platform_tools`, revue de #1274) — qui peut poser la liste, et
-ce qu'elle peut nommer —, et tout élargissement d'une liste d'outils (`tools`), à la
-modification comme à la création d'un agent.
+ce qu'elle peut nommer —, et tout élargissement d'une liste d'outils (`tools`) : à la
+retouche d'un agent ou d'une campagne, à la création d'une campagne, au lancement d'un
+agent plus outillé que soi.
 
 Sorti de `runner_triggers` : la capacité des agents dépassait 1 900 lignes, et cette
 règle est un tout — les refus d'auteur et de contenu, avec leur borne.
 
 **Une personne, pas un agent.** Sous un jeton de délégation (`verrou_org.travail_de_la_requete`,
 posé au bord MCP et au bord REST pour un travail hébergé), un agent qui a `oto_trigger` dans
-sa liste élargirait la sienne — une injection de prompt suffirait —, ou créerait un agent
-plus outillé que lui, qui tournerait ensuite avec ces outils. Élargir reste un geste de
-personne ; réduire, reposer la même liste, ou créer un agent qui n'a que des outils du
-travail appelant reste permis."""
+sa liste élargirait la sienne — une injection de prompt suffirait —, ou créerait une
+campagne plus outillée que lui, qui tournerait ensuite avec ces outils. Élargir reste un
+geste de personne ; réduire, reposer la même liste, ou créer une campagne qui n'a que des
+outils du travail appelant reste permis. Créer un agent est refusé en bloc
+(`agents_human_only`, `_personne_seule`)."""
 from __future__ import annotations
 
 import logging
 from typing import Optional
 
 from .. import access, deprecations, outils_du_travail, verrou_org
+from ._personne_seule import depuis_un_agent_heberge
 from ._types import AuthzDenied, ResolvedCtx
 
 logger = logging.getLogger(__name__)
 
 #: La borne de `platform_tools` : une liste d'outils d'admin NOMMÉS, jamais tout l'admin.
 PLATFORM_TOOLS_MAX = 10
-
-
-def _depuis_un_agent_heberge() -> bool:
-    """L'appel vient d'un travail hébergé : la requête porte un jeton de délégation."""
-    return verrou_org.travail_de_la_requete() is not None
 
 
 def _refuser_l_elargissement(outils: list[str], permis: set | frozenset) -> None:
@@ -45,7 +43,7 @@ def exiger_aucun_ajout_d_agent(actuel: dict, outils: list[str]) -> None:
     ou la reposer telle quelle, passe : cela ne donne rien de plus. La création a sa
     règle (`exiger_aucun_outil_hors_du_travail`). Hors jeton de délégation, rien ne
     change — la personne qui modifie l'agent l'élargit comme avant."""
-    if not _depuis_un_agent_heberge():
+    if not depuis_un_agent_heberge():
         return
     _refuser_l_elargissement(outils, {deprecations.tool_canonique(n)
                                       for n in (actuel.get("tools") or [])
@@ -53,16 +51,34 @@ def exiger_aucun_ajout_d_agent(actuel: dict, outils: list[str]) -> None:
 
 
 def exiger_aucun_outil_hors_du_travail(outils: list[str]) -> None:
-    """`op=create` : refuse `tools_human_only` quand un agent hébergé crée un agent qui
-    aurait un outil hors de ce que SON travail peut appeler (`outils_du_travail.
-    permis_du_travail`, au canonique). `outils` est la liste qui sera écrite — fournie,
-    ou déduite de la procédure quand `tools` est omis : un agent ne s'outille pas plus
-    que lui par la procédure qu'il nomme. Un sous-ensemble passe. Hors jeton de
-    délégation, rien ne change."""
+    """`oto_fleet op=create` : refuse `tools_human_only` quand un agent hébergé crée une
+    campagne qui aurait un outil hors de ce que SON travail peut appeler
+    (`outils_du_travail.permis_du_travail`, au canonique). `outils` est la liste qui
+    sera écrite. Un sous-ensemble passe. Hors jeton de délégation, rien ne change."""
     verrou = verrou_org.travail_de_la_requete()
     if verrou is None:
         return
     _refuser_l_elargissement(outils, outils_du_travail.permis_du_travail(verrou.job_id))
+
+
+def exiger_un_enfant_dans_ses_outils(outils: list) -> None:
+    """`run_now` d'un agent hébergé qui ne déclare aucun lien `starts` : refuse
+    `chain_widens_tools` quand l'agent lancé (`outils`, sa liste stockée) a un outil hors
+    de ce que le travail appelant peut appeler (`outils_du_travail.permis_du_travail`, au
+    canonique). Un agent ne passe pas la main à plus outillé que lui sans qu'une personne
+    l'ait décidé : un lien `starts` posé par elle lève la borne (`runner_triggers.
+    _maillon_suivant`). Hors jeton de délégation, rien ne change."""
+    verrou = verrou_org.travail_de_la_requete()
+    if verrou is None:
+        return
+    permis = outils_du_travail.permis_du_travail(verrou.job_id)
+    trop = sorted({deprecations.tool_canonique(n) for n in outils if isinstance(n, str)}
+                  - permis)
+    if trop:
+        raise AuthzDenied(403, "chain_widens_tools",
+                          f"a hosted agent only starts an agent whose tools are among its "
+                          f"own: {', '.join(trop)} are not. A person starts it, or declares "
+                          "a `starts` link between the two agents (`op=link`).")
 
 
 def exiger_un_lancement_sans_role_plateforme(org_id: int, trigger_id: int,
@@ -72,10 +88,10 @@ def exiger_un_lancement_sans_role_plateforme(org_id: int, trigger_id: int,
     porteur (`db.outils_plateforme_d_un_lancement`, la liste que le serveur TIENDRA pour
     l'enfant, filtrée comme `verrou_org.outils_permis`) que le sien n'exerce pas
     (#1499). L'enfant tourne sous le MÊME porteur : le parent prêterait ainsi un rôle
-    qu'on ne lui avait pas donné. Lancer un agent ou armer une campagne qui a plus de
-    `tools` que soi reste permis (relais, en attendant la refonte des droits de #1499) ;
-    le rôle plateforme, lui, ne se prête pas. Hors jeton de délégation, rien ne change."""
-    if not _depuis_un_agent_heberge():
+    qu'on ne lui avait pas donné. Un lien `starts` déclaré permet de lancer un agent qui a
+    plus de `tools` que soi (`exiger_un_enfant_dans_ses_outils`) ; le rôle plateforme, lui,
+    ne se prête pas, lien ou non. Hors jeton de délégation, rien ne change."""
+    if not depuis_un_agent_heberge():
         return
     from .. import db
     cible = verrou_org.outils_d_admin(
@@ -103,7 +119,7 @@ def outils_plateforme_valides(ctx: ResolvedCtx, noms: list[str], actuel: dict,
     posée d'avance s'armerait le jour où il le devient. Chaque nom est un `oto_admin_*`
     déjà dans les outils de l'agent (`outils`, sinon ceux stockés) : la liste ne sort pas
     de la liste d'outils, que le serveur tient de toute façon (`outils_du_travail`)."""
-    if _depuis_un_agent_heberge():
+    if depuis_un_agent_heberge():
         raise AuthzDenied(403, "platform_tools_human_only",
                           "`platform_tools` ne se pose pas depuis un agent hébergé : "
                           "c'est son propriétaire qui la pose, depuis son compte.")

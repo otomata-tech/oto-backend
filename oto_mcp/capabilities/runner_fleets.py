@@ -62,7 +62,8 @@ from pydantic import BaseModel, Field
 
 from . import (_abonnement, _cle_exigee, _descriptions_outils, _instruction,
                _limites_du_run, _lignes_de_campagne, _lignes_reservables, _modele,
-               _ordonnanceur_de_campagne, _outils_manquants, _outils_plateforme)
+               _ordonnanceur_de_campagne, _outils_manquants, _outils_plateforme,
+               _personne_seule)
 from .. import (db, deprecations, output_projection, runner_models, session_org,
                tool_alias, verrou_org)
 
@@ -464,6 +465,9 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
                 400, "missing_fields",
                 f"create exige : {', '.join(manquants)} — le nom de l'automatisation, "
                 "la procédure à jouer, et les outils (l'allowlist de ses exécutions)")
+        # Sous un jeton de délégation, la campagne n'a pas plus d'outils que le travail
+        # qui la crée (`tools_human_only`) — la règle d'`update`, posée dès la création.
+        _outils_plateforme.exiger_aucun_outil_hors_du_travail(inp.tools)
         # La cible se DÉCLARE ou s'assume absente : un passage qui écrit dans un
         # tableau sans l'avoir nommé n'a aucun périmètre à opposer à un agent.
         if inp.row_filter is not None and not inp.namespace:
@@ -538,7 +542,9 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
                 "revanche, est ouvert à tout membre.")
         # ⚠️ Un déroulé ne LANCE pas. Un agent qui se relance lui-même coûte un
         # budget en boucle — pire qu'un arrêt de trop, qui ne coûte qu'une reprise.
-        if _run_courant():
+        # Le run NOMMÉ (`_run_id`) ne suffit pas à le reconnaître : un agent hébergé qui
+        # tait le sien porte toujours son jeton de délégation (`_personne_seule`).
+        if _run_courant() or _personne_seule.depuis_un_agent_heberge():
             raise AuthzDenied(
                 403, "not_from_a_run",
                 "un run ne lance pas d'automatisation — un agent qui se relance "
@@ -754,9 +760,8 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # chaque passage relit SA liste (`campagne_a_servir`), donc une campagne armée
         # par une personne s'élargissait au passage suivant. Même règle qu'un agent ;
         # réduire, ou reposer la même liste, passe. `procedure` est figée (`update` ne
-        # la pose pas) : la liste servie ne bouge que par `tools`. Lancer ou armer une
-        # campagne plus outillée que le travail appelant reste permis (relais) : sa
-        # liste, elle, est posée par une personne.
+        # la pose pas) : la liste servie ne bouge que par `tools`. Armer une campagne
+        # est un geste de personne (`launch`, `not_from_a_run`).
         if actuelle:
             _outils_plateforme.exiger_aucun_ajout_d_agent(actuelle, inp.tools)
         retires = _descriptions_outils.outils_nommes_retires(
@@ -836,6 +841,14 @@ CAPABILITIES += [
                           "seul tableau"),
             DeclaredError(404, "fleet_not_found",
                           "automatisation inconnue dans l'org du porteur"),
+            DeclaredError(403, "not_from_a_run",
+                          "`launch` depuis un run nommé (`_run_id`) ou depuis un agent "
+                          "hébergé (jeton de délégation) : une personne arme une "
+                          "automatisation"),
+            DeclaredError(403, "tools_human_only",
+                          "`tools` élargi depuis un agent hébergé (jeton de délégation) : "
+                          "à `create`, un outil hors de la liste du travail appelant ; à "
+                          "`update`, un outil hors de la liste stockée"),
             DeclaredError(409, "not_launchable",
                           "`launch` d'une automatisation déjà armée ou en cours"),
             DeclaredError(409, "max_rows_reached",

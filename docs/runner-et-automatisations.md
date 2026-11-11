@@ -1873,10 +1873,11 @@ genres :
 
 - **`starts`** — A peut lancer B en fin de run. Les liens d'un agent BORNENT ce qu'il
   lance : un run hébergé de A, qui a au moins un lien `starts`, et qui appelle `run_now`
-  vers un agent qu'aucun d'eux ne relie à A est refusé (`chain_not_linked`). ⚠️ Un agent
-  SANS lien `starts` garde la règle d'avant (les bornes `chain_*` seules) : les chaînes
-  écrites dans les procédures depuis v1.586.0 ne cassent pas parce que les liens
-  existent. Un travail sans agent lanceur (flotte, enfilage à la main) aussi. Toutes
+  vers un agent qu'aucun d'eux ne relie à A est refusé (`chain_not_linked`) ; un agent
+  relié part quels que soient ses outils. ⚠️ Un agent SANS lien `starts` (et un travail
+  sans agent lanceur : flotte, enfilage à la main) ne lance qu'un agent dont la liste
+  tient dans la sienne (`chain_widens_tools`, §Élargir) : les chaînes écrites dans les
+  procédures depuis v1.586.0 qui passent la main à plus outillé déclarent leur lien. Toutes
   les bornes de l'enchaînement restent : `chain_self`, `chain_already_started`,
   `chain_too_wide`, `chain_too_deep`, `chain_budget_exhausted` (budget par `root_job`),
   et `run_already_queued` hors `handoff`. ⚠️ Le lien ne DONNE PAS `oto_trigger` : l'outil
@@ -3419,24 +3420,32 @@ un jeton de délégation. Un calcul qui échoue lève : pas de liste posée à l
 (`verrou_org.travail_de_la_requete`, la même détection que `platform_tools_human_only`), un
 `op=update` dont `tools` nomme un outil absent de la liste stockée est refusé (403) : sans
 ça, un agent qui a `oto_trigger` élargirait sa propre liste — une injection de prompt
-suffirait. Réduire la liste, ou la reposer telle quelle, passe. `op=create` suit la même
-règle contre la liste du travail APPELANT (`outils_du_travail.permis_du_travail` : sa
-liste servie et les outils de l'hôte) : sinon il suffirait de créer un agent plus outillé
-que soi. La liste jugée est celle qui sera écrite — `tools` fourni, ou, s'il est omis, la
-liste par défaut, c'est-à-dire les outils que la procédure cite (`<tool:…>`,
-`_outils_de_la_procedure`). Un sous-ensemble passe.
+suffirait. Réduire la liste, ou la reposer telle quelle, passe. `oto_fleet op=create` suit
+la même règle contre la liste du travail APPELANT (`outils_du_travail.permis_du_travail` :
+sa liste servie et les outils de l'hôte) : un sous-ensemble passe.
 
-**Lancer passe le relais (#1499).** Un agent lancé tourne avec SA liste, posée par une
-personne. Sous un jeton de délégation, `oto_trigger op=run_now` enfile un agent même plus
-outillé que le travail appelant, et `oto_fleet op=launch` arme une campagne même plus
-outillée : c'est le relais vers un agent spécialisé, sans créer de tâche planifiée sur le
-second. La liste du travail appelant borne SES appels (`outils_du_travail`), pas ce qu'il
-lance ; la liste de l'agent ou de la campagne lancés, elle, reste posée par une personne.
-Décision transitoire, le temps de refaire les droits en profondeur (#1499) : le refus d'un
-lancement plus outillé (#1501) est retiré. Restent refusés sous un jeton de délégation :
-créer un agent plus outillé que soi ou élargir la liste d'un agent (`tools_human_only`,
-ci-dessus), élargir la liste d'une campagne (ci-dessous), prêter le rôle plateforme et
-toucher la porte d'un webhook (`hook_door_human_only`).
+**Un agent hébergé ne gère pas les agents (`agents_human_only`).** Sous un jeton de
+délégation (`_personne_seule.depuis_un_agent_heberge`, le prédicat de tous les refus
+« personne seule »), `oto_trigger` refuse `create`, `delete`, `share`, `unshare`, `lend`,
+`unlend` et `take_over`, et `update` de tout agent, le sien compris, dès qu'un champ hors
+de `_personne_seule.CHAMPS_D_AGENT_PERMIS` est posé : la consigne, la procédure, le
+modèle, l'horloge, l'allumage, les bornes, le nom, le projet, les réglages d'un webhook.
+Restent permis `folder` (ranger) et `tools` qui réduit ou repose la liste (ci-dessus). Le
+refus vient avant toute lecture de l'agent. Les autres gestes de personne gardent leur
+code (`give_human_only`, `links_human_only`, `rerun_human_only`, `hook_door_human_only`,
+`platform_tools_human_only`, `agent_preset_human_only`).
+
+**Lancer : pas plus outillé que soi, sauf lien déclaré (`chain_widens_tools`).** Un agent
+lancé tourne avec SA liste. Sous un jeton de délégation, `oto_trigger op=run_now` d'un
+lanceur qui déclare au moins un lien `starts` ne lance que les agents ainsi reliés
+(`chain_not_linked`), quels que soient leurs outils : le lien, posé par une personne qui
+peut modifier les deux agents (`links_human_only`), est la décision de passer la main. Un
+lanceur sans lien `starts` (ou un travail sans agent) ne lance qu'un agent dont la liste
+tient dans la sienne (`outils_du_travail.permis_du_travail`) ; sinon 403
+`chain_widens_tools`, qui nomme les outils en trop. `oto_fleet op=launch` est refusé à un
+agent hébergé (`not_from_a_run`), qu'il nomme son run (`_run_id`) ou non : armer une
+campagne est un geste de personne. Restent refusés aussi : prêter le rôle plateforme
+(ci-dessous) et toucher la porte d'un webhook (`hook_door_human_only`).
 
 **Ni par une campagne retouchée (`tools_human_only`, #1499).** Chaque passage d'une
 campagne relit SA liste (`campagne_a_servir`) : un travail qui retouchait `tools` d'une

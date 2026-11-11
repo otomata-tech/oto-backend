@@ -70,7 +70,7 @@ class ColumnSources(BaseModel):
         "attribuée."))
 
 
-#: Le jour où l'attribution a été posée (la révision `20261111_1100_cell_sources`).
+#: Le jour où l'attribution a été posée (la révision `20261111_1510_cell_sources`).
 MISE_EN_SERVICE = "2026-11-11"
 
 

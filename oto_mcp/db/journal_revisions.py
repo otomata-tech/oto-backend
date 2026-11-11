@@ -88,7 +88,7 @@ DDL_COLONNE_SUPPRESSION = (f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS "
 # QUI A TROUVÉ la valeur : l'outil qui l'a écrite (`jev_rows`, `waterfall_email_act`,
 # l'outil qu'un `data_write(via=…)` a prouvé) et le fournisseur derrière elle (`hunter`).
 # Nullables, sans défaut : catalogue seul, aucune réécriture du journal. Mêmes formes
-# dans le `CREATE TABLE`, dans la révision `20261111_1000_outil_revisions` et ici.
+# dans le `CREATE TABLE`, dans la révision `20261111_1500_outil_revisions` et ici.
 #
 # ⚠️ La FONCTION est reposée à chaque démarrage par toute version servie sur la base
 # partagée : une version d'avant ces colonnes qui redémarre repose l'ancien corps, qui

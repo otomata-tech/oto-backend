@@ -16,8 +16,8 @@ corps de la fonction ne les nomme pas, elles restent `NULL`.
 Retour arrière : retire les colonnes (l'attribution des révisions écrites depuis se
 perd ; les révisions restent). Repose d'abord une version qui ne les écrit pas.
 
-Révision : 20261111_1000_outil_revisions
-Précédente : 20261109_2120_alertes_slack
+Révision : 20261111_1500_outil_revisions
+Précédente : 20261111_1400_ouvertures_par_run
 """
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ from alembic import op
 
 from oto_mcp.db import journal_revisions
 
-revision = "20261111_1000_outil_revisions"
-down_revision = "20261109_2120_alertes_slack"
+revision = "20261111_1500_outil_revisions"
+down_revision = "20261111_1400_ouvertures_par_run"
 branch_labels = None
 depends_on = None
 

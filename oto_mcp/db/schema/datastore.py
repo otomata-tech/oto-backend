@@ -126,7 +126,7 @@ REVISIONS = """
 -- une base existante, la colonne vient de la révision `0016` ou du démarrage
 -- (`journal_revisions.DDL_COLONNE_SUPPRESSION`, même forme). `outil`/`fournisseur` :
 -- l'outil et le fournisseur qui ont trouvé la valeur (`journal_revisions.
--- DDL_COLONNES_ATTRIBUTION`, révision `20261111_1000_outil_revisions`).
+-- DDL_COLONNES_ATTRIBUTION`, révision `20261111_1500_outil_revisions`).
 CREATE TABLE IF NOT EXISTS datastore_row_revisions (
     id BIGSERIAL PRIMARY KEY,
     ns_id BIGINT NOT NULL REFERENCES user_datastores(id) ON DELETE CASCADE,

@@ -394,5 +394,5 @@ def test_la_migration_pose_ses_declencheurs_sous_garde_sans_drop(compte):
     assert n == 3
     import pathlib
     src = pathlib.Path(__file__).resolve().parents[2] / \
-        "oto_mcp/db/migrations/versions/20261111_1100_cell_sources.py"
+        "oto_mcp/db/migrations/versions/20261111_1510_cell_sources.py"
     assert "DROP TRIGGER" not in src.read_text().split("def downgrade")[0]

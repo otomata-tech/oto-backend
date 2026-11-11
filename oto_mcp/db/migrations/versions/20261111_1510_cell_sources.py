@@ -13,8 +13,8 @@ garde, même DDL.
 
 Retour arrière : retire déclencheurs, fonction et table (l'attribution se perd).
 
-Révision : 20261111_1100_cell_sources
-Précédente : 20261111_1000_outil_revisions
+Révision : 20261111_1510_cell_sources
+Précédente : 20261111_1500_outil_revisions
 """
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ from alembic import op
 
 from oto_mcp.db import attribution_cellules as ac
 
-revision = "20261111_1100_cell_sources"
-down_revision = "20261111_1000_outil_revisions"
+revision = "20261111_1510_cell_sources"
+down_revision = "20261111_1500_outil_revisions"
 branch_labels = None
 depends_on = None
 

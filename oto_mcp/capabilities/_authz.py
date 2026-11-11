@@ -284,7 +284,10 @@ def ORG_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
 
 def PLATFORM_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     """Admin opérationnel (admin ou super_admin) — supervision plateforme sans
-    l'escalade en masse vers les orgs tierces (réservée à SUPER_ADMIN)."""
+    l'escalade vers les orgs tierces (réservée à SUPER_ADMIN). Un geste qui ferait
+    entrer quelqu'un dans une org tierce ne se déclare donc pas `PLATFORM_ADMIN` seul :
+    il passe par une règle qui exige SUPER_ADMIN dès que l'org est portée
+    (`PLATFORM_INVITE`)."""
     sub = _require_sub(raw)
     if not access.is_platform_operator(sub):
         raise AuthzDenied(403, "forbidden", "Réservé à un admin plateforme.")
@@ -300,6 +303,17 @@ def SUPER_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
         raise AuthzDenied(403, "forbidden", "Réservé au super admin.")
     return ResolvedCtx(sub=sub, org_id=access.current_org(sub),
                        role=access.get_user_role(sub))
+
+
+def PLATFORM_INVITE(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+    """Émettre une invitation plateforme : `PLATFORM_ADMIN` pour un onboarding pur
+    (sans `org_id`), `SUPER_ADMIN` dès que l'invitation porte une org — son
+    acceptation y fait entrer l'invité avec le rôle d'org choisi, admin compris :
+    c'est l'écriture sur une org tierce que `PLATFORM_ADMIN` n'ouvre pas.
+    L'acceptation tient la même règle (`org_store.invitation_hors_droit`)."""
+    if getattr(inp, "org_id", None) is not None:
+        return SUPER_ADMIN(raw, inp)
+    return PLATFORM_ADMIN(raw, inp)
 
 
 def _refus_publication_bibliotheque() -> AuthzDenied:
@@ -349,6 +363,7 @@ def LIBRARY_PUBLISHER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedC
 # active, mais son plancher de rôle reste `super`.
 PLATFORM_ADMIN.platform_floor = "operator"
 SUPER_ADMIN.platform_floor = "super"
+PLATFORM_INVITE.platform_floor = "operator"
 LIBRARY_PUBLISHER.platform_floor = "super"
 
 

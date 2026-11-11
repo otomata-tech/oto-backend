@@ -12,8 +12,15 @@ connector. What the description derives (pair, effects, batches, personal argume
   its functions' schemas, and each call is validated (JSON Schema 2020-12) against its function's own schema. A call
   refused there answers the function's description, schema and example.
 - The credential is the caller's, resolved at each call: a key by `access.resolve_api_key`, a service account's JSON
-  key file by `access.resolve_credential_fields`. It is given to the engine under the description's field name; the
-  engine reads no secret anywhere else.
+  key file by `access.resolve_credential_fields`, a login and a password (`basic`) by `access.resolve_credential`.
+  It is given to the engine under the description's field names; the engine reads no secret anywhere else.
+- A connector with mode `platform` resolves the shared key as any shared key resolves (closed or open, grants, quota:
+  the registry entry and the cascade decide, never this module). The probe function reads the account itself: on the
+  shared key it is the platform's account, refused.
+- Every successful call notes on its trace the `quantity` its declared cost settles (`oto.connectors.cost`: read in
+  the answer when the cost says `settle`, the requests otherwise), 0 for a function without cost: the partner billing
+  axis (`tool_calls.quantity`), on any key, never left NULL (the ledger reads NULL as 1). A refused call notes
+  nothing. Quota `units` are never noted: a platform connector served here is in `access.reglement.SANS_DEBIT`.
 - A refusal the description names (`engine.Refused`) becomes `RefusNomme` (`status_code`, `retryable`,
   `credential_rejected` from `marks_account`), which the error taxonomy reads like any upstream error; an undeclared
   status passes as the engine raised it (`UpstreamHTTPError`, its body masked of the call's secrets).
@@ -24,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any, Optional
 
 from fastmcp import FastMCP
@@ -32,13 +40,16 @@ from jsonschema import Draft202012Validator
 from mcp.types import INVALID_PARAMS, ErrorData
 from pydantic import PrivateAttr
 
-from oto.connectors import engine, serve
+from oto.connectors import cost, engine, serve
 
-from .. import access
+from .. import access, session_org
 from ..connectors import descriptions
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from .lecture import ACTE, LECTURE, SIMULATION
+
+logger = logging.getLogger(__name__)
+
 
 class RefusNomme(Exception):
     """A refusal named by the description (`engine.Refused`): its fixed message (never the vendor's body), and what
@@ -117,17 +128,39 @@ class Servi:
     def __init__(self, nom: str, description: dict):
         self.nom = nom
         self.description = description
-        self.champ = descriptions.secret_unique(description)["name"]
-        self.coffre = descriptions.champ_du_coffre(description)
+        self.champs = tuple(c["name"] for c in descriptions.champs_du_compte(description))
+        self.basique = descriptions.identifiant_et_mot_de_passe(description)
+        self.champ = self.champs[0]
+        self.coffre = None if self.basique else descriptions.champ_du_coffre(description)
+        self.plateforme = "platform" in description["connector"]["modes"]
+        self.sonde = (description["connector"].get("probe") or {}).get("function")
         self.fonctions = {f["name"]: f for f in description["functions"]}
         self.validateurs = {n: Draft202012Validator(f["input"]) for n, f in self.fonctions.items()}
 
-    def _secret_de_l_appelant(self) -> str:
-        """The caller's secret, resolved as the vault keeps it: a key, or a service account's JSON key file."""
+    def _credential_de_l_appelant(self) -> tuple[dict, bool]:
+        """`(credential for the engine, on the platform key)`, resolved as the vault keeps it: a key, a service
+        account's JSON key file, or a login and a password (both fields, under the description's names)."""
         if descriptions.compte_de_service(self.description):
-            return access.resolve_credential_fields(self.nom)[self.coffre]
-        cle, _ = access.resolve_api_key(self.nom)
-        return cle
+            return {self.champ: access.resolve_credential_fields(self.nom)[self.coffre]}, False
+        if self.basique:
+            rc = access.resolve_credential(self.nom, want="auto" if self.plateforme else "byo")
+            champs = rc.fields
+            manquent = [c for c in self.champs if not champs.get(c)]
+            if manquent:
+                raise _invalide(f"The {self.description['connector']['label']} credential lacks "
+                                f"{', '.join(manquent)}: set it again on the connector. Nothing was done.")
+            return {c: champs[c] for c in self.champs}, rc.is_platform
+        cle, sur_plateforme = access.resolve_api_key(self.nom)
+        return {self.champ: cle}, sur_plateforme
+
+    def _noter_la_quantite(self, f: dict, args: dict, answers: list) -> None:
+        """The call's settled quantity on its trace (`cost.settled_quantity`), 0 without a declared cost; a quantity
+        read above the worst case is noted as read, and logged."""
+        regle = cost.settled_quantity(self.description["connector"]["name"], f["name"], args, answers)
+        if regle is not None and regle["exceeded"]:
+            logger.warning("%s.%s: settled %s %s, above its declared worst case", self.nom, f["name"],
+                           regle["quantity"], regle["unit"])
+        session_org.note_call_trace(quantity=0 if regle is None else int(regle["quantity"]))
 
     def valider(self, outil: str, ops: list[str], arguments: dict) -> tuple[dict, dict]:
         """`(function, its arguments)` of a call of `outil`, refused (`INVALID_PARAMS`) when its op is not one of the
@@ -143,10 +176,14 @@ class Servi:
 
     def appeler(self, f: dict, args: dict) -> dict:
         """Call the function by the engine with the caller's credential: every page read, the refusal named, the
-        answer shaped (`serve.result`)."""
-        credential = {self.champ: self._secret_de_l_appelant()}
+        quantity noted, the answer shaped (`serve.result`)."""
+        credential, sur_plateforme = self._credential_de_l_appelant()
+        if sur_plateforme and f["name"] == self.sonde:
+            raise _invalide(f"op `{f['name']}` reads the {self.description['connector']['label']} account itself; "
+                            "this call runs on the shared platform key, whose account is the platform's. "
+                            "Nothing was done.")
         try:
-            return engine.call(self.description, f["name"], args, credential=credential)
+            pages = engine.execute(self.description, f["name"], args, credential=credential)
         except engine.Refused as refus:
             raise RefusNomme(refus) from refus
         except engine.InvalidArguments as e:
@@ -154,12 +191,15 @@ class Servi:
             for valeur in _masques(f, args):
                 message = message.replace(valeur, "[personal]")
             raise _invalide(f"{message} Nothing was done.") from None
+        self._noter_la_quantite(f, args, pages.answers)
+        return serve.result(serve.function(self.description, f["name"]), pages.answers, pages.next_cursor)
 
     def sonder(self, fields: dict, config: Optional[dict] = None) -> Optional[dict]:  # noqa: ARG002
         """"Test connection": the description's probe function, no argument, by the engine; a refusal that marks the
         key is `NonAutorise`, one that marks the credits `QuotaEpuise`; an unhealthy answer raises with its reason."""
         sonde = self.description["connector"]["probe"]
-        credential = {self.champ: fields.get(self.coffre)}
+        credential = ({c: fields.get(c) for c in self.champs} if self.basique
+                      else {self.champ: fields.get(self.coffre)})
         try:
             pages = engine.execute(self.description, sonde["function"], {}, credential=credential)
         except (engine.Refused, engine.TokenRefused) as refus:

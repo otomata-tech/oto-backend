@@ -257,8 +257,15 @@ def test_rembourser_annuler_desactiver_detruisent():
 
 
 def test_aucune_op_bulk_ni_delete_n_echappe_a_detruire():
+    """Un outil servi par sa description (`tools/decrits.py`) tient la classe de chaque op
+    de la description (`class: read`), que `test_convention_act` garde : chez lui, `bulk_`
+    nomme aussi une LECTURE en lot (DataForSEO `bulk_keyword_difficulty`, `bulk_ranks`)."""
+    from oto_mcp.connectors import descriptions
+    decrits = descriptions.classes_des_outils()
     for nom in EFFETS:
         for op, classe in effets.classes_par_op(nom).items():
+            if op and op.startswith("bulk_") and decrits.get(nom, {}).get(op) == "lire":
+                continue
             if op and (op.startswith("bulk_") or op.split("_")[0] in (
                     "delete", "remove", "merge", "purge", "archive", "revoke", "trash")):
                 assert classe == "detruire", (nom, op)

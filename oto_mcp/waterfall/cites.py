@@ -44,7 +44,7 @@ _PORTEE = 800
 PROPOSABLES = frozenset({
     "apollo_enrich_organization", "apollo_match_person", "apollo_reveal_phone",
     "apollo_reveal_phone_result", "apollo_search_people", "cognism_enrich_account",
-    "cognism_enrich_contact", "dataforseo_technologies", "dropcontact_enrich",
+    "cognism_enrich_contact", "dropcontact_enrich",
     "dropcontact_result", "forager_person", "fr_get", "fr_search", "fullenrich_enrich_linkedin",
     "fullenrich_result", "hunter_email_finder", "kaspr_enrich_linkedin", "lemlist_database",
     "lemlist_enrich", "lemlist_enrich_result", "linkedin_aiark_person", "pipecorn",
@@ -53,7 +53,10 @@ PROPOSABLES = frozenset({
 })
 #: Les outils d'étape jamais proposés : l'étape s'en sert pour UN acteur fixé, mais
 #: l'outil en lance n'importe lequel. Ils restent dans `missing_tools`, au geste.
-NON_PROPOSES = frozenset({"apify_run_sync"})
+#: `dataforseo` (servi par sa description depuis le 11/11/2026) : l'étape n'en lit que
+#: `domain_technologies`, l'outil sert toutes les fonctions de DataForSEO, un crawl de site
+#: facturé compris.
+NON_PROPOSES = frozenset({"apify_run_sync", "dataforseo"})
 
 
 def outils_de_l_etape(step: Step) -> list[str]:

@@ -20,7 +20,11 @@ This module is PURE (no I/O, no `oto_mcp` import at module level): from a served
   (an op that writes without a list of its own takes the tool's first batch, as `LOTS` asks);
 - the PERSONAL arguments (`personal: true`, at any depth), that the call log never writes in clear;
 - the CREDENTIAL: one secret of the account, a key (`api_key`, `bearer`) kept in the vault under `key`, or a service
-  account's JSON key file (`oauth2_jwt_bearer`) kept under the description's field name;
+  account's JSON key file (`oauth2_jwt_bearer`) kept under the description's field name; or a login and a password
+  (`basic`), kept as two fields under the description's names (since 11/11/2026);
+- the PLATFORM key (mode `platform`, since 11/11/2026): resolved by the cascade like any shared key (grants, quota),
+  each call noting the quantity its declared cost settles (`tools/decrits.py`); the probe function, which reads the
+  account itself, is not served on it;
 - what the reader CANNOT serve, refused at mount, never approximated.
 """
 from __future__ import annotations
@@ -36,6 +40,9 @@ _AUTH_A_CLE = ("api_key", "bearer")
 #: The kind of `auth` whose one secret is a service account's JSON key file, kept under the description's field name
 #: (`access.resolve_credential_fields`), as `google_analytics` keeps its own.
 _AUTH_A_COMPTE_DE_SERVICE = "oauth2_jwt_bearer"
+#: The kind of `auth` of a login and a password: two fields of the account, kept under the description's names
+#: (`access.resolve_credential`), the login not secret, the password secret.
+_AUTH_BASIQUE = "basic"
 #: The key field of a served connector's credential in the vault, for a key (`_AUTH_A_CLE`).
 CHAMP_DE_CLE = "key"
 
@@ -212,6 +219,30 @@ def secret_unique(description: dict) -> dict:
     return champs[0]
 
 
+def identifiant_et_mot_de_passe(description: dict) -> bool:
+    """The credential is a login and a password (`basic`), two fields, not one secret."""
+    return description["connector"]["auth"]["kind"] == _AUTH_BASIQUE
+
+
+def champs_du_compte(description: dict) -> tuple:
+    """The credential fields the reader serves, in the order of the description: the one secret
+    (`secret_unique`), or the login then the password that a `basic` auth names — the login not secret, the password
+    secret, both of the account. `DescriptionNonServie` otherwise."""
+    connecteur = description["connector"]
+    if not identifiant_et_mot_de_passe(description):
+        return (secret_unique(description),)
+    champs = connecteur.get("credential") or []
+    auth = connecteur["auth"]
+    par_nom = {c["name"]: c for c in champs}
+    login, mot_de_passe = par_nom.get(auth.get("username")), par_nom.get(auth.get("password"))
+    if (len(champs) != 2 or login is None or mot_de_passe is None or login is mot_de_passe
+            or login.get("secret") is True or mot_de_passe.get("secret") is not True
+            or any(c.get("holder", "account") != "account" for c in champs)):
+        raise DescriptionNonServie(f"{connecteur['name']}: the credential is not one secret of the account, nor its "
+                                   f"login and password (auth basic, {len(champs)} field(s))")
+    return tuple(c for c in champs if c is login or c is mot_de_passe)
+
+
 def compte_de_service(description: dict) -> bool:
     """The one secret is a service account's JSON key file (`oauth2_jwt_bearer`), not a key."""
     return description["connector"]["auth"]["kind"] == _AUTH_A_COMPTE_DE_SERVICE
@@ -252,7 +283,7 @@ def refus_de_montage(description: dict) -> list[str]:
     connecteur = description["connector"]
     raisons = []
     try:
-        secret_unique(description)
+        champs_du_compte(description)
     except DescriptionNonServie as e:
         raisons.append(str(e).split(": ", 1)[1])
     if "settings" in connecteur:
@@ -260,8 +291,6 @@ def refus_de_montage(description: dict) -> list[str]:
         raisons.append("connector.settings")
     if "access_levels" in connecteur["auth"]:
         raisons.append("auth.access_levels")
-    if "platform" in connecteur["modes"]:
-        raisons.append("mode platform (a shared key's quota and billing)")
     for f in description["functions"]:
         raisons += _refus_de_la_fonction(description, f)
         if any(a in f["input"]["properties"] and "pagination" not in f for a in ARGUMENTS_DE_PAGINATION):

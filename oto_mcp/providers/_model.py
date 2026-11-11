@@ -612,31 +612,56 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
     )
 
 
-def _decrit(name, *, help, href, key_help) -> Connector:
+def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota=None) -> Connector:
     """Registry entry of a connector served by the GENERIC READER of its description
     (`tools/decrits.py`), which runs it by the library's engine: its label, namespace,
-    modes and credential field are READ in the description (`oto.connectors.descriptions`),
+    modes and credential fields are READ in the description (`oto.connectors.descriptions`),
     never written twice; `help`, `href` and `key_help` are the catalog's prose. A
     description the reader cannot serve is refused here, at import
     (`connectors.descriptions.verifier`).
 
-    The credential is one secret. A key (`api_key`, `bearer`) is kept under `key` and
-    resolved by `access.resolve_api_key`. A service account's JSON key file
-    (`oauth2_jwt_bearer`) is kept under the description's field name, as
+    The credential is one secret, or a login and a password. A key (`api_key`, `bearer`)
+    is kept under `key` and resolved by `access.resolve_api_key`. A service account's JSON
+    key file (`oauth2_jwt_bearer`) is kept under the description's field name, as
     `google_analytics` keeps its own (`secret_kind="fields"`, resolved by
     `access.resolve_credential_fields`); `whitespace_significant`, because the PEM
-    private key holds spaces that the default cleanup would strip."""
+    private key holds spaces that the default cleanup would strip. A login and a password
+    (`basic`) are two fields under the description's names, the login not secret
+    (`secret_kind="fields"`); `key_help` is then `{field name: help}`, one per field.
+
+    A description with mode `platform` takes `platform_key_open` and `default_quota`:
+    whether the shared key serves every org or only the granted ones, and its daily
+    quota, are the registry's decision, never a default. Without the mode, neither."""
     from ..connectors import descriptions  # lazy: this module stays pure
 
     description = descriptions.charger(name)
     descriptions.verifier(description)
     connecteur = description["connector"]
+    modes = set(connecteur["modes"])
+    plateforme = {"platform_key_open": platform_key_open, "default_quota": default_quota}
+    if "platform" in modes and None in plateforme.values():
+        raise ValueError(f"{name}: mode platform, its `platform_key_open` and `default_quota` are to be given")
+    if "platform" not in modes and set(plateforme.values()) != {None}:
+        raise ValueError(f"{name}: no mode platform, no `platform_key_open` nor `default_quota`")
+    reglages = {k: v for k, v in plateforme.items() if v is not None}
+    if descriptions.identifiant_et_mot_de_passe(description):
+        champs = descriptions.champs_du_compte(description)
+        if not isinstance(key_help, dict) or set(key_help) != {c["name"] for c in champs}:
+            raise ValueError(f"{name}: `key_help` names the help of each credential field "
+                             f"({', '.join(c['name'] for c in champs)})")
+        return _c(
+            name, [connecteur["namespace"]], auth_modes=modes, keyed=False, secret_kind="fields",
+            label=connecteur["label"], help=help, href=href, decrit=True,
+            credential_fields=tuple(CredentialField(c["name"], c["label"], secret=c.get("secret") is True,
+                                                    help=key_help[c["name"]]) for c in champs),
+            **reglages,
+        )
     secret = descriptions.secret_unique(description)
     champ = CredentialField(descriptions.champ_du_coffre(description), secret["label"], secret=True,
                             help=key_help, whitespace_significant=descriptions.compte_de_service(description))
     cle = not descriptions.compte_de_service(description)
     return _c(
-        name, [connecteur["namespace"]], auth_modes=set(connecteur["modes"]), keyed=cle,
+        name, [connecteur["namespace"]], auth_modes=modes, keyed=cle,
         secret_kind="api_key" if cle else "fields", label=connecteur["label"], help=help, href=href,
-        credential_fields=(champ,), decrit=True,
+        credential_fields=(champ,), decrit=True, **reglages,
     )

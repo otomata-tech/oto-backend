@@ -198,14 +198,6 @@ data_share	-	1b3219a98c95204e
 data_update_where	-	720d8bde36782b8e
 data_url	-	4459136daa442990
 data_write	-	5a2fa2bc2d4e80bc
-dataforseo_account	-	82b72acb27d7e283
-dataforseo_ai_visibility	-	c15410c89f094b1c
-dataforseo_backlinks	-	82f0ab1e9d5a334d
-dataforseo_domain	-	fdfea3528d603c14
-dataforseo_keywords	-	8c2dbeccdac13645
-dataforseo_site_audit	-	e47235d44671c096
-dataforseo_technologies	-	b7d9efbb19c54eb5
-dataforseo_web_mentions	-	9654bcc26e77a8d7
 drive_access	-	4bba7137749a5e35
 drive_file	create_folder delete download export list metadata update upload	5539f7b168b124d2
 dropcontact_credits	-	99334726611ccf58

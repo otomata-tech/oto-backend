@@ -211,9 +211,11 @@ def test_une_cascade_coupee_par_le_temps_laisse_la_ligne_en_attente(calls, table
 
 def test_tech_sur_un_tableau_la_liste_en_json_et_la_techno_cherchee_pour_chaque_ligne(calls, table):
     table["lignes"] = [{"_id": "r1", "website": "acme.com"}, {"_id": "r2", "website": "b.com"}]
-    calls["answers"]["dataforseo_technologies"] = [
-        IssueCible(ok=True, result={"technologies": {"content": {"cms": ["Shopify"]}}}),
-        IssueCible(ok=True, result={"technologies": {"content": {"cms": ["WordPress"]}}})]
+    calls["answers"]["dataforseo"] = [
+        IssueCible(ok=True, result={"tasks": [{"result": [
+            {"technologies": {"content": {"cms": ["Shopify"]}}}]}]}),
+        IssueCible(ok=True, result={"tasks": [{"result": [
+            {"technologies": {"content": {"cms": ["WordPress"]}}}]}]})]
     out = _act("waterfall_tech", datastore="42", inputs={"domain": "website"},
                output={"technologies": "stack", "matched": "uses"},
                status_column="tech_status", providers=["dataforseo"],

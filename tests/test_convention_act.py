@@ -42,7 +42,7 @@ A_MIGRER = frozenset({
     "affinity", "ahrefs", "aircall", "airtable", "amplitude", "apify", "apollo",
     "ashby", "attio", "bigquery", "bls", "bodacc", "boondmanager", "brevo", "brevoauto",
     "browser", "calendar", "ccn", "claap", "clay", "cloro", "cognism",
-    "crunchbase", "culture", "dataforseo", "drive", "dropcontact", "figma", "finkare",
+    "crunchbase", "culture", "drive", "dropcontact", "figma", "finkare",
     "firecrawl", "fireflies", "folk", "foncier", "forager", "fr", "frenchtech",
     "fullenrich", "ga4", "github", "gocardless", "google", "google_ads", "gr", "grain",
     "granola", "greenhouse", "hellostock", "hithorizons", "http", "hubspot", "hunter",

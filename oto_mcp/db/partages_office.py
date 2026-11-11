@@ -4,7 +4,7 @@ La révision `0035_agents_partages_a_l_org` a posé, sur chaque agent existant a
 02/10/2026, un partage `editor` à son org entière, marqué
 (`granted_by = runner_triggers.MARQUE_MIGRATION_0035`). Aucune personne ne l'a posé :
 il ouvrait l'écriture d'un agent à tous les membres de son org. La révision
-`20261111_1900_office_en_lecture` le rabat en lecture (`viewer`/`read`) : les
+`20261111_2000_office_en_lecture` le rabat en lecture (`viewer`/`read`) : les
 membres gardent la vue, perdent l'écriture ; le propriétaire et les admins de l'org ne
 perdent rien (leur droit ne passe pas par ce partage).
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 from ._conn import _connect
 from .runner_triggers import MARQUE_MIGRATION_0035
 
-REVISION = "20261111_1900_office_en_lecture"
+REVISION = "20261111_2000_office_en_lecture"
 MARQUE_RABATTU_EN_LECTURE = f"migration:{REVISION}"
 
 

@@ -30,8 +30,8 @@ par une personne n'a plus cette marque et n'est pas touché.
 Après le tag : `oto-mcp migrer upgrade head` par le lanceur
 (docs/migrations-versionnees.md §5.1).
 
-Révision : 20261111_1900_office_en_lecture
-Précédente : 20261111_1400_ouvertures_par_run
+Révision : 20261111_2000_office_en_lecture
+Précédente : 20261111_1930_dataforseo_decrit
 """
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ from alembic import context, op
 
 from oto_mcp.db import partages_office
 
-revision = "20261111_1900_office_en_lecture"
-down_revision = "20261111_1400_ouvertures_par_run"
+revision = "20261111_2000_office_en_lecture"
+down_revision = "20261111_1930_dataforseo_decrit"
 branch_labels = None
 depends_on = None
 

@@ -62,7 +62,7 @@ Ils sont ici, chacun nommé, chacun jouable seul :
     oto-mcp maintenance partages-office --dry-run
                                             compte, par org, les partages d'org posés
                                             d'office sur les agents que la révision
-                                            `20261111_1900_office_en_lecture` rabat en
+                                            `20261111_2000_office_en_lecture` rabat en
                                             lecture — LECTURE SEULE, PAS un travail
     oto-mcp maintenance key-index-rebuild   (#421 — voir plus bas, PAS dans `all`)
     oto-mcp maintenance journal-tokens      purge rétroactive des jetons écrits en

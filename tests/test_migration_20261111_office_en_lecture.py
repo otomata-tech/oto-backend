@@ -1,4 +1,4 @@
-"""La révision `20261111_1900_office_en_lecture` rabat en lecture les partages d'org
+"""La révision `20261111_2000_office_en_lecture` rabat en lecture les partages d'org
 posés d'office sur les agents, et `oto-mcp maintenance partages-office --dry-run` les
 compte sans rien changer.
 
@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 
 RACINE = Path(__file__).resolve().parent.parent
-_PRECEDENTE = "20261111_1400_ouvertures_par_run"
-_REVISION = "20261111_1900_office_en_lecture"
+_PRECEDENTE = "20261111_1930_dataforseo_decrit"
+_REVISION = "20261111_2000_office_en_lecture"
 _M0035 = "migration:0035_agents_partages_a_l_org"
 _MARQUE = f"migration:{_REVISION}"
 

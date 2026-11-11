@@ -497,6 +497,8 @@ sources = [
   "oto_mcp/capabilities/preset_agents.py",
   "oto_mcp/capabilities/me_abonnements.py",
   "oto_mcp/db/runner_*.py",
+  # Les partages d'org posés d'office sur les agents, et leur passage en lecture.
+  "oto_mcp/db/partages_office.py",
   "oto_mcp/db/run_thread.py",
   "oto_mcp/db/user_subscriptions.py",
   "oto_mcp/db/org_subscription_*.py",
@@ -518,6 +520,7 @@ tests = [
   "tests/**/test_time_saved.py",
   "tests/**/test_preset_agents*.py",
   "tests/**/test_partage_agents*.py",
+  "tests/**/test_migration_20261111_office_en_lecture.py",
   "tests/**/test_partage_par_defaut.py",
 ]
 

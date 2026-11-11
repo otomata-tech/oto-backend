@@ -196,6 +196,7 @@ import oto_mcp.capabilities.apps_appel  # noqa: F401 — me.app.call (POST /api/
 from . import uploads  # noqa: F401 — me.upload_url (oto_upload_url) — push out-of-bande de gros contenu (#105)
 # Journal de travail du datastore (ADR 0046 b4) — parcours d'une ligne + activité du tableau.
 import oto_mcp.capabilities.datastore.activity  # noqa: F401 — me.datastore.{row_activity,activity} (REST-only)
+import oto_mcp.capabilities.datastore.column_sources  # noqa: F401 — me.datastore.column_sources (REST-only)
 # File de travail côté application (signal #362) — réserver depuis un front web.
 import oto_mcp.capabilities.datastore.claim  # noqa: F401 — me.datastore.{claim_next,claim_row} (REST-only)
 import oto_mcp.capabilities.datastore.schema  # noqa: F401 — me.datastore.{get,set}_schema (MCP data_get_schema + REST)

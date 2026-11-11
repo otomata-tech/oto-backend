@@ -354,3 +354,31 @@ def test_le_plan_d_un_dry_run_dit_l_etape_que_le_travail_refusera(calls, table, 
     assert out["missing_tools"] == ["hunter_email_finder"]
     assert out["fix"]["tools"][-1] == "hunter_email_finder"
     assert "will be skipped" in out["next_step"]
+
+
+def test_chaque_ligne_trouvee_porte_l_outil_de_l_etape_qui_a_trouve(calls, table, monkeypatch):
+    """Le journal des révisions nomme, par valeur, l'OUTIL de l'étape gagnante (ce qu'un
+    client résout en logo, « trouvé par Hunter ») ; un verdict sans trouvaille n'en
+    porte aucun."""
+    from oto_mcp import geste
+    vus: dict = {}
+
+    def ecrire(lot, rid, patch):
+        vus[rid] = geste.estampille()["fournisseur"]
+        table["store"].ecrites.setdefault(rid, {}).update(patch)
+        return None
+
+    monkeypatch.setattr(pr, "ecrire", ecrire)
+    table["lignes"] = [{"_id": "r1", "first_name": "Jane", "last_name": "Doe",
+                        "website": "acme.com"}]
+    calls["answers"]["hunter_email_finder"] = IssueCible(
+        ok=True, result={"data": {"email": "jane@acme.com"}})
+    _act("waterfall_email", **_EMAIL_ARGS)
+    table["lignes"] = [{"_id": "r2", "first_name": "Max", "last_name": "Roe",
+                        "website": "nope.com"}]
+    calls["answers"]["hunter_email_finder"] = IssueCible(
+        ok=True, result={"data": {"email": None}})
+    _act("waterfall_email", **_EMAIL_ARGS)
+    assert table["store"].ecrites["r2"]["email_status"] == "no_match"
+    assert vus == {"r1": "hunter_email_finder", "r2": None}
+    assert geste.estampille()["fournisseur"] is None, "rien ne reste posé après l'écriture"

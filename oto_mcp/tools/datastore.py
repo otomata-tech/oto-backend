@@ -28,6 +28,7 @@ from ..datastore import colonnes_non_declarees
 from ..datastore import validation_complete
 from ..datastore import charge_a_renvoyer
 from ..datastore import forcage as fcg
+from ..datastore import via as ds_via
 from ..datastore import layers as dsl
 from ..datastore import versions as dsver
 from ..datastore.identite import AdresseJson as Adresse
@@ -968,6 +969,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @_avec_la_phrase_des_couches
+    @ds_via.sous_via
     def data_write(datastore: Adresse, row: dict | None = None, id: str | None = None,
                    rows: list | None = None, key: str | None = None,
                    readonly_override: bool = False,
@@ -978,7 +980,8 @@ def register(mcp: FastMCP) -> None:
                    upsert: bool = False,
                    layers: str = dsl.DEFAUT,
                    versions: Optional[list[str]] = None,
-                   empties: str = dsl.EMPTIES_DEFAUT) -> dict:
+                   empties: str = dsl.EMPTIES_DEFAUT,
+                   via: str | None = None) -> dict:
         """Write one row, or a BATCH of rows in a single call.
 
         ⚠️ **Provenance goes in `comment`, never in `origine`.** Put WHAT you
@@ -1243,6 +1246,7 @@ def register(mcp: FastMCP) -> None:
                 the reply states what it served in `versions_servies`.
             empties: how the returned row serves an assumed empty (`plain` default,
                 `sentinel`) — same as `data_rows`. Single row only.
+            via: <<via>>
         """
         store = _acting_store()
         try:

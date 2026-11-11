@@ -124,7 +124,9 @@ REVISIONS = """
 -- Estampille (acteur, run, source, geste) : M2, NULL en M1. `suppression` : la
 -- révision que laisse la suppression de la ligne (tous ses champs en `avant`) ; sur
 -- une base existante, la colonne vient de la révision `0016` ou du démarrage
--- (`journal_revisions.DDL_COLONNE_SUPPRESSION`, même forme).
+-- (`journal_revisions.DDL_COLONNE_SUPPRESSION`, même forme). `outil`/`fournisseur` :
+-- l'outil et le fournisseur qui ont trouvé la valeur (`journal_revisions.
+-- DDL_COLONNES_ATTRIBUTION`, révision `20261111_1000_outil_revisions`).
 CREATE TABLE IF NOT EXISTS datastore_row_revisions (
     id BIGSERIAL PRIMARY KEY,
     ns_id BIGINT NOT NULL REFERENCES user_datastores(id) ON DELETE CASCADE,
@@ -136,7 +138,9 @@ CREATE TABLE IF NOT EXISTS datastore_row_revisions (
     source TEXT,
     geste_id TEXT,
     at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    suppression BOOLEAN NOT NULL DEFAULT false
+    suppression BOOLEAN NOT NULL DEFAULT false,
+    outil TEXT,
+    fournisseur TEXT
 );
 """
 

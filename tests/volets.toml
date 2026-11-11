@@ -312,6 +312,7 @@ chemins = [
   "oto_mcp/db/google.py",
   "oto_mcp/db/grants.py",
   "oto_mcp/db/historique.py",
+  "oto_mcp/db/attribution_cellules.py",
   "oto_mcp/db/index_concurrent.py",
   "oto_mcp/db/index_releve.py",
   "oto_mcp/db/invitations_ressource.py",

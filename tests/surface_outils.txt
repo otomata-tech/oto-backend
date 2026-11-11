@@ -197,7 +197,7 @@ data_set_schema	-	c73fd901556af0aa
 data_share	-	1b3219a98c95204e
 data_update_where	-	720d8bde36782b8e
 data_url	-	4459136daa442990
-data_write	-	7f53116220d271b3
+data_write	-	5a2fa2bc2d4e80bc
 dataforseo_account	-	82b72acb27d7e283
 dataforseo_ai_visibility	-	c15410c89f094b1c
 dataforseo_backlinks	-	82f0ab1e9d5a334d

@@ -471,6 +471,16 @@ async def _sans_identite() -> dict:
     return {}
 
 
+def _outil_ecrivant(name: Optional[str], arguments: Any) -> Optional[str]:
+    """L'outil que le journal des révisions nomme pour les lignes écrites pendant
+    l'appel : `oto_call` déplié vers sa cible (c'est elle qui écrit), sinon l'outil."""
+    if name == "oto_call" and isinstance(arguments, dict):
+        cible = arguments.get("name")
+        if isinstance(cible, str) and cible.strip():
+            return cible.strip()[:128]
+    return name or None
+
+
 class ToolCallLogger(Middleware):
     """Middleware FastMCP : journalise chaque on_call_tool via le sink fourni.
 
@@ -566,7 +576,9 @@ class ToolCallLogger(Middleware):
         # Le GESTE de l'appel (oto#273) : ce que le journal des révisions de ligne
         # estampille sur toute ligne écrite pendant l'appel. Son identifiant EST
         # `call_uid` — une révision se relie à SA ligne `tool_calls` sans heuristique.
-        jeton_geste = geste.poser(geste.AGENT, row.get("sub"), row["call_uid"])
+        jeton_geste = geste.poser(geste.AGENT, row.get("sub"), row["call_uid"],
+                                  outil=_outil_ecrivant(context.message.name,
+                                                        context.message.arguments))
         t0 = time.monotonic()
         try:
             result = await call_next(context)

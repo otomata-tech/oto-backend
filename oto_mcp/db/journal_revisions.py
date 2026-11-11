@@ -85,6 +85,19 @@ NOM_FONCTION_SUPPRESSION = "datastore_journal_suppression"
 COLONNE_SUPPRESSION = "suppression"
 DDL_COLONNE_SUPPRESSION = (f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS "
                            f"{COLONNE_SUPPRESSION} BOOLEAN NOT NULL DEFAULT false")
+# QUI A TROUVÉ la valeur : l'outil qui l'a écrite (`jev_rows`, `waterfall_email_act`,
+# l'outil qu'un `data_write(via=…)` a prouvé) et le fournisseur derrière elle (`hunter`).
+# Nullables, sans défaut : catalogue seul, aucune réécriture du journal. Mêmes formes
+# dans le `CREATE TABLE`, dans la révision `20261111_1000_outil_revisions` et ici.
+#
+# ⚠️ La FONCTION est reposée à chaque démarrage par toute version servie sur la base
+# partagée : une version d'avant ces colonnes qui redémarre repose l'ancien corps, qui
+# ne les écrit pas — les révisions suivantes portent alors `NULL` (« l'outil n'est pas
+# connu »), jusqu'au prochain démarrage d'une version qui les connaît. Jamais d'échec :
+# l'ancien corps ne nomme pas ces colonnes, le nouveau ne lit que des réglages.
+COLONNES_ATTRIBUTION = ("outil", "fournisseur")
+DDL_COLONNES_ATTRIBUTION = tuple(
+    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS {c} TEXT" for c in COLONNES_ATTRIBUTION)
 # Le bail (`claimed_*`), `claims`, `rev`, `updated_at` : aucun ne fait une révision.
 CONDITION_UPDATE = "OLD.data IS DISTINCT FROM NEW.data"
 
@@ -171,12 +184,15 @@ BEGIN
             RETURN NULL;
         END IF;
     END IF;
-    INSERT INTO {TABLE} (ns_id, row_id, rev, diff, acteur, run_id, source, geste_id)
+    INSERT INTO {TABLE} (ns_id, row_id, rev, diff, acteur, run_id, source, geste_id,
+                         outil, fournisseur)
     VALUES (NEW.ns_id, NEW.row_id, NEW.rev, d,
             NULLIF(current_setting('oto.acteur', true), ''),
             NULLIF(current_setting('oto.run_id', true), ''),
             NULLIF(current_setting('oto.source', true), ''),
-            NULLIF(current_setting('oto.geste_id', true), ''));
+            NULLIF(current_setting('oto.geste_id', true), ''),
+            NULLIF(current_setting('oto.outil', true), ''),
+            NULLIF(current_setting('oto.fournisseur', true), ''));
     RETURN NULL;
 END $$"""
 
@@ -208,12 +224,13 @@ BEGIN
                     '{{}}'::jsonb)
       INTO d FROM jsonb_each(OLD.data) AS e(k, v);
     INSERT INTO {TABLE} (ns_id, row_id, rev, diff, {COLONNE_SUPPRESSION},
-                         acteur, run_id, source, geste_id)
+                         acteur, run_id, source, geste_id, outil)
     VALUES (OLD.ns_id, OLD.row_id, OLD.rev, d, true,
             NULLIF(current_setting('oto.acteur', true), ''),
             NULLIF(current_setting('oto.run_id', true), ''),
             NULLIF(current_setting('oto.source', true), ''),
-            NULLIF(current_setting('oto.geste_id', true), ''));
+            NULLIF(current_setting('oto.geste_id', true), ''),
+            NULLIF(current_setting('oto.outil', true), ''));
     RETURN NULL;
 END $$"""
 
@@ -239,6 +256,13 @@ def poser_journal_des_revisions(conn) -> list[str]:
                     (TABLE, COLONNE_SUPPRESSION)).fetchone() is None:
         conn.execute(DDL_COLONNE_SUPPRESSION)
         poses.append(f"{TABLE}.{COLONNE_SUPPRESSION}")
+    # Même garde de catalogue pour l'attribution : l'`ALTER` n'est envoyé que s'il manque.
+    for colonne, ddl in zip(COLONNES_ATTRIBUTION, DDL_COLONNES_ATTRIBUTION):
+        if conn.execute("SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = %s AND column_name = %s",
+                        (TABLE, colonne)).fetchone() is None:
+            conn.execute(ddl)
+            poses.append(f"{TABLE}.{colonne}")
     conn.execute(_FONCTION)
     conn.execute(_FONCTION_SUPPRESSION)
     for nom, quand, condition, fonction in (

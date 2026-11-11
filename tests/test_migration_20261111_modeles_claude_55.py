@@ -1,4 +1,4 @@
-"""La révision `20261111_1400_modeles_claude_55` passe les agents posés sur un modèle
+"""La révision `20261111_1600_modeles_claude_55` passe les agents posés sur un modèle
 Claude d'avant à la génération 5.5.
 
 Jouée sur une vraie base : chaque id d'avant devient son successeur sur
@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 RACINE = Path(__file__).resolve().parent.parent
-_PRECEDENTE = "20261111_0920_jetons_echeance"
-_REVISION = "20261111_1400_modeles_claude_55"
+_PRECEDENTE = "20261111_1510_cell_sources"
+_REVISION = "20261111_1600_modeles_claude_55"
 _ORG = 8391
 
 

@@ -1098,7 +1098,7 @@ servis et routés. Sonnet 5.5 est donc le défaut proposé quand la famille est 
 payable, et `repli_api` envoie `sub:sonnet|opus|haiku` au modèle 5.5 du même tier
 (premier du tier dans l'ordre).
 
-- **Les agents posés passent à la 5.5** par la révision `20261111_1400_modeles_claude_55` :
+- **Les agents posés passent à la 5.5** par la révision `20261111_1600_modeles_claude_55` :
   `runner_triggers.model` et `forfait_prete_model` dans la même écriture (un prêt n'est
   vivant que si les deux sont égaux), puis `runner_fleets.model`.
 - ⚠️ **La révision se joue APRÈS le tag de prod** qui porte ce catalogue : prod et préprod

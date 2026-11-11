@@ -35,15 +35,15 @@ et la révision ensemble : rien à attendre.
 un modèle 5.5 APRÈS la révision redescend lui aussi : un retour arrière se joue avant de
 ramener un code qui ne connaîtrait pas les ids 5.5.
 
-Révision : 20261111_1400_modeles_claude_55
-Précédente : 20261111_0920_jetons_echeance
+Révision : 20261111_1600_modeles_claude_55
+Précédente : 20261111_1510_cell_sources
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "20261111_1400_modeles_claude_55"
-down_revision = "20261111_0920_jetons_echeance"
+revision = "20261111_1600_modeles_claude_55"
+down_revision = "20261111_1510_cell_sources"
 branch_labels = None
 depends_on = None
 

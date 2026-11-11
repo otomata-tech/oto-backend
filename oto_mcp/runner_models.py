@@ -51,7 +51,7 @@ MODELES: tuple[Modele, ...] = (
     Modele("claude-opus-5-5", "Claude Opus 5.5", "anthropic"),
     Modele("claude-haiku-5-5", "Claude Haiku 5.5", "anthropic"),
     # ⚠️ Les modèles d'avant RESTENT, servis et routés : la base peut encore les nommer
-    # tant que la révision `20261111_1400_modeles_claude_55` n'est pas jouée (après le tag
+    # tant que la révision `20261111_1600_modeles_claude_55` n'est pas jouée (après le tag
     # qui porte ce catalogue — prod et préprod partagent la base), les travaux déjà
     # enfilés et les reprises de runs démarrés dessus (`modele_du_run`) tournent sur eux,
     # et leurs tours se règlent sous leurs lignes de barème.

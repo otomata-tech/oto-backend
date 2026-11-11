@@ -41,8 +41,11 @@ et laisse passer tout le reste.
 
 Ce qui reste vrai, et qui est la vraie asymétrie : **`launch` ARME**, il ne
 démarre aucun processus, et il demande un ADMIN d'org ; **`stop` DEMANDE**
-l'arrêt et l'ouvre à tout membre — attendre un admin pendant qu'une flotte
-dépense est le mauvais échange.
+l'arrêt, et l'ouvre au propriétaire de la flotte comme aux admins — attendre un
+admin pendant qu'une flotte dépense est le mauvais échange. `update` et `stop`
+suivent le droit par objet (`_exiger_d_ecrire`) : la flotte s'exécute sous
+l'identité de son propriétaire, aucun autre membre ne la retouche ni ne
+l'interrompt.
 
 Et les trois verbes de l'ORDONNANCEUR sont servis ici aussi (`take`, `beat`,
 `ack_stop`). Ils ont manqué au contrat d'entrée du 30/08 au 02/09 pendant que la
@@ -434,24 +437,35 @@ def _agent_declarant(org_id: int) -> Optional[int]:
     return db.agent_du_travail(v.job_id, org_id)
 
 
-def _exiger_de_modifier(ctx: ResolvedCtx, fleet_id: int) -> dict:
-    """Modifier une automatisation est réservé à son propriétaire (celui qui l'a
-    déclarée, `runner_fleets.sub`) et aux admins de son org — les niveaux des agents
-    (`_acces_agent`). Elle s'exécute sous l'identité de son propriétaire : la
-    retoucher, c'est agir en son nom. Une automatisation ne se partage pas : aucun
-    autre membre n'y a de niveau d'écriture. La LIRE reste ouvert à tout membre."""
+def _exiger_d_ecrire(ctx: ResolvedCtx, fleet_id: int,
+                     geste: Literal["update", "stop"]) -> dict:
+    """Modifier ou arrêter une automatisation est réservé à son propriétaire (celui
+    qui l'a déclarée, `runner_fleets.sub`) et aux admins de son org — les niveaux des
+    agents (`_acces_agent`). Elle s'exécute sous l'identité de son propriétaire : la
+    retoucher ou l'interrompre, c'est agir en son nom. Une automatisation ne se
+    partage pas : aucun autre membre n'y a de niveau d'écriture. La LIRE reste
+    ouvert à tout membre."""
     f = db.get_fleet(fleet_id, ctx.org_id)
     if not f:
         raise AuthzDenied(404, "fleet_not_found", "automatisation inconnue")
     n = _acces_agent.niveaux_d_objets(ctx.sub, ctx.org_id, [f], None)[int(f["id"])]
-    if n not in _acces_agent.ECRIRE:
+    if n in _acces_agent.ECRIRE:
+        return f
+    # Deux refus littéraux, pas un code calculé : le cliquet des refus déclarés ne
+    # lit que `AuthzDenied(<status>, "<code>")` écrit en toutes lettres.
+    if geste == "stop":
         raise AuthzDenied(
-            403, "fleet_edit_forbidden",
-            "modifier une automatisation est réservé à la personne qui l'a déclarée "
+            403, "fleet_stop_forbidden",
+            "arrêter une automatisation est réservé à la personne qui l'a déclarée "
             "et aux admins de l'org : elle s'exécute sous l'identité de cette "
-            "personne. La lire et l'ARRÊTER restent ouverts à tout membre ; une "
-            "autre configuration, c'est une automatisation que tu déclares.")
-    return f
+            "personne. La lire reste ouvert à tout membre ; pour la faire arrêter, "
+            "préviens sa déclarante ou un admin.")
+    raise AuthzDenied(
+        403, "fleet_edit_forbidden",
+        "modifier une automatisation est réservé à la personne qui l'a déclarée "
+        "et aux admins de l'org : elle s'exécute sous l'identité de cette "
+        "personne. La lire reste ouvert à tout membre ; une autre configuration, "
+        "c'est une automatisation que tu déclares.")
 
 
 def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
@@ -555,7 +569,7 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
                 403, "org_admin_required",
                 "lancer une automatisation est réservé aux administrateurs de l'org : il "
                 "engage une dépense et des écritures chez un tiers. L'ARRÊTER, en "
-                "revanche, est ouvert à tout membre.")
+                "revanche, est aussi ouvert à la personne qui l'a déclarée.")
         # ⚠️ Un déroulé ne LANCE pas. Un agent qui se relance lui-même coûte un
         # budget en boucle — pire qu'un arrêt de trop, qui ne coûte qu'une reprise.
         if _run_courant():
@@ -667,18 +681,18 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
                                       if lignes and par_ligne else None)}
 
     if inp.op == "stop":
-        # Ouvert à TOUT MEMBRE : un passage qui part en vrille doit pouvoir être
-        # stoppé par la première personne qui le voit, pas par celle qui a le bon
-        # rôle. Attendre un admin pendant qu'une flotte dépense est le mauvais
-        # échange.
-        # ⚠️ Mais un déroulé n'arrête pas CELLE QUI L'EXÉCUTE : la garde nomme le
-        # cas plutôt que de fermer le verbe à tout le monde — fermer, ce serait
-        # payer le prix sur tous les usages légitimes.
+        # Réservé au propriétaire et aux admins de l'org, comme `update` : arrêter
+        # interrompt un travail qui agit sous l'identité de son propriétaire. Pas de
+        # plancher admin pour autant : le propriétaire arrête la sienne sans attendre.
+        # ⚠️ Et un déroulé n'arrête pas CELLE QUI L'EXÉCUTE : la garde nomme le cas
+        # plutôt que de fermer le verbe — fermer, ce serait payer le prix sur tous
+        # les usages légitimes.
         run = _run_courant()
         if run and db.run_appartient_a_flotte(run, inp.fleet_id):
             raise AuthzDenied(
                 403, "not_your_own_fleet",
                 "un run ne peut pas arrêter l'automatisation qui l'exécute.")
+        _exiger_d_ecrire(ctx, inp.fleet_id, "stop")
         f = db.demander_arret(inp.fleet_id, ctx.org_id,
                               inp.reason or "arrêt demandé")
         if not f:
@@ -767,7 +781,7 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
             "valeur, c'est une autre automatisation. Les champs modifiables sont : "
             f"{', '.join(f'`{c}`' for c in db.CHAMPS_MODIFIABLES)}.")
     # Le droit par objet, une fois l'entrée jugée : un refus de forme ne lit rien.
-    actuelle = _exiger_de_modifier(ctx, inp.fleet_id)
+    actuelle = _exiger_d_ecrire(ctx, inp.fleet_id, "update")
     # `tools` reste modifiable, `descriptions_outils` non : une allowlist qui retirerait un
     # outil que le réglage nomme le rendrait inerte sans un mot (oto#241).
     if inp.tools is not None:
@@ -856,6 +870,9 @@ CAPABILITIES += [
                           "seul tableau"),
             DeclaredError(404, "fleet_not_found",
                           "automatisation inconnue dans l'org du porteur"),
+            DeclaredError(403, "fleet_stop_forbidden",
+                          "`stop` d'une automatisation par un membre qui n'en est "
+                          "ni le déclarant ni un admin de l'org"),
             DeclaredError(403, "fleet_edit_forbidden",
                           "`update` d'une automatisation par un membre qui n'en est "
                           "ni le déclarant ni un admin de l'org"),

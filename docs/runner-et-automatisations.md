@@ -184,19 +184,20 @@ jusqu'au 01/09/2026 : c'est faux et constaté sur la machine), gaté par le cran
   relever `max_rows` (`op=update`) ou déclarer une autre automatisation.
   ⚠️ **Deux planchers, parce que la garde suit ce que le geste ENGAGE** :
   `launch` est réservé aux **admins** de l'org (il engage une dépense et des
-  écritures chez un tiers, irréversibles) ; `stop` est ouvert à **tout membre**
-  (un passage qui part en vrille doit pouvoir être stoppé par la première
-  personne qui le voit). Deux gardes distinctes : *un déroulé ne LANCE pas* (un
-  agent qui se relance dépense en boucle) et *un déroulé n'arrête pas CELLE QUI
-  L'EXÉCUTE* — nommée, plutôt que de fermer le verbe à tout le monde.
-  ⚠️ **Droit par objet sur `update`** : modifier une automatisation (consigne,
-  outils, bornes, libellé) est réservé à son **propriétaire** (`runner_fleets.sub`,
-  la personne qui l'a déclarée, sous l'identité de qui elle s'exécute) et aux
-  **admins** de l'org, sinon `403 fleet_edit_forbidden`. Les niveaux sont ceux des
-  agents (`_acces_agent.niveaux_d_objets`) ; une automatisation ne se partage pas,
-  donc aucun autre membre n'a de niveau d'écriture. La lire (`list`, `get`,
-  `state`) et l'arrêter restent ouverts à tout membre ; `launch` garde son plancher
-  admin. Il n'existe pas de verbe de suppression.
+  écritures chez un tiers, irréversibles) ; `stop` est ouvert au **propriétaire**
+  de l'automatisation et aux admins (le propriétaire arrête la sienne sans attendre
+  un admin). Deux gardes distinctes : *un déroulé ne LANCE pas* (un agent qui se
+  relance dépense en boucle) et *un déroulé n'arrête pas CELLE QUI L'EXÉCUTE* —
+  nommée, plutôt que de fermer le verbe à tout le monde.
+  ⚠️ **Droit par objet sur `update` et `stop`** : modifier une automatisation
+  (consigne, outils, bornes, libellé) ou l'arrêter est réservé à son
+  **propriétaire** (`runner_fleets.sub`, la personne qui l'a déclarée, sous
+  l'identité de qui elle s'exécute) et aux **admins** de l'org, sinon
+  `403 fleet_edit_forbidden` (`update`) ou `403 fleet_stop_forbidden` (`stop`).
+  Les niveaux sont ceux des agents (`_acces_agent.niveaux_d_objets`) ; une
+  automatisation ne se partage pas, donc aucun autre membre n'a de niveau
+  d'écriture. La lire (`list`, `get`, `state`) reste ouvert à tout membre ;
+  `launch` garde son plancher admin. Il n'existe pas de verbe de suppression.
 - **déclencheurs** `runner_triggers` — capacité + MCP `oto_trigger` (un agent hébergé de l'org,
   pas la tâche planifiée qu'un utilisateur demande à son assistant — voir l'avertissement en tête), tick
   backend avec CAS sur `next_due` (prod/preprod partagent la base : un seul

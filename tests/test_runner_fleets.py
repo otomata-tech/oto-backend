@@ -697,3 +697,29 @@ def test_un_admin_de_l_org_modifie_celle_d_un_autre(monkeypatch):
 def test_le_refus_de_droit_est_declare():
     cap = next(c for c in CAPABILITIES if c.key == "runner.fleets")
     assert (403, "fleet_edit_forbidden") in {(e.status, e.code) for e in cap.errors}
+
+
+def test_un_membre_n_arrete_pas_l_automatisation_d_un_autre(monkeypatch):
+    _une_flotte_de(monkeypatch, "collegue", admin=False)
+    monkeypatch.setattr(RF, "_run_courant", lambda: None)
+    demandes: list = []
+    monkeypatch.setattr(RF.db, "demander_arret",
+                        lambda *a: demandes.append(a) or {"id": 1, "status": "stopping"})
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="stop", fleet_id=1)
+    assert (e.value.status, e.value.code) == (403, "fleet_stop_forbidden")
+    assert demandes == [], "un refus ne pose aucun ordre d'arrêt"
+
+
+@pytest.mark.parametrize("proprietaire, admin", [("alexis", False), ("collegue", True)])
+def test_le_declarant_et_l_admin_arretent(monkeypatch, proprietaire, admin):
+    _une_flotte_de(monkeypatch, proprietaire, admin=admin)
+    monkeypatch.setattr(RF, "_run_courant", lambda: None)
+    monkeypatch.setattr(RF.db, "demander_arret",
+                        lambda *a: {"id": 1, "status": "stopping"})
+    assert _appel(_ctx(), op="stop", fleet_id=1)["fleet"]["status"] == "stopping"
+
+
+def test_le_refus_d_arret_est_declare():
+    cap = next(c for c in CAPABILITIES if c.key == "runner.fleets")
+    assert (403, "fleet_stop_forbidden") in {(e.status, e.code) for e in cap.errors}

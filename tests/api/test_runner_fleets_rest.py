@@ -481,9 +481,10 @@ def test_une_flotte_HISTORIQUE_sans_borne_reste_lisible_et_S_ARME(client, org):
 #
 #   lancer   de l'argent et des effets externes IRRÉVERSIBLES — des lignes
 #            écrites chez un tiers ⟹ plancher ADMIN
-#   arrêter  une interruption et un travail à reprendre ⟹ tout MEMBRE, parce
-#            qu'un passage qui part en vrille doit pouvoir être stoppé par la
-#            première personne qui le voit
+#   arrêter  une interruption et un travail à reprendre ⟹ son PROPRIÉTAIRE ou
+#            un admin, sans plancher admin : la déclarante arrête la sienne sans
+#            attendre ; les autres membres n'interrompent pas ce qui agit sous
+#            une autre identité que la leur
 #
 # ⚠️ Et aucun des deux ne pose un FAIT : `launch` arme (on a demandé), `stop`
 # demande l'arrêt (la boucle ne l'a pas lu). Une intention déclarée et un fait
@@ -627,14 +628,12 @@ def test_un_simple_membre_ne_LANCE_pas(client, org, simple_membre):
     # La phrase du refus est servie sous `detail` (enveloppe REST), pas `message`.
     assert "ARRÊTER" in rr.json().get("detail", ""), (
         "un refus qui n'enseigne pas ce qui RESTE ouvert pousse à chercher un "
-        "contournement — ici, que tout membre peut arrêter")
+        "contournement — ici, que sa déclarante peut l'arrêter")
 
 
-def test_un_simple_membre_ARRÊTE(client, org, simple_membre):
-    """L'autre moitié, et c'est le choix de conception : un passage qui part en
-    vrille doit pouvoir être stoppé par la première personne qui le voit, pas par
-    celle qui a le bon rôle. Attendre un admin pendant qu'une flotte dépense est
-    le mauvais échange."""
+def test_un_simple_membre_n_ARRÊTE_pas_celle_d_un_autre(client, org, simple_membre):
+    """Arrêter interrompt un travail qui agit sous l'identité de sa déclarante :
+    droit par objet, comme `update`. Le refus ne pose aucun ordre d'arrêt."""
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "model": MODELE_SERVI, "label": "arret-par-membre", "procedure": "p",
         "tools": ["oto_kb"],
@@ -644,8 +643,26 @@ def test_un_simple_membre_ARRÊTE(client, org, simple_membre):
                        json={"op": "launch", "fleet_id": fid}).status_code == 200
     rr = client.post(ROUTE, headers=_h(simple_membre),
                      json={"op": "stop", "fleet_id": fid, "reason": "vu passer"})
-    assert rr.status_code == 200, rr.text
-    assert rr.json()["fleet"]["status"] == "stopping"
+    assert (rr.status_code, rr.json().get("error")) == (403, "fleet_stop_forbidden")
+    lu = client.post(ROUTE, headers=_h(simple_membre), json={"op": "get", "fleet_id": fid})
+    assert lu.json()["fleet"]["status"] == "armed", "un refus n'arrête rien"
+
+
+def test_la_declarante_ARRÊTE_la_sienne_et_l_admin_celle_d_un_autre(
+        client, org, simple_membre):
+    """Le propriétaire n'attend pas un admin pour arrêter la sienne ; l'admin arrête
+    celle d'un autre."""
+    for qui_arrete in (simple_membre, org["membre"]):
+        r = client.post(ROUTE, headers=_h(simple_membre), json={
+            "op": "create", "model": MODELE_SERVI, "label": "a-arreter", "procedure": "p",
+            "tools": ["oto_kb"], "max_tokens_per_row": 50_000})
+        fid = r.json()["fleet"]["id"]
+        assert client.post(ROUTE, headers=_h(org["membre"]),
+                           json={"op": "launch", "fleet_id": fid}).status_code == 200
+        rr = client.post(ROUTE, headers=_h(qui_arrete),
+                         json={"op": "stop", "fleet_id": fid, "reason": "fin"})
+        assert rr.status_code == 200, rr.text
+        assert rr.json()["fleet"]["status"] == "stopping"
 
 
 # ── le droit par objet : modifier est au déclarant et aux admins de l'org ─────

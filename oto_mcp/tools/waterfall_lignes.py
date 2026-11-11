@@ -37,7 +37,7 @@ from typing import Any, Literal, Optional
 from fastmcp import FastMCP
 from starlette.concurrency import run_in_threadpool
 
-from .. import outils_du_travail
+from .. import geste, outils_du_travail
 from ..auth.hooks import current_user_sub_from_token
 from ..datastore import par_reference as pr
 from ..mcp_errors import McpError
@@ -126,6 +126,12 @@ def _entrees(ns: str, valeurs: dict, appel: dict) -> dict:
                                   v.get("full_name"), v.get("domain"),
                                   v.get("company_name"), v.get("linkedin_url"),
                                   v.get("email") if ns == "waterfall_person" else None)
+
+
+def _ecrire_par(fournisseur: Optional[str], lot, rid: str, patch: dict) -> Optional[str]:
+    """`pr.ecrire` sous le fournisseur qui a trouvé la valeur (aucun sur un verdict)."""
+    with geste.par_fournisseur(fournisseur):
+        return pr.ecrire(lot, rid, patch)
 
 
 def _cellule(kind: str, champ: str, trouve: dict, fournisseur: Optional[str]) -> Any:
@@ -417,8 +423,19 @@ async def fill_rows(mcp: FastMCP, ns: str, *, datastore, inputs: dict, output: d
             # A step answered without finding and none failed: a verdict, kept, so the
             # next call doesn't pay for it again.
             patch, cle = {status_column: SANS}, "no_match"
+        # Le FOURNISSEUR qui a trouvé, sur chaque révision écrite (`geste.par_fournisseur`) :
+        # l'en-tête de la colonne dit « Hunter 62 %, FullEnrich 30 % », jamais deviné.
+        # Posé DANS le fil qui écrit — c'est là que l'estampille est lue.
+        # L'OUTIL de l'étape gagnante (`linkedin_aiark_person`), pas sa clé (`aiark`) :
+        # une clé n'est pas toujours un espace de noms de connecteur (`google` est
+        # `serper_search`), l'outil l'est toujours — c'est ce que le client résout en logo.
+        fournisseur = None
+        if cle == "found":
+            gagnant = out.get("provider")
+            fournisseur = next((a.get("tool") for a in reversed(attempts)
+                                if a.get("provider") == gagnant and a.get("tool")), gagnant)
         for rid in rids:
-            code = await run_in_threadpool(pr.ecrire, lot, rid, patch)
+            code = await run_in_threadpool(_ecrire_par, fournisseur, lot, rid, patch)
             if code:
                 recu.echec(rid, f"writeback_{code}")
             else:

@@ -355,6 +355,7 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     if not inp.token:
         raise AuthzDenied(400, "missing_token", "Aucun token d'invitation fourni.")
     _garde_org_suspendue(inp.token)
+    _garde_invitation_plateforme(inp.token)
     _garde_partage_d_app(ctx, inp.token)
     res = org_store.accept_invitation(inp.token, ctx.sub)
     if not res:
@@ -370,6 +371,18 @@ def _garde_org_suspendue(token: str) -> None:
     inv = org_store.get_invitation_by_token(token)
     if inv and inv.get("org_id") and (texte := org_suspension.refus(inv["org_id"])):
         raise AuthzDenied(403, "org_suspended", texte)
+
+
+def _garde_invitation_plateforme(token: str) -> None:
+    """Une invitation plateforme qui porte une org n'est honorée que si son émetteur
+    est super admin (`org_store.invitation_hors_droit`, la règle de l'émission). Le
+    store la refuse sur tous les chemins ; ici, le refus du lien se dit avec son code
+    plutôt qu'en « invalide ou expirée »."""
+    inv = org_store.get_invitation_by_token(token)
+    if inv and org_store.invitation_hors_droit(inv):
+        raise AuthzDenied(403, "platform_invite_not_allowed",
+                          "Cette invitation rattache à une org sans avoir été émise par "
+                          "le super admin : elle ne peut pas être acceptée.")
 
 
 def _invite_claim(ctx: ResolvedCtx, inp: InviteClaimInput) -> dict:
@@ -579,6 +592,9 @@ CAPABILITIES += [
         rest=RestBinding("POST", "/api/me/invitations/accept"),
         errors=(DeclaredError(403, "org_suspended",
                               "l'org de l'invitation est suspendue : on ne la rejoint pas"),
+                DeclaredError(403, "platform_invite_not_allowed",
+                              "invitation plateforme qui porte une org sans avoir été "
+                              "émise par le super admin"),
                 DeclaredError(403, "not_the_invitee",
                               "partage en attente d'une app accepté depuis un compte "
                               "dont l'adresse n'est pas l'adresse invitée"),),

@@ -25,7 +25,7 @@ from . import droits_admin, platform_invites, unipile_seats, users_admin
 from .orgs import (admin as orgs_admin, members as orgs_members,
                    reads as orgs_reads)
 from ._authz import (ADMIN_BY_OP, ORG_ADMIN_OF, ORG_ADMIN_OF_OR_OPERATOR, ORG_MEMBER_OF,
-                     PLATFORM_ADMIN, SUPER_ADMIN)
+                     PLATFORM_ADMIN, PLATFORM_INVITE, SUPER_ADMIN)
 from ._types import AuthzDenied, Capability, ResolvedCtx
 from ._execution import execute
 from .registry import CAPABILITIES, by_key
@@ -433,12 +433,13 @@ CAPABILITIES += [
     ),
     Capability(
         key="admin.invite", handler=_invite, Input=InviteAdminInput,
-        authz=PLATFORM_ADMIN,
+        authz=ADMIN_BY_OP({"create": PLATFORM_INVITE, "list": PLATFORM_ADMIN,
+                           "revoke": PLATFORM_ADMIN}),
         description=("Invite users to the oto platform (feature cascade, platform tier). "
                      "op=create (optional `email` + `org_id` to attach directly to an org "
-                     "with `role` org_member|org_admin — omit org_id for pure onboarding; "
-                     "send_email=false returns the link only) / list (pending platform "
-                     "invitations) / revoke (`invite_id`). Platform admin."),
+                     "with `role` org_member|org_admin, super admin only — omit org_id for "
+                     "pure onboarding; send_email=false returns the link only) / list "
+                     "(pending platform invitations) / revoke (`invite_id`). Platform admin."),
         mcp="oto_admin_invite",
     ),
     Capability(

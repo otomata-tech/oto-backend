@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import (_prerequis, org_d_inscription, slack_reglage, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, regles_de_comptes,
+from . import (_prerequis, org_d_inscription, slack_reglage, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, attribution_cellules, regles_de_comptes,
                projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
@@ -933,6 +933,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # recopie, et après `_SCHEMA`, qui crée sa table. Index et déclencheurs posés
     # seulement s'ils manquent — cf. `db/journal_revisions.py`.
     journal_revisions.poser_journal_des_revisions(conn)
+    # QUI A TROUVÉ chaque case (en-tête des colonnes) : sa table et son déclencheur à
+    # part, APRÈS le journal dont il lit l'interrupteur — cf. `db/attribution_cellules.py`.
+    attribution_cellules.poser_attribution(conn)
     # Le journal et la garde des RÈGLES de comptes (#1499) : après `_SCHEMA`, qui crée
     # leurs tables ; déclencheurs posés seulement s'ils manquent — cf.
     # `db/regles_de_comptes.py`.

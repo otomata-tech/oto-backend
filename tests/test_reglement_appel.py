@@ -82,7 +82,9 @@ def _outils_a_cle_plateforme() -> dict:
             continue
         porteur = providers.REGISTRY.get(providers.credential_provider(connecteur.name))
         if porteur is not None and "platform" in porteur.auth_modes:
-            out[t.name] = t.fn
+            # Un outil du lecteur générique (`tools/decrits.py`) n'a pas de `fn` : il ne
+            # pose jamais `units`, seulement `quantity`.
+            out[t.name] = getattr(t, "fn", None)
     return out
 
 
@@ -91,6 +93,8 @@ def _pose_units(fn) -> bool:
     `units` au relevé ? Fermeture par NOM dans le module, à l'AST : un `_run` partagé
     par les outils d'un connecteur compte pour chacun d'eux."""
     import inspect
+    if fn is None:
+        return False   # le lecteur générique : `quantity`, jamais `units`
     fn = inspect.unwrap(fn)
     module = inspect.getmodule(fn)
     arbre = ast.parse(inspect.getsource(module))

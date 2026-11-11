@@ -2,9 +2,9 @@
 (oto#273, M2).
 
 Toute écriture de `datastore_rows.data` du serveur s'ouvre ici. Une transaction, et
-dedans, avant la première écriture, les quatre réglages que lit le déclencheur du
+dedans, avant la première écriture, les six réglages que lit le déclencheur du
 journal (`journal_revisions._FONCTION`) : `oto.acteur`, `oto.run_id`, `oto.source`,
-`oto.geste_id`. Leurs valeurs viennent du geste en cours (`oto_mcp.geste`).
+`oto.geste_id`, `oto.outil`, `oto.fournisseur`. Leurs valeurs viennent du geste en cours (`oto_mcp.geste`).
 
 **`set_config(…, true)`, l'équivalent de `SET LOCAL`** : la valeur meurt avec la
 transaction. Une connexion du pool sert tout le monde ; un `SET` de session suivrait la
@@ -32,7 +32,9 @@ from ._conn import _connect
 _POSER = ("SELECT set_config('oto.acteur', %(acteur)s, true), "
           "set_config('oto.run_id', %(run_id)s, true), "
           "set_config('oto.source', %(source)s, true), "
-          "set_config('oto.geste_id', %(geste_id)s, true)")
+          "set_config('oto.geste_id', %(geste_id)s, true), "
+          "set_config('oto.outil', %(outil)s, true), "
+          "set_config('oto.fournisseur', %(fournisseur)s, true)")
 
 
 @contextmanager

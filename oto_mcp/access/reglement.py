@@ -70,9 +70,9 @@ SANS_DEBIT = frozenset({
     "apify_linkedin_companies", "apify_linkedin_posts", "apify_linkedin_jobs",
     "apify_indeed_jobs", "apify_welcome_to_the_jungle_jobs", "apify_website_contacts",
     "apify_website_crawl", "apify_google_maps_places", "apify_google_maps_reviews",
-    "dataforseo_keywords", "dataforseo_domain", "dataforseo_backlinks",
-    "dataforseo_account", "dataforseo_ai_visibility", "dataforseo_site_audit",
-    "dataforseo_technologies", "dataforseo_web_mentions",
+    # dataforseo — served by the generic reader (`tools/decrits.py`), which notes the
+    # settled cost as `quantity` (partner billing), never quota `units`.
+    "dataforseo",
     "dropcontact_enrich", "dropcontact_result", "dropcontact_credits",
     "firecrawl_map", "firecrawl_scrape", "firecrawl_search", "firecrawl_crawl",
     "firecrawl_crawl_status", "firecrawl_cancel_crawl", "firecrawl_extract",

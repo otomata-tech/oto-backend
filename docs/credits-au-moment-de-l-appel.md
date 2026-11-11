@@ -99,8 +99,13 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   | `anthropic` | `messages:<modèle>` | `cache_read_input_tokens` | un jeton lu au cache |
 
   `<modèle>` est l'identifiant SANS date de version du catalogue des agents hébergés
-  (`runner_models`) : aujourd'hui `claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`,
-  soit douze lignes `anthropic`. Un identifiant daté (`…-20261001`) se lit sans sa date :
+  (`runner_models`) : aujourd'hui `claude-sonnet-5-5`, `claude-opus-5-5`,
+  `claude-haiku-5-5`, `claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`, soit
+  vingt-quatre lignes `anthropic`. Les ids d'avant gardent les leurs une fois les agents
+  passés à la 5.5 : des travaux enfilés et des reprises de runs démarrés dessus tournent
+  et se règlent encore sous elles. ⚠️ Claude Haiku 5.5 a DEUX tarifs selon la longueur du
+  prompt (au-delà de 100 000 jetons, cache compris, tout le tour est 5 × plus cher) ; une
+  ligne par unité n'en porte qu'un. Un identifiant daté (`…-20261001`) se lit sans sa date :
   un instantané garde le prix de son modèle, un modèle nouveau est un identifiant
   nouveau, donc des lignes nouvelles.
 - **Le curseur** est opaque (`<xid>.<id>`). Un mouvement porte l'identifiant de la

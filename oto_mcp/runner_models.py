@@ -42,6 +42,19 @@ class Modele(NamedTuple):
 #: ⚠️ L'ORDRE est la préférence : le modèle proposé par défaut est le premier
 #: modèle SERVI de cette liste (cf. `catalogue`). Aucun n'est marqué en dur.
 MODELES: tuple[Modele, ...] = (
+    # La génération 5.5 EN TÊTE (11/11/2026) : chaque modèle précède son prédécesseur,
+    # parce que le défaut proposé est le premier servi ET que `repli_api` prend le premier
+    # modèle `anthropic` qui porte le tier (`sub:haiku` -> `claude-haiku-5-5`).
+    # Haiku 5.5 accepte `output_config.effort` (`low` à `max`, défaut `medium` —
+    # documentation Anthropic) : pas de `none`, contrairement à Haiku 4.5.
+    Modele("claude-sonnet-5-5", "Claude Sonnet 5.5", "anthropic"),
+    Modele("claude-opus-5-5", "Claude Opus 5.5", "anthropic"),
+    Modele("claude-haiku-5-5", "Claude Haiku 5.5", "anthropic"),
+    # ⚠️ Les modèles d'avant RESTENT, servis et routés : la base peut encore les nommer
+    # tant que la révision `20261111_1400_modeles_claude_55` n'est pas jouée (après le tag
+    # qui porte ce catalogue — prod et préprod partagent la base), les travaux déjà
+    # enfilés et les reprises de runs démarrés dessus (`modele_du_run`) tournent sur eux,
+    # et leurs tours se règlent sous leurs lignes de barème.
     Modele("claude-sonnet-5", "Claude Sonnet 5", "anthropic"),
     Modele("claude-opus-5", "Claude Opus 5", "anthropic"),
     # ⚠️ `none` : Haiku 4.5 refuse `output_config.effort` (400, mesuré le 14/09/2026), que
@@ -65,7 +78,7 @@ MODELES: tuple[Modele, ...] = (
     #
     # ⚠️ Des ids PRÉFIXÉS, et non les ids nus du catalogue Anthropic : la famille se
     # DÉDUIT du modèle (`famille`), donc deux voies d'exécution ne peuvent pas
-    # partager un id. `claude-sonnet-5` reste la voie « clé de l'org » ;
+    # partager un id. `claude-sonnet-5-5` est la voie « clé de l'org » ;
     # `sub:sonnet` est la voie « abonnement ». Le runner retire le préfixe et passe
     # l'alias au programme, qui sert ce que le forfait de la personne autorise.
     Modele("sub:sonnet", "Claude Sonnet (abonnement)", "claude_subscription"),
@@ -140,8 +153,9 @@ def repli_api(model: Optional[str]) -> Optional[str]:
     façon de payer le même travail (OTO-130, repli plafond, 27/09/2026).
 
     Dérivé du même préfixe que la famille (`sub:sonnet` -> tier `sonnet` ->
-    `claude-sonnet-5`) — jamais une table à part qui divergerait du catalogue le
-    jour où un tier est ajouté d'un côté et pas de l'autre. `None` si `model`
+    `claude-sonnet-5-5`, le premier du tier dans l'ordre de `MODELES`) — jamais une
+    table à part qui divergerait du catalogue le jour où un tier est ajouté d'un côté
+    et pas de l'autre. `None` si `model`
     n'est pas un abonnement, ou si aucun modèle `anthropic` ne porte ce tier."""
     m = _PAR_ID.get(model or "")
     if not m or m.family not in FAMILLES_PERSONNELLES:

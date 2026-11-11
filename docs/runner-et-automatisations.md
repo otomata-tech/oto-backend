@@ -1064,6 +1064,7 @@ travail que ce que le modèle déclare :
 
 | Modèle | `effort` | `max_output_tokens` |
 |---|---|---|
+| `claude-sonnet-5-5`, `claude-opus-5-5`, `claude-haiku-5-5` | — (celui du worker) | — (celui du worker) |
 | `claude-sonnet-5`, `claude-opus-5` | — (celui du worker) | — (celui du worker) |
 | `claude-haiku-4-5` | `none` | — |
 | `mistral-large-2512` | — | 8 192 |
@@ -1088,6 +1089,31 @@ fournisseur.
 ⚠️ **Un `continue` relit l'effort et le plafond du `start`**, jamais le catalogue
 courant (`db.modele_du_run`). Les deux voyagent ensemble : relire l'effort sans le
 plafond faisait lever toute reprise d'un run qui raisonne (relevé en revue).
+
+### La génération Claude 5.5 passe devant, et les agents la rejoignent (11/11/2026)
+
+Le catalogue sert `claude-sonnet-5-5`, `claude-opus-5-5` et `claude-haiku-5-5` EN TÊTE,
+puis les ids d'avant (`claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`), qui restent
+servis et routés. Sonnet 5.5 est donc le défaut proposé quand la famille est servie et
+payable, et `repli_api` envoie `sub:sonnet|opus|haiku` au modèle 5.5 du même tier
+(premier du tier dans l'ordre).
+
+- **Les agents posés passent à la 5.5** par la révision `20261111_1400_modeles_claude_55` :
+  `runner_triggers.model` et `forfait_prete_model` dans la même écriture (un prêt n'est
+  vivant que si les deux sont égaux), puis `runner_fleets.model`.
+- ⚠️ **La révision se joue APRÈS le tag de prod** qui porte ce catalogue : prod et préprod
+  partagent la base et le tick tourne dans les deux. Jouée avant, la prod lirait des ids
+  qu'elle ne connaît pas et refuserait la livraison de ces agents (`motif_sans_famille`).
+  Ordre : fusion -> tag -> `oto-mcp migrer upgrade head` -> comptage (plus aucun
+  déclencheur ni flotte sur un id d'avant). ⚠️ Entre la fusion et le tag, un agent posé ou
+  retouché EN PRÉPROD sur un id 5.5 est refusé par le tick de la prod jusqu'au tag.
+- ⚠️ **`runner_jobs` n'est PAS réécrit.** Un travail enfilé porte sa charge et se route
+  par `model_family` (inchangée) ; un `continue` reprend le modèle du départ de son run,
+  jamais le catalogue courant (ci-dessus).
+- ⚠️ **Les lignes de barème des trois modèles 5.5 se posent AVANT la fusion**
+  (`docs/credits-au-moment-de-l-appel.md`) : sans elles, un tour sur clé refacturée est
+  `credits_unpriced` — refusé en `enforce`, servi sans réservation en `report`. Celles des
+  ids d'avant restent : travaux en vol et reprises se règlent sous elles.
 
 ⚠️ **Le backend se déploie avant le runner.** Un worker d'avant ce lot ignore
 `max_output_tokens` et applique sa variable d'hôte ; un worker d'après lève sur un
@@ -2455,7 +2481,7 @@ ces identifiants. D'où trois conséquences lisibles dans le code :
 - seul un **worker de plateforme** reçoit ce sandbox, et seul lui peut faire arrêter
   un travail faute de connexion — la file est ouverte aux membres, pas ce pouvoir.
 
-**Des ids PRÉFIXÉS.** La famille se DÉDUIT du modèle : `claude-sonnet-5` reste la voie
+**Des ids PRÉFIXÉS.** La famille se DÉDUIT du modèle : `claude-sonnet-5-5` est la voie
 « clé de l'org », `sub:sonnet` est la voie « abonnement ». Le worker retire le préfixe.
 
 **La couture du partage : `_abonnement.peut_agir_pour`.** Au niveau de la PERSONNE : le

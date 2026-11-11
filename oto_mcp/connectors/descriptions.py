@@ -11,6 +11,8 @@ This module is PURE (no I/O, no `oto_mcp` import at module level): from a served
 
 - the PAIR of tools: `<ns>` serves the functions `act: false` (`LECTURE`, or `SIMULATION` when one of them writes, a
   draft), `<ns>_act` the functions `act: true` (`ACTE`); the `op` of a call is the function's name;
+  the description's `exposure` block is IGNORED (gap): always this pair, whatever its mode. The exposure modes
+  and the grouping by family are decided in oto-core, `docs/conception/exposition-des-fonctions.md`;
 - the EFFECT of each op (`tools/effets.py`'s classes): `read` → `lire`; `write` that does not commit (`act: false`) →
   `ecrire`; `write` that commits → `envoyer`; `sensitive` → its declared `effect`, `send` → `envoyer`, `destroy` →
   `detruire`. A sensitive function without `effect` is refused at mount: confirming it says nothing of what it does;

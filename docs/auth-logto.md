@@ -157,8 +157,14 @@ reçoit 90 jours, que la réponse rend (`ttl_days`). La règle vit au store
 (`db.echeance_bornee`, appelée par `create_api_token`) et les capacités la lisent au
 même endroit — membre, admin, clé d'org, et `scripts/issue_token.py`. Les jetons de
 délégation (`ttl_seconds`, la durée d'un bail) sont sous le plafond par construction.
-⚠️ **Les jetons émis avant le plafond gardent leur `expires_at`, NULL compris** : les
-borner est une décision à part. ⚠️ Une **clé d'org** sans échéance (intégration tierce)
+⚠️ **Les jetons émis avant le plafond sans échéance expirent 90 jours après la mise en
+prod** (décision du 10/11/2026) : la révision Alembic `20261111_0920_jetons_echeance`
+pose `expires_at = NOW() + 90 jours` sur chaque jeton NON révoqué dont `expires_at` est
+NULL, toutes natures (`user`, `org`, `delegation`). Elle est jouée par
+`oto-mcp migrer upgrade head` après le tag (le démarrage ne la joue pas), et ne se
+défait pas : rien ne distingue ensuite un jeton qu'elle a borné d'un jeton émis avec 90
+jours, d'où un retour arrière qui lève `RetourImpossible` plutôt que de rendre
+éternels des jetons qui ne l'étaient pas. ⚠️ Une **clé d'org** sans échéance (intégration tierce)
 et un jeton du script de bootstrap expirent désormais à 90 jours : leur porteur doit
 les renouveler.
 

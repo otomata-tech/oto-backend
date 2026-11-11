@@ -428,7 +428,8 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   ⚠️ **depuis le 10/11/2026, au plus 90 jours** (`400 token_ttl_too_long` au-delà), et
   une demande sans échéance — `-1` ou un texte compris — reçoit 90 jours, rendus dans
   `ttl_days` : plus aucun jeton neuf n'est non-expirant (`docs/auth-logto.md` §Durée de
-  vie). Les jetons d'avant gardent leur échéance, NULL compris.
+  vie). Les jetons d'avant sans échéance reçoivent 90 jours à la mise en prod (révision
+  `20261111_0920_jetons_echeance`).
   **Révoquer ne supprime plus la ligne** (#523, 23/09/2026) : le `DELETE …/{token_id}`
   pose `revoked_at`/`revoked_by` (l'APPELANT)/`revoked_reason` (corps facultatif
   `{"reason": "…"}`, 500 caractères au plus, `400 reason_too_long` au-delà — jamais

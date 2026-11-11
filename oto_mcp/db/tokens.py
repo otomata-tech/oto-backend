@@ -27,8 +27,8 @@ _TOKEN_PREFIX = "oto_"
 #: La durée de vie MAXIMALE d'un jeton `oto_` neuf, en jours — et celle que reçoit un
 #: jeton demandé sans échéance. Un jeton sans échéance survivait à tout : un mot de
 #: passe changé ne le coupait pas, et qui l'avait émis depuis une session volée gardait
-#: l'accès indéfiniment. Les jetons émis AVANT ce plafond gardent leur `expires_at`
-#: (NULL compris) : les toucher est une décision à part.
+#: l'accès indéfiniment. Les jetons émis AVANT ce plafond sans échéance ont reçu la
+#: leur par la révision `20261111_0920_jetons_echeance` (90 jours après sa mise en prod).
 TTL_MAX_JOURS = 90
 
 

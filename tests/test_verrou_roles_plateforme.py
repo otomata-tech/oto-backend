@@ -6,8 +6,8 @@ point les borne, `access.scope.role_effectif`, d'où dérivent `get_user_role`,
 `is_super_admin`, `is_platform_operator`, `roles.is_platform_admin` et
 `is_operator_role` — les règles `PLATFORM_ADMIN`/`SUPER_ADMIN` le lisent.
 
-`OTO_VERROU_ROLES_PLATEFORME` : `enforce` les retire, `report` (défaut) le journalise
-sans rien retirer, `off` le coupe. Aucun accès base : `db.get_user` est remplacé.
+`OTO_VERROU_ROLES_PLATEFORME` : `enforce` (défaut) les retire, `report` (posé
+explicitement) le journalise sans rien retirer, `off` le coupe. Aucun accès base : `db.get_user` est remplacé.
 """
 from __future__ import annotations
 
@@ -79,7 +79,23 @@ def test_enforce_borne_aussi_le_sub_d_amorcage(delegue, monkeypatch):
     assert not access.is_operator_role(PORTEUR, None)
 
 
-def test_report_par_defaut_laisse_passer_et_le_dit_une_fois(delegue, caplog):
+def test_enforce_par_defaut(delegue):
+    """Variable absente ou vide : le mode sûr, sans rien poser."""
+    assert verrou_org.mode_roles() == "enforce"
+    assert access.get_user_role(PORTEUR) == "member"
+    assert not access.is_super_admin(PORTEUR)
+    with pytest.raises(AuthzDenied):
+        _authz.SUPER_ADMIN(_raw(PORTEUR))
+
+
+def test_vide_vaut_enforce(delegue, monkeypatch):
+    monkeypatch.setenv(ENV, "  ")
+    assert verrou_org.mode_roles() == "enforce"
+    assert not access.is_platform_operator(PORTEUR)
+
+
+def test_report_pose_laisse_passer_et_le_dit_une_fois(delegue, monkeypatch, caplog):
+    monkeypatch.setenv(ENV, "report")
     with caplog.at_level(logging.WARNING, logger="oto_mcp.verrou_org"):
         assert access.is_super_admin(PORTEUR)
         assert access.is_platform_operator(PORTEUR)
@@ -91,10 +107,10 @@ def test_report_par_defaut_laisse_passer_et_le_dit_une_fois(delegue, caplog):
     assert "travail 7" in lignes[0] and "super_admin" in lignes[0]
 
 
-def test_une_valeur_inconnue_vaut_report(delegue, monkeypatch):
+def test_une_valeur_inconnue_vaut_enforce(delegue, monkeypatch):
     monkeypatch.setenv(ENV, "strict")
-    assert verrou_org.mode_roles() == "report"
-    assert access.is_super_admin(PORTEUR)
+    assert verrou_org.mode_roles() == "enforce"
+    assert not access.is_super_admin(PORTEUR)
 
 
 def test_off_coupe(delegue, monkeypatch, caplog):
@@ -169,6 +185,14 @@ def test_un_outil_permis_garde_le_role_et_laisse_une_trace(delegue, liste_de_l_a
     assert len(traces) == 1, "une ligne par outil et par requête, pas une par prédicat"
     assert "`oto_admin_org`" in traces[0] and "travail 7" in traces[0]
     assert liste_de_l_agent["lus"] == [7], "la liste se lit une fois par requête"
+
+
+def test_platform_tools_sert_sous_le_defaut(delegue, liste_de_l_agent):
+    """Sans variable posée (`enforce` par défaut), l'agent d'un opérateur garde les
+    `oto_admin_*` que sa liste nomme, et seulement eux."""
+    assert _pendant("oto_admin_org", lambda: access.get_user_role(PORTEUR)) == "super_admin"
+    assert _pendant("oto_admin_user", lambda: access.get_user_role(PORTEUR)) == "member"
+    assert access.get_user_role(PORTEUR) == "member"
 
 
 def test_la_trace_reste_en_report(delegue, liste_de_l_agent, monkeypatch, caplog):

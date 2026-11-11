@@ -209,6 +209,29 @@ def test_retirer_de_tools_un_outil_que_le_reglage_nomme_est_refuse(monkeypatch):
     assert rendu["fleet"]["tools"] == ["data_rows", "data_write", "fr_get"]
 
 
+def test_un_non_operateur_n_ajoute_pas_un_outil_d_operateur_a_une_campagne(monkeypatch):
+    """Même règle qu'un agent (`admin_tools_operator_only`) : un `oto_admin_*` réservé au
+    rôle plateforme n'entre dans la liste que par un opérateur ; reposer la liste passe."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import _outils_plateforme as OP
+    monkeypatch.setattr(OP.access, "is_platform_operator", lambda sub: sub == "alexis")
+    monkeypatch.setattr(db, "get_fleet", lambda fid, org: {
+        "id": fid, "tools": ["data_rows", "oto_admin_org"]})
+    monkeypatch.setattr(db, "update_fleet", lambda fid, org, champs: {"id": fid, **champs})
+
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(sub="membre"), op="update", fleet_id=1,
+               tools=["data_rows", "oto_admin_org", "oto_admin_user"])
+    assert (e.value.status, e.value.code) == (403, "admin_tools_operator_only")
+
+    rendu = _appel(_ctx(sub="membre"), op="update", fleet_id=1,
+                   tools=["data_rows", "oto_admin_org"])
+    assert rendu["fleet"]["tools"] == ["data_rows", "oto_admin_org"]
+    rendu = _appel(_ctx(), op="update", fleet_id=1,
+                   tools=["data_rows", "oto_admin_org", "oto_admin_user"])
+    assert rendu["fleet"]["tools"][-1] == "oto_admin_user"
+
+
 def test_aucun_modele_servi_ne_porte_de_monnaie():
     """Les tarifs changent et diffèrent par fournisseur : une valeur monétaire figée
     en base devient fausse sans que rien ne le dise. Et un NUMERIC servi tel quel

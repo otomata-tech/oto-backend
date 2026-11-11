@@ -48,6 +48,7 @@ from ._authz import ORG_MEMBER
 from ._dossier import FOLDER_MAX, dossier_valide
 from ._outils_plateforme import (PLATFORM_TOOLS_MAX, exiger_aucun_ajout_d_agent,
                                  exiger_aucun_outil_hors_du_travail,
+                                 exiger_outils_d_admin_a_sa_portee,
                                  exiger_un_lancement_sans_role_plateforme,
                                  outils_plateforme_valides)
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -1653,6 +1654,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Sous un jeton de délégation, l'agent créé n'a pas plus d'outils que le travail
         # qui le crée — liste fournie ou déduite de la procédure (`tools_human_only`).
         exiger_aucun_outil_hors_du_travail(outils)
+        # Un `oto_admin_*` réservé au rôle plateforme : un opérateur seul l'ajoute.
+        exiger_outils_d_admin_a_sa_portee(ctx.sub, outils)
         # Une personne qui pose l'agent voit ce que ses outils appelleront pour lui
         # (recettes, étapes de cascade) et qu'il n'a pas (`tools_to_add`) — rien d'ajouté.
         a_ajouter = _a_ajouter_par_une_personne(ctx.org_id, inp.procedure, outils)
@@ -2311,6 +2314,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 a_ranger = (slug, int(projet))
     if "tools" in champs:
         exiger_aucun_ajout_d_agent(_actuel(), champs["tools"])
+        exiger_outils_d_admin_a_sa_portee(ctx.sub, champs["tools"],
+                                          (_actuel() or {}).get("tools"))
     if inp.platform_tools is not None:
         champs["outils_plateforme"] = outils_plateforme_valides(
             ctx, inp.platform_tools, _actuel(), champs.get("tools"))

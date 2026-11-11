@@ -6,9 +6,9 @@ From this card, click **connect**: Google asks you to authorize **Gmail only** (
 
 ## usage — search, read, draft, send
 
-Two tools, under the chosen account: `gmail(op=search|get|attachment|drafts|draft|accounts)` reads or prepares a draft — nothing leaves, nothing is deleted; `gmail_act(op=send|archive|trash)` acts, and your client asks you to confirm it.
+Two tools, under the chosen account: `gmail(op=search|get|attachment|drafts|draft|accounts)` reads or prepares a draft — nothing leaves, nothing is deleted; `gmail_act(op=send|archive|trash|delete_draft)` acts, and your client asks you to confirm it.
 - "find this week's unread emails" → `gmail(query="is:unread newer_than:7d")`; "archive the newsletters" → `gmail_act(op="archive", message_ids=[…])`
-- "draft a reply to this email" → `gmail(op="draft", reply_to="…", body="…")`; "send it" → `gmail_act(op="send", draft_id="…")`, the draft as it stands
+- "draft a reply to this email" → `gmail(op="draft", reply_to="…", body="…")`; "send it" → `gmail_act(op="send", draft_id="…")`, the draft as it stands; "delete this draft" → `gmail_act(op="delete_draft", draft_id="…")` (the draft `id`, not its `message_id`: `trash` answers 404 on a draft)
 - composing (`gmail` op=draft, or `gmail_act` op=send with a full message) appends the sending account's **Gmail signature** (after `--`), like the web client — the Gmail API never does it on its own. `sign=False` composes without it; the response reports `signature`: `appended`, `none_configured` or `disabled`
 - "read the `.xlsx` spreadsheet attached to this email, `devis` sheet" — an attachment (`op=attachment`) comes back as CSV per sheet, truncated
 - "look at the photo or the scan attached" — an image, or a scanned PDF with JPEG pages, comes back as an image you can look at (up to 3 MB and 5 pages; beyond, a signed URL)

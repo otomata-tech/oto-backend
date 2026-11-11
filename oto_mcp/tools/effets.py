@@ -449,7 +449,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "github_repos": {"lire": "get tags mine org user branches commits commit compare contributors languages topics releases release latest_release", "envoyer": "create_release update_release"},
     "github_search": {"lire": "users repos code issues commits"},
     "gmail": {"lire": "search get accounts attachment drafts", "ecrire": "draft"},
-    "gmail_act": {"envoyer": "send", "detruire": "archive trash"},
+    "gmail_act": {"envoyer": "send", "detruire": "archive trash delete_draft"},
     "gocardless_creditors": "lire",
     "gocardless_events": "lire",
     "gocardless_failed": "lire",

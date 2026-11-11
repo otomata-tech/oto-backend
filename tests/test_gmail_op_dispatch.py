@@ -21,7 +21,7 @@ import pytest
 from oto_mcp.mcp_errors import McpError
 # Méthodes du GmailClient qui MUTENT la boîte : aucune ne doit être atteinte par
 # une lecture, ni par une op inconnue, ni par un appel sans `op`.
-_DESTRUCTIVE = ("archive_messages", "trash_message")
+_DESTRUCTIVE = ("archive_messages", "trash_message", "delete_draft")
 
 
 def _tool(name: str):
@@ -229,7 +229,7 @@ def test_the_declared_default_op_is_declared_as_a_read():
     default = inspect.signature(asyncio.run(m.get_tool("gmail")).fn) \
         .parameters["op"].default
     assert default == "search"
-    assert set(G._ACT_OPS) == {"send", "archive", "trash"}
+    assert set(G._ACT_OPS) == {"send", "archive", "trash", "delete_draft"}
     assert not set(G._ACT_OPS) & set(G._OPS), "une op qui agit ne vit QUE dans gmail_act"
     assert set(_DESTRUCTIVE) <= set(dir(_pinned_client_class()))
 
@@ -439,3 +439,33 @@ def test_une_corbeille_entierement_reussie_ne_change_pas_de_forme(client):
     client.trash_message.side_effect = lambda mid: {"id": mid}
     assert _call("gmail_act", op="trash", message_ids=["m1", "m2"]) == \
         {"trashed": ["m1", "m2"]}
+
+
+# --- delete_draft : un brouillon se supprime par son draft_id, pas par `trash` ------
+
+def test_delete_draft_calls_delete_draft_with_the_draft_id_only(client):
+    client.delete_draft.return_value = {"deleted": "r-1"}
+    out = _call("gmail_act", op="delete_draft", draft_id="r-1")
+    client.delete_draft.assert_called_once_with("r-1")
+    assert out == {"kind": "draft_deleted", "draft_id": "r-1"}
+    client.trash_message.assert_not_called()
+    client.archive_messages.assert_not_called()
+
+
+def test_delete_draft_without_draft_id_is_refused_before_the_credential(client):
+    with pytest.raises(McpError, match=r"delete_draft.*draft_id"):
+        _call("gmail_act", op="delete_draft")
+    client.delete_draft.assert_not_called()
+    client._factory.assert_not_called()
+
+
+def test_trash_404_tells_the_agent_to_use_delete_draft(client):
+    class _Resp:
+        status = 404
+
+    err = Exception("Requested entity was not found.")
+    err.resp = _Resp()
+    client.trash_message.side_effect = err
+    with pytest.raises(McpError, match=r"DRAFT.*delete_draft.*draft_id"):
+        _call("gmail_act", op="trash", message_ids=["m-draft"])
+    client.delete_draft.assert_not_called()

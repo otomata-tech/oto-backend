@@ -312,7 +312,7 @@ github_pulls	commits create files get merge merged remove_reviewers request_revi
 github_repos	branches commit commits compare contributors create_release get languages latest_release mine org release releases tags topics update_release user	56e360c3072b00ce
 github_search	code commits issues repos users	48102a71899e53e0
 gmail	accounts attachment draft drafts get search	e2280a2d86d7c4e9
-gmail_act	archive send trash	bfe73369fbf72f7e
+gmail_act	archive delete_draft send trash	e4fa31d15362c266
 gocardless_creditors	-	99334726611ccf58
 gocardless_events	-	bdc3f81b4f1b4e56
 gocardless_failed	-	dc999a592296d551

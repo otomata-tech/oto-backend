@@ -46,8 +46,7 @@ from ..tools import catalogue as tool_catalogue
 from ..waterfall import cites as waterfall_cites
 from ._authz import ORG_MEMBER
 from ._dossier import FOLDER_MAX, dossier_valide
-from ._outils_plateforme import (PLATFORM_TOOLS_MAX, exiger_aucun_ajout_d_agent,
-                                 exiger_un_enfant_dans_ses_outils,
+from ._outils_plateforme import (PLATFORM_TOOLS_MAX, exiger_un_enfant_dans_ses_outils,
                                  exiger_un_lancement_sans_role_plateforme,
                                  outils_plateforme_valides)
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -398,7 +397,7 @@ class ToolWarning(BaseModel):
     #: qu'elle lance, mais n'est PAS dans `tools` : le run sera refusé
     #: (`tool_not_in_job`) au premier appel. `needed_by` dit qui l'appelle ; le geste qui
     #: le lève est `missing_tools` du déclencheur (un clic : `op=update`,
-    #: `tools=tools+missing_tools`), un geste de personne (`tools_human_only`).
+    #: `tools=tools+missing_tools`), un geste de personne (`agents_human_only`).
     issue: Literal["installable", "not_exposed", "unknown_tool", "not_granted"]
     detail: str
     needed_by: Optional[str] = None
@@ -505,7 +504,7 @@ class Trigger(BaseModel):
     #: Les outils que la procédure ou ses recettes appellent et que `tools` n'a pas —
     #: la liste à AJOUTER (`op=update`, `tools=tools+missing_tools`) : le bouton
     #: « Autoriser » d'un écran, joué par une personne — un agent hébergé n'élargit
-    #: aucune liste (`tools_human_only`). Calculé même quand `tools` est vide. `[]` = rien
+    #: aucune liste (`agents_human_only`). Calculé même quand `tools` est vide. `[]` = rien
     #: ne manque ; `None` = pas calculé. Jamais stocké, comme `tool_warnings`.
     missing_tools: Optional[list[str]] = None
     #: Ce qui ATTEND maintenant — ce que `clear_queue` viderait. `queue_pending`
@@ -1187,7 +1186,7 @@ def _a_ajouter_par_une_personne(org: int, slug: Optional[str],
     recettes publiées), un agent peut l'écrire ; un ajout silencieux à la retouche
     suivante d'une personne lui ouvrirait en direct ce qu'elle cite.
 
-    Sous un jeton de délégation : rien (`tools_human_only`). Un calcul qui échoue lève :
+    Sous un jeton de délégation : rien (`agents_human_only`). Un calcul qui échoue lève :
     la personne ne pose pas une liste sans savoir ce qui lui manque."""
     if not slug or _personne_seule.depuis_un_agent_heberge():
         return []
@@ -1529,7 +1528,7 @@ def _relancer(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     ⚠️ **Une PERSONNE seule** : la liste d'outils d'origine peut être plus large que celle
     de l'agent aujourd'hui, et c'est elle que le run exercera (`outils_du_travail`). Sous
     un jeton de délégation, un agent hébergé ressusciterait ainsi une liste que son
-    propriétaire a réduite depuis — l'élargissement que `tools_human_only` refuse. Un
+    propriétaire a réduite depuis — un geste de personne (`agents_human_only`). Un
     agent hébergé a `run_now`, qui part de la configuration du moment.
 
     ⚠️ L'identité est l'APPELANT (`ctx.sub`), comme `run_now` : un run lancé à la main
@@ -2345,8 +2344,6 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 champs["project_id"] = projet
             if ranger and projet is not None:
                 a_ranger = (slug, int(projet))
-    if "tools" in champs:
-        exiger_aucun_ajout_d_agent(_actuel(), champs["tools"])
     if inp.platform_tools is not None:
         champs["outils_plateforme"] = outils_plateforme_valides(
             ctx, inp.platform_tools, _actuel(), champs.get("tools"))
@@ -3064,10 +3061,6 @@ CAPABILITIES += [
                           "`platform_tools` hors d'`op=update`"),
             DeclaredError(403, "platform_tools_human_only",
                           "`platform_tools` posé depuis un agent hébergé (jeton de délégation)"),
-            DeclaredError(403, "tools_human_only",
-                          "`tools` élargi depuis un agent hébergé (jeton de délégation) : "
-                          "à `update`, un outil hors de la liste stockée — un geste de "
-                          "personne"),
             DeclaredError(403, "platform_tools_owner_only",
                           "`platform_tools` posé par un autre que le propriétaire de l'agent"),
             DeclaredError(403, "platform_tools_operator_only",

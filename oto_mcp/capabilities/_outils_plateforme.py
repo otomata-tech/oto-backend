@@ -1,8 +1,7 @@
 """Ce qu'un agent hébergé ne pose pas lui-même : ses outils d'admin exercés avec le rôle
 plateforme de son porteur (`platform_tools`, revue de #1274) — qui peut poser la liste, et
 ce qu'elle peut nommer —, et tout élargissement d'une liste d'outils (`tools`) : à la
-retouche d'un agent ou d'une campagne, à la création d'une campagne, au lancement d'un
-agent plus outillé que soi.
+retouche d'une campagne, à sa création, au lancement d'un agent plus outillé que soi.
 
 Sorti de `runner_triggers` : la capacité des agents dépassait 1 900 lignes, et cette
 règle est un tout — les refus d'auteur et de contenu, avec leur borne.
@@ -10,10 +9,10 @@ règle est un tout — les refus d'auteur et de contenu, avec leur borne.
 **Une personne, pas un agent.** Sous un jeton de délégation (`verrou_org.travail_de_la_requete`,
 posé au bord MCP et au bord REST pour un travail hébergé), un agent qui a `oto_trigger` dans
 sa liste élargirait la sienne — une injection de prompt suffirait —, ou créerait une
-campagne plus outillée que lui, qui tournerait ensuite avec ces outils. Élargir reste un
-geste de personne ; réduire, reposer la même liste, ou créer une campagne qui n'a que des
-outils du travail appelant reste permis. Créer un agent est refusé en bloc
-(`agents_human_only`, `_personne_seule`)."""
+campagne plus outillée que lui, qui tournerait ensuite avec ces outils. Pour une campagne,
+élargir reste un geste de personne ; réduire, reposer la même liste, ou en créer une qui
+n'a que des outils du travail appelant reste permis. Créer ou retoucher un agent, sa liste
+d'outils comprise, est refusé en bloc (`agents_human_only`, `_personne_seule`)."""
 from __future__ import annotations
 
 import logging
@@ -38,11 +37,11 @@ def _refuser_l_elargissement(outils: list[str], permis: set | frozenset) -> None
 
 
 def exiger_aucun_ajout_d_agent(actuel: dict, outils: list[str]) -> None:
-    """`op=update` : refuse `tools_human_only` quand un agent hébergé AJOUTE un outil à
-    la liste d'un agent (`outils` hors de celle stockée, au canonique). Réduire la liste,
-    ou la reposer telle quelle, passe : cela ne donne rien de plus. La création a sa
-    règle (`exiger_aucun_outil_hors_du_travail`). Hors jeton de délégation, rien ne
-    change — la personne qui modifie l'agent l'élargit comme avant."""
+    """`oto_fleet op=update` : refuse `tools_human_only` quand un agent hébergé AJOUTE un
+    outil à la liste d'une campagne (`outils` hors de celle stockée, au canonique).
+    Réduire la liste, ou la reposer telle quelle, passe : cela ne donne rien de plus. La
+    création a sa règle (`exiger_aucun_outil_hors_du_travail`). Hors jeton de délégation,
+    rien ne change."""
     if not depuis_un_agent_heberge():
         return
     _refuser_l_elargissement(outils, {deprecations.tool_canonique(n)

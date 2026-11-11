@@ -179,6 +179,56 @@ def test_relier_exige_de_pouvoir_modifier_les_deux(org, monkeypatch):
     assert not org["liens"], "rien n'est posé"
 
 
+def _niveaux(monkeypatch, par_agent: dict):
+    """Le niveau de l'appelant, agent par agent (`owner` par défaut ; None = aucun droit)."""
+    from oto_mcp.capabilities import _acces_agent
+    monkeypatch.setattr(_acces_agent, "niveaux", lambda sub, org_id, ts: {
+        int(t["id"]): par_agent.get(int(t["id"]), "owner") for t in ts})
+
+
+@pytest.mark.parametrize("de, vers, niveaux, attendu", [
+    (1, 2, {2: "viewer"}, (403, "trigger_edit_forbidden")),   # lit seulement l'enfant
+    (1, 2, {2: None}, (404, "trigger_not_found")),            # aucun droit sur l'enfant
+    (1, 2, {1: "viewer"}, (403, "trigger_edit_forbidden")),   # lit seulement le parent
+    (1, 2, {1: "editor", 2: "viewer"}, (403, "trigger_edit_forbidden")),
+])
+def test_relier_exige_d_ecrire_sur_le_parent_et_sur_l_enfant(org, monkeypatch, de, vers,
+                                                            niveaux, attendu):
+    """Poser un lien, c'est permettre au parent de lancer l'enfant : écrire sur l'un ne
+    suffit pas, il faut écrire sur les deux (`_acces_agent.ECRIRE` : propriétaire, admin,
+    éditeur)."""
+    _niveaux(monkeypatch, niveaux)
+    with pytest.raises(AuthzDenied) as e:
+        _relier(de, vers)
+    assert (e.value.status, e.value.code) == attendu
+    assert not org["liens"], "rien n'est posé"
+
+
+def test_un_editeur_des_deux_agents_les_relie(org, monkeypatch):
+    _niveaux(monkeypatch, {1: "editor", 2: "editor"})
+    assert _relier(1, 2)["ok"]
+
+
+def test_reposer_un_lien_exige_toujours_d_ecrire_sur_les_deux(org, monkeypatch):
+    """Modifier un lien existant (sa phrase), c'est le reposer : la même garde, relue sur
+    les droits du moment."""
+    _relier(1, 2, condition="quand x")
+    _niveaux(monkeypatch, {2: "viewer"})
+    with pytest.raises(AuthzDenied) as e:
+        _relier(1, 2, condition="toujours")
+    assert (e.value.status, e.value.code) == (403, "trigger_edit_forbidden")
+    assert [l["condition"] for l in org["liens"]] == ["quand x"], "rien n'est modifié"
+
+
+def test_retirer_un_lien_exige_d_ecrire_sur_les_deux(org, monkeypatch):
+    lien = _relier(1, 2)["link"]
+    _niveaux(monkeypatch, {2: "viewer"})
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="unlink", link_id=lien["id"])
+    assert (e.value.status, e.value.code) == (403, "trigger_edit_forbidden")
+    assert len(org["liens"]) == 1, "rien n'est retiré"
+
+
 def test_on_ne_relie_pas_l_agent_d_une_autre_org(org):
     """L'agent d'une autre org ne se lit pas dans la mienne (`get_trigger` borné à
     l'org de l'appel) : 404, comme un agent inconnu — et rien n'est posé."""

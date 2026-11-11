@@ -32,10 +32,10 @@ from .. import verrou_org
 from ._types import AuthzDenied, DeclaredError
 
 #: Les champs d'`oto_trigger op=update` qu'un agent hébergé pose encore. `folder` range
-#: un agent dans l'écran ; `tools` ne fait que réduire ou reposer la liste
-#: (`_outils_plateforme.exiger_aucun_ajout_d_agent` refuse tout ajout). Aucun des deux
-#: ne change ce que l'agent fait, quand il le fait ni sous quelle identité.
-CHAMPS_D_AGENT_PERMIS = frozenset({"folder", "tools"})
+#: un agent dans l'écran : il ne change ni ce que l'agent fait, ni quand, ni sous quelle
+#: identité. `tools` n'y est pas, même pour réduire la liste : la liste d'outils d'un
+#: agent est posée par une personne.
+CHAMPS_D_AGENT_PERMIS = frozenset({"folder"})
 
 REFUS_AGENTS = DeclaredError(
     403, "agents_human_only",

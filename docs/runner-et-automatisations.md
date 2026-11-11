@@ -3416,12 +3416,11 @@ main ; `apify_run_sync`, qui lance n'importe quel acteur, est dans `NON_PROPOSES
 au geste via `missing_tools`) ; jamais les marqueurs `<tool:…>` de la procédure ; rien sous
 un jeton de délégation. Un calcul qui échoue lève : pas de liste posée à l'aveugle.
 
-**Élargir est un geste de personne (`tools_human_only`).** Sous un jeton de délégation
-(`verrou_org.travail_de_la_requete`, la même détection que `platform_tools_human_only`), un
-`op=update` dont `tools` nomme un outil absent de la liste stockée est refusé (403) : sans
-ça, un agent qui a `oto_trigger` élargirait sa propre liste — une injection de prompt
-suffirait. Réduire la liste, ou la reposer telle quelle, passe. `oto_fleet op=create` suit
-la même règle contre la liste du travail APPELANT (`outils_du_travail.permis_du_travail` :
+**Élargir est un geste de personne.** Sous un jeton de délégation, la liste d'outils d'un
+AGENT ne se pose pas du tout (`agents_human_only`, ci-dessous), même pour la réduire. Celle
+d'une CAMPAGNE ne s'élargit pas (`tools_human_only`) : `oto_fleet op=update` dont `tools`
+nomme un outil absent de la liste stockée est refusé (403), réduire ou reposer la liste
+passe. `oto_fleet op=create` suit la même règle contre la liste du travail APPELANT (`outils_du_travail.permis_du_travail` :
 sa liste servie et les outils de l'hôte) : un sous-ensemble passe.
 
 **Un agent hébergé ne gère pas les agents (`agents_human_only`).** Sous un jeton de
@@ -3430,7 +3429,7 @@ délégation (`_personne_seule.depuis_un_agent_heberge`, le prédicat de tous le
 `unlend` et `take_over`, et `update` de tout agent, le sien compris, dès qu'un champ hors
 de `_personne_seule.CHAMPS_D_AGENT_PERMIS` est posé : la consigne, la procédure, le
 modèle, l'horloge, l'allumage, les bornes, le nom, le projet, les réglages d'un webhook.
-Restent permis `folder` (ranger) et `tools` qui réduit ou repose la liste (ci-dessus). Le
+Reste permis `folder` (ranger) seul : `tools` est refusé même pour réduire la liste. Le
 refus vient avant toute lecture de l'agent. Les autres gestes de personne gardent leur
 code (`give_human_only`, `links_human_only`, `rerun_human_only`, `hook_door_human_only`,
 `platform_tools_human_only`, `agent_preset_human_only`).

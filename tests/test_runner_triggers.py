@@ -416,7 +416,7 @@ def test_platform_tools_refuse_sous_un_jeton_de_delegation(agent_d_operateur):
     assert agent_d_operateur == {}
 
 
-# ── tools : élargir est un geste de personne (`tools_human_only`) ────────────
+# ── tools : la liste d'un agent est posée par une personne ────────────────
 
 def test_une_personne_elargit_la_liste_d_un_agent(agent_d_operateur):
     _appel(_ctx(), op="update", trigger_id=3,
@@ -425,36 +425,25 @@ def test_une_personne_elargit_la_liste_d_un_agent(agent_d_operateur):
         "tools": ["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"]}
 
 
-def test_un_agent_heberge_n_elargit_pas_une_liste_d_outils(agent_d_operateur):
-    """Sous un jeton de délégation, un agent qui a `oto_trigger` ajouterait à sa propre
-    liste n'importe quel outil : une injection de prompt suffirait."""
+@pytest.mark.parametrize("outils", [
+    ["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"],  # élargie
+    ["fr_siret"],                                                    # réduite
+    ["oto_admin_signal", "oto_admin_org", "fr_siret"],               # la même, réordonnée
+    [],                                                              # vidée
+])
+def test_un_agent_heberge_ne_pose_aucune_liste_d_outils(agent_d_operateur, outils):
+    """La liste d'outils d'un agent est posée par une personne : sous un jeton de
+    délégation, `tools` est refusé même quand il réduit ou repose la liste."""
     from oto_mcp import verrou_org
     t = verrou_org.poser(verrou_org.Verrou(sub="porteur", org_id=2, job_id=9))
     try:
         with pytest.raises(AuthzDenied) as e:
-            _appel(_ctx(), op="update", trigger_id=3,
-                   tools=["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"])
+            _appel(_ctx(), op="update", trigger_id=3, tools=outils)
     finally:
         verrou_org.lever(t)
-    assert (e.value.status, e.value.code) == (403, "tools_human_only")
-    assert "data_rows" in e.value.message
+    assert (e.value.status, e.value.code) == (403, "agents_human_only")
+    assert "`tools`" in e.value.message
     assert agent_d_operateur == {}, "rien n'est écrit"
-
-
-@pytest.mark.parametrize("outils", [
-    ["fr_siret"],                                             # réduite
-    ["oto_admin_signal", "oto_admin_org", "fr_siret"],        # la même, réordonnée
-    [],                                                       # vidée
-])
-def test_un_agent_heberge_reduit_ou_repose_une_liste_d_outils(agent_d_operateur, outils):
-    """Réduire ne donne rien de plus : la règle ne vise que l'ajout."""
-    from oto_mcp import verrou_org
-    t = verrou_org.poser(verrou_org.Verrou(sub="porteur", org_id=2, job_id=9))
-    try:
-        _appel(_ctx(), op="update", trigger_id=3, tools=outils)
-    finally:
-        verrou_org.lever(t)
-    assert agent_d_operateur == {"tools": outils}
 
 
 # ── retoucher et gérer un agent : un geste de personne (`agents_human_only`) ──

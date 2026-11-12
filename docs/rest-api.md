@@ -676,7 +676,11 @@ suivants, et chaque verdict **nomme** le consommateur (`scripts/contrat-front.py
 
 Seul le CONTENU d'un contrat peut rougir. Un secret déclaré mais absent rougit aussi
 (défaut chez nous, #823) ; un dépôt illisible ou un fichier déplacé chez le consommateur
-avertit sans rougir (`scripts/lire-contrat-consommateur.sh`).
+avertit sans rougir (`scripts/lire-contrat-consommateur.sh`). Sur une PR venue d'un fork,
+GitHub ne transmet aucun secret : la garde d'avant déploiement y retire de sa matrice les
+consommateurs à secret et l'annonce en avertissement (job `consommateurs`) ; sans
+consommateur lisible, elle est sautée. Ni vert ni rouge : ils sont jugés à la poussée sur
+`main`, avant la préproduction.
 
 Déclarés au 25/09/2026 : un front tiers (extrait des opérations qu'il appelle) et le
 dashboard (**l'instantané complet** de l'API : tout retrait ou changement de forme d'une

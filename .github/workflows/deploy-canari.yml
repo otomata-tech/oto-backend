@@ -303,9 +303,13 @@ jobs:
     timeout-minutes: 5
     outputs:
       liste: ${{ steps.liste.outputs.liste }}
+      liste_code: ${{ steps.liste.outputs.liste_code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: liste
+        env:
+          # Une PR venue d'un fork ne reçoit aucun secret du dépôt (règle de GitHub).
+          EST_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -euo pipefail
           # La liste se lit dans le dépôt, donc une PR peut la modifier : chaque champ est
@@ -321,6 +325,19 @@ jobs:
             exit 1
           fi
           echo "liste=$(jq -c . .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
+          # La garde d'avant déploiement (`contrat-front-code`) ne juge que ce qu'elle PEUT
+          # lire. Sur une PR de fork, un consommateur à secret est illisible : il quitte sa
+          # matrice, et ce retrait est DIT (annotation), jamais rendu en vert. Il est jugé,
+          # secret en main, à la poussée sur main, avant le déploiement de préproduction.
+          if [ "$EST_FORK" = "true" ]; then
+            non_juges="$(jq -r '[.[] | select(.secret != null) | .nom] | join(", ")' .github/contrat-consommateurs.json)"
+            if [ -n "$non_juges" ]; then
+              echo "::warning title=Contrat NON JUGÉ sur cette PR de fork::GitHub ne transmet aucun secret à une PR venue d'un fork : le contrat de $non_juges n'est pas confronté ici (jambes sautées). Rien à corriger côté contributeur — il est jugé à la poussée sur main, avant le déploiement de préproduction."
+            fi
+            echo "liste_code=$(jq -c '[.[] | select(.secret == null)]' .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "liste_code=$(jq -c . .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
+          fi
 
   # ─────────────────────────────────────────────────────────────────────────────
   # APRÈS la préproduction : ce qui est réellement SERVI. Un constat, pas une garde —
@@ -411,19 +428,24 @@ jobs:
   # Mêmes règles de verdict : seule une rupture d'appel ou de lecture bloque. Un ajout
   # compatible sort en avertissement et n'empêche PAS de fusionner.
   #
-  # #823 — SANS LE SECRET, IL ROUGIT. GitHub ne transmet pas les secrets à une PR venue
-  # d'un fork : ce job y sortait VERT sans rien avoir jugé. Un « je n'ai pas pu juger »
-  # est un résultat, distinct d'un « jugé conforme » : échec nommé. Ce rouge ne bloque
-  # pas la fusion (aucun contrôle requis sur `main`) et ne demande rien au
-  # contributeur : le même job rejuge le code, secret en main, à la poussée sur le tronc.
+  # Un « je n'ai pas pu juger » n'est jamais un « jugé conforme » (#823). GitHub ne
+  # transmet aucun secret à une PR venue d'un fork : un consommateur à secret y est
+  # illisible. Il ne sort ni VERT (rien jugé) ni ROUGE (rien à voir avec le code) : il
+  # quitte la matrice (`liste_code`, filtrée par `consommateurs`, qui l'annonce en
+  # annotation), et si plus rien n'est lisible le job est SAUTÉ. Le même job rejuge le
+  # code, secret en main, à la poussée sur le tronc, avant la préproduction. Ailleurs
+  # (PR interne, poussée), un secret déclaré mais absent reste un échec nommé.
+  # ⚠️ Un job sauté compte comme réussi pour un contrôle REQUIS : ne pas rendre ce job
+  # requis sans revoir ce point.
   contrat-front-code:
     name: Contrat avant déploiement — ${{ matrix.consommateur.nom }}
     needs: [consommateurs]
+    if: needs.consommateurs.outputs.liste_code != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        consommateur: ${{ fromJSON(needs.consommateurs.outputs.liste) }}
+        consommateur: ${{ fromJSON(needs.consommateurs.outputs.liste_code) }}
     timeout-minutes: 10  # max observé 54 s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -449,7 +471,6 @@ jobs:
         id: contrat
         env:
           CLE_LECTURE: ${{ matrix.consommateur.secret && secrets[matrix.consommateur.secret] || '' }}
-          EST_FORK: ${{ github.event.pull_request.head.repo.fork }}
           NOM: ${{ matrix.consommateur.nom }}
           DEPOT: ${{ matrix.consommateur.depot }}
           CHEMIN: ${{ matrix.consommateur.chemin }}
@@ -509,7 +530,6 @@ jobs:
         if: ${{ !cancelled() && matrix.consommateur.chemin_admin }}
         env:
           CLE_LECTURE: ${{ matrix.consommateur.secret && secrets[matrix.consommateur.secret] || '' }}
-          EST_FORK: ${{ github.event.pull_request.head.repo.fork }}
           NOM: ${{ matrix.consommateur.nom }}
           DEPOT: ${{ matrix.consommateur.depot }}
           CHEMIN: ${{ matrix.consommateur.chemin_admin }}

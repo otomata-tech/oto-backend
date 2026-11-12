@@ -6,7 +6,8 @@
 #
 # Usage : lire-contrat-consommateur.sh <nom> <dépôt owner/repo> <chemin> <secret|"">
 # Env   : CLE_LECTURE  la clé de déploiement en lecture seule (vide pour un dépôt public)
-#         EST_FORK     "true" sur une PR venue d'un fork (GitHub n'y transmet aucun secret)
+# Une PR venue d'un fork n'appelle pas ce script pour un consommateur à secret : le job
+# `consommateurs` le retire de la matrice et l'annonce (GitHub n'y transmet aucun secret).
 # Sorties (GITHUB_OUTPUT) : travail=<dossier temporaire>, lu=oui|non, contrat=<fichier>
 #
 # TROIS états, pas deux — et la distinction EST le sujet du contrat. Ce mécanisme existe
@@ -20,11 +21,7 @@ set -euo pipefail
 NOM="$1" DEPOT="$2" CHEMIN="$3" SECRET="$4"
 
 if [ -n "$SECRET" ] && [ -z "${CLE_LECTURE:-}" ]; then
-  if [ "${EST_FORK:-}" = "true" ]; then
-    echo "::error title=Contrat de $NOM NON JUGÉ (PR de fork)::GitHub ne transmet pas le secret $SECRET à une PR venue d'un fork : le contrat de $NOM N'A PAS été confronté à ce code. Rien à corriger côté contributeur — le contrôle se rejoue, secret en main, à la poussée sur main, avant le déploiement de préproduction."
-  else
-    echo "::error title=Contrat de $NOM NON JUGÉ::Le secret $SECRET est absent — le contrat épinglé par $NOM N'A PAS été confronté. Reposer le secret du dépôt, puis relancer."
-  fi
+  echo "::error title=Contrat de $NOM NON JUGÉ::Le secret $SECRET est absent — le contrat épinglé par $NOM N'A PAS été confronté. Reposer le secret du dépôt, puis relancer."
   exit 1
 fi
 

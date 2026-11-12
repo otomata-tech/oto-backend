@@ -8,6 +8,7 @@ REST. Erreurs (plan Ship 1 §3) : pas d'org active → 400 `no_active_org`
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Literal, Optional
 
 from pydantic import BaseModel, field_validator
@@ -143,10 +144,14 @@ async def _search(ctx: ResolvedCtx, inp: SearchInput) -> dict:
 
     # Vecteur de requête (fusion sémantique) — None si désactivé/échec → lexical seul.
     # Calculé dès qu'UNE source à sémantique est demandée : page/brief/guide + ligne (#67 V2.2).
+    # Lancé sur la boucle SANS l'attendre : la recherche (au threadpool) joue ses sources
+    # lexicales pendant ce temps, et n'attend le vecteur que pour les sémantiques.
     _semantic_kinds = {"page", "brief", "guide", "ligne"}
     want_semantic = not inp.kinds or bool(_semantic_kinds & set(inp.kinds))
     from .. import embeddings
-    qvec = await embeddings.embed_query(q) if want_semantic else None
+    qvec = (asyncio.run_coroutine_threadsafe(
+                embeddings.embed_query(q), asyncio.get_running_loop()).result
+            if want_semantic else None)
 
     return await run_in_threadpool(
         search_mod.search,

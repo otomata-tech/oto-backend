@@ -1094,9 +1094,12 @@ def list_working_docs_for_project(project_id: int) -> list[dict]:
         rows = conn.execute(
             "WITH RECURSIVE gardees AS ("
             f"  SELECT id, parent_id FROM docs WHERE project_id = %s AND {PAGES_DE_TRAVAIL} "
-            "  UNION "
+            "  UNION ALL "
             "  SELECT d.id, d.parent_id FROM docs d JOIN gardees g ON d.id = g.parent_id"
-            f") SELECT {_DOC_COLS} FROM docs WHERE id IN (SELECT id FROM gardees) "
+            # Une remontée par page de travail, bornée par `CYCLE` comme toute récursion
+            # sur l'arbre : un parent en boucle ne la fait pas tourner sans fin.
+            ") CYCLE id SET boucle USING chemin "
+            f"SELECT {_DOC_COLS} FROM docs WHERE id IN (SELECT id FROM gardees) "
             "ORDER BY parent_id NULLS FIRST, position NULLS LAST, title", (project_id,),
         ).fetchall()
         return [dict(r) for r in rows]

@@ -54,6 +54,37 @@ une page qui la cite (`[[…]]`, `op=backlinks`). Aucune option de recherche ne 
 la réponse serait un second chemin de découverte à scoper et à garder, pour un besoin
 que la liste sert.
 
+## Les sources brutes : un genre à part, à la demande (12/11/2026)
+
+`docs.kind = 'source'` (transcriptions, imports) se verse en continu : un projet peut en
+porter des dizaines de milliers pour une centaine de pages de travail (`doc`, `note`).
+Elles noyaient la recherche et la ralentissaient. Décision du propriétaire du produit :
+elles sont traitées **à part**.
+
+- **`oto_search`** : `page` ne couvre plus que `doc` et `note`, au lexical
+  (`search_docs_fts`) comme au sémantique (`search_docs_semantic`). Un genre `source`
+  s'ajoute à `kinds`, **absent du défaut** (`search.KINDS_A_LA_DEMANDE`) : on le
+  demande (`kinds=['source']`, ou `['page','source']`). Lexical seul : une source se
+  retrouve par ses mots. Le hit a la forme d'une page (`ref` = l'id d'`oto_doc op=get`).
+- **Pas de silence** : quand les pages sont cherchées sans `source` et que le périmètre
+  en porte, la réponse porte `sources_skipped: true` et `hint_sources` (comment les
+  inclure). Une sonde `EXISTS` par l'index partiel des sources, jamais un compte.
+- **`oto_doc op=list`** (la liste que lit l'arbre du dashboard) : par défaut l'arbre de
+  TRAVAIL, sans les sources — sauf une source qui est l'ancêtre d'une page de travail,
+  gardée pour que l'arbre reste entier — et `sources_hidden` dit combien il en laisse,
+  comme `archived_hidden`. `kind="source"` liste les sources seules, les plus récentes
+  d'abord (`created_at`, puis `id`), paginées : `limit` (50, au plus 200), `cursor` (le
+  `next_cursor` précédent, `null` sur la dernière page), `since`/`until`, et `total`
+  sur la période. Une source se lit toujours par son id (`op=get`).
+- **Index** : les prédicats `kind <> 'source'` et `kind = 'source' AND archived_at IS
+  NULL` (`db/projects.py`) sont la source unique de quatre index partiels — les deux
+  GIN des pages de travail (`db/search.py::INDEX_PAGES_DE_TRAVAIL`), l'arbre de travail
+  par projet, les sources récentes par projet —, posés CONCURRENTLY par la révision
+  `20261112_1200_docs_par_genre` (au-delà de 10 000 lignes : `oto-mcp maintenance
+  index-concurrents 20261112_1200_docs_par_genre`). Les GIN de la table entière restent
+  et servent la recherche des sources. Sans les index partiels, tout répond juste, plus
+  lentement.
+
 ## L'org d'un résultat : où vit l'objet, pas par où on l'atteint (21/09/2026)
 
 Signal #1005 (et #1006, son doublon sur `data_list_datastores`) : un agent qui audite

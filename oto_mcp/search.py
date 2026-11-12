@@ -20,6 +20,11 @@ Invariants (plan lot 3 §4.2) :
   (`capabilities/apps._org_list` — mêmes seams que la liste des projets), matchées
   en mémoire sur leur titre.
 
+Les sources brutes d'un projet (`docs.kind='source'`) sont un genre À PART, `source`,
+parcouru seulement quand on le demande (`KINDS_A_LA_DEMANDE`) ; `page` ne couvre que les
+pages de travail (`doc`, `note`), au lexical comme au sémantique. Sans `source` demandé,
+une réponse dont le périmètre en porte le dit (`sources_skipped`, `hint_sources`).
+
 Deux familles de hits : **passages** (prose — page/brief/procedure/guide + ligne de
 datastore, avec fragment surligné) et **conteneurs** (tableau/fichier/connecteur —
 nom+description, pas d'aperçu). La **ligne** (#67 V2.1) est hybride : un enregistrement
@@ -42,6 +47,13 @@ logger = logging.getLogger(__name__)
 _RRF_K = 60
 KINDS = ("page", "brief", "procedure", "guide", "tableau", "ligne", "fichier", "connecteur",
          "app")
+# Les genres parcourus SEULEMENT quand on les demande (`kinds`), jamais par défaut :
+# `source` = les sources brutes d'un projet (`docs.kind='source'` : transcriptions,
+# imports), versées en continu et en nombre — elles noieraient les pages de travail
+# (`page` = `doc` et `note`). Quand le périmètre en porte et qu'on ne les a pas
+# demandées, la réponse le DIT (`sources_skipped`) : jamais un silence.
+KINDS_A_LA_DEMANDE = ("source",)
+GENRES = KINDS + KINDS_A_LA_DEMANDE
 
 # Repli d'accents côté Python (miroir de db.projects._fold) — pour les sources
 # matchées en mémoire (tableaux, connecteurs).
@@ -199,6 +211,10 @@ def search(sub: str, org_id: int, q: str, *,
     # ── fusion RRF : dédup par (kind, ref) en SOMMANT les rangs réciproques ──
     # Une page trouvée par lexical ET sémantique cumule ses deux contributions →
     # remonte (le vrai gain du RRF). On garde le passage lexical s'il existe.
+    # Les sources brutes, à la demande seulement (`KINDS_A_LA_DEMANDE`), entrent dans la
+    # même fusion, classées par leur rang comme toute source.
+    if "source" in wanted:
+        ranked += _rangs_des_sources(q, pids, per_source)
     fused: dict[tuple, tuple[float, dict]] = {}
     for score, hit in ranked:
         key = (hit["kind"], str(hit["ref"]))
@@ -249,7 +265,40 @@ def search(sub: str, org_id: int, q: str, *,
         out["hint"] = ("Aucun résultat — reformule (la V1 est lexicale : essaie les "
                        "mots exacts du contenu), ou navigue : `oto_project op=list` "
                        "puis l'épine du projet.")
+    out.update(_sources_non_parcourues(wanted, pids))
     return out
+
+
+def _rangs_des_sources(q: str, pids: list[int], limit: int) -> list[tuple[float, dict]]:
+    """Les sources brutes du périmètre qui portent la requête, en `(rang réciproque, hit)`
+    pour la fusion RRF. Lexical seul : une source se retrouve par ses mots (un nom, un
+    chiffre, une phrase dite), et le sémantique des pages ne les parcourt pas."""
+    rows = db.search_docs_fts(q, pids, limit=limit, sources=True)
+    return [(1.0 / (_RRF_K + i + 1), _hit_source(r)) for i, r in enumerate(rows)]
+
+
+def _hit_source(r: dict) -> dict:
+    """Un hit `source` : une page dont le genre est `source`, même forme qu'une page
+    trouvée par ses mots — `ref` est l'id qu'`oto_doc op=get` ouvre."""
+    return {"kind": "source", "ref": r["id"], "title": r["title"],
+            "project_id": r["project_id"], "description": r.get("description") or None,
+            "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
+            "updated_at": r.get("updated_at"), "matched_by": "lexical"}
+
+
+def _sources_non_parcourues(wanted: set, pids: list[int]) -> dict:
+    """Le signal d'une recherche de pages qui n'a PAS parcouru les sources brutes du
+    périmètre : `sources_skipped` et la phrase qui dit comment les inclure. Rien quand
+    les sources étaient demandées, quand les pages ne l'étaient pas, ou quand le
+    périmètre n'en porte aucune. Une sonde de présence, jamais un compte."""
+    if "source" in wanted or "page" not in wanted or not db.sources_presentes(pids):
+        return {}
+    return {"sources_skipped": True,
+            "hint_sources": (
+                "Les sources brutes (transcriptions, imports) de ce périmètre n'ont pas "
+                "été parcourues : elles ne le sont que sur demande. Pour les inclure, "
+                "relance avec `kinds=['source']`, ou `kinds=['page','source']` avec les "
+                "pages de travail.")}
 
 
 def _accessible_namespaces(sub: str, org_id: int) -> list[dict]:

@@ -626,7 +626,7 @@ oto_connector_activation	clear list set	7596a92524e0e798
 oto_connector_app	-	ea92db2cbafdb344
 oto_context	-	fd3168d48576c83d
 oto_disable_tool	-	1149380513abd0af
-oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_public shared_with_me unarchive update verify	ee93f6ed6a49cc89
+oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_public shared_with_me unarchive update verify	c20aad60a0879f59
 oto_doc_app	-	380bde4997dd0aa4
 oto_enable_tool	-	1149380513abd0af
 oto_fleet	ack_stop beat create get launch list state stop take update	5c192086a0806dea
@@ -656,7 +656,7 @@ oto_resource	get list share transfer unshare	40a9d7eaa2b6e5f8
 oto_resource_v2	get list share transfer unshare	637bc809e5097167
 oto_run_thread	append read	44bbcd76833e2fd0
 oto_scheduled_emails	cancel list	8667993dedb8c784
-oto_search	-	18ffe4e9d63c0a93
+oto_search	-	bc9ec7089f5b4e82
 oto_shell	-	1e4aa9b504342353
 oto_tool_schema	-	b12939b40013387f
 oto_trigger	clear_queue connect_source create default_sharing delete deliveries disconnect_source get give graph lend link links list rerun rotate_address rotate_secret run_now share shares take_over unlend unlink unshare update	cecfa2ae4affaa78

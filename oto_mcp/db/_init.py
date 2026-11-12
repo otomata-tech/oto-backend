@@ -801,6 +801,13 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
         conn.execute(_paths.DDL_FONCTION_VALEURS_TEXTE)
     for index in _search.INDEX_VALEURS:
         index_concurrent.poser_au_demarrage(conn, index)
+    # Les pages de travail à part des sources brutes (`docs.kind`) : leurs index
+    # partiels sous le même verdict — construits ici sur une base neuve seulement ; une
+    # base servie les reçoit de la révision `20261112_1200_docs_par_genre`.
+    from . import projects as _projects
+    for index in (*_search.INDEX_PAGES_DE_TRAVAIL, _projects.INDEX_TRAVAIL_PAR_PROJET,
+                  _projects.INDEX_SOURCES_RECENTES):
+        index_concurrent.poser_au_demarrage(conn, index)
     # Le texte des valeurs servies MATÉRIALISÉ par ligne (16/10/2026) : colonnes,
     # déclencheur qui les remplit à chaque écriture de `data` (ancien code compris,
     # bleu/vert sur base partagée), et leurs deux GIN sous le même verdict CONCURRENTLY.

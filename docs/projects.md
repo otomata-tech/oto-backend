@@ -115,6 +115,14 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > porte que `op=get` (une page partagée seule a donc aussi son plan) ; `outline` est servi
 > au lecteur d'un projet publié. Banc : `tests/test_doc_lecture_section_1266.py`.
 
+> **Les sources brutes à part de l'arbre de travail (12/11/2026).** `op=list` rend par
+> défaut les pages de travail (`doc`, `note`) et dit combien de sources il laisse
+> (`sources_hidden: N`) ; une source ancêtre d'une page de travail reste, pour que l'arbre
+> soit entier. `kind="source"` liste les sources seules, les plus récentes d'abord,
+> paginées (`limit`, `cursor` → `next_cursor`, `since`/`until`, `total`) ; ces quatre
+> paramètres sont refusés ailleurs (`unsupported_pagination`). Détail, index et recherche :
+> `docs/search-and-kb.md` §Les sources brutes.
+>
 > **Archiver une page, et dater sa vérification (signal #1087, 23/10/2026).** Des pages
 > « Dernier état connu » datées en dur dans leur corps remontaient dans `oto_search` à
 > égalité avec des pages fraîches, et la seule sortie était `op=delete`, irréversible.

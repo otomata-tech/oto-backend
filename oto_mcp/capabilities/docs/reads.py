@@ -6,10 +6,12 @@ reçoivent la ligne déjà résolue par le gate `doc_id` du dispatcher.
 """
 from __future__ import annotations
 
+import base64
+from datetime import datetime, timezone
 from typing import Optional
 
 from ... import db, output_projection
-from .._types import ResolvedCtx
+from .._types import AuthzDenied, ResolvedCtx
 from ... import doc_patch
 from . import common, region, view
 from .common import require
@@ -18,23 +20,105 @@ from .common import require
 def liste(sub: Optional[str], inp) -> dict:
     require(inp.project_id is not None, "missing_project", "`project_id` is required.")
     require(common.can(sub, inp.project_id, "read"), "forbidden", "Access refused.", 403)
+    pid = int(inp.project_id)
+    # Les sources brutes (`kind="source"`) se listent À PART, paginées : un projet peut
+    # en porter des dizaines de milliers pour une centaine de pages de travail.
+    if inp.kind == db.KIND_SOURCE:
+        return _sources(sub, inp, pid)
     # Une liste sert à choisir quoi ouvrir : elle rend l'INDEX de l'arbre, pas les
     # corps (37 pages = 201 K caractères, refusés par le client). `body_length`
     # remplace `body_md` ; `fields=["*"]` rend le brut. (`fields` est validé en tête
     # du dispatcher, pour toutes les ops d'un coup — voir `view.FIELDS_OPS`.)
-    pages = db.list_docs_for_project(int(inp.project_id))
+    # L'arbre de TRAVAIL : sans les sources, sauf celles qui sont l'ancêtre d'une page
+    # de travail (elle garde son chemin). `kind="doc"|"note"` : ce genre seul.
+    pages = db.list_working_docs_for_project(pid)
+    if inp.kind is not None:
+        pages = [d for d in pages if d.get("kind") == inp.kind]
     # #1087 : une page ARCHIVÉE sort de la liste par défaut — et la liste DIT combien
     # elle en retire, sinon « 12 pages » se lirait comme le projet entier.
     archivees = sum(1 for d in pages if d.get("archived_at"))
     if not inp.include_archived:
         pages = [d for d in pages if not d.get("archived_at")]
+    # Même règle pour les sources écartées : la liste dit combien elle en laisse.
+    sources_cachees = 0
+    if inp.kind is None:
+        sources_cachees = db.count_live_sources(pid) - sum(
+            1 for d in pages if d.get("kind") == db.KIND_SOURCE and not d.get("archived_at"))
     rows, notice = output_projection.summarize(
         [view.view(d, sub) for d in pages],
         body_fields=("body_md",), fields=inp.fields, always=view.ALWAYS)
     return {"project_id": inp.project_id, "docs": rows,
             **({"archived_hidden": archivees} if archivees and not inp.include_archived
                else {}),
+            **({"sources_hidden": sources_cachees} if sources_cachees else {}),
             **({"projection": notice} if notice else {})}
+
+
+#: La page de sources par défaut, et son plafond.
+SOURCES_PAR_PAGE = 50
+SOURCES_PAR_PAGE_MAX = 200
+
+
+def _sources(sub: Optional[str], inp, pid: int) -> dict:
+    """Les sources du projet, les plus récentes d'abord (`created_at`), par pages :
+    `limit` (défaut 50, au plus 200), `cursor` = le `next_cursor` de la page précédente,
+    `since` (inclus) / `until` (exclu) bornent la période. `total` compte les sources de
+    la période, toutes pages confondues ; `next_cursor` vaut `null` sur la dernière."""
+    limit = SOURCES_PAR_PAGE if inp.limit is None else int(inp.limit)
+    require(1 <= limit <= SOURCES_PAR_PAGE_MAX, "invalid_limit",
+            f"`limit` is between 1 and {SOURCES_PAR_PAGE_MAX} (got {limit}).")
+    since, until = _instant(inp.since, "since"), _instant(inp.until, "until")
+    lignes, total = db.list_sources_page(
+        pid, limit=limit, after=_depuis_curseur(inp.cursor) if inp.cursor else None,
+        since=since, until=until, include_archived=bool(inp.include_archived))
+    suite = len(lignes) > limit
+    lignes = lignes[:limit]
+    rows, notice = output_projection.summarize(
+        [view.view(d, sub) for d in lignes],
+        body_fields=("body_md",), fields=inp.fields, always=view.ALWAYS)
+    return {"project_id": inp.project_id, "kind": db.KIND_SOURCE, "docs": rows,
+            "total": total,
+            "next_cursor": _curseur(lignes[-1]) if suite else None,
+            **({"projection": notice} if notice else {})}
+
+
+def _curseur(d: dict) -> str:
+    """La clé de tri de la dernière source servie, encodée. Opaque par CONTRAT : ce
+    qu'il encode peut changer avec le tri."""
+    cree = d["created_at"]   # la couche db rend un instant ISO, ou un datetime
+    brut = f"src:{cree if isinstance(cree, str) else cree.isoformat()}|{int(d['id'])}"
+    return base64.urlsafe_b64encode(brut.encode()).decode()
+
+
+def _depuis_curseur(cursor: str) -> tuple[datetime, int]:
+    """L'inverse — et un refus NOMMÉ si le curseur est abîmé : repartir du début en
+    silence resservirait la première page en boucle."""
+    try:
+        brut = base64.urlsafe_b64decode(cursor.encode()).decode()
+        prefixe, _, reste = brut.partition(":")
+        instant, _, ident = reste.rpartition("|")
+        if prefixe != "src":
+            raise ValueError(prefixe)
+        return datetime.fromisoformat(instant), int(ident)
+    except Exception:  # noqa: BLE001
+        raise AuthzDenied(400, "invalid_cursor",
+                          "`cursor` is not a cursor this list served: pass the "
+                          "`next_cursor` of the previous page as is, or omit it to "
+                          "start from the most recent source.") from None
+
+
+def _instant(valeur: Optional[str], nom: str) -> Optional[datetime]:
+    """Une borne de période : une date ISO (`2026-11-01`, minuit UTC) ou un instant ISO
+    (`2026-11-01T08:00:00+01:00`). Un instant sans fuseau est lu en UTC."""
+    if valeur is None:
+        return None
+    try:
+        lu = datetime.fromisoformat(valeur.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise AuthzDenied(400, "invalid_period",
+                          f"`{nom}` is an ISO date (2026-11-01) or date-time "
+                          f"(2026-11-01T08:00:00+01:00); got {valeur!r}.") from None
+    return lu if lu.tzinfo else lu.replace(tzinfo=timezone.utc)
 
 
 def search(ctx: ResolvedCtx, inp) -> dict:

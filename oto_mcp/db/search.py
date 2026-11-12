@@ -24,7 +24,8 @@ from ._conn import _connect
 from .index_concurrent import IndexConcurrent
 from . import valeurs_servies as vs
 from .paths import ROW_SERVED_VALUES_TEXT_SQL
-from .projects import _fold
+from .projects import (DOCS_PAR_GENRE_MAX_LIGNES, PAGES_DE_TRAVAIL,
+                       REVISION_DOCS_PAR_GENRE, SOURCES_VIVANTES, _fold)
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +348,29 @@ INDEX_VALEURS = (
 )
 
 
+# Les pages de TRAVAIL (`doc`, `note`), sans les sources brutes (`db/projects.py`) :
+# leurs deux GIN partiels, sur le prédicat exact de `search_docs_fts` et de
+# `search_docs_semantic`. Une recherche de pages ne parcourt plus les sources, qui
+# peuvent être cent fois plus nombreuses dans un seul projet ; les GIN de la table
+# entière (`index_ddl`) servent la recherche des sources (`kind=source`). Posés par la
+# révision `REVISION_DOCS_PAR_GENRE`, et au démarrage d'une base neuve.
+INDEX_PAGES_DE_TRAVAIL = (
+    IndexConcurrent(nom="idx_docs_travail_fts", table="docs",
+                    forme=f"USING GIN ({_vec(DOCS_TEXT)}) WHERE {PAGES_DE_TRAVAIL}",
+                    revision=REVISION_DOCS_PAR_GENRE, max_lignes=DOCS_PAR_GENRE_MAX_LIGNES),
+    IndexConcurrent(nom="idx_docs_travail_trgm", table="docs",
+                    forme=f"USING GIN ({_trgm(DOCS_TEXT)}) WHERE {PAGES_DE_TRAVAIL}",
+                    revision=REVISION_DOCS_PAR_GENRE, max_lignes=DOCS_PAR_GENRE_MAX_LIGNES),
+)
+
+
+def _genre_des_pages(sources: bool, alias: str = "") -> str:
+    """Le prédicat de genre d'une recherche de pages : les sources, ou le travail —
+    le texte même des index partiels, préfixé de l'alias quand la requête joint."""
+    predicat = SOURCES_VIVANTES if sources else PAGES_DE_TRAVAIL
+    return re.sub(r"\b(kind|archived_at)\b", rf"{alias}.\1", predicat) if alias else predicat
+
+
 def _tsquery_mot() -> str:
     """La tsquery d'UN mot de la saisie (paramètre `%s`), foldée comme le texte."""
     return f"plainto_tsquery('french', {_fold('%s')})"
@@ -453,8 +477,11 @@ def _prose_query(table: str, text_expr: str, select_cols: str, headline_col: str
     return rows
 
 
-def search_docs_fts(q: str, project_ids: list[int], *, limit: int = 20) -> list[dict]:
-    """Pages (docs) des projets accessibles — kind=page. Une page ARCHIVÉE n'en sort pas
+def search_docs_fts(q: str, project_ids: list[int], *, limit: int = 20,
+                    sources: bool = False) -> list[dict]:
+    """Pages (docs) des projets accessibles — kind=page : les pages de TRAVAIL (`doc`,
+    `note`) ; `sources=True` : les sources brutes seules (kind=source), jamais les deux
+    à la fois. Une page ARCHIVÉE n'en sort pas
     (signal #1087) : l'archivage retire de la découverte, pas de l'accès — la page reste
     lisible par son id (`docs/search-and-kb.md` §Une page archivée)."""
     if not project_ids:
@@ -463,8 +490,8 @@ def search_docs_fts(q: str, project_ids: list[int], *, limit: int = 20) -> list[
         "docs", DOCS_TEXT,
         "id, project_id, title, description, updated_at",
         "coalesce(body_md,'')",
-        "project_id = ANY(%s) AND archived_at IS NULL", (project_ids,), q, limit,
-        rank_vec=rank_expr("docs"))
+        f"project_id = ANY(%s) AND archived_at IS NULL AND {_genre_des_pages(sources)}",
+        (project_ids,), q, limit, rank_vec=rank_expr("docs"))
 
 
 def search_project_briefs(q: str, project_ids: list[int], *, limit: int = 20) -> list[dict]:
@@ -533,9 +560,12 @@ def search_docs_semantic(query_literal: str, project_ids: list[int], *,
     TOUJOURS `limit` pages, même sans rapport avec la requête → à 500 pages, un
     repli sémantique noierait le lexical sous du bruit (oto-backend#6). `body_excerpt`
     (début du corps) sert de passage de repli pour un hit sémantique pur (sans
-    surlignage lexical). Une page archivée n'en sort pas, comme au lexical."""
+    surlignage lexical). Une page archivée n'en sort pas, comme au lexical, ni une
+    source brute : le sémantique ne parcourt que les pages de TRAVAIL (la recherche des
+    sources est lexicale, `search_docs_fts(sources=True)`)."""
     if not project_ids:
         return []
+    genre = _genre_des_pages(False, "d")
     # Une page matche si son embedding PRINCIPAL (doc_embeddings) OU un chunk de
     # DÉBORDEMENT (doc_chunk_embeddings, #6 C — pages longues) est proche. Deux kNN
     # INDEXÉS (chacun ORDER BY <=> LIMIT → HNSW), unis, dédupliqués par doc (distance min).
@@ -544,11 +574,13 @@ def search_docs_semantic(query_literal: str, project_ids: list[int], *,
         "WITH cand AS ("
         "  (SELECT e.doc_id, e.embedding <=> %s::halfvec AS distance "
         "     FROM doc_embeddings e JOIN docs d ON d.id = e.doc_id "
-        "     WHERE d.project_id = ANY(%s) AND d.archived_at IS NULL ORDER BY e.embedding <=> %s::halfvec LIMIT %s) "
+        f"     WHERE d.project_id = ANY(%s) AND d.archived_at IS NULL AND {genre} "
+        "     ORDER BY e.embedding <=> %s::halfvec LIMIT %s) "
         "  UNION ALL "
         "  (SELECT c.doc_id, c.embedding <=> %s::halfvec AS distance "
         "     FROM doc_chunk_embeddings c JOIN docs d ON d.id = c.doc_id "
-        "     WHERE d.project_id = ANY(%s) AND d.archived_at IS NULL ORDER BY c.embedding <=> %s::halfvec LIMIT %s)"
+        f"     WHERE d.project_id = ANY(%s) AND d.archived_at IS NULL AND {genre} "
+        "     ORDER BY c.embedding <=> %s::halfvec LIMIT %s)"
         "), best AS ("
         "  SELECT doc_id, min(distance) AS distance FROM cand WHERE distance < %s GROUP BY doc_id"
         ") "
@@ -563,6 +595,18 @@ def search_docs_semantic(query_literal: str, project_ids: list[int], *,
                   query_literal, project_ids, query_literal, k,
                   max_distance, limit)).fetchall()
         return [dict(r) for r in rows]
+
+
+def sources_presentes(project_ids: list[int]) -> bool:
+    """Le périmètre porte-t-il au moins une source vivante ? Ce que la recherche dit
+    quand elle ne les a pas parcourues : une sonde par l'index partiel des sources,
+    jamais un compte (un projet peut en porter des dizaines de milliers)."""
+    if not project_ids:
+        return False
+    with _connect() as conn:
+        return bool(conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM docs WHERE project_id = ANY(%s) "
+            f"AND {SOURCES_VIVANTES}) AS b", (project_ids,)).fetchone()["b"])
 
 
 def project_labels(ids: list[int]) -> dict[int, dict]:

@@ -45,10 +45,12 @@ def test_la_liste_declaree_est_bien_formee():
 def test_les_deux_jobs_de_contrat_tournent_sur_toute_la_liste():
     wf = yaml.safe_load((_RACINE / ".github" / "workflows" / "deploy-canari.yml").read_text())
     jobs = wf["jobs"]
-    for nom in ("contrat-front", "contrat-front-code"):
+    # `liste_code` : la liste entière, sauf sur une PR de fork où les consommateurs à
+    # secret en sont retirés et annoncés (test_workflow_secret_absent_rougit.py).
+    for nom, sortie in (("contrat-front", "liste"), ("contrat-front-code", "liste_code")):
         strat = jobs[nom]["strategy"]
         assert strat["fail-fast"] is False, f"{nom} : un rouge masquerait les suivants"
-        assert "fromJSON(needs.consommateurs.outputs.liste)" in strat["matrix"]["consommateur"]
+        assert f"fromJSON(needs.consommateurs.outputs.{sortie})" in strat["matrix"]["consommateur"]
         assert "consommateurs" in jobs[nom]["needs"]
     assert "contrat-front-code" in jobs["deploy-preprod"]["needs"], \
         "la garde d'avant déploiement doit bloquer la préproduction"

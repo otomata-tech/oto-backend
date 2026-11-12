@@ -36,21 +36,78 @@ def test_le_contrat_d_un_consommateur_sans_son_secret_rougit(tmp_path):
     """Depuis #966, la lecture du contrat d'un consommateur vit dans
     `scripts/lire-contrat-consommateur.sh`, appelé par les deux jobs de contrat : le
     cliquet ci-dessous ne la voit plus dans le YAML. On l'ÉPROUVE donc : un secret
-    déclaré mais vide doit sortir en échec NOMMÉ, jamais en vert — PR de fork comprise."""
+    déclaré mais vide doit sortir en échec NOMMÉ, jamais en vert. (Une PR de fork ne
+    l'appelle pas pour un consommateur à secret : voir le test suivant.)"""
     import os
     import subprocess
     script = _WORKFLOWS.parents[1] / "scripts" / "lire-contrat-consommateur.sh"
-    for fork in ("", "true"):
-        sortie = tmp_path / f"out{fork}"
-        r = subprocess.run(
-            [str(script), "oto-commerce", "otomata-tech/oto-commerce",
-             "api/openapi-service.json", "OTO_COMMERCE_CONTRACT_KEY"],
-            env={**os.environ, "CLE_LECTURE": "", "EST_FORK": fork,
-                 "GITHUB_OUTPUT": str(sortie)},
-            capture_output=True, text=True)
-        assert r.returncode == 1, r.stdout + r.stderr
-        assert "Contrat de oto-commerce NON JUGÉ" in r.stdout
-        assert not sortie.exists() or "lu=oui" not in sortie.read_text()
+    sortie = tmp_path / "out"
+    r = subprocess.run(
+        [str(script), "oto-commerce", "otomata-tech/oto-commerce",
+         "api/openapi-service.json", "OTO_COMMERCE_CONTRACT_KEY"],
+        env={**os.environ, "CLE_LECTURE": "", "GITHUB_OUTPUT": str(sortie)},
+        capture_output=True, text=True)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "Contrat de oto-commerce NON JUGÉ" in r.stdout
+    assert not sortie.exists() or "lu=oui" not in sortie.read_text()
+
+
+def _etape_liste() -> str:
+    import yaml
+    wf = yaml.safe_load((_WORKFLOWS / "deploy-canari.yml").read_text())
+    return next(s for s in wf["jobs"]["consommateurs"]["steps"] if s.get("id") == "liste")
+
+
+def _liste_code(tmp_path, est_fork: str, liste: list) -> tuple[str, str]:
+    """Joue l'étape `liste` du job `consommateurs` sur une liste donnée : (liste_code, stdout)."""
+    import json
+    import os
+    import subprocess
+    (tmp_path / ".github").mkdir(exist_ok=True)
+    (tmp_path / ".github" / "contrat-consommateurs.json").write_text(json.dumps(liste))
+    sortie = tmp_path / f"out-{est_fork}"
+    r = subprocess.run(["bash", "-c", _etape_liste()["run"]], cwd=tmp_path,
+                       env={**os.environ, "EST_FORK": est_fork, "GITHUB_OUTPUT": str(sortie)},
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    sorties = dict(l.split("=", 1) for l in sortie.read_text().splitlines())
+    return sorties["liste_code"], r.stdout
+
+
+def test_une_pr_de_fork_ne_juge_que_ce_qu_elle_peut_lire_et_le_dit(tmp_path):
+    """Sur une PR de fork, un consommateur à secret quitte la matrice de la garde
+    d'avant déploiement — ni vert (rien jugé) ni rouge (rien à voir avec le code) — et ce
+    retrait est ANNONCÉ. Un consommateur public reste jugé ; hors fork, rien ne change."""
+    import json
+    prive = {"nom": "prive", "depot": "o/a", "chemin": "c.json", "secret": "CLE_A"}
+    public = {"nom": "public", "depot": "o/b", "chemin": "c.json", "secret": None}
+
+    code, sortie = _liste_code(tmp_path, "true", [prive, public])
+    assert json.loads(code) == [public]
+    assert "::warning title=Contrat NON JUGÉ sur cette PR de fork::" in sortie
+    assert "prive" in sortie
+
+    code, sortie = _liste_code(tmp_path, "true", [prive])
+    assert code == "[]"  # le job est alors sauté (son `if`), pas vert
+
+    code, sortie = _liste_code(tmp_path, "false", [prive, public])
+    assert json.loads(code) == [prive, public]
+    assert "::warning" not in sortie
+
+
+def test_la_garde_d_avant_deploiement_lit_la_liste_filtree_et_saute_si_vide():
+    import yaml
+    wf = yaml.safe_load((_WORKFLOWS / "deploy-canari.yml").read_text())
+    job = wf["jobs"]["contrat-front-code"]
+    assert job["strategy"]["matrix"]["consommateur"] == \
+        "${{ fromJSON(needs.consommateurs.outputs.liste_code) }}"
+    assert job["if"] == "needs.consommateurs.outputs.liste_code != '[]'"
+    # Le fork se reconnaît au dépôt de la tête de PR, pas à l'absence d'un secret : une
+    # PR interne sans secret reste un échec nommé.
+    assert "head.repo.full_name != github.repository" in _etape_liste()["env"]["EST_FORK"]
+    # Le constat d'après préproduction garde la liste complète.
+    assert wf["jobs"]["contrat-front"]["strategy"]["matrix"]["consommateur"] == \
+        "${{ fromJSON(needs.consommateurs.outputs.liste) }}"
 
 
 def test_les_jobs_de_contrat_passent_le_secret_de_chaque_consommateur():

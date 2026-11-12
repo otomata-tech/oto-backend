@@ -82,6 +82,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "lemlist",
     # Neighbour of `lemlist`: the domains and mailboxes it sends from — wired 2026-10-05.
     "mailpool",
+    # Neighbour of `lemlist` by trade: cold email campaigns, leads, replies and
+    # webhooks, on one workspace API key with scopes — wired 2026-11-04.
+    "instantly",
     "kaspr",
     "pennylane",
     # The firm side of the same publisher (one token, every company of the firm):
@@ -284,6 +287,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "amplitude",
     "snitcher",
     "waalaxy",
+    # Neighbour of `waalaxy` by trade (LinkedIn outreach automation), with the inbox,
+    # statistics and webhooks its API serves — wired 2026-11-04.
+    "heyreach",
     "airtable",
     "tally",
     # Neighbour of `tally` by trade (online forms); read-only.

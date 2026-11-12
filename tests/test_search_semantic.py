@@ -28,6 +28,8 @@ def _stub_sources(monkeypatch, *, lexical=(), semantic=()):
     monkeypatch.setattr(S.db, "list_datastores_shared_to_user", lambda sub: [])
     monkeypatch.setattr(S.db, "list_datastores_granted_to", lambda *a: [])
     monkeypatch.setattr(S.db, "project_labels", lambda ids: {})
+    # La sonde des sources brutes non parcourues (12/11/2026).
+    monkeypatch.setattr(S.db, "sources_presentes", lambda pids: False)
 
 
 def _page(id, title, headline=None):

@@ -24,6 +24,9 @@ def seams(monkeypatch):
                         lambda pid, title, parent_id=None, body_md="", kind="doc", created_by=None, description=None, trace=None:
                         rec["create"].append((pid, title, parent_id, kind, created_by)) or 3)
     monkeypatch.setattr(db, "list_docs_for_project", lambda pid: [DOC])
+    # La liste par défaut lit l'arbre de TRAVAIL et compte les sources laissées (12/11/2026).
+    monkeypatch.setattr(db, "list_working_docs_for_project", lambda pid: [DOC])
+    monkeypatch.setattr(db, "count_live_sources", lambda pid: 0)
     monkeypatch.setattr(db, "update_doc",
                         lambda did, title=None, body_md=None, kind=None, edited_by=None, description=None, expected_rev=None, face=None, regroupable=False, trace=None: rec["update"].append((did, title, body_md, kind, edited_by, expected_rev)))
     monkeypatch.setattr(db, "list_doc_revisions",

@@ -36,6 +36,9 @@ class DocInput(BaseModel):
     parent_id: Optional[int] = None    # create / move (None = 1er niveau sous le projet)
     title: Optional[str] = None
     body_md: Optional[str] = None
+    # create/update : le genre de la page. list : le genre LISTÉ — omis = les pages de
+    # travail (`doc`, `note`), sans les sources brutes ; `source` = les sources seules,
+    # paginées (`limit`, `cursor`, `since`, `until`).
     kind: Optional[Literal["doc", "note", "source"]] = None
     description: Optional[str] = None  # chapô (Ship 2) — '' efface (fallback dérivé)
     position: Optional[int] = None     # move : INDEX cible (0-based) dans la fratrie
@@ -65,6 +68,17 @@ class DocInput(BaseModel):
         "across all your organizations. Served in any organization."))
     # list (#1087) : True = remontre aussi les pages ARCHIVÉES (retirées par défaut).
     include_archived: Optional[bool] = None
+    # list kind="source" SEULEMENT : la page de sources (les plus récentes d'abord).
+    limit: Optional[int] = Field(default=None, description=(
+        "op=list kind=\"source\" only: sources per page (default 50, at most 200)."))
+    cursor: Optional[str] = Field(default=None, description=(
+        "op=list kind=\"source\" only: the `next_cursor` of the previous page, as is."))
+    since: Optional[str] = Field(default=None, description=(
+        "op=list kind=\"source\" only: sources created at or after this ISO date or "
+        "date-time."))
+    until: Optional[str] = Field(default=None, description=(
+        "op=list kind=\"source\" only: sources created before this ISO date or "
+        "date-time."))
     # delete (#657) : True = ne supprime RIEN, rend seulement ce que la suppression
     # emporterait (de quoi annoncer « ceci supprimera N pages » avant de la faire).
     # patch (oto#171) : True = n'écrit rien, rend la région que le patch retirerait.
@@ -113,6 +127,11 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         require(inp.op == "list", "unsupported_include_archived",
                 "`include_archived` only applies to op=list. An archived page is read "
                 "with op=get like any other. Remove it.")
+    if any(v is not None for v in (inp.limit, inp.cursor, inp.since, inp.until)):
+        require(inp.op == "list" and inp.kind == "source", "unsupported_pagination",
+                "`limit`, `cursor`, `since` and `until` only apply to op=list "
+                "kind=\"source\" (the project's raw sources, newest first). The "
+                "working-page list is not paginated. Remove them.")
     if inp.dry_run is not None:
         require(inp.op in ("delete", "patch"), "unsupported_dry_run",
                 "`dry_run` only applies to op=delete and op=patch — the other ops "
@@ -233,7 +252,12 @@ CAPABILITIES += [
             "key is refused) / list "
             "(project_id → the page INDEX, build the tree via parent_id: titles and "
             "`body_md_length`, NOT the bodies — pick a page here, then op=get it. "
-            '`fields=["*"]` returns whole pages, `fields=[…]` picks columns) / search (project_id + '
+            '`fields=["*"]` returns whole pages, `fields=[…]` picks columns. It lists the '
+            "WORKING pages (doc, note): raw sources (kind=source) are left out — "
+            "`sources_hidden` says how many — except one that is the parent of a working "
+            "page. `kind=\"source\"` lists the sources alone, newest first, by pages: "
+            "`limit`, `cursor`=the `next_cursor` of the previous page (null on the last), "
+            "`since`/`until` bound the creation date; `total` counts them) / search (project_id + "
             "query → full-text hits {id,title,kind,snippet}: LOCATE a page, then get its "
             "content) / get (the whole page, incl. `rev`, an ETag; pass `fields=[…]` to read "
             'ONLY those columns — `fields=["id","rev"]` gets the rev for an optimistic patch '

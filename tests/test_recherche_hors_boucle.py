@@ -62,6 +62,7 @@ def recherche(monkeypatch):
     monkeypatch.setattr(selection, "_visible_catalog", lambda ctx: [])
     monkeypatch.setattr(search_mod.db, "search_docs_fts", _fts)
     monkeypatch.setattr(search_mod.db, "project_labels", lambda ids: {})
+    monkeypatch.setattr(search_mod.db, "sources_presentes", lambda pids: False)
     monkeypatch.setattr(search_mod, "_stamp_origins", lambda *a, **k: None)
 
     async def _sans_vecteur(q):

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from .. import ownership, search as search_mod
@@ -28,7 +28,7 @@ class SearchHit(BaseModel):
     désigner (le même slug peut exister en plateforme, en org et en perso).
     `matched_by` dit par quel chemin le hit est remonté — un même document trouvé
     par les deux voies est dédupliqué, ses rangs sommés (RRF)."""
-    kind: str                                    # page | brief | procedure | guide | tableau | ligne | fichier | connecteur | app
+    kind: str                                    # page | brief | procedure | guide | tableau | ligne | fichier | connecteur | app | source
     ref: object
     title: str
     description: Optional[str] = None
@@ -66,13 +66,23 @@ class SearchResults(BaseModel):
     total: Optional[int] = None
     truncated: Optional[bool] = None
     hint_truncated: Optional[str] = None
+    # Présents UNIQUEMENT quand les pages ont été cherchées SANS les sources brutes et
+    # que le périmètre en porte : elles n'ont pas été parcourues, et la phrase dit
+    # comment les inclure. Une présence, pas un compte. Rien quand `source` était demandé.
+    sources_skipped: Optional[bool] = None
+    hint_sources: Optional[str] = None
 
 
 class SearchInput(BaseModel):
     q: str
     scope: Literal["org", "project"] = "org"
     project: Optional[int] = None
-    kinds: Optional[list[str]] = None      # sous-ensemble de search_mod.KINDS
+    # Sous-ensemble de `search_mod.GENRES`. Omis = `search_mod.KINDS`, sans `source`.
+    kinds: Optional[list[str]] = Field(default=None, description=(
+        "Kinds to search. Omitted = every kind EXCEPT `source`. `page` = working pages "
+        "(doc, note) only; `source` = a project's raw sources (transcripts, imports), "
+        "searched ONLY when listed: kinds=['source'], or kinds=['page','source'] for "
+        "both."))
     limit: int = 20
 
     @field_validator("kinds", mode="before")
@@ -87,9 +97,9 @@ class SearchInput(BaseModel):
     @classmethod
     def _known(cls, v):
         if v:
-            bad = set(v) - set(search_mod.KINDS)
+            bad = set(v) - set(search_mod.GENRES)
             if bad:
-                raise ValueError(f"kinds inconnus : {sorted(bad)} (valides : {list(search_mod.KINDS)})")
+                raise ValueError(f"kinds inconnus : {sorted(bad)} (valides : {list(search_mod.GENRES)})")
         return v
 
     @field_validator("limit")
@@ -174,7 +184,11 @@ CAPABILITIES += [
             "`count` is what this response holds; when the cut bit, `total` says how "
             "many were FOUND and `truncated` is true — 20 hits out of 300 must not "
             "read as « that is all there is ». "
-            "`kinds` filters (page|brief|procedure|guide|tableau|ligne|fichier|connecteur|app). "
+            "`kinds` filters (page|brief|procedure|guide|tableau|ligne|fichier|connecteur|app|"
+            "source). A project's RAW SOURCES (transcripts, imports: kind=source) are NOT "
+            "searched unless `kinds` lists `source`; `page` covers working pages only. "
+            "When they were skipped and exist, the response says so: `sources_skipped` "
+            "and `hint_sources`. "
             "Every hit carries WHERE the object lives, not how you reach it: "
             "`origin_org_id` (the org it lives in) and `other_org` — true = it lives in "
             "ANOTHER org than the active one (a share: never present it as the active "
@@ -183,7 +197,7 @@ CAPABILITIES += [
             "does not record its org yet) — say so, do not guess. "
             "SEARCH when you know what you're looking for; NAVIGATE (oto_project op=get "
             "include=['spine']) when the question is structural. Then open the hit: "
-            "oto_doc op=get (page), data_rows (tableau/ligne), oto_procedure op=get, "
+            "oto_doc op=get (page, source), data_rows (tableau/ligne), oto_procedure op=get, "
             "oto_apps op=get app_id=<ref> (app)."),
         mcp="oto_search",
         rest=RestBinding("GET", "/api/me/search"),

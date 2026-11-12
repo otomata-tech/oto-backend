@@ -28,6 +28,7 @@ from .datastore import (
     set_datastore_schema,
 )
 from .datastore_ns import resolve_datastore_ids_by_name
+from .index_concurrent import IndexConcurrent
 from .users import upsert_user
 
 
@@ -1051,6 +1052,96 @@ def list_docs_for_project(project_id: int) -> list[dict]:
             "ORDER BY parent_id NULLS FIRST, position NULLS LAST, title", (project_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- Les sources brutes, à part des pages de travail ---------------------------
+# `kind='source'` = ce qui est VERSÉ dans un projet (transcription, import), en continu
+# et en nombre ; `doc` et `note` = les pages de travail. Un projet peut porter des
+# dizaines de milliers de sources pour une centaine de pages : la liste par défaut, la
+# recherche par défaut (`db/search.py`) et leurs index les traitent à part. Les deux
+# prédicats sont la source unique de leurs index partiels : une requête qui les écrit
+# autrement perd l'index.
+KIND_SOURCE = "source"
+PAGES_DE_TRAVAIL = "kind <> 'source'"
+SOURCES_VIVANTES = "kind = 'source' AND archived_at IS NULL"
+
+#: La révision qui pose les index partiels par genre (ceux-ci et ceux de `db/search.py`).
+REVISION_DOCS_PAR_GENRE = "20261112_1200_docs_par_genre"
+#: Seuil bas, comme les index des valeurs servies : au démarrage, la construction non
+#: concurrente bloquerait les écritures de `docs`, que les agents et les versements de
+#: sources écrivent en continu. Au-delà, la construction est le geste manuel CONCURRENTLY
+#: (`oto-mcp maintenance index-concurrents 20261112_1200_docs_par_genre`).
+DOCS_PAR_GENRE_MAX_LIGNES = 10_000
+
+#: Les pages de travail d'un projet, sans lire ses sources (liste par défaut, arbre).
+INDEX_TRAVAIL_PAR_PROJET = IndexConcurrent(
+    nom="idx_docs_travail_projet", table="docs",
+    forme=f"(project_id) WHERE {PAGES_DE_TRAVAIL}", revision=REVISION_DOCS_PAR_GENRE,
+    max_lignes=DOCS_PAR_GENRE_MAX_LIGNES)
+#: Les sources vivantes d'un projet, les plus récentes d'abord : la page de la liste
+#: paginée, son total et la présence que signale la recherche.
+INDEX_SOURCES_RECENTES = IndexConcurrent(
+    nom="idx_docs_sources_recentes", table="docs",
+    forme=f"(project_id, created_at DESC, id DESC) WHERE {SOURCES_VIVANTES}",
+    revision=REVISION_DOCS_PAR_GENRE, max_lignes=DOCS_PAR_GENRE_MAX_LIGNES)
+
+
+def list_working_docs_for_project(project_id: int) -> list[dict]:
+    """Les pages de TRAVAIL du projet (`doc`, `note`), et les sources qui en sont les
+    ANCÊTRES : une page de travail rangée sous une source garde son chemin dans l'arbre,
+    au lieu de disparaître avec son parent. Même ordre que `list_docs_for_project`."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "WITH RECURSIVE gardees AS ("
+            f"  SELECT id, parent_id FROM docs WHERE project_id = %s AND {PAGES_DE_TRAVAIL} "
+            "  UNION ALL "
+            "  SELECT d.id, d.parent_id FROM docs d JOIN gardees g ON d.id = g.parent_id"
+            # Une remontée par page de travail, bornée par `CYCLE` comme toute récursion
+            # sur l'arbre : un parent en boucle ne la fait pas tourner sans fin.
+            ") CYCLE id SET boucle USING chemin "
+            f"SELECT {_DOC_COLS} FROM docs WHERE id IN (SELECT id FROM gardees) "
+            "ORDER BY parent_id NULLS FIRST, position NULLS LAST, title", (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_live_sources(project_id: int) -> int:
+    """Le nombre de sources vivantes (non archivées) du projet — par l'index partiel."""
+    with _connect() as conn:
+        return int(conn.execute(
+            f"SELECT count(*) AS n FROM docs WHERE project_id = %s AND {SOURCES_VIVANTES}",
+            (project_id,)).fetchone()["n"])
+
+
+def list_sources_page(project_id: int, *, limit: int,
+                      after: Optional[tuple[datetime, int]] = None,
+                      since: Optional[datetime] = None, until: Optional[datetime] = None,
+                      include_archived: bool = False) -> tuple[list[dict], int]:
+    """Une page des sources du projet, les plus récentes d'abord (`created_at`, puis
+    `id`), et leur TOTAL sur la période. `after` = la clé `(created_at, id)` de la
+    dernière ligne de la page précédente ; `since` inclus, `until` exclu. Rend au plus
+    `limit + 1` lignes : la ligne de trop dit qu'une page suit."""
+    genre = "kind = 'source'" if include_archived else SOURCES_VIVANTES
+    where, params = [f"project_id = %s AND {genre}"], [project_id]
+    if since is not None:
+        where.append("created_at >= %s")
+        params.append(since)
+    if until is not None:
+        where.append("created_at < %s")
+        params.append(until)
+    filtre = " AND ".join(where)
+    page_where, page_params = filtre, list(params)
+    if after is not None:
+        page_where += " AND (created_at, id) < (%s, %s)"
+        page_params += [after[0], after[1]]
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_DOC_COLS} FROM docs WHERE {page_where} "
+            "ORDER BY created_at DESC, id DESC LIMIT %s", (*page_params, limit + 1),
+        ).fetchall()
+        total = conn.execute(f"SELECT count(*) AS n FROM docs WHERE {filtre}",
+                             tuple(params)).fetchone()["n"]
+        return [dict(r) for r in rows], int(total)
 
 
 # Repli d'accents FR SANS extension PG (unaccent non installable sur la base managée) :

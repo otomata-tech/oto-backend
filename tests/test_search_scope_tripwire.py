@@ -154,12 +154,16 @@ def test_each_source_gets_its_predicate(monkeypatch):
     monkeypatch.setattr(S.db, "search_datastore_rows_fts",
                         lambda q, ns_ids, limit=20: rec.setdefault("rows_ns", ns_ids) and [])
     monkeypatch.setattr(S.db, "project_labels", lambda ids: {})
+    # La sonde des sources brutes non parcourues (12/11/2026) : le MÊME périmètre que
+    # les pages — elle ne doit ni élargir ni dire ce qui vit hors de portée.
+    monkeypatch.setattr(S.db, "sources_presentes",
+                        lambda pids: rec.setdefault("sources_pids", pids) and False)
 
     S.search("u1", 7, "prospection")
     assert rec["want"] == "read"
     # docs/briefs/fichiers : le MÊME ensemble accessible (jamais un scope à part)
     assert (rec["docs_pids"] == rec["briefs_pids"] == rec["files_pids"]
-            == rec["content_pids"] == [11, 12])
+            == rec["content_pids"] == rec["sources_pids"] == [11, 12])
     # procédures : l'org active, rien d'autre
     assert rec["proc_org"] == 7
     # guides : org active + sub (org perso simulée : le personnel y entre)
@@ -184,8 +188,10 @@ def test_project_scope_restricts_to_one_project(monkeypatch):
     monkeypatch.setattr(S.db, "search_docs_fts",
                         lambda q, pids, limit: rec.setdefault("pids", pids) and [])
     monkeypatch.setattr(S.db, "project_labels", lambda ids: {})
+    monkeypatch.setattr(S.db, "sources_presentes",
+                        lambda pids: rec.setdefault("sources_pids", pids) and False)
     S.search("u1", 7, "x y", scope="project", project_id=42, kinds=["page"])
-    assert rec["pids"] == [42]
+    assert rec["pids"] == rec["sources_pids"] == [42]
 
 
 def test_op_list_lit_la_meme_source_de_partages():

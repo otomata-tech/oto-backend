@@ -28,21 +28,23 @@ VIVANTS = ("ouvert", "en_soin", "escalade")
 
 _COLONNES = ("id, org_id, trigger_id, classe, cote, statut, motif, dernier_job_id, "
              "travaux_morts, reparations, diagnostic, classe_manuelle, ouvert_at, vu_at, "
-             "clos_at, resolution")
+             "clos_at, resolution, empreinte")
 
 
 def pannes_en_cours() -> list[dict[str, Any]]:
     """Les agents ALLUMÉS qui ont au moins un travail mort depuis leur dernier succès,
     dans la fenêtre de l'alerte. Une ligne par agent : org, libellé, modèle, le compte,
     le DERNIER travail mort (id, motif, genre, charge, identité) — de quoi le classer et
-    le relancer sans relire."""
+    le relancer sans relire. `motif_de_l_agent` : le motif est la NOTE que l'agent a
+    écrite sur un travail qu'il a conclu bloqué (`issues_des_travaux.motif`), pas une
+    erreur de la plateforme — un texte libre, qui ne s'empreinte pas."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             f"""
             SELECT t.id AS trigger_id, t.org_id, t.model,
                    COALESCE(NULLIF(t.label, ''), t.procedure) AS libelle,
                    f.travaux, d.id AS job_id, LEFT(d.motif, %(tete)s) AS motif,
-                   d.kind, d.payload, d.sub, d.finished_at AS dernier
+                   d.kind, d.payload, d.sub, d.finished_at AS dernier, d.motif_de_l_agent
               FROM runner_triggers t
               CROSS JOIN LATERAL (
                     SELECT MAX(j.finished_at) AS dernier_succes
@@ -56,7 +58,8 @@ def pannes_en_cours() -> list[dict[str, Any]]:
                        AND (s.dernier_succes IS NULL
                             OR j.finished_at > s.dernier_succes)) f
               CROSS JOIN LATERAL (
-                    SELECT j.id, {issues_des_travaux.motif()} AS motif, j.kind, j.payload, j.sub, j.finished_at
+                    SELECT j.id, {issues_des_travaux.motif()} AS motif, j.kind, j.payload, j.sub, j.finished_at,
+                           NULLIF(j.last_error, '') IS NULL AS motif_de_l_agent
                       FROM runner_jobs j
                      WHERE {_DU_DECLENCHEUR} AND {issues_des_travaux.mort()}
                        AND j.finished_at > NOW() - make_interval(days => %(fenetre)s)
@@ -68,33 +71,67 @@ def pannes_en_cours() -> list[dict[str, Any]]:
         ).fetchall()]
 
 
+#: Un épisode dont rien n'a changé n'est réécrit qu'une fois par battement : `vu_at`
+#: est le POULS que lit le silence du courriel (`agents_soignes_par_nous`, borné par
+#: `medecin_agents.FRAICHEUR`, 30 min) ; le battement doit en rester bien en deçà.
+BATTEMENT = timedelta(minutes=10)
+
+
 def ouvrir_ou_rafraichir(*, org_id: int, trigger_id: int, classe: str, cote: str,
                          motif: Optional[str], job_id: Optional[int],
-                         travaux: int) -> dict[str, Any]:
+                         travaux: int, empreinte: Optional[str] = None) -> dict[str, Any]:
     """L'épisode vivant de l'agent, ouvert s'il n'existe pas, rafraîchi sinon (dernier
     travail, motif, compte, `vu_at`). La classe suit le DERNIER motif : une panne qui
     change de cause change de remède — sauf une classe posée à la main (`poser`,
     `classe_manuelle`) : un diagnostic d'humain ou de l'agent médecin n'est pas
-    défait au passage suivant par la regex qu'il corrigeait. Rend la ligne."""
+    défait au passage suivant par la regex qu'il corrigeait. `empreinte` = la clé de la
+    cause du dernier motif (`causes_agents`), qui suit le motif. Rend la ligne.
+
+    ⚠️ **Écrire seulement ce qui change** (13/11/2026) : l'épisode vivant n'est réécrit
+    que si un champ a changé, ou si son pouls (`vu_at`) a plus d'un `BATTEMENT` ; sinon
+    il est relu. Et l'INSERT ne part que s'il n'y a pas d'épisode vivant : l'ancien
+    `INSERT … ON CONFLICT DO UPDATE` tirait un numéro de la séquence à CHAQUE passage
+    pour CHAQUE agent en panne, et réécrivait la ligne cinq minutes après cinq minutes."""
+    p = {"org": int(org_id), "trigger": int(trigger_id), "classe": classe,
+         "cote": cote, "motif": motif, "job": job_id, "travaux": int(travaux),
+         "empreinte": empreinte, "battement": BATTEMENT}
     with _connect() as conn:
-        return dict(conn.execute(
+        row = conn.execute(
             f"""
-            INSERT INTO agent_episodes (org_id, trigger_id, classe, cote, motif,
-                                        dernier_job_id, travaux_morts)
-            VALUES (%(org)s, %(trigger)s, %(classe)s, %(cote)s, %(motif)s, %(job)s,
-                    %(travaux)s)
-            ON CONFLICT (trigger_id) WHERE statut <> 'clos' DO UPDATE
-               SET classe = CASE WHEN agent_episodes.classe_manuelle
-                                 THEN agent_episodes.classe ELSE EXCLUDED.classe END,
-                   cote = CASE WHEN agent_episodes.classe_manuelle
-                               THEN agent_episodes.cote ELSE EXCLUDED.cote END,
-                   motif = EXCLUDED.motif, dernier_job_id = EXCLUDED.dernier_job_id,
-                   travaux_morts = EXCLUDED.travaux_morts, vu_at = NOW()
+            UPDATE agent_episodes
+               SET classe = CASE WHEN classe_manuelle THEN classe ELSE %(classe)s END,
+                   cote = CASE WHEN classe_manuelle THEN cote ELSE %(cote)s END,
+                   motif = %(motif)s, dernier_job_id = %(job)s,
+                   travaux_morts = %(travaux)s, empreinte = %(empreinte)s, vu_at = NOW()
+             WHERE trigger_id = %(trigger)s AND statut <> 'clos'
+               AND (vu_at < NOW() - %(battement)s
+                    OR (NOT classe_manuelle AND (classe IS DISTINCT FROM %(classe)s
+                                                 OR cote IS DISTINCT FROM %(cote)s))
+                    OR motif IS DISTINCT FROM %(motif)s
+                    OR dernier_job_id IS DISTINCT FROM %(job)s::bigint
+                    OR travaux_morts IS DISTINCT FROM %(travaux)s
+                    OR empreinte IS DISTINCT FROM %(empreinte)s)
             RETURNING {_COLONNES}
-            """,
-            {"org": int(org_id), "trigger": int(trigger_id), "classe": classe,
-             "cote": cote, "motif": motif, "job": job_id, "travaux": int(travaux)},
-        ).fetchone())
+            """, p).fetchone()
+        if row is None:
+            row = conn.execute(
+                f"SELECT {_COLONNES} FROM agent_episodes "
+                "WHERE trigger_id = %(trigger)s AND statut <> 'clos'", p).fetchone()
+        if row is None:
+            row = conn.execute(
+                f"""
+                INSERT INTO agent_episodes (org_id, trigger_id, classe, cote, motif,
+                                            dernier_job_id, travaux_morts, empreinte)
+                VALUES (%(org)s, %(trigger)s, %(classe)s, %(cote)s, %(motif)s, %(job)s,
+                        %(travaux)s, %(empreinte)s)
+                ON CONFLICT (trigger_id) WHERE statut <> 'clos' DO NOTHING
+                RETURNING {_COLONNES}
+                """, p).fetchone()
+        if row is None:   # un autre processus l'a ouvert entre-temps : le sien vaut
+            row = conn.execute(
+                f"SELECT {_COLONNES} FROM agent_episodes "
+                "WHERE trigger_id = %(trigger)s AND statut <> 'clos'", p).fetchone()
+    return dict(row)
 
 
 def clore_les_gueris() -> list[dict[str, Any]]:

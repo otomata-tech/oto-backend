@@ -43,6 +43,9 @@ def org(monkeypatch):
     monkeypatch.setattr(db, "list_triggers", lambda o: [dict(agent)] if o == ORG else [])
     monkeypatch.setattr(db, "get_trigger",
                         lambda i, o: dict(agent) if (i, o) == (7, ORG) else None)
+    monkeypatch.setattr(db, "porteurs_des_agents",
+                        lambda ids, o: [{"id": 7, "org_id": ORG, "sub": agent["sub"]}]
+                        if o == ORG and 7 in ids else [])
 
     def _maj(i, o, champs, hors_abonnement_d_autrui=None, par=None):
         etat["ecrit"] = champs
@@ -726,3 +729,17 @@ def test_retirer_le_pret_referme_l_equipe_pas_le_nomme(forfait):
         "subscription_personal_only"
     _appel(EDITEUR, op="update", trigger_id=7, input="y")
     assert forfait["ecrit"] == {"input": "y"}
+
+
+def test_une_page_de_travaux_lit_ses_agents_en_UNE_lecture(org, monkeypatch):
+    """Un `get_trigger` par agent de la page empruntait le pool autant de fois :
+    la page lit ses agents d'un coup, quel que soit leur nombre."""
+    lus = []
+    monkeypatch.setattr(A.db, "porteurs_des_agents",
+                        lambda ids, o: lus.append(list(ids)) or
+                        [{"id": i, "org_id": o, "sub": PROPRIETAIRE} for i in ids])
+    monkeypatch.setattr(A.db, "get_trigger",
+                        lambda i, o: pytest.fail("une lecture par agent"))
+    jobs = [{"id": n, "payload": {"trigger_id": 100 + n % 9, "input": "x"}} for n in range(40)]
+    assert A.masquer_charges(ResolvedCtx(sub=PROPRIETAIRE, org_id=ORG), jobs) == jobs
+    assert lus == [sorted({100 + n % 9 for n in range(40)})]

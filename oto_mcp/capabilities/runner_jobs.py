@@ -1576,25 +1576,24 @@ def _resume(ctx: ResolvedCtx, jours: int) -> dict:
     # Le temps gagné : les runs conclus `done` de chaque agent vu, leurs appels du
     # journal rangés par type de résultat (`time_saved.py`), aux minutes de l'org. Un
     # run sans appel au journal n'est PAS compté — il est dit, pas estimé.
+    # ⚠️ COMPTÉ PAR LA BASE (`db.formes_des_runs_conclus`) : la page Agents décodait
+    # chaque appel de chaque run de la fenêtre, des centaines de milliers sur une org
+    # chargée — 1,4 à 2 s de CPU sous le GIL, toutes les requêtes du processus
+    # arrêtées (13/11/2026). Python ne reçoit plus que les formes des runs, par agent.
     minutes = time_saved.standards(db.minutes_gagnees_de_l_org(ctx.org_id))
-    conclus = [r for r in db.outils_des_runs_conclus(ctx.org_id, jours)
-               if int(r["trigger_id"]) in par_agent]
-    par_run: dict[str, list] = {}
-    for c in db.appels_des_runs([r["run_id"] for r in conclus if r.get("run_id")]):
-        par_run.setdefault(c["run_id"], []).append(time_saved.Call(
-            tool=c["tool"], op=c["op"], ok=bool(c["ok"]), key=c["cle"], day=c["jour"]))
-    runs_par_agent: dict[int, list] = {}
-    sans_journal: dict[int, int] = {}
-    for r in conclus:
-        tid = int(r["trigger_id"])
-        appels = par_run.get(r.get("run_id") or "")
-        if appels:
-            runs_par_agent.setdefault(tid, []).append(appels)
-        else:
-            sans_journal[tid] = sans_journal.get(tid, 0) + 1
+    formes, sans = db.formes_des_runs_conclus(ctx.org_id, jours, sorted(par_agent),
+                                              time_saved.classe)
+    formes_par_agent: dict[int, list] = {}
+    for f in formes:
+        formes_par_agent.setdefault(f["trigger_id"], []).append(time_saved.Forme(
+            actions=f["actions"], records=f["records"], research=f["research"],
+            runs=f["runs"]))
+    sans_journal = {r["trigger_id"]: r["runs"] for r in sans}
     tallies: dict[int, dict] = {}
-    for tid, runs in runs_par_agent.items():
-        gagne, tallies[tid] = time_saved.for_agent(runs, minutes)
+    for tid, fs in formes_par_agent.items():
+        if tid not in par_agent:
+            continue
+        gagne, tallies[tid] = time_saved.for_shapes(fs, minutes)
         par_agent[tid]["time_saved_minutes"] = gagne
     for tid, a in par_agent.items():
         tally = tallies.get(tid, {})

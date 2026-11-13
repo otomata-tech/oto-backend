@@ -3366,11 +3366,19 @@ pas des mesures) : chaque org les surcharge. Servi par `runner.jobs op=summary`
 `time_standards`).
 
 **La matière : le journal.** Les appels des runs conclus `done` (`tool_calls` par
-`run_id`, `db.appels_des_runs`) : l'`op`, la réussite, et l'enregistrement nommé
-(`CLES_D_ENREGISTREMENT` : id, email, url… — rien d'autre des arguments n'est lu). Un
-run sans appel au journal n'est **pas compté** : il est rendu dans
-`time_saved_not_counted` (`reason: no_logged_calls`, `runs`), jamais estimé depuis ses
-`tool_counts`.
+`run_id`) : l'`op`, la réussite, et l'enregistrement nommé (`CLES_D_ENREGISTREMENT` :
+id, email, url… — rien d'autre des arguments n'est lu). Un run sans appel au journal
+n'est **pas compté** : il est rendu dans `time_saved_not_counted` (`reason:
+no_logged_calls`, `runs`), jamais estimé depuis ses `tool_counts`.
+
+⚠️ **Compté par la base, pas par Python** (13/11/2026) : `db.formes_des_runs_conclus`
+fait juger par `time_saved.classe` chaque couple DISTINCT `(outil, op)` du journal de la
+fenêtre, puis la base applique le verdict, garde la première occurrence de chaque
+enregistrement (par agent et par jour) et rend les **formes** des runs (actions,
+écritures, recherches, nombre de runs) ; les règles du run (`for_shapes` : productif,
+rapport, plafond) restent en Python. `time_saved.formes_des_runs` est la référence en
+mémoire, et `tests/test_temps_gagne_borne_live.py` prouve la parité et la borne
+(`docs/event-loop-perf.md`).
 
 **Revu sur des agents réels (17/10/2026)**, qui surcomptaient :
 - un balayage qui ne PRODUIT rien de neuf ne gagne rien — sa recherche ne compte que

@@ -64,7 +64,10 @@ def test_les_trois_lectures_portent_le_predicat_de_leur_index():
 
     assert RJ.INDEX_DECLENCHEURS.forme == f"(org_id, due_at) WHERE {RJ.PREDICAT_DECLENCHEUR}"
     assert inspect.getsource(RJ.resume_des_declencheurs).count("{PREDICAT_DECLENCHEUR}") == 2
-    assert inspect.getsource(RJ.outils_des_runs_conclus).count("{PREDICAT_DECLENCHEUR}") == 1
+    # Le temps gagné lit ses travaux par UN seul fragment, qui porte le prédicat, dans
+    # chacune de ses trois requêtes.
+    assert inspect.getsource(RJ).count("AND {PREDICAT_DECLENCHEUR}\n           AND {_AGENT_DU_TRAVAIL}") == 1
+    assert inspect.getsource(RJ.formes_des_runs_conclus).count("{_TRAVAUX_CONCLUS}") == 3
     assert inspect.getsource(RJ).count("~ '^[0-9]+$'\"") == 1
 
 
@@ -87,7 +90,7 @@ def test_la_revision_0067_pose_l_index_des_declencheurs():
 
 def test_les_lectures_d_une_org_chargee_passent_par_l_index(base, monkeypatch):
     """Contre une vraie base : 20 000 travaux de flotte (sans clé) dans l'org, quelques
-    travaux d'agent. Le démarrage a posé l'index, valide, et les trois lectures du code
+    travaux d'agent. Le démarrage a posé l'index, valide, et les cinq lectures du code
     — capturées telles quelles, puis expliquées — le prennent au lieu de balayer la file."""
     from contextlib import contextmanager
 
@@ -100,7 +103,10 @@ def test_les_lectures_d_une_org_chargee_passent_par_l_index(base, monkeypatch):
     class _Capture:
         def execute(self, sql, params):
             lues.append((sql, params))
-            return type("C", (), {"fetchall": lambda _s: []})()
+            # Un couple d'outils au journal, pour que la lecture du temps gagné passe
+            # aussi par sa requête de compte.
+            rows = [{"tool": "serper_search", "op": None}] if "SELECT DISTINCT tc.tool" in sql else []
+            return type("C", (), {"fetchall": lambda _s: rows})()
 
     @contextmanager
     def _capture():
@@ -108,9 +114,9 @@ def test_les_lectures_d_une_org_chargee_passent_par_l_index(base, monkeypatch):
 
     monkeypatch.setattr(RJ, "_connect", _capture)
     RJ.resume_des_declencheurs(1, 28)
-    RJ.outils_des_runs_conclus(1, 28)
+    RJ.formes_des_runs_conclus(1, 28, [5], lambda outil, op: ("research", outil))
     monkeypatch.undo()
-    assert len(lues) == 3
+    assert len(lues) == 5
 
     with _connect() as c:
         assert ic.scalaire_de(c)(RJ.INDEX_DECLENCHEURS.sql_validite) is True

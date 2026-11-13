@@ -522,6 +522,7 @@ tests = [
   "tests/**/test_portee_runner.py",
   "tests/**/test_trigger*.py",
   "tests/**/test_time_saved.py",
+  "tests/**/test_temps_gagne*.py",
   "tests/**/test_preset_agents*.py",
   "tests/**/test_partage_agents*.py",
   "tests/**/test_partage_par_defaut.py",

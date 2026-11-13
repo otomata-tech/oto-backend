@@ -314,7 +314,9 @@ def masquer_charges(ctx: ResolvedCtx, jobs: list[dict]) -> list[dict]:
            and str(p.get("trigger_id") or "").isdigit()}
     if not ids:
         return jobs
-    agents = [t for i in sorted(ids) if (t := db.get_trigger(i, ctx.org_id))]
+    # UNE lecture pour la page (le niveau ne lit que l'id et le porteur) : un
+    # `get_trigger` par agent empruntait le pool autant de fois (13/11/2026).
+    agents = db.porteurs_des_agents(sorted(ids), ctx.org_id)
     n = niveaux(ctx.sub, ctx.org_id, agents)
     # Un agent SUPPRIMÉ n'a plus de partages à lire : ses travaux restent lisibles à
     # qui les portait (son propriétaire d'alors) et aux admins de l'org.

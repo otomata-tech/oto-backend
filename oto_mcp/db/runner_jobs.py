@@ -2381,49 +2381,139 @@ def poser_minutes_gagnees(org_id: int, minutes: Optional[dict]) -> bool:
     return row is not None
 
 
-def outils_des_runs_conclus(org_id: int, jours: int) -> list[dict]:
-    """Les runs d'agents CONCLUS `done` sur la fenêtre — la matière du temps gagné,
-    dans l'ordre où ils sont tombés dus. Une ligne par run : `{trigger_id, run_id}`
-    (`trigger_id` en TEXTE, tel que le payload le porte : la clé n'est jamais castée
-    en SQL ; `run_id` mène à ses appels dans le journal, None quand le run n'y est
-    pas lié — il n'est alors pas compté)."""
-    with _connect() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT payload->>'trigger_id' AS trigger_id, run_id
-              FROM runner_jobs
-             WHERE org_id = %s AND status = 'done'
-               AND due_at >= NOW() - make_interval(days => %s)
-               AND {PREDICAT_DECLENCHEUR}
-             ORDER BY due_at
-            """,
-            (org_id, int(jours)),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
 #: Les arguments qui NOMMENT l'enregistrement touché, dans l'ordre où on les essaie —
 #: pour « un même enregistrement compte une fois par jour ».
 CLES_D_ENREGISTREMENT = ("id", "record_id", "person_id", "contact_id", "company_id",
                          "lead_id", "issue_id", "row_id", "email", "linkedin_url", "url")
 
+#: L'agent d'un travail, en TEXTE et sans zéro de tête : deux écritures du même nombre
+#: (`"5"`, `"05"`) désignent le même agent, comme leur `int()` côté Python. Jamais
+#: casté : la clé n'est lue qu'en texte (`PREDICAT_DECLENCHEUR` garantit des chiffres).
+_AGENT_DU_TRAVAIL = "COALESCE(NULLIF(ltrim(payload->>'trigger_id', '0'), ''), '0')"
 
-def appels_des_runs(run_ids: list[str]) -> list[dict]:
-    """Les appels d'outils MCP de ces runs, dans l'ordre (`tool_calls`, par
-    `idx_tool_calls_run`) : outil, `op`, réussite, l'enregistrement nommé et le jour.
-    Rien d'autre des arguments n'est lu — ni corps, ni lignes, ni contenu."""
-    if not run_ids:
-        return []
-    cle = "COALESCE(" + ", ".join(f"args->>'{k}'" for k in CLES_D_ENREGISTREMENT) + ")"
+#: Les runs d'agents CONCLUS `done` de la fenêtre, des agents demandés — servis par
+#: `idx_runner_jobs_declencheurs`, dont la lecture porte le prédicat.
+_TRAVAUX_CONCLUS = f"""
+    travaux AS MATERIALIZED (
+        SELECT id, {_AGENT_DU_TRAVAIL} AS agent, run_id, due_at
+          FROM runner_jobs
+         WHERE org_id = %(org)s AND status = 'done'
+           AND due_at >= NOW() - make_interval(days => %(jours)s)
+           AND {PREDICAT_DECLENCHEUR}
+           AND {_AGENT_DU_TRAVAIL} = ANY(%(agents)s)
+    )"""
+
+
+def formes_des_runs_conclus(org_id: int, jours: int, agents: list[int],
+                            classer) -> tuple[list[dict], list[dict]]:
+    """La matière du temps gagné des `agents` (`time_saved`), COMPTÉE PAR LA BASE :
+    par agent, les formes de ses runs conclus `done` sur la fenêtre — combien d'actions,
+    d'écritures et de recherches chaque run a produites — et le nombre de runs de
+    chaque forme ; puis, par agent, les runs sans aucun appel au journal (pas de
+    `run_id`, ou rien sous lui), qui ne sont PAS comptés.
+
+    `classer(outil, op)` → `(type, outil canonique)` ou None (`time_saved.classe`) :
+    il juge chaque couple DISTINCT `(outil, op)` du journal de ces runs — autant que de
+    variété d'outils et d'`op`, pas d'appels —, et la base applique le verdict à
+    chaque appel. Python ne décode donc ni un travail ni un appel : ce qu'il reçoit
+    dépend du nombre de couples, d'agents et de formes, pas du nombre de runs (le gel d'1,4-2 s du
+    13/11/2026 décodait des centaines de milliers d'appels sous le GIL).
+
+    Mêmes règles que `time_saved.formes_des_runs`, la référence en mémoire : appels
+    `mcp` réussis, un enregistrement (action ou écriture qui nomme une clé non vide)
+    une fois par jour et par agent, la PREMIÈRE occurrence comptant — dans l'ordre où
+    les runs sont tombés dus, puis des appels dans le run. Un run est un TRAVAIL :
+    deux travaux d'un même `run_id` (une reprise) comptent chacun ses appels."""
+    if not agents:
+        return [], []
+    p = {"org": org_id, "jours": int(jours), "agents": [str(int(a)) for a in agents]}
+    cle = "COALESCE(" + ", ".join(f"tc.args->>'{k}'" for k in CLES_D_ENREGISTREMENT) + ")"
     with _connect() as conn:
-        rows = conn.execute(
+        couples = conn.execute(
             f"""
-            SELECT run_id, tool, args->>'op' AS op, ok, {cle} AS cle,
-                   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS jour
-              FROM tool_calls
-             WHERE run_id = ANY(%s) AND kind = 'mcp'
-             ORDER BY run_id, created_at
-            """,
-            (list(run_ids),),
-        ).fetchall()
-    return [dict(r) for r in rows]
+            WITH {_TRAVAUX_CONCLUS}
+            SELECT DISTINCT tc.tool, tc.args->>'op' AS op
+              FROM (SELECT DISTINCT run_id FROM travaux WHERE run_id IS NOT NULL) t
+              JOIN tool_calls tc ON tc.run_id = t.run_id
+             WHERE tc.kind = 'mcp' AND tc.ok
+            """, p).fetchall()
+        # Une `op` absente et une `op` vide se jugent pareil (`kind_of`) : la carte les
+        # confond, et n'a qu'une entrée par couple — une jointure qui en trouverait deux
+        # compterait l'appel deux fois.
+        carte: dict[tuple[str, str], tuple[str, str]] = {}
+        for c in couples:
+            if (v := classer(c["tool"], c["op"])):
+                carte.setdefault((c["tool"], c["op"] or ""), v)
+        formes = []
+        if carte:
+            outils = [t for t, _o in carte]
+            ops = [o for _t, o in carte]
+            types = [k for k, _c in carte.values()]
+            canoniques = [c for _k, c in carte.values()]
+            formes = conn.execute(
+                f"""
+                WITH carte AS (
+                    SELECT * FROM unnest(%(outils)s::text[], %(ops)s::text[],
+                                         %(types)s::text[], %(canoniques)s::text[])
+                           AS c(tool, op, kind, canon)
+                ),
+                {_TRAVAUX_CONCLUS},
+                -- Les seules colonnes utiles, tirées une fois : ni `args` entier ni
+                -- aucun corps ne voyage au-delà.
+                bruts AS MATERIALIZED (
+                    SELECT t.id AS travail, t.agent, t.due_at, tc.id AS appel,
+                           tc.created_at, tc.tool, COALESCE(tc.args->>'op', '') AS op,
+                           {cle} AS cle
+                      FROM travaux t
+                      JOIN tool_calls tc ON tc.run_id = t.run_id
+                     WHERE tc.kind = 'mcp' AND tc.ok
+                ),
+                appels AS (
+                    SELECT b.*, c.kind, c.canon,
+                           (c.kind IN ('action', 'record') AND COALESCE(b.cle, '') <> '')
+                               AS marque
+                      FROM bruts b
+                      JOIN carte c ON c.tool = b.tool AND c.op = b.op
+                ),
+                -- Un enregistrement nommé ne compte qu'à sa PREMIÈRE occurrence chez son
+                -- agent, ce jour-là : dans l'ordre des runs, puis des appels du run.
+                premiers AS (
+                    SELECT DISTINCT ON (agent, kind, canon, cle, jour) travail, agent, kind
+                      FROM (SELECT *, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+                                          AS jour
+                              FROM appels WHERE marque) m
+                     ORDER BY agent, kind, canon, cle, jour, due_at, travail, created_at, appel
+                ),
+                comptes AS (
+                    SELECT travail, agent, kind FROM appels WHERE NOT marque
+                    UNION ALL
+                    SELECT travail, agent, kind FROM premiers
+                ),
+                par_run AS (
+                    SELECT agent,
+                           COUNT(*) FILTER (WHERE kind = 'action') AS actions,
+                           COUNT(*) FILTER (WHERE kind = 'record') AS records,
+                           COUNT(*) FILTER (WHERE kind = 'research') AS research
+                      FROM comptes
+                     GROUP BY travail, agent
+                )
+                SELECT agent, actions::int, records::int, research::int, COUNT(*)::int AS runs
+                  FROM par_run
+                 GROUP BY 1, 2, 3, 4
+                 ORDER BY 1, 2, 3, 4
+                """,
+                {**p, "outils": outils, "ops": ops, "types": types,
+                 "canoniques": canoniques}).fetchall()
+        sans_journal = conn.execute(
+            f"""
+            WITH {_TRAVAUX_CONCLUS}
+            SELECT agent, COUNT(*)::int AS runs
+              FROM travaux t
+             WHERE t.run_id IS NULL
+                OR NOT EXISTS (SELECT 1 FROM tool_calls tc
+                                WHERE tc.run_id = t.run_id AND tc.kind = 'mcp')
+             GROUP BY 1
+             ORDER BY 1
+            """, p).fetchall()
+    return ([{**r, "trigger_id": int(r.pop("agent"))} for r in formes],
+            [{"trigger_id": int(r["agent"]), "runs": r["runs"]} for r in sans_journal])

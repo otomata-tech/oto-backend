@@ -675,8 +675,11 @@ def test_summary_rend_heures_total_et_derniere_panne_des_agents_vus(monkeypatch)
     monkeypatch.setattr(RJ.db, "list_triggers", lambda org: [{"id": 5, "sub": "u"}, {"id": 9, "sub": "autre"}])
     monkeypatch.setattr(RJ._acces_agent, "niveaux", lambda sub, org, agents: {5: "owner", 9: None})
     monkeypatch.setattr(RJ.db, "minutes_gagnees_de_l_org", lambda org: {})
-    monkeypatch.setattr(RJ.db, "outils_des_runs_conclus", lambda org, jours: [])
+    monkeypatch.setattr(RJ.db, "formes_des_runs_conclus",
+                        lambda org, jours, agents, classer: vu.update(agents=agents) or ([], []))
     rep = _appel(_ctx(sub="u"), op="summary", days=7)
+    # Le temps gagné ne se compte que pour les agents VUS : l'invisible n'est pas lu.
+    assert vu.pop("agents") == [5]
     assert vu == {"org": 226, "jours": 7}
     assert [a["trigger_id"] for a in rep["summary"]] == [5]
     a = rep["summary"][0]
@@ -719,9 +722,37 @@ def _un_agent_vu(monkeypatch, conclus, appels, surcharges=None):
     monkeypatch.setattr(RJ.db, "list_triggers", lambda org: [{"id": 5, "sub": "u"}, {"id": 9, "sub": "autre"}])
     monkeypatch.setattr(RJ._acces_agent, "niveaux", lambda sub, org, agents: {5: "owner", 9: None})
     monkeypatch.setattr(RJ.db, "minutes_gagnees_de_l_org", lambda org: surcharges or {})
-    monkeypatch.setattr(RJ.db, "outils_des_runs_conclus", lambda org, jours: conclus)
-    monkeypatch.setattr(RJ.db, "appels_des_runs", lambda ids: [a for a in appels if a["run_id"] in ids])
+    monkeypatch.setattr(RJ.db, "formes_des_runs_conclus", _formes_en_memoire(conclus, appels))
     return _appel(_ctx(sub="u"), op="summary", days=7)
+
+
+def _formes_en_memoire(conclus, appels):
+    """`db.formes_des_runs_conclus` rejoué en mémoire depuis des lignes de travaux et
+    d'appels, par la référence (`time_saved.formes_des_runs`) — la parité de la
+    requête avec elle se prouve contre une vraie base (`test_temps_gagne_borne_live`)."""
+    from oto_mcp import time_saved
+
+    def _formes(org, jours, agents, classer):
+        par_run: dict = {}
+        for c in appels:
+            par_run.setdefault(c["run_id"], []).append(time_saved.Call(
+                tool=c["tool"], op=c["op"], ok=bool(c["ok"]), key=c["cle"], day=c["jour"]))
+        runs: dict = {}
+        sans: dict = {}
+        for r in conclus:
+            tid = int(r["trigger_id"])
+            if tid not in agents:
+                continue
+            a = par_run.get(r.get("run_id") or "")
+            if a:
+                runs.setdefault(tid, []).append(a)
+            else:
+                sans[tid] = sans.get(tid, 0) + 1
+        formes = [{"trigger_id": tid, "actions": f.actions, "records": f.records,
+                   "research": f.research, "runs": f.runs}
+                  for tid, rs in runs.items() for f in time_saved.formes_des_runs(rs)]
+        return formes, [{"trigger_id": t, "runs": n} for t, n in sans.items()]
+    return _formes
 
 
 def _appel_journal(run_id, tool, op=None, ok=True, cle=None):

@@ -140,12 +140,58 @@ class Call(NamedTuple):
     day: Optional[str] = None
 
 
-def for_agent(runs: list[list[Call]], minutes: dict[str, float]) -> tuple[float, dict[str, dict]]:
-    """(minutes gagnées, `{type: {count, minutes}}`) d'UN agent sur ses runs conclus,
-    dans l'ordre où ils ont tourné. Les règles du module, appliquées run par run :
-    appels réussis seulement, un enregistrement une fois par jour, la recherche dans
-    un run productif seulement et plafonnée, le rapport une fois par run."""
+def classe(name: str, op: Optional[str] = None) -> Optional[tuple[str, str]]:
+    """`(type, outil canonique)` d'un appel compté, None s'il ne compte pas. Le
+    canonique est l'outil dont on marque l'enregistrement (« une fois par jour ») : un
+    nom préfixé par le worker et son nom nu touchent le même enregistrement."""
+    k = kind_of(name, op)
+    return (k, resolve(name) or name) if k else None
+
+
+class Forme(NamedTuple):
+    """Ce qu'UN run a produit une fois ses appels comptés (réussis, typés, un
+    enregistrement une fois par jour et par agent) — et combien de runs l'ont eu.
+    `for_shapes` en tire le temps gagné : les règles du run vivent là, une fois."""
+    actions: int
+    records: int
+    research: int
+    runs: int = 1
+
+
+def formes_des_runs(runs: list[list[Call]]) -> list[Forme]:
+    """Les formes des runs conclus d'UN agent, dans l'ordre où ils ont tourné : appels
+    réussis seulement, un enregistrement (action ou écriture qui le nomme) une fois par
+    jour et par agent — la première occurrence compte, les suivantes non.
+
+    La référence en mémoire : la page Agents compte la même chose en SQL
+    (`db.formes_des_runs_conclus`), sans décoder un appel ; le banc de parité les
+    compare (`tests/test_temps_gagne_borne_live.py`)."""
     vus: set[tuple] = set()
+    out: list[Forme] = []
+    for run in runs:
+        counts: dict[str, int] = {}
+        for c in run:
+            if not c.ok:
+                continue
+            classee = classe(c.tool, c.op)
+            if not classee:
+                continue
+            k, canonique = classee
+            if k in _PRODUCTS and c.key:
+                marque = (k, canonique, c.key, c.day)
+                if marque in vus:
+                    continue
+                vus.add(marque)
+            counts[k] = counts.get(k, 0) + 1
+        out.append(Forme(counts.get("action", 0), counts.get("record", 0),
+                         counts.get("research", 0)))
+    return out
+
+
+def for_shapes(formes: list[Forme], minutes: dict[str, float]) -> tuple[float, dict[str, dict]]:
+    """(minutes gagnées, `{type: {count, minutes}}`) d'UN agent depuis les formes de
+    ses runs : la recherche dans un run productif seulement et plafonnée, le rapport
+    une fois par run. Une forme vaut `runs` runs identiques."""
     tally: dict[str, dict] = {}
     total = 0.0
 
@@ -156,30 +202,24 @@ def for_agent(runs: list[list[Call]], minutes: dict[str, float]) -> tuple[float,
         t["minutes"] += m
         total += m
 
-    for run in runs:
-        counts: dict[str, int] = {}
-        for c in run:
-            if not c.ok:
-                continue
-            k = kind_of(c.tool, c.op)
-            if not k:
-                continue
-            if k in _PRODUCTS and c.key:
-                marque = (k, resolve(c.tool) or c.tool, c.key, c.day)
-                if marque in vus:
-                    continue
-                vus.add(marque)
-            counts[k] = counts.get(k, 0) + 1
-        produits = {k: n for k, n in counts.items() if k in _PRODUCTS}
-        if not produits:
+    for f in formes:
+        produits = {k: n for k, n in (("action", f.actions), ("record", f.records)) if n}
+        if not produits or f.runs <= 0:
             continue          # un balayage qui n'a rien produit de neuf
-        recherche = counts.get("research", 0)
-        if recherche and set(produits) == {"action"}:
-            ajoute("report", 1, minutes["report"])     # chercher puis poster : un rapport
+        if f.research and set(produits) == {"action"}:
+            ajoute("report", f.runs, f.runs * minutes["report"])  # chercher puis poster
             continue
         for k, n in produits.items():
-            ajoute(k, n, n * minutes[k])
-        if recherche:
-            ajoute("research", recherche, min(recherche * minutes["research"], RESEARCH_CAP_PER_RUN))
+            ajoute(k, f.runs * n, f.runs * (n * minutes[k]))
+        if f.research:
+            ajoute("research", f.runs * f.research,
+                   f.runs * min(f.research * minutes["research"], RESEARCH_CAP_PER_RUN))
     return total, tally
 
+
+def for_agent(runs: list[list[Call]], minutes: dict[str, float]) -> tuple[float, dict[str, dict]]:
+    """(minutes gagnées, `{type: {count, minutes}}`) d'UN agent sur ses runs conclus,
+    dans l'ordre où ils ont tourné. Les règles du module, appliquées run par run :
+    appels réussis seulement, un enregistrement une fois par jour, la recherche dans
+    un run productif seulement et plafonnée, le rapport une fois par run."""
+    return for_shapes(formes_des_runs(runs), minutes)

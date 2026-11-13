@@ -1411,3 +1411,52 @@ recherche, donc une poignée de main TLS par appel vers le fournisseur. Le clien
 première requête, **un par boucle d'événements** (un client lie ses connexions à sa boucle), fermé
 à l'arrêt par le lifespan ; même délai (8 s, posé sur la requête), même repli lexical en cas d'échec.
 Preuve : `tests/test_embeddings_client_partage.py` (deux appels, un client ; deux boucles, deux).
+
+## La page Agents décodait tout le journal de la fenêtre (13/11/2026)
+
+Une matinée de relevés : une quinzaine de gels d'1,4 à 2 s en une heure, le processus à
+plus d'un cœur, la boucle au repos dans `select`. Dans chacun, un fil du pool exécute
+`runner.jobs op=summary` (`POST /api/me/runner/jobs`, la page Agents du tableau de bord,
+rechargée par chaque onglet ouvert) : `_resume` → `db.outils_des_runs_conclus` puis
+`db.appels_des_runs`, au fond `_str_dict_row.make_row`. Le temps gagné lisait **chaque
+travail conclu des 28 jours, puis chaque appel `mcp` de chacun**, les décodait en dicts,
+en faisait des `time_saved.Call`, puis les rejouait un par un (`time_saved.for_agent`,
+dont `resolve()` parcourt tout le registre pour un nom préfixé par le worker). Le coût
+grandissait avec l'historique, sous le GIL : les appels voisins (`apps/{id}/call`) passaient
+d'≈ 0,5 s à 2,2-2,6 s. Les sondages des workers (`claim`, `extend`, `complete` — la masse
+des appels de la route) n'y étaient pour rien : `summary` leur est refusé.
+
+**Remède — le compte se fait dans la base** (`db.formes_des_runs_conclus`), en trois
+requêtes sur un emprunt :
+1. les couples DISTINCTS `(outil, op)` du journal de la fenêtre — bornés par la variété
+   des outils et des `op` appelés, pas par le nombre d'appels — que Python classe
+   (`time_saved.classe` : type et outil canonique) ;
+2. la carte rendue en `unnest` : la base applique le verdict à chaque appel réussi,
+   garde la PREMIÈRE occurrence d'un enregistrement par agent et par jour (`DISTINCT
+   ON`, dans l'ordre des runs puis des appels), compte par run et rend les **formes**
+   `(agent, actions, écritures, recherches, runs)` ; ni `args` entier ni corps ne
+   quittent la CTE matérialisée qui n'en tire que l'`op` et la clé ;
+3. les runs sans appel au journal, par agent.
+
+Les règles du run (productif, rapport, plafond de recherche) restent en Python
+(`time_saved.for_shapes`), sur ces formes ; `for_agent` passe par elles et reste la
+référence. Seuls les agents VUS sont lus.
+
+Mesuré sur un jeu local de 20 agents, 15 000 runs et 225 000 appels : CPU Python du fil
+**≈ 1,0 s → 0,015 s**, lignes rendues à Python ≈ 240 000 → ≈ 7 200 (3 500 couples
+— le jeu appelle 870 outils synthétiques sous quatre `op` — et 3 700 formes : ces
+nombres suivent la variété des outils et des runs, pas leur nombre) ; temps de mur
+≈ 1,1-1,3 s → ≈ 0,4-0,5 s, désormais passé à attendre la base, hors GIL — avec deux
+millions d'appels étrangers en plus dans `tool_calls`, les trois requêtes restent sur
+`idx_tool_calls_run` (0,09 + 0,32 + 0,02 s). Le reste de `summary`
+(`resume_des_declencheurs`, ≈ 8 900 cases horaires) : ≈ 0,01 s de CPU. Résultats identiques au dixième servi, surcharges
+d'org comprises (la somme se fait par forme × nombre de runs : l'ordre des additions
+flottantes change, pas l'arrondi servi).
+
+Même lot : `_acces_agent.masquer_charges` (`op=list`, `op=get`) lisait chaque agent de
+la page par un `get_trigger` — autant d'emprunts au pool ; il lit `id, org_id, sub` de
+toute la page en une requête (`db.porteurs_des_agents`).
+
+Preuves : `tests/test_temps_gagne_borne_live.py` (parité avec la référence sur chaque
+cas des règles et sur un journal aléatoire ; requêtes et lignes rendues identiques à 100
+et à 2 000 runs), `tests/test_partage_agents.py` (une lecture pour la page).

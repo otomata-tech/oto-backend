@@ -52,6 +52,21 @@ def list_tenant_issuers() -> list:
     return [dict(r) for r in rows]
 
 
+def primary_tenant_tool_prefix() -> str:
+    """Le `tool_prefix` DÉCLARÉ sur la ligne du tenant primaire, ou `""`.
+
+    Lu À PART de `list_tenant_issuers` : la ligne primaire n'y figure pas (son émetteur
+    est l'env, souvent NULL en base), et ce n'est pas un émetteur qu'on lui emprunte —
+    seulement le nom sous lequel ses comptes voient les outils de la plateforme
+    (`tool_alias`). Tel que déclaré : `tool_alias.normalize_prefix` juge, rien ici.
+    Ne rattrape rien : `tenancy.load_primary_tool_prefix` porte le filet.
+    """
+    with _connect() as conn:
+        row = conn.execute("SELECT tool_prefix FROM tenants WHERE slug = %s",
+                           (tenancy.primary_slug(),)).fetchone()
+    return str(row["tool_prefix"] or "") if row else ""
+
+
 def tenant_exists(slug: str) -> bool:
     """Le slug désigne-t-il une ligne `tenants` ? Garde de pose d'une clé de tenant
     (L-clés PR 1) : un slug inconnu ne doit pas fabriquer une ligne de coffre que
@@ -457,8 +472,10 @@ def _shape_tenant(row: dict) -> dict:
     out["logto_mgmt"] = dict(mgmt) if isinstance(mgmt, dict) else {}
     # DÉCLARÉ seulement : ce que le process applique vraiment se lit sur le registre
     # (`tenants_admin._decorate` → `tool_prefix_effectif`). Un préfixe posé en base
-    # après le dernier boot, ou refusé par `tool_alias.normalize_prefix`, s'affiche
-    # ici sans être servi — et c'est justement l'écart qu'un suivi doit montrer.
+    # après le dernier chargement du registre (boot ou rechargement), ou refusé par
+    # `tool_alias.normalize_prefix`, s'affiche ici sans être servi — et c'est
+    # justement l'écart qu'un suivi doit montrer. Vaut aussi pour le PRIMAIRE, dont
+    # le préfixe est lu à part (`primary_tenant_tool_prefix`).
     out["tool_prefix"] = (out.get("tool_prefix") or None)
     for k in ("orgs", "orgs_archivees", "comptes", "comptes_actifs", "appels",
               "orgs_desalignees"):

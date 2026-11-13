@@ -203,12 +203,18 @@ def normalize_issuer(issuer) -> Optional[str]:
 
 
 def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
-          tenants: Iterable[Mapping] = ()) -> dict:
+          tenants: Iterable[Mapping] = (), primary_tool_prefix: str = "") -> dict:
     """`{issuer: TenantIssuer}` — le registre.
 
     `primary_issuer` et `drain_issuers` viennent de l'ENV et portent tous deux le
     tenant `oto` : le drain est un second émetteur du même tenant, pas un tenant.
     `tenants` vient de la base (lignes `slug`/`issuer`/`jwks_uri`).
+
+    `primary_tool_prefix` est la SEULE déclaration de la ligne primaire que le
+    registre reprend (`load_primary_tool_prefix`) : le nom sous lequel ses comptes
+    voient les outils `oto_*` (`tool_alias`). Ni émetteur, ni nom, ni hosts, ni
+    palette — l'env et notre charte gardent tout le reste. Vide (le défaut, et toute
+    instance dont le primaire ne déclare rien) = l'entrée d'avant, à l'octet près.
 
     Trois refus, tous loggés ET alertés (`_refus`) — chacun ferait qualifier un
     sub sous le mauvais tenant, c'est-à-dire pointer la mauvaise serrure du coffre :
@@ -239,9 +245,9 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
                                     logto_mgmt=_normalize_mgmt(logto_mgmt, slug))
 
     primaire = primary_slug()
-    _put(primaire, primary_issuer)
+    _put(primaire, primary_issuer, tool_prefix=primary_tool_prefix)
     for drain in drain_issuers or ():
-        _put(primaire, drain)
+        _put(primaire, drain, tool_prefix=primary_tool_prefix)
 
     for row in tenants or ():
         # Pas de `.strip()` : le slug entre dans le sub, donc il vaut EXACTEMENT ce
@@ -538,6 +544,22 @@ def require_primary_tenant(sub: Optional[str], action: str) -> Optional[str]:
             f"de {slug!r} — cet acte doit être porté par le tenant propriétaire du "
             f"compte.")
     return sub
+
+
+def load_primary_tool_prefix() -> str:
+    """Le `tool_prefix` déclaré par la ligne du tenant primaire, ou `""`.
+
+    Même filet que `load_tenants` : une base illisible rend `""` (les noms canoniques,
+    le comportement d'avant), loggé — un nom d'outil ne coûte jamais un boot ni un
+    rechargement du registre.
+    """
+    try:
+        from . import db
+        return str(db.primary_tenant_tool_prefix() or "")
+    except Exception:
+        logger.warning("registre d'émetteurs : préfixe d'outils du tenant primaire "
+                       "illisible — noms canoniques", exc_info=True)
+        return ""
 
 
 def load_tenants() -> list:

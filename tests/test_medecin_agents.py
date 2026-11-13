@@ -116,6 +116,16 @@ def file(monkeypatch):
     import sentry_sdk
     monkeypatch.setattr(sentry_sdk, "capture_message",
                         lambda message, level=None: etat["signaux"].append((message, level)))
+    # Le catalogue des causes, en ombre : ce qu'on lui a remis, et ce qu'il rend.
+    from oto_mcp.db import causes_agents
+    etat["catalogue"], etat["releves"] = {}, []
+
+    def _relever(lot):
+        lot = list(lot)
+        etat["releves"].append(lot)
+        return {c: dict(etat["catalogue"].get(c, {"statut": "proposee", "neuve": True}))
+                for c, *_ in lot}
+    monkeypatch.setattr(causes_agents, "relever", _relever)
     return etat
 
 
@@ -229,8 +239,9 @@ def test_un_passage_ne_s_arrete_pas_sur_une_panne_illisible(monkeypatch, file, t
     monkeypatch.setattr(episodes_agents, "ouvrir_ou_rafraichir", _ouvrir)
     bilan = M.balayer(_MAINTENANT)
     assert appels == [1, 2]
-    assert bilan == {"pannes": 2, "relances": 1, "gueris": 1, "gueris_apres_soin": 1,
-                     "erreurs": 1, "tenant_tiers_ecartes": 0}
+    assert {k: v for k, v in bilan.items() if not k.startswith("catalogue_")} == {
+        "pannes": 2, "relances": 1, "gueris": 1, "gueris_apres_soin": 1, "erreurs": 1,
+        "tenant_tiers_ecartes": 0}
 
 
 def test_l_org_d_un_tenant_tiers_n_est_ni_relevee_ni_relancee(monkeypatch, file, tenants):
@@ -292,3 +303,80 @@ def test_un_horodatage_illisible_refuse_la_relance(file):
     assert "illisible" in M.relancer(_panne(dernier="pas une date"), _episode(),
                                      maintenant=_MAINTENANT)
     assert file["enfiles"] == []
+
+
+# --- Le catalogue des causes, en OMBRE : il est rempli, il ne décide de rien. ---------
+
+def _un_passage(monkeypatch, pannes):
+    from oto_mcp.db import episodes_agents
+    monkeypatch.setattr(M, "_ECARTEES_DITES", set())
+    monkeypatch.setattr(episodes_agents, "clore_les_gueris", lambda: [])
+    monkeypatch.setattr(episodes_agents, "pannes_en_cours", lambda: pannes)
+    ouverts = []
+
+    def _ouvrir(**kw):
+        ouverts.append(kw)
+        return _episode(org_id=kw["org_id"], trigger_id=kw["trigger_id"],
+                        classe=kw["classe"], cote=kw["cote"])
+    monkeypatch.setattr(episodes_agents, "ouvrir_ou_rafraichir", _ouvrir)
+    return ouverts
+
+
+def test_la_meme_panne_dans_deux_orgs_porte_la_meme_empreinte(monkeypatch, file, tenants):
+    ouverts = _un_passage(monkeypatch, [
+        _panne(org_id=7, trigger_id=1, motif="HTTP 529 overloaded_error req_011CXaaaa1"),
+        _panne(org_id=8, trigger_id=2, motif="HTTP 529 overloaded_error req_022DYbbbb2"),
+        _panne(org_id=8, trigger_id=3, motif=None)])
+    bilan = M.balayer(_MAINTENANT)
+    cles = [o["empreinte"] for o in ouverts]
+    assert cles[0] == cles[1] and cles[0] and cles[2] is None
+    assert file["releves"] == [[(cles[0], "http <n> overloaded_error <id>",
+                                 "refus_passager", "plateforme")] * 2]
+    assert (bilan["catalogue_neuves"], bilan["catalogue_sans_empreinte"]) == (1, 1)
+
+
+def test_une_cause_approuvee_qui_contredit_la_regex_ne_change_aucun_geste(
+        monkeypatch, file, tenants):
+    """En ombre, la regex décide : la cause approuvée « titulaire » d'un refus passager
+    est comptée en désaccord, et la relance part quand même."""
+    from oto_mcp import causes_pannes
+    motif = "HTTP 529 overloaded_error"
+    cle_ = causes_pannes.cle(causes_pannes.de(motif))
+    file["catalogue"][cle_] = {"statut": "approuvee", "classe": "cle_refusee",
+                               "cote": "proprietaire", "neuve": False}
+    ouverts = _un_passage(monkeypatch, [_panne(motif=motif)])
+    bilan = M.balayer(_MAINTENANT)
+    assert (ouverts[0]["classe"], ouverts[0]["cote"]) == ("refus_passager", "plateforme")
+    assert bilan["relances"] == 1 and len(file["enfiles"]) == 1
+    assert (bilan["catalogue_reconnues"], bilan["catalogue_desaccords"]) == (1, 1)
+
+
+def test_un_catalogue_illisible_ne_coute_que_son_bilan(monkeypatch, file, tenants):
+    from oto_mcp.db import causes_agents
+
+    def _casse(lot):
+        raise RuntimeError("base indisponible")
+    monkeypatch.setattr(causes_agents, "relever", _casse)
+    _un_passage(monkeypatch, [_panne()])
+    bilan = M.balayer(_MAINTENANT)
+    assert bilan["relances"] == 1 and bilan["erreurs"] == 0
+    assert bilan["catalogue_erreur"] == 1
+
+
+def test_la_note_libre_d_un_agent_bloque_ne_s_empreinte_pas(monkeypatch, file, tenants):
+    ouverts = _un_passage(monkeypatch, [
+        _panne(motif="Je n'ai pas trouvé le fichier du client", motif_de_l_agent=True)])
+    bilan = M.balayer(_MAINTENANT)
+    assert ouverts[0]["empreinte"] is None
+    assert file["releves"] == [[]] and bilan["catalogue_sans_empreinte"] == 1
+
+
+def test_une_cause_qui_complete_un_inconnu_n_est_pas_un_desaccord(monkeypatch, file, tenants):
+    from oto_mcp import causes_pannes
+    motif = "fin_anormale (success)"
+    file["catalogue"][causes_pannes.cle(causes_pannes.de(motif))] = {
+        "statut": "approuvee", "classe": "refus_fournisseur", "cote": "plateforme"}
+    _un_passage(monkeypatch, [_panne(motif=motif)])
+    bilan = M.balayer(_MAINTENANT)
+    assert (bilan["catalogue_reconnues"], bilan["catalogue_desaccords"]) == (1, 0)
+    assert file["enfiles"] == [], "inconnu ne se relance toujours pas"

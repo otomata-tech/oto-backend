@@ -598,7 +598,7 @@ osm_pois	-	485c2d67473c59a3
 oto_account_access	grant list revoke	e61dc66d7a63346a
 oto_admin_access_shadow	read	870877d4d2d3f931
 oto_admin_account	resume suspend	0c85c3eeb402068b
-oto_admin_agent_repair	add_tool close diagnose escalate get list rerun	e63e2844f4db5fac
+oto_admin_agent_repair	add_tool causes close diagnose escalate get list rerun set_cause	ae5e64aa17f5ea4e
 oto_admin_connector_setting	-	73541a3b652d11e2
 oto_admin_guide	delete get list set	930751362a9526d9
 oto_admin_guides_semis	-	fd3168d48576c83d

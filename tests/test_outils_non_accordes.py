@@ -130,7 +130,7 @@ def test_le_fix_joue_sur_la_capacite_donne_a_l_agent_la_liste_entiere(
         _travail, _agent_7, monkeypatch):
     """Le `fix` est un vrai geste : rejoué tel quel sur `oto_trigger`, il pose la liste
     de l'agent PLUS les manquants — par une personne. Sous le jeton du travail, le même
-    geste est refusé (`tools_human_only`) : un agent n'élargit pas sa propre liste."""
+    geste est refusé (`agents_human_only`) : un agent ne pose pas sa propre liste."""
     monkeypatch.setattr(code.pont_bac, "executer_avec_pont", None)
     corps = {**_CORPS_CODE, "limits": {"max_calls": 5, "max_units": 1, "max_seconds": 10}}
     fix = asyncio.run(code.executer(corps, {}, fastmcp=None, sub="u", ecrire=True))["fix"]
@@ -139,7 +139,7 @@ def test_le_fix_joue_sur_la_capacite_donne_a_l_agent_la_liste_entiere(
 
     with pytest.raises(AuthzDenied) as e:
         asyncio.run(RT._triggers(ctx, RT.TriggerInput(**arguments)))
-    assert (e.value.status, e.value.code) == (403, "tools_human_only")
+    assert (e.value.status, e.value.code) == (403, "agents_human_only")
     assert _agent_7 == {}, "rien n'est écrit sous le jeton du travail"
 
     monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete", lambda: None)
@@ -362,15 +362,16 @@ def test_une_retouche_qui_ne_touche_ni_liste_ni_procedure_ne_dit_rien(_agent_8, 
     assert "tools" not in _agent_8 and "tools_to_add" not in rep
 
 
-def test_sous_le_jeton_d_un_travail_rien_n_est_propose(_agent_8, monkeypatch):
-    """Un agent qui repose une liste (même ou plus courte) passe, et n'emporte rien de
-    plus."""
+def test_sous_le_jeton_d_un_travail_rien_n_est_pose_ni_propose(_agent_8, monkeypatch):
+    """Un agent ne repose pas une liste, même identique ou plus courte
+    (`agents_human_only`) : rien n'est écrit, rien n'est proposé."""
     monkeypatch.setattr(outils_du_travail.verrou_org, "travail_de_la_requete",
                         lambda: types.SimpleNamespace(job_id=41))
-    rep = RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
-        op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act"]))
-    assert _agent_8["tools"] == ["oto_recipe", "waterfall_email_act"]
-    assert "tools_to_add" not in rep
+    with pytest.raises(AuthzDenied) as e:
+        RT._triggers_sync(ResolvedCtx(sub="porteur", org_id=2), RT.TriggerInput(
+            op="update", trigger_id=8, tools=["oto_recipe", "waterfall_email_act"]))
+    assert (e.value.status, e.value.code) == (403, "agents_human_only")
+    assert "tools" not in _agent_8, "rien n'est écrit"
 
 
 def test_une_prose_ecrite_par_un_agent_n_elargit_pas_la_liste_a_la_retouche_suivante(

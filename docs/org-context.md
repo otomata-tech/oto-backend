@@ -202,3 +202,13 @@ MCP — depuis la ligne du jeton. `OTO_VERROU_ORG_DELEGATION` : `enforce` (défa
 verrouillé jusqu'à la fin de son bail (quelques minutes). Hors périmètre : la portée
 personnelle du porteur (ses ressources et comptes personnels) et les outils hors de la
 liste d'outils du déclencheur.
+
+**Les gestes de personne** (`capabilities/_personne_seule.py`) : sous un jeton de
+délégation, quel que soit le mode du verrou d'org, un agent hébergé ne gère ni les
+agents (`agents_human_only`, `docs/runner-et-automatisations.md` §Élargir), ni les comptes
+et connecteurs (`accounts_human_only` : `oto_instance op=lend`, `oto_account_access
+op=grant|revoke`, `oto_connector` hors `list`/`setup_link`, `oto_connector_activation` et
+`oto_connector_access_level` hors lecture), ni l'org (`org_human_only` : `oto_org` hors
+`list_invites`/`list_loans`, `oto_org_settings op=set`, `oto_group` hors
+`list`/`get`/`list_invites`). Les lectures restent ouvertes. La face REST est déjà fermée
+au jeton (`delegation_rest_forbidden`) : la garde vit dans la console MCP.

@@ -17,7 +17,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
-from . import scheduled_emails
+from . import _personne_seule, scheduled_emails
 from .connectors import apify_charge_cap as connectors_apify_charge_cap, sharing as connectors_sharing
 from .groups import core as groups, guide as groups_guide, invites as groups_invites, members as groups_members
 from .orgs import core as orgs, email_settings as orgs_email_settings, field_filters as orgs_field_filters, invites as orgs_invites, mfa as orgs_mfa, model_subscriptions as orgs_model_subscriptions, partage_par_defaut as orgs_partage_par_defaut, update as orgs_update
@@ -57,7 +57,15 @@ class OrgInput(BaseModel):
     carrier: Optional[str] = None          # accept_invite
 
 
+#: Les lectures d'`oto_org` et d'`oto_group`, ouvertes à un agent hébergé ; tout autre
+#: geste est réservé à une personne (`org_human_only`, `_personne_seule`).
+_LECTURES_D_ORG = ("list_invites", "list_loans")
+_LECTURES_D_EQUIPE = ("list", "get", "list_invites")
+
+
 def _org(ctx: ResolvedCtx, inp: OrgInput) -> dict:
+    if inp.op not in _LECTURES_D_ORG:
+        _personne_seule.exiger_pour_l_org(f"oto_org op={inp.op}")
     if inp.op == "create":
         return orgs._create_org(ctx, orgs.CreateOrgInput(
             name=_need(inp.name, "missing_name", "`name` requis pour create.")))
@@ -235,6 +243,8 @@ def _plafond_apify(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
 
 
 def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
+    if inp.op == "set":
+        _personne_seule.exiger_pour_l_org(f"oto_org_settings op=set domain={inp.domain}")
     es, mfa, ff = orgs_email_settings, orgs_mfa, orgs_field_filters
     if inp.domain == "apify_charge_cap":
         return _plafond_apify(ctx, inp)
@@ -341,6 +351,8 @@ class GroupInput(BaseModel):
 
 
 def _group(ctx: ResolvedCtx, inp: GroupInput) -> dict:
+    if inp.op not in _LECTURES_D_EQUIPE:
+        _personne_seule.exiger_pour_l_org(f"oto_group op={inp.op}")
     if inp.op == "create":
         return groups._create_group(ctx, groups.CreateGroupInput(
             org_id=_need(inp.org_id, "missing_org", "`org_id` requis pour create."),
@@ -398,6 +410,7 @@ def _scheduled_emails(ctx: ResolvedCtx, inp: ScheduledEmailsInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="org.console", handler=_org, Input=OrgInput,
+        errors=(_personne_seule.REFUS_ORG,),
         authz=BY_OP({
             "create": SUB_ONLY, "accept_invite": SUB_ONLY,
             # Refuser est le geste de l'INVITÉ, pas d'un administrateur : SUB_ONLY,
@@ -423,6 +436,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="org.settings.console", handler=_org_settings, Input=OrgSettingsInput,
+        errors=(_personne_seule.REFUS_ORG,),
         authz=BY_OP({"get": ORG_MEMBER_OF("org_id"), "set": ORG_ADMIN_OF("org_id"),
                      "preview": ORG_MEMBER_OF("org_id")}),
         description=(
@@ -483,6 +497,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="group.console", handler=_group, Input=GroupInput,
+        errors=(_personne_seule.REFUS_ORG,),
         authz=BY_OP({
             "create": ORG_ADMIN_OF("org_id"), "list": SUB_ONLY,
             "get": GROUP_MEMBER_OF("group_id"),

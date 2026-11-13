@@ -134,7 +134,7 @@ def correctif(trigger_id: Optional[int], outils: list, manque: list) -> dict:
     """Le geste qui lève le refus, sous une forme qu'un écran joue en un clic : la liste
     de l'agent (`outils`) augmentée de ces outils, posée par `oto_trigger op=update` —
     `tools` REMPLACE la liste, d'où la liste entière. Un geste de personne : sous un jeton
-    de délégation, l'élargissement est refusé (`tools_human_only`)."""
+    de délégation, toute retouche d'agent est refusée (`agents_human_only`)."""
     return {"tool": "oto_trigger", "op": "update", "trigger_id": trigger_id,
             "tools": list(dict.fromkeys([*outils, *manque]))}
 

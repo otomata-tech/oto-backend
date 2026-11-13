@@ -35,7 +35,7 @@ from starlette.concurrency import run_in_threadpool
 from . import preset_agents
 from .orgs import partage_par_defaut
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
-               _modele, _portee, _procedure_du_travail, _projet_de_l_agent,
+               _modele, _personne_seule, _portee, _procedure_du_travail, _projet_de_l_agent,
                _secret_par_lien, _source_du_hook, runner_jobs)
 from .. import (db, deprecations, org_store, outils_du_travail, ownership,
                 procedure_retiree, roles, runner_hook, runner_models, runner_tick,
@@ -46,8 +46,7 @@ from ..tools import catalogue as tool_catalogue
 from ..waterfall import cites as waterfall_cites
 from ._authz import ORG_MEMBER
 from ._dossier import FOLDER_MAX, dossier_valide
-from ._outils_plateforme import (PLATFORM_TOOLS_MAX, exiger_aucun_ajout_d_agent,
-                                 exiger_aucun_outil_hors_du_travail,
+from ._outils_plateforme import (PLATFORM_TOOLS_MAX, exiger_un_enfant_dans_ses_outils,
                                  exiger_un_lancement_sans_role_plateforme,
                                  outils_plateforme_valides)
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -398,7 +397,7 @@ class ToolWarning(BaseModel):
     #: qu'elle lance, mais n'est PAS dans `tools` : le run sera refusé
     #: (`tool_not_in_job`) au premier appel. `needed_by` dit qui l'appelle ; le geste qui
     #: le lève est `missing_tools` du déclencheur (un clic : `op=update`,
-    #: `tools=tools+missing_tools`), un geste de personne (`tools_human_only`).
+    #: `tools=tools+missing_tools`), un geste de personne (`agents_human_only`).
     issue: Literal["installable", "not_exposed", "unknown_tool", "not_granted"]
     detail: str
     needed_by: Optional[str] = None
@@ -505,7 +504,7 @@ class Trigger(BaseModel):
     #: Les outils que la procédure ou ses recettes appellent et que `tools` n'a pas —
     #: la liste à AJOUTER (`op=update`, `tools=tools+missing_tools`) : le bouton
     #: « Autoriser » d'un écran, joué par une personne — un agent hébergé n'élargit
-    #: aucune liste (`tools_human_only`). Calculé même quand `tools` est vide. `[]` = rien
+    #: aucune liste (`agents_human_only`). Calculé même quand `tools` est vide. `[]` = rien
     #: ne manque ; `None` = pas calculé. Jamais stocké, comme `tool_warnings`.
     missing_tools: Optional[list[str]] = None
     #: Ce qui ATTEND maintenant — ce que `clear_queue` viderait. `queue_pending`
@@ -785,6 +784,15 @@ def _corps_de_la_procedure(org: int, slug: str) -> str:
 
 _REGLAGES_WEBHOOK = ("payload_mode", "payload_fields", "max_per_hour",
                      "freshness_seconds", "max_per_day", "private_address")
+
+#: Les gestes de GESTION d'un agent, réservés à une personne (`agents_human_only`,
+#: `_personne_seule`). `create` a sa place dans sa branche, après la porte d'un webhook ;
+#: `update` se juge champ par champ (`_exiger_une_personne_pour_retoucher`).
+_GESTES_DE_GESTION = ("delete", "share", "unshare", "lend", "unlend", "take_over")
+
+#: Ce qui, dans `update`, désigne l'agent ou a déjà son propre refus de personne
+#: (`platform_tools_human_only`) : hors du jugement des champs.
+_HORS_DU_JUGEMENT = frozenset({"op", "trigger_id", "trigger_ids", "platform_tools"})
 
 
 def _exiger_projet_de_l_org(ctx: ResolvedCtx, project_id: Optional[int]) -> None:
@@ -1210,9 +1218,9 @@ def _a_ajouter_par_une_personne(org: int, slug: Optional[str],
     recettes publiées), un agent peut l'écrire ; un ajout silencieux à la retouche
     suivante d'une personne lui ouvrirait en direct ce qu'elle cite.
 
-    Sous un jeton de délégation : rien (`tools_human_only`). Un calcul qui échoue lève :
+    Sous un jeton de délégation : rien (`agents_human_only`). Un calcul qui échoue lève :
     la personne ne pose pas une liste sans savoir ce qui lui manque."""
-    if not slug or verrou_org.travail_de_la_requete() is not None:
+    if not slug or _personne_seule.depuis_un_agent_heberge():
         return []
     return _appeles_par_ses_outils(org, slug, outils)
 
@@ -1235,7 +1243,7 @@ def _noms_canoniques(ctx: ResolvedCtx, inp: TriggerInput) -> TriggerInput:
     return inp.model_copy(update=maj) if maj else inp
 
 
-def _maillon_suivant(org_id: int, trigger_id: int) -> Optional[dict]:
+def _maillon_suivant(org_id: int, trigger_id: int, outils: list) -> Optional[dict]:
     """La lignée du run que `run_now` va lancer, quand l'appel vient d'un AGENT HÉBERGÉ —
     None pour une personne (bouton de l'écran, MCP d'un humain) : rien ne s'enchaîne.
 
@@ -1243,8 +1251,10 @@ def _maillon_suivant(org_id: int, trigger_id: int) -> Optional[dict]:
     lignée se lit dans SA charge en base — jamais un argument de l'appel : un agent qui
     déclarerait sa propre profondeur désarmerait la borne.
 
-    ⚠️ Six refus, avant tout enfilage — dont celui d'un agent qu'aucun lien `starts`
-    ne relie à un lanceur qui en déclare (`chain_not_linked`). Les cinq autres : relancer SON PROPRE agent (`chain_self` — une
+    ⚠️ Sept refus, avant tout enfilage — dont celui d'un agent qu'aucun lien `starts`
+    ne relie à un lanceur qui en déclare (`chain_not_linked`), et, pour un lanceur qui
+    n'en déclare aucun, celui d'un agent plus outillé que lui (`chain_widens_tools` :
+    `outils` est la liste de l'agent lancé). Les cinq autres : relancer SON PROPRE agent (`chain_self` — une
     boucle immédiate, qui n'attendrait même pas la borne), dépasser `CHAINE_MAX`
     maillons après le départ (`chain_too_deep` — la boucle par un tiers, A → B → A ; le
     départ est à la profondeur 0, la chaîne compte donc `CHAINE_MAX + 1` agents),
@@ -1265,20 +1275,24 @@ def _maillon_suivant(org_id: int, trigger_id: int) -> Optional[dict]:
                           "un agent hébergé ne relance pas son propre agent : la "
                           "prochaine occurrence passe par son horloge.")
     # Les liens DÉCLARÉS bornent le lanceur (22/10/2026) : un agent qui a au moins un
-    # lien `starts` ne lance, depuis un run hébergé, QUE les agents ainsi reliés au sien.
-    # ⚠️ Un agent SANS aucun lien `starts` garde la règle d'avant (les bornes `chain_*`
-    # seules) : les chaînes écrites dans les procédures depuis v1.586.0 tournent sans
-    # lien déclaré, et ne cassent pas parce que la déclaration existe. Un travail sans
-    # agent (une flotte, un enfilage à la main) n'a pas de lien à montrer non plus.
+    # lien `starts` ne lance, depuis un run hébergé, QUE les agents ainsi reliés au sien
+    # — quels que soient leurs outils : le lien est la décision d'une personne qui peut
+    # modifier les deux agents (`links_human_only`).
+    # ⚠️ Un agent SANS aucun lien `starts` ne lance qu'un agent dont les outils tiennent
+    # dans les siens (`chain_widens_tools`) : sans décision d'une personne, un agent ne
+    # passe pas la main à plus outillé que lui. Un travail sans agent (une flotte, un
+    # enfilage à la main) n'a pas de lien à montrer : la même borne.
     de = parent.get("trigger_id")
-    if de is not None:
-        relies = {int(c["to_trigger_id"]) for c in
-                  db.runner_links.depuis_l_agent(org_id, int(de), db.runner_links.DEMARRE)}
-        if relies and int(trigger_id) not in relies:
-            raise AuthzDenied(400, "chain_not_linked",
-                              f"l'agent {de} n'est pas relié à l'agent {trigger_id} : ses "
-                              "liens `starts` (`op=link`), posés par quelqu'un qui peut "
-                              "modifier les deux agents, nomment ce qu'il peut lancer.")
+    relies = ({int(c["to_trigger_id"]) for c in
+               db.runner_links.depuis_l_agent(org_id, int(de), db.runner_links.DEMARRE)}
+              if de is not None else set())
+    if relies and int(trigger_id) not in relies:
+        raise AuthzDenied(400, "chain_not_linked",
+                          f"l'agent {de} n'est pas relié à l'agent {trigger_id} : ses "
+                          "liens `starts` (`op=link`), posés par quelqu'un qui peut "
+                          "modifier les deux agents, nomment ce qu'il peut lancer.")
+    if not relies:
+        exiger_un_enfant_dans_ses_outils(outils)
     enfants = db.enfants_du_travail(v.job_id, org_id)
     if str(trigger_id) in enfants:
         raise AuthzDenied(400, "chain_already_started",
@@ -1411,7 +1425,7 @@ def _liens(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     # ⚠️ Un agent hébergé ne pose ni ne retire de lien : un lien est une PERMISSION
     # (lancer un autre agent), et un agent qui lit des données tierces se l'accorderait
     # sur une injection de prompt. Le motif de `platform_tools_human_only`.
-    if verrou_org.travail_de_la_requete() is not None:
+    if _personne_seule.depuis_un_agent_heberge():
         raise AuthzDenied(403, "links_human_only",
                           "un lien entre agents se pose ou se retire par une personne, "
                           "jamais depuis un agent hébergé.")
@@ -1546,14 +1560,14 @@ def _relancer(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     ⚠️ **Une PERSONNE seule** : la liste d'outils d'origine peut être plus large que celle
     de l'agent aujourd'hui, et c'est elle que le run exercera (`outils_du_travail`). Sous
     un jeton de délégation, un agent hébergé ressusciterait ainsi une liste que son
-    propriétaire a réduite depuis — l'élargissement que `tools_human_only` refuse. Un
+    propriétaire a réduite depuis — un geste de personne (`agents_human_only`). Un
     agent hébergé a `run_now`, qui part de la configuration du moment.
 
     ⚠️ L'identité est l'APPELANT (`ctx.sub`), comme `run_now` : un run lancé à la main
     tourne en ton nom. Pas bornée par `run_already_queued` (relancer UNE occurrence n'en
     double aucune autre), mais par ses propres relances : une relance du même travail
     encore en vol refuse la suivante (`rerun_already_queued`)."""
-    if verrou_org.travail_de_la_requete() is not None:
+    if _personne_seule.depuis_un_agent_heberge():
         raise AuthzDenied(403, "rerun_human_only",
                           "op=rerun replays a past run with the tools it had then: a person "
                           "does it from their own account, never a hosted agent. A hosted "
@@ -1602,6 +1616,24 @@ def _relancer(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             "trigger": _avec_hook(ctx.org_id, t)}
 
 
+def _exiger_une_personne_pour_retoucher(inp: TriggerInput) -> None:
+    """`op=update` sous un jeton de délégation : refuse `agents_human_only` dès qu'un champ
+    hors de `_personne_seule.CHAMPS_D_AGENT_PERMIS` est posé — la consigne, la procédure,
+    le modèle, l'horloge, l'allumage, les bornes, le projet, le nom, les réglages d'un
+    webhook. Un agent hébergé ne retouche ainsi aucun agent, le sien compris. Hors jeton
+    de délégation, rien ne change."""
+    if not _personne_seule.depuis_un_agent_heberge():
+        return
+    poses = sorted(nom for nom, champ in TriggerInput.model_fields.items()
+                   if nom not in _HORS_DU_JUGEMENT
+                   and nom not in _personne_seule.CHAMPS_D_AGENT_PERMIS
+                   and getattr(inp, nom) != champ.default)
+    if poses:
+        _personne_seule.exiger_pour_les_agents(
+            f"op=update of {', '.join(f'`{n}`' for n in poses)} (a hosted agent only sets "
+            f"{', '.join(f'`{n}`' for n in sorted(_personne_seule.CHAMPS_D_AGENT_PERMIS))})")
+
+
 def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     """TOUT le SQL de `runner.triggers`, en synchrone — `_triggers` l'exécute dans le
     threadpool. Rend les déclencheurs SANS leurs avertissements d'outils : ceux-là
@@ -1640,11 +1672,17 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         raise AuthzDenied(400, "platform_tools_update_only",
                           "`platform_tools` ne se pose que par `op=update`, sur un agent "
                           "existant.")
+    if inp.op in _GESTES_DE_GESTION:
+        _personne_seule.exiger_pour_les_agents(f"op={inp.op}")
+    if inp.op == "update":
+        _exiger_une_personne_pour_retoucher(inp)
     if inp.op == "create":
         webhook = (inp.kind or "schedule") == "webhook"
         if webhook:
             # Créer un webhook REND son porteur en clair : c'est poser une porte (#1499).
             _exiger_une_personne_a_la_porte()
+        # Un agent hébergé ne crée pas d'agent (`agents_human_only`).
+        _personne_seule.exiger_pour_les_agents("op=create")
         # Un webhook se pose dans toute org depuis le 24/09/2026 : la porte `beta`
         # qui le fermait tenait parce que ses déroulés tournaient sur NOTRE clé.
         # Désormais un agent déclare son modèle et tourne sur la clé de son org
@@ -1682,9 +1720,6 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 "été fourni. Un agent sans outil n'exécute rien : cite les outils "
                 "dans la procédure (marqueurs `<tool:nom>`), ou passe `tools` "
                 "explicitement.")
-        # Sous un jeton de délégation, l'agent créé n'a pas plus d'outils que le travail
-        # qui le crée — liste fournie ou déduite de la procédure (`tools_human_only`).
-        exiger_aucun_outil_hors_du_travail(outils)
         # Une personne qui pose l'agent voit ce que ses outils appelleront pour lui
         # (recettes, étapes de cascade) et qu'il n'a pas (`tools_to_add`) — rien d'ajouté.
         a_ajouter = _a_ajouter_par_une_personne(ctx.org_id, inp.procedure, outils)
@@ -1976,7 +2011,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # redéduite, garde d'abonnement sur l'appelant.
         # ⚠️ L'identité est l'APPELANT (`ctx.sub`), pas le propriétaire : un run
         # lancé à la main tourne en ton nom — comme le bouton de l'écran.
-        chaine = _maillon_suivant(ctx.org_id, inp.trigger_id)
+        chaine = _maillon_suivant(ctx.org_id, inp.trigger_id, t.get("tools") or [])
         charge = runner_tick.charge_du_declencheur(
             {**t, "tz": t.get("tz") or _TZ_DEFAUT},
             datetime.datetime.now(datetime.timezone.utc),
@@ -1992,10 +2027,10 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         charge = runner_jobs.charge_et_modele(ctx, runner_jobs.JobsInput(
             op="enqueue", kind="start",
             payload={k: v for k, v in charge.items() if v is not None}))
-        # Depuis un agent hébergé, l'enfant tourne avec SA liste, même plus fournie que
-        # celle du parent (relais, en attendant #1499) — mais pas avec un rôle plateforme
-        # que le parent n'exerce pas : l'enfant tourne sous le même porteur, avec les
-        # `oto_admin_*` de SON agent (#1499).
+        # Depuis un agent hébergé, l'enfant tourne avec SA liste — plus fournie que celle
+        # du parent seulement par un lien `starts` déclaré (`_maillon_suivant`) — mais
+        # jamais avec un rôle plateforme que le parent n'exerce pas : l'enfant tourne
+        # sous le même porteur, avec les `oto_admin_*` de SON agent (#1499).
         exiger_un_lancement_sans_role_plateforme(ctx.org_id, t["id"], ctx.sub)
         res = db.enqueue_job(ctx.org_id, "start", payload=charge, sub=ctx.sub,
                              chaine=chaine)
@@ -2049,7 +2084,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # agit et le forfait qui le paie. Sous un jeton de délégation, un agent qui lit
         # des données tierces le ferait sur une injection de prompt (le motif de
         # `links_human_only` et de `agent_preset_human_only`).
-        if verrou_org.travail_de_la_requete() is not None:
+        if _personne_seule.depuis_un_agent_heberge():
             raise AuthzDenied(403, "give_human_only",
                               "op=give hands the agent's identity and plan over: a person "
                               "does it from their own account, never a hosted agent.")
@@ -2343,8 +2378,6 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 champs["project_id"] = projet
             if ranger and projet is not None:
                 a_ranger = (slug, int(projet))
-    if "tools" in champs:
-        exiger_aucun_ajout_d_agent(_actuel(), champs["tools"])
     if inp.platform_tools is not None:
         champs["outils_plateforme"] = outils_plateforme_valides(
             ctx, inp.platform_tools, _actuel(), champs.get("tools"))
@@ -2633,7 +2666,7 @@ def _exiger_une_personne_a_la_porte() -> None:
     par `_exiger_la_porte` (`rotate_secret`, `rotate_address`, `connect_source` /
     `disconnect_source`, `update private_address`, `hook-auth`) et la création d'un
     webhook. Une personne fait tout cela comme avant."""
-    if verrou_org.travail_de_la_requete() is not None:
+    if _personne_seule.depuis_un_agent_heberge():
         raise AuthzDenied(
             403, "hook_door_human_only",
             "a hosted agent does not handle a webhook's door (its bearer, address, mode "
@@ -3041,6 +3074,10 @@ CAPABILITIES += [
                           "`keep_previous_owner` hors de `op=give`"),
             DeclaredError(403, "give_human_only",
                           "`op=give` depuis un agent hébergé (jeton de délégation)"),
+            _personne_seule.REFUS_AGENTS,
+            DeclaredError(403, "chain_widens_tools",
+                          "`run_now` depuis un agent hébergé sans lien `starts`, vers un "
+                          "agent dont un outil manque à la liste du travail appelant"),
             *preset_agents.REFUS,
             DeclaredError(400, "link_cycle",
                           "`link` qui fermerait une boucle, les deux genres comptés ensemble"),
@@ -3058,10 +3095,6 @@ CAPABILITIES += [
                           "`platform_tools` hors d'`op=update`"),
             DeclaredError(403, "platform_tools_human_only",
                           "`platform_tools` posé depuis un agent hébergé (jeton de délégation)"),
-            DeclaredError(403, "tools_human_only",
-                          "`tools` élargi depuis un agent hébergé (jeton de délégation) : "
-                          "à `update`, un outil hors de la liste stockée ; à `create`, un "
-                          "outil hors de celle du travail appelant — un geste de personne"),
             DeclaredError(403, "platform_tools_owner_only",
                           "`platform_tools` posé par un autre que le propriétaire de l'agent"),
             DeclaredError(403, "platform_tools_operator_only",

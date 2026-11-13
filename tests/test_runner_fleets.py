@@ -618,6 +618,10 @@ def _create_capture(monkeypatch, *, job_id, agents):
     monkeypatch.setattr(RF.db, "agent_du_travail",
                         lambda j, org: lus.append((j, org)) or agents.get((j, org)))
     monkeypatch.setattr(RF, "_cible_a_la_declaration", lambda ctx, ns: ns)
+    # Le travail peut appeler l'outil de la campagne : la borne a son banc
+    # (`test_chaine_outils_live.py`).
+    monkeypatch.setattr(RF._outils_plateforme.outils_du_travail, "permis_du_travail",
+                        lambda job: frozenset({"oto_kb"}))
     vu = {}
     monkeypatch.setattr(RF.db, "create_fleet", lambda *a, **kw: vu.update(kw) or {"id": 1})
     _appel(_ctx(), op="create", label="cartes", procedure="pousser-les-appels",

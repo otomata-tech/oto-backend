@@ -30,6 +30,7 @@ from . import (access_level as connectors_access_level,
                setup_link as connectors_setup_link,
                sharing as connectors_sharing,
                verify as connectors_verify)
+from .. import _personne_seule
 from .._authz import (
     BY_OP,
     GROUP_ADMIN_OF,
@@ -61,6 +62,8 @@ class ActivationInput(BaseModel):
 
 def _activation(ctx: ResolvedCtx, inp: ActivationInput) -> dict:
     a = connectors_activation
+    if inp.op != "list":
+        _personne_seule.exiger_pour_les_comptes(f"oto_connector_activation op={inp.op}")
     if inp.scope == "org":
         oid = _need(inp.org_id, "missing_org", "`org_id` is required for scope=org.")
         if inp.op == "list":
@@ -94,6 +97,8 @@ class AccessLevelInput(BaseModel):
 
 def _access_level(ctx: ResolvedCtx, inp: AccessLevelInput) -> dict:
     a = connectors_access_level
+    if inp.op != "get":
+        _personne_seule.exiger_pour_les_comptes(f"oto_connector_access_level op={inp.op}")
     if inp.op == "set" and inp.level is None:
         raise AuthzDenied(400, "missing_level", "`level` is required for set.")
     if inp.scope == "org":
@@ -124,12 +129,19 @@ class ConnectorInput(BaseModel):
     connectors: Optional[list[str]] = None     # recommend: baseline ([] clears)
 
 
+#: Ce qu'un agent hébergé fait encore d'`oto_connector` : lire le catalogue, et obtenir
+#: la page où une PERSONNE connecte un compte (`setup_link` ne pose rien).
+_LECTURES_DU_CONNECTEUR = ("list", "setup_link")
+
+
 async def _connector(ctx: ResolvedCtx, inp: ConnectorInput) -> dict:
     # `async` for `force` only: the other actions read/write the database
     # synchronously (`_me`, `_select`…, `_recommend` → `connectors.kit.appliquer`), so never
     # on the loop. Found by the execution guard, not by the sweep: the local alias
     # `sel = connectors_selection` hid the calls.
     sel = connectors_selection
+    if inp.op not in _LECTURES_DU_CONNECTEUR:
+        _personne_seule.exiger_pour_les_comptes(f"oto_connector op={inp.op}")
     if inp.op == "list":
         # `name` is honored HERE too (feedback #326): it was declared on the tool
         # but only select/pause/unselect/force read it → passed on list it was silently
@@ -180,6 +192,7 @@ async def _instance(ctx: ResolvedCtx, inp: InstanceInput) -> dict:
             ctx, connectors_instances.ListInstancesInput(connector=inp.connector, level=inp.level))
     connector = _need(inp.connector, "missing_connector", f"`connector` is required for {inp.op}.")
     if inp.op == "lend":
+        _personne_seule.exiger_pour_les_comptes("oto_instance op=lend")
         if inp.to is None and inp.to_group is None and not inp.to_org:
             raise AuthzDenied(400, "missing_to", "`to` (the email or the sub of a member of "
                                                  "your organization), `to_group` (a team "
@@ -234,6 +247,7 @@ def _account_access(ctx: ResolvedCtx, inp: AccountAccessInput) -> dict:
     ag = connectors_account_grants
     if inp.op == "list":
         return ag._list(ctx, ag.AccountGrantsListInput())
+    _personne_seule.exiger_pour_les_comptes(f"oto_account_access op={inp.op}")
     grant_inp = ag.AccountGrantInput(
         channel=_need(inp.channel, "missing_channel", "`channel` is required."),
         grantee=_need(inp.grantee, "missing_grantee", "`grantee` (sub or email) is required."))
@@ -243,6 +257,7 @@ def _account_access(ctx: ResolvedCtx, inp: AccountAccessInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="connectors.console.activation", handler=_activation, Input=ActivationInput,
+        errors=(_personne_seule.REFUS_COMPTES,),
         authz=BY_OP({
             ("list", "org"): ORG_MEMBER_OF("org_id"),
             ("set", "org"): ORG_ADMIN_OF("org_id"),
@@ -264,6 +279,7 @@ CAPABILITIES += [
     Capability(
         key="connectors.console.access_level", handler=_access_level,
         Input=AccessLevelInput, Output=connectors_access_level.AccessLevelState,
+        errors=(_personne_seule.REFUS_COMPTES,),
         authz=BY_OP({
             ("get", "org"): ORG_ADMIN_OF("org_id"),
             ("set", "org"): ORG_ADMIN_OF("org_id"),
@@ -286,6 +302,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="connectors.console.connector", handler=_connector, Input=ConnectorInput,
+        errors=(_personne_seule.REFUS_COMPTES,),
         authz=BY_OP({
             "list": SUB_ONLY, "select": SUB_ONLY, "pause": SUB_ONLY, "unselect": SUB_ONLY,
             "setup_link": SUB_ONLY,
@@ -317,6 +334,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="connectors.console.instance", handler=_instance, Input=InstanceInput,
+        errors=(_personne_seule.REFUS_COMPTES,),
         authz=BY_OP({"list": SUB_ONLY, "lend": SUB_ONLY, "verify": ORG_MEMBER}),
         description=(
             "Connector INSTANCES (connector x auth/config; the secret is never returned). "
@@ -365,6 +383,7 @@ CAPABILITIES += [
     ),
     Capability(
         key="connectors.console.account_access", handler=_account_access, Input=AccountAccessInput,
+        errors=(_personne_seule.REFUS_COMPTES,),
         authz=SUB_ONLY,
         description=(
             "Shared connector accounts (#55) — who may OPERATE your connected messaging "

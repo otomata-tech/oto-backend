@@ -416,7 +416,7 @@ def test_platform_tools_refuse_sous_un_jeton_de_delegation(agent_d_operateur):
     assert agent_d_operateur == {}
 
 
-# ── tools : élargir est un geste de personne (`tools_human_only`) ────────────
+# ── tools : la liste d'un agent est posée par une personne ────────────────
 
 def test_une_personne_elargit_la_liste_d_un_agent(agent_d_operateur):
     _appel(_ctx(), op="update", trigger_id=3,
@@ -425,39 +425,103 @@ def test_une_personne_elargit_la_liste_d_un_agent(agent_d_operateur):
         "tools": ["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"]}
 
 
-def test_un_agent_heberge_n_elargit_pas_une_liste_d_outils(agent_d_operateur):
-    """Sous un jeton de délégation, un agent qui a `oto_trigger` ajouterait à sa propre
-    liste n'importe quel outil : une injection de prompt suffirait."""
+@pytest.mark.parametrize("outils", [
+    ["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"],  # élargie
+    ["fr_siret"],                                                    # réduite
+    ["oto_admin_signal", "oto_admin_org", "fr_siret"],               # la même, réordonnée
+    [],                                                              # vidée
+])
+def test_un_agent_heberge_ne_pose_aucune_liste_d_outils(agent_d_operateur, outils):
+    """La liste d'outils d'un agent est posée par une personne : sous un jeton de
+    délégation, `tools` est refusé même quand il réduit ou repose la liste."""
     from oto_mcp import verrou_org
     t = verrou_org.poser(verrou_org.Verrou(sub="porteur", org_id=2, job_id=9))
     try:
         with pytest.raises(AuthzDenied) as e:
-            _appel(_ctx(), op="update", trigger_id=3,
-                   tools=["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"])
+            _appel(_ctx(), op="update", trigger_id=3, tools=outils)
     finally:
         verrou_org.lever(t)
-    assert (e.value.status, e.value.code) == (403, "tools_human_only")
-    assert "data_rows" in e.value.message
+    assert (e.value.status, e.value.code) == (403, "agents_human_only")
+    assert "`tools`" in e.value.message
     assert agent_d_operateur == {}, "rien n'est écrit"
 
 
-@pytest.mark.parametrize("outils", [
-    ["fr_siret"],                                             # réduite
-    ["oto_admin_signal", "oto_admin_org", "fr_siret"],        # la même, réordonnée
-    [],                                                       # vidée
-])
-def test_un_agent_heberge_reduit_ou_repose_une_liste_d_outils(agent_d_operateur, outils):
-    """Réduire ne donne rien de plus : la règle ne vise que l'ajout."""
+# ── retoucher et gérer un agent : un geste de personne (`agents_human_only`) ──
+
+@pytest.fixture
+def deleguer():
+    from contextlib import contextmanager
+
     from oto_mcp import verrou_org
-    t = verrou_org.poser(verrou_org.Verrou(sub="porteur", org_id=2, job_id=9))
-    try:
-        _appel(_ctx(), op="update", trigger_id=3, tools=outils)
-    finally:
-        verrou_org.lever(t)
-    assert agent_d_operateur == {"tools": outils}
+
+    @contextmanager
+    def _jeton():
+        t = verrou_org.poser(verrou_org.Verrou(sub="alexis", org_id=2, job_id=9))
+        try:
+            yield
+        finally:
+            verrou_org.lever(t)
+    return _jeton
 
 
-# ── tools à la création : pas plus d'outils que le travail qui crée ─────────
+@pytest.mark.parametrize("champs", [
+    {"input": "nouvelle consigne"},
+    {"procedure": "autre"},
+    {"model": "claude-sonnet-5"},
+    {"cron": "0 9 * * *"},
+    {"tz": "Europe/Paris"},
+    {"enabled": True},
+    {"max_steps": 400},
+    {"label": "autre nom"},
+    {"folder": "veille", "input": "nouvelle consigne"},
+])
+def test_un_agent_heberge_ne_retouche_aucun_agent(agent_d_operateur, deleguer, champs):
+    """La consigne, la procédure, le modèle, l'horloge, l'allumage — de tout agent, le
+    sien compris : le refus nomme les champs, rien n'est écrit."""
+    with deleguer(), pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="update", trigger_id=3, **champs)
+    assert (e.value.status, e.value.code) == (403, "agents_human_only")
+    assert all(f"`{c}`" in e.value.message for c in champs if c != "folder")
+    assert agent_d_operateur == {}, "rien n'est écrit"
+
+
+def test_un_agent_heberge_range_un_agent_dans_un_dossier(agent_d_operateur, deleguer):
+    """`folder` est un champ permis (`_personne_seule.CHAMPS_D_AGENT_PERMIS`) : il
+    range, il ne change rien à ce que l'agent fait."""
+    with deleguer():
+        _appel(_ctx(), op="update", trigger_id=3, folder="veille")
+    assert agent_d_operateur == {"folder": "veille"}
+
+
+def test_une_personne_retouche_la_consigne(agent_d_operateur):
+    _appel(_ctx(), op="update", trigger_id=3, input="nouvelle consigne")
+    assert agent_d_operateur == {"input": "nouvelle consigne"}
+
+
+@pytest.mark.parametrize("op, kw", [
+    ("delete", {}),
+    ("share", {"everyone": True}),
+    ("unshare", {"everyone": True}),
+    ("lend", {}),
+    ("unlend", {}),
+    ("take_over", {}),
+])
+def test_un_agent_heberge_ne_gere_pas_un_agent(monkeypatch, deleguer, op, kw):
+    lu = []
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: lu.append(i) or {"id": i})
+    with deleguer(), pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op=op, trigger_id=3, **kw)
+    assert (e.value.status, e.value.code) == (403, "agents_human_only")
+    assert lu == [], "refusé avant toute lecture"
+
+
+def test_une_personne_supprime_son_agent(monkeypatch):
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {"id": i, "sub": "alexis"})
+    monkeypatch.setattr(RT.db, "delete_trigger", lambda i, o: True)
+    assert _appel(_ctx(), op="delete", trigger_id=3)["ok"] is True
+
+
+# ── la création : un geste de personne (`agents_human_only`) ──────────────
 
 @pytest.fixture
 def creation(monkeypatch):
@@ -489,39 +553,18 @@ def creation(monkeypatch):
     return types.SimpleNamespace(vu=vu, deleguer=deleguer)
 
 
-def test_un_agent_heberge_ne_cree_pas_un_agent_plus_outille_que_lui(creation):
-    with creation.deleguer(), pytest.raises(AuthzDenied) as e:
-        _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *",
-               tools=["fr_siret", "apollo_search_people"])
-    assert (e.value.status, e.value.code) == (403, "tools_human_only")
-    assert "apollo_search_people" in e.value.message
-    assert creation.vu == {}, "rien n'est écrit"
-
-
-def test_un_agent_heberge_cree_un_agent_avec_une_partie_de_ses_outils(creation):
-    with creation.deleguer():
-        _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *",
-               tools=["data_write", "run_finish"])
-    assert creation.vu["tools"] == ["data_write", "run_finish"]
-
-
-@pytest.mark.parametrize("cites, refuse", [
-    ("<tool:fr_siret> puis <tool:data_write>", False),
-    ("<tool:fr_siret> puis <tool:apollo_search_people>", True),
+@pytest.mark.parametrize("outils", [
+    ["fr_siret", "apollo_search_people"],    # plus outillé que le travail
+    ["data_write", "run_finish"],            # une partie de ses outils
+    None,                                    # déduits de la procédure
 ])
-def test_sans_tools_la_liste_deduite_de_la_procedure_est_jugee(
-        creation, monkeypatch, cites, refuse):
-    """`tools` omis : la liste par défaut est celle que la procédure cite
-    (`_outils_de_la_procedure`). Elle ne dépasse pas plus que l'autre le travail."""
-    monkeypatch.setattr(RT.db, "get_guide_db", lambda *a: {"body_md": cites})
-    with creation.deleguer():
-        if refuse:
-            with pytest.raises(AuthzDenied) as e:
-                _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *")
-            assert e.value.code == "tools_human_only" and creation.vu == {}
-        else:
-            _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *")
-            assert creation.vu["tools"] == ["fr_siret", "data_write"]
+def test_un_agent_heberge_ne_cree_aucun_agent(creation, outils):
+    """Créer un agent est un geste de personne (`agents_human_only`), quelle que soit sa
+    liste d'outils."""
+    with creation.deleguer(), pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *", tools=outils)
+    assert (e.value.status, e.value.code) == (403, "agents_human_only")
+    assert creation.vu == {}, "rien n'est écrit"
 
 
 def test_une_personne_cree_un_agent_avec_n_importe_quelle_liste(creation):
@@ -822,13 +865,15 @@ def test_un_agent_heberge_ne_relance_pas(run_relancable, agent_lancable, monkeyp
 def _depuis_le_travail(monkeypatch, job_id=77, charge=None, enfants=(), runs=1,
                        racines=None):
     """L'appel vient d'un agent hébergé : le jeton porte le travail `job_id`, dont la
-    charge en base est `charge`, qui a déjà lancé les agents `enfants`, et dont la
-    chaîne compte déjà `runs` runs (départ compris). `racines` reçoit le départ que
-    le budget a lu."""
+    charge en base est `charge` (par défaut, l'agent 4 avec les outils de l'agent lancé :
+    `chain_widens_tools` a son banc, `test_liens_agents.py`), qui a déjà lancé les agents
+    `enfants`, et dont la chaîne compte déjà `runs` runs (départ compris). `racines`
+    reçoit le départ que le budget a lu."""
     from oto_mcp import verrou_org
     jeton = verrou_org.poser(verrou_org.Verrou(sub="porteur", org_id=2, job_id=job_id))
     monkeypatch.setattr(RT.db, "charge_du_travail",
-                        lambda j: (charge if charge is not None else {"trigger_id": 4})
+                        lambda j: (charge if charge is not None
+                                   else {"trigger_id": 4, "tools": ["data_write"]})
                         if j == job_id else None)
     monkeypatch.setattr(RT.db, "enfants_du_travail",
                         lambda j, org: [str(e) for e in enfants] if j == job_id else [])
@@ -871,7 +916,8 @@ def test_un_agent_heberge_enchaine_avec_sa_lignee(agent_lancable, monkeypatch):
                         original.update(payload=payload, sub=sub) or lignee.update(chaine or {})
                         or {"id": 42, "status": "pending", "due_at": "2026-10-21 08:00:00"})
     jeton = _depuis_le_travail(monkeypatch, charge={"trigger_id": 4,
-                                                    "procedure": "collecte-leads"})
+                                                    "procedure": "collecte-leads",
+                                                    "tools": ["data_write"]})
     try:
         out = _appel(_ctx(), op="run_now", trigger_id=5, handoff="résultat")
     finally:
@@ -884,13 +930,30 @@ def test_un_agent_heberge_enchaine_avec_sa_lignee(agent_lancable, monkeypatch):
         agent_lancable["payload"]["input"], "le second agent sait qui lui passe la main"
 
 
-def test_un_agent_heberge_passe_le_relais_a_un_agent_plus_outille(agent_lancable,
-                                                                   monkeypatch):
-    """Le relais vers un agent spécialisé (en attendant #1499) : le parent n'a que
-    `oto_trigger`, l'enfant est enfilé avec SA liste (`data_write`), pas celle du parent.
-    Le rôle plateforme reste borné (`chain_widens_platform_tools`, banc
-    `test_chaine_outils_live.py`)."""
+def test_un_agent_heberge_ne_passe_pas_le_relais_a_plus_outille_sans_lien(agent_lancable,
+                                                                          monkeypatch):
     from oto_mcp import verrou_org
+    jeton = _depuis_le_travail(monkeypatch, charge={"trigger_id": 4, "procedure": "p",
+                                                    "tools": ["oto_trigger"]})
+    try:
+        with pytest.raises(AuthzDenied) as e:
+            _appel(_ctx(), op="run_now", trigger_id=5)
+    finally:
+        verrou_org.lever(jeton)
+    assert (e.value.status, e.value.code) == (403, "chain_widens_tools")
+    assert "data_write" in e.value.message
+    assert not agent_lancable.get("payload"), "rien n'est enfilé"
+
+
+def test_un_agent_heberge_relie_passe_le_relais_a_un_agent_plus_outille(agent_lancable,
+                                                                       monkeypatch):
+    """Le relais vers un agent spécialisé, décidé par une personne (un lien `starts`) :
+    le parent n'a que `oto_trigger`, l'enfant est enfilé avec SA liste (`data_write`),
+    pas celle du parent. Le rôle plateforme reste borné (`chain_widens_platform_tools`,
+    banc `test_chaine_outils_live.py`)."""
+    from oto_mcp import verrou_org
+    monkeypatch.setattr(RT.db.runner_links, "depuis_l_agent",
+                        lambda o, de, genre: [{"to_trigger_id": 5}])
     jeton = _depuis_le_travail(monkeypatch, charge={"trigger_id": 4, "procedure": "p",
                                                     "tools": ["oto_trigger"]})
     try:
@@ -910,7 +973,7 @@ def test_la_profondeur_se_lit_chez_le_parent(agent_lancable, monkeypatch):
                         lignee.update(chaine or {})
                         or {"id": 43, "status": "pending", "due_at": "2026-10-21 08:00:00"})
     jeton = _depuis_le_travail(monkeypatch, charge={
-        "trigger_id": 4, "_chaine": {"parent_job": 70, "root_job": 60, "depth": 2}})
+        "trigger_id": 4, "tools": ["data_write"], "_chaine": {"parent_job": 70, "root_job": 60, "depth": 2}})
     try:
         _appel(_ctx(), op="run_now", trigger_id=5)
     finally:
@@ -934,7 +997,7 @@ def test_un_agent_ne_se_relance_pas_lui_meme(agent_lancable, monkeypatch):
 def test_une_chaine_s_arrete_a_la_borne(agent_lancable, monkeypatch):
     from oto_mcp import verrou_org
     jeton = _depuis_le_travail(monkeypatch, charge={
-        "trigger_id": 4, "_chaine": {"parent_job": 70, "root_job": 60,
+        "trigger_id": 4, "tools": ["data_write"], "_chaine": {"parent_job": 70, "root_job": 60,
                                      "depth": RT.CHAINE_MAX}})
     try:
         with pytest.raises(AuthzDenied) as e:
@@ -975,7 +1038,7 @@ def test_le_dernier_maillon_passe_la_racine_plus_cinq(agent_lancable, monkeypatc
     `CHAINE_MAX` part, le suivant non — six agents en tout, comme le dit l'outil."""
     from oto_mcp import verrou_org
     jeton = _depuis_le_travail(monkeypatch, charge={
-        "trigger_id": 4, "_chaine": {"parent_job": 70, "root_job": 60,
+        "trigger_id": 4, "tools": ["data_write"], "_chaine": {"parent_job": 70, "root_job": 60,
                                      "depth": RT.CHAINE_MAX - 1}})
     try:
         out = _appel(_ctx(), op="run_now", trigger_id=5)
@@ -992,7 +1055,7 @@ def test_une_chaine_s_arrete_a_son_budget(agent_lancable, monkeypatch):
     from oto_mcp import verrou_org
     racines: list = []
     jeton = _depuis_le_travail(monkeypatch, runs=RT.CHAINE_BUDGET, racines=racines,
-                               charge={"trigger_id": 4, "_chaine": {
+                               charge={"trigger_id": 4, "tools": ["data_write"], "_chaine": {
                                    "parent_job": 70, "root_job": 60, "depth": 2}})
     try:
         with pytest.raises(AuthzDenied) as e:
@@ -1037,7 +1100,8 @@ class _FileEnMemoire:
     agent. Chaque enfilage y entre avec la lignée posée par le serveur."""
 
     def __init__(self, monkeypatch, travaux):
-        self.travaux = {j: dict(c) for j, c in travaux.items()}
+        # Le lanceur a les outils de l'agent lancé : `chain_widens_tools` a son banc.
+        self.travaux = {j: {"tools": ["data_write"], **c} for j, c in travaux.items()}
         self.suivant = 1000
         monkeypatch.setattr(RT.db, "charge_du_travail", lambda j: self.travaux.get(j))
         monkeypatch.setattr(RT.db, "enfants_du_travail", lambda j, org: [

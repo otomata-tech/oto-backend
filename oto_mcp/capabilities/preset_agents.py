@@ -30,7 +30,8 @@ donner, d'où trois bornes :
 """
 from __future__ import annotations
 
-from .. import db, verrou_org
+from .. import db
+from ._personne_seule import depuis_un_agent_heberge
 from ._types import AuthzDenied, DeclaredError
 from .orgs import partage_par_defaut
 
@@ -68,7 +69,7 @@ def servi(sub: str, org_id: int) -> dict:
 def poser(sub: str, org_id: int, valeur: str) -> None:
     """Pose le préréglage de `sub` dans cette org. `private` reste permis sous un refus
     de l'admin : on peut toujours se refermer."""
-    if verrou_org.travail_de_la_requete() is not None:
+    if depuis_un_agent_heberge():
         raise AuthzDenied(403, "agent_preset_human_only",
                           "op=default_sharing consents for the person: they set it from "
                           "their own account, never a hosted agent.")

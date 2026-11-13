@@ -662,7 +662,7 @@ oto_scheduled_emails	cancel list	8667993dedb8c784
 oto_search	-	18ffe4e9d63c0a93
 oto_shell	-	1e4aa9b504342353
 oto_tool_schema	-	b12939b40013387f
-oto_trigger	clear_queue connect_source create default_sharing delete deliveries disconnect_source get give graph lend link links list rerun rotate_address rotate_secret run_now share shares take_over unlend unlink unshare update	cecfa2ae4affaa78
+oto_trigger	clear_queue connect_source create default_sharing delete deliveries disconnect_source get give graph lend link links list rerun rotate_address rotate_secret run_now share shares take_over unlend unlink unshare update	319a204c648177ce
 oto_upload_url	create update	c4038cd6d5c823e4
 oto_use_group	-	e83286e86451c199
 oto_use_org	-	5c64f85f3092fc23

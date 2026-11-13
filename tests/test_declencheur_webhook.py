@@ -622,6 +622,51 @@ def test_un_cron_sur_un_webhook_est_REFUSE_pas_ecrit(retouche):
     assert "cron" not in retouche and "next_due" not in retouche
 
 
+@pytest.mark.parametrize("stocke, demande", [("webhook", "schedule"),
+                                             ("schedule", "webhook"),
+                                             (None, "webhook")])
+def test_un_AUTRE_genre_a_update_est_REFUSE_et_le_dit(retouche, stocke, demande):
+    """Un `kind` différent était accepté par le schéma puis ignoré : la réponse
+    disait toujours l'ancien genre, sans erreur. Il est refusé, nommé, et le refus
+    dit quoi faire (un nouvel agent de l'autre genre). `None` = ligne d'avant le
+    genre, lue `schedule`."""
+    retouche["stocke"].update(kind=stocke, cron="5 6 * * *" if stocke != "webhook" else None)
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op="update", trigger_id=5, kind=demande, label="neuf")
+    assert (e.value.status, e.value.code) == (400, "kind_immutable")
+    assert "create" in e.value.message
+    assert "label" not in retouche, "rien n'est écrit quand le genre est refusé"
+
+
+def test_un_AUTRE_genre_AVEC_cron_dit_le_genre_pas_le_cadencement(retouche):
+    """`kind=schedule cron=…` sur un webhook : le vrai motif est le genre, pas
+    l'absence de cadencement d'un webhook."""
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op="update", trigger_id=5, kind="schedule", cron="*/10 * * * *")
+    assert e.value.code == "kind_immutable"
+    assert "cron" not in retouche
+
+
+def test_le_MEME_genre_a_update_est_sans_effet(retouche):
+    """Redire le genre actuel n'est pas une erreur : les autres champs s'écrivent,
+    `kind` n'est jamais transmis à l'écriture."""
+    _appel(op="update", trigger_id=5, kind="webhook", label="neuf", max_per_hour=10)
+    assert retouche["label"] == "neuf" and retouche["max_per_hour"] == 10
+    assert "kind" not in retouche
+
+
+def test_le_MEME_genre_seul_ne_change_rien(retouche):
+    _appel(op="update", trigger_id=5, kind="webhook")
+    assert set(retouche) == {"stocke"}
+
+
+def test_un_genre_sur_un_agent_INCONNU_rend_404(monkeypatch, retouche):
+    monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: None)
+    with pytest.raises(AuthzDenied) as e:
+        _appel(op="update", trigger_id=5, kind="schedule")
+    assert (e.value.status, e.value.code) == (404, "trigger_not_found")
+
+
 def test_un_tz_seul_sur_un_webhook_est_refuse_pas_500(retouche):
     """`validate_cron(None, tz)` levait AttributeError."""
     with pytest.raises(AuthzDenied) as e:

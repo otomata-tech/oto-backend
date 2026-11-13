@@ -594,26 +594,20 @@ def _prepare_database() -> None:
             credentials_store.backfill_member_scope()
     except Exception as e:
         logger.warning("backfill_member_scope at boot failed: %s", e)
-    # Le porteur `microsoft` reprend le coffre et les coordonnées d'application de la
-    # carte `sharepoint` (devenue un service qui l'emprunte) : COPIE re-chiffrée,
-    # additive — la base est partagée, le code servi d'avant lit encore `sharepoint`.
-    # Idempotente par marque (`credentials_store.copy_connector_rows`), après
-    # backfill_member_scope (lignes au scope membre).
-    try:
-        from .auth import microsoft as ms_auth
-        with _timed("microsoft_copy_from_sharepoint"):
-            ms_auth.copier_depuis_sharepoint()
-    except Exception as e:
-        logger.warning("microsoft_copy_from_sharepoint at boot failed: %s", e)
-    # Le connecteur Custom API s'appelle `api` (ex-`http`) : même COPIE re-chiffrée et
-    # additive du coffre, l'instance neuve reprenant la définition (opérations, en-têtes)
-    # de l'ancienne. Idempotente par marque.
-    try:
-        from .connectors import api_operations
-        with _timed("api_copy_from_http"):
-            api_operations.copier_depuis_http()
-    except Exception as e:
-        logger.warning("api_copy_from_http at boot failed: %s", e)
+    # Les copies du coffre des connecteurs renommés (`sharepoint` → porteur `microsoft`,
+    # `http` → `api`) : COPIES re-chiffrées, additives — la base est partagée, le code
+    # servi d'avant lit encore l'ancien nom. Idempotentes par marque
+    # (`credentials_store.copy_connector_rows`), après backfill_member_scope (lignes au
+    # scope membre). UNE liste, `maintenance.copies_declarees` : la porte d'une cible,
+    # qui migre AVANT de démarrer, la joue avant la migration (`oto-mcp maintenance
+    # copies-du-coffre`) — une révision de renommage lit ces copies.
+    from .maintenance import copies_declarees
+    for nom, copier in copies_declarees():
+        try:
+            with _timed(nom):
+                copier()
+        except Exception as e:
+            logger.warning("%s at boot failed: %s", nom, e)
     # (Le backfill ADR 0044 §F R2 — clés plateforme legacy → instances scope PLATFORM —
     # a été RETIRÉ le 2026-07-28 : la fenêtre R2→R4 est close, `platform_keys` est droppée
     # par les migrations (`db/_init.py`) et les lectures passent par le coffre unifié. Il

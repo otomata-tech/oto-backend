@@ -97,35 +97,57 @@ def _chemin(r: httpx.Response) -> str:
         return "?"
 
 
+class FodError(RuntimeError):
+    """Un refus du service FOD, qui PORTE son statut HTTP et son détail.
+
+    Une `RuntimeError` nue n'en portait aucun : la taxonomie des erreurs
+    (`error_taxonomy.classify`) n'y lisait aucun statut amont et la servait en
+    « Internal server error. » — un 502 « source amont indisponible », un 400
+    « commune inconnue » et une vraie panne se lisaient pareil (#1454).
+    `status_code` est l'attribut que la taxonomie lit ; `detail` est le texte du
+    service, déjà purgé de toute adresse interne.
+    """
+
+    def __init__(self, status_code: int, message: str, detail: str = "") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.detail = detail
+
+
 def _raise_for(r: httpx.Response) -> None:
+    if r.status_code < 400:
+        return
+    detail = _detail(r)
+    raise FodError(r.status_code, _message(r, detail), detail)
+
+
+def _message(r: httpx.Response, detail: str) -> str:
     if r.status_code == 503:
-        raise RuntimeError(f"FOD saturé — réessayez ({_detail(r)})")
+        return f"FOD saturé — réessayez ({detail})"
     if r.status_code == 504:
-        raise RuntimeError(f"FOD: requête trop longue ({_detail(r)})")
+        return f"FOD: requête trop longue ({detail})"
     if r.status_code == 429:
         # Le quota amont a tenu malgré les reprises. Ce refus est RÉESSAYABLE et
         # ne dit rien sur la donnée demandée : sans cette phrase, il remontait en
         # `HTTPStatusError: … 429 …` dans la ligne de résultat, où il se lisait
         # comme une propriété de l'entreprise (otomata-tech/oto#44). FOD sait déjà
         # le dire — il suffit de ne pas perdre son détail.
-        raise RuntimeError(
+        return (
             f"Quota de l'API amont atteint, malgré {_RETRY_ATTEMPTS} reprises — "
             f"RÉESSAYABLE plus tard ou par lots plus petits ; ce n'est pas un fait "
-            f"sur la donnée demandée ({_detail(r)})")
+            f"sur la donnée demandée ({detail})")
     if r.status_code == 502:
         # 502 = FOD a bien répondu, mais l'API PUBLIQUE qu'il interroge ne lui a rien
         # rendu. Ce n'est ni notre panne ni un fait sur la donnée : le dire évite de
         # lire « pas de mutation ici » là où il faut lire « source amont muette ».
-        raise RuntimeError(
+        return (
             f"Source amont indisponible ({_chemin(r)}) : l'API publique interrogée "
             f"n'a pas répondu. Ce n'est pas un fait sur la donnée demandée — "
-            f"RÉESSAYABLE plus tard. ({_detail(r)})")
-    if r.status_code >= 400:
-        # JAMAIS `r.raise_for_status()` ici : httpx met l'URL ABSOLUE dans son message,
-        # donc l'hôte et le port de FOD — une adresse de notre réseau, servie telle
-        # quelle à l'utilisateur (mesuré le 2026-09-09 sur un 500 de `sitadel/search`).
-        raise RuntimeError(
-            f"FOD: {r.status_code} sur {_chemin(r)} ({_detail(r)})")
+            f"RÉESSAYABLE plus tard. ({detail})")
+    # JAMAIS `r.raise_for_status()` ici : httpx met l'URL ABSOLUE dans son message,
+    # donc l'hôte et le port de FOD — une adresse de notre réseau, servie telle
+    # quelle à l'utilisateur (mesuré le 2026-09-09 sur un 500 de `sitadel/search`).
+    return f"FOD: {r.status_code} sur {_chemin(r)} ({detail})"
 
 
 # Attente maximale honorée sur un `Retry-After` amont. Au-delà, réessayer n'a plus

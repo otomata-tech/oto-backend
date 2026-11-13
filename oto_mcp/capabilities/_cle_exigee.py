@@ -32,7 +32,8 @@ retirée après la pose, ou un agent posé avant l'allumage, n'échappe pas au s
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from contextlib import contextmanager
+from typing import Iterator, Optional
 
 from .. import credentials_store, db, providers
 from ..db import connector_settings
@@ -114,22 +115,17 @@ def cle_partagee(org_id: int, fournisseur: str, sub: Optional[str] = None, *,
     refus vaut mieux qu'une facture qui change de destinataire. Avec `strict`, il
     LÈVE `CleIllisible` : la réservation rend alors le travail à la file plutôt que
     de l'arrêter sur une raison fausse."""
-    from .. import access, session_org
-    from ..auth import hooks as auth_hooks
+    from .. import access
     from ..mcp_errors import McpError
     c = providers.connector_for_provider(fournisseur)
     if c is None or "platform" not in c.auth_modes:
         return None
     try:
         if sub:
-            with auth_hooks.sub_override(sub):
-                jeton = session_org.set_call_org(int(org_id))
-                try:
-                    rc = access.resolve_credential(fournisseur, sub=sub,
-                                                   emit_on_failure=False,
-                                                   check_usage=False)
-                finally:
-                    session_org.reset_call_org(jeton)
+            with _au_nom_du_travail(org_id, sub):
+                rc = access.resolve_credential(fournisseur, sub=sub,
+                                               emit_on_failure=False,
+                                               check_usage=False)
         else:
             rc = access._resolve_credential_anon(fournisseur, "auto", int(org_id),
                                                  check_usage=False)
@@ -143,6 +139,44 @@ def cle_partagee(org_id: int, fournisseur: str, sub: Optional[str] = None, *,
             raise CleIllisible(str(e)) from e
         return None
     return rc if rc.mode in RANGS_PARTAGES else None
+
+
+@contextmanager
+def _au_nom_du_travail(org_id: int, sub: str) -> Iterator[None]:
+    """Le contexte d'un travail : son demandeur `sub`, dans l'org du travail — ce que la
+    cascade des clés lit pour lui, hors de la requête du worker qui le sert."""
+    from .. import session_org
+    from ..auth import hooks as auth_hooks
+    with auth_hooks.sub_override(sub):
+        jeton = session_org.set_call_org(int(org_id))
+        try:
+            yield
+        finally:
+            session_org.reset_call_org(jeton)
+
+
+def quota_partage_atteint(org_id: int, fournisseur: str, sub: str) -> Optional[dict]:
+    """Le quota du jour de la clé de PLATEFORME qui sert `fournisseur` à `sub` dans cette
+    org, s'il est ATTEINT : `{used, limit}` ; None s'il ne l'est pas, s'il n'y a pas de
+    plafond (levé par `platform_unmetered`), ou si un autre rang paie.
+
+    « Utilisé contre plafond » se lit EXACTEMENT comme au refus d'un outil
+    (`resolve._win_quota`, par `access.platform_quota_hint`) : même compteur, même
+    plafond, même rang gagnant. Une lecture qui échoue LÈVE : l'appelant ne sert rien
+    sur un doute."""
+    from .. import access
+    with _au_nom_du_travail(org_id, sub):
+        q = access.platform_quota_hint(fournisseur, sub)
+    if q is None or q["used"] < q["limit"]:
+        return None
+    return {"used": q["used"], "limit": q["limit"]}
+
+
+def raison_quota_atteint(fournisseur: str, q: dict) -> str:
+    return (f"quota du jour de la clé partagée `{fournisseur}` atteint ({q['used']}/"
+            f"{q['limit']}) pour cette organisation — il repart à minuit. Deux "
+            "issues : déposer sa propre clé (Connecteurs), ou demander un quota plus haut "
+            "à qui administre la clé partagée de cette instance.")
 
 
 def cle_de_plateforme_posee(fournisseur: str) -> Optional[bool]:

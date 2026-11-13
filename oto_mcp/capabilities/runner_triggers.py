@@ -567,6 +567,38 @@ class RunnerModel(BaseModel):
     #: déclare de famille (`families: []`) : il faut alors omettre `model`.
     default: bool = False
     served: bool = False
+    #: Où tourne le modèle (`runner_models.hebergement`) : ce que l'écran affiche pour
+    #: que le client sache dans quel pays partent les données de son agent.
+    hosting: Optional["RunnerModelHosting"] = None
+    #: False quand l'org a écarté la région où il tourne (`orgs.allow_cn_models`) :
+    #: l'écran ne le propose pas, et la pose le refuse (`model_region_blocked`).
+    allowed: bool = True
+
+
+class RunnerModelHost(BaseModel):
+    """Un serveur qui reçoit les tours d'un modèle, dans l'ordre où il est essayé."""
+    name: str
+    region: Literal["us", "eu", "cn"]
+    role: Literal["only", "first", "backup", "last_backup"]
+
+
+class RunnerModelMaker(BaseModel):
+    name: str
+    country: str
+
+
+class RunnerModelRouter(BaseModel):
+    name: str
+    region: Literal["us", "eu", "cn"]
+
+
+class RunnerModelHosting(BaseModel):
+    """Où tourne un modèle : `region` est la PIRE de ses hôtes et de son routeur — `cn`
+    dès qu'un seul, même de secours, est en Chine."""
+    region: Literal["us", "eu", "cn"]
+    hosts: list[RunnerModelHost]
+    maker: RunnerModelMaker
+    router: Optional[RunnerModelRouter] = None
 
 
 RunnerArme.model_rebuild()
@@ -1665,6 +1697,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Un modèle inconnu se corrige dans l'appel, comme un cron : il se juge
         # avec lui, avant la présence du runner.
         famille = _modele.famille_declaree(inp.model)
+        _modele.exige_region_permise(ctx.org_id, inp.model)
         # Le modèle est OBLIGATOIRE (24/09/2026) : il se corrige dans l'appel, comme
         # un modèle inconnu, donc il se juge avec lui.
         _modele.exige_un_modele(famille)
@@ -2080,6 +2113,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     famille = None
     if inp.model is not None:
         famille = _modele.famille_declaree(inp.model)
+        _modele.exige_region_permise(ctx.org_id, inp.model)
         # `model=""` RETIRAIT le modèle pour revenir à celui du worker : un agent
         # hébergé déclare désormais le sien (24/09/2026), la retouche ne peut que
         # le changer.

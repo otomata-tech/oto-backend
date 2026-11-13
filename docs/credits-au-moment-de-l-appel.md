@@ -383,6 +383,29 @@ comptage avant l'appel) : ils se règlent `exceeded: true`. Échéance :
 Le rapprochement avec le relevé d'Anthropic se fait en jetons, au total et par modèle
 (`oto_admin_model_spend`, `by_model`).
 
+**Les modèles OUVERTS servis par OpenRouter** (famille `openrouter`, `runner_models`) ne
+passent PAS par le budget d'unités : ni réservés, ni réglés, ni plancher au départ du
+travail. Un même id y est servi par plusieurs hôtes à des prix différents, et l'hôte d'un
+tour se choisit à la requête : une ligne au jeton ne serait qu'une supposition (mesuré le
+12/11 : 7 à 13 % au-dessus du coût au prix de l'hôte le plus cher). OpenRouter rend avec
+chaque appel ce qu'il a facturé (`usage.cost`) ; le worker le rapporte (`usage_cost_usd`)
+et oto l'ÉCRIT au journal, une ligne par tour — `kind='settlement'`, outil `openrouter`,
+`quantity` en micro-dollars arrondis au-dessus —, sans y appliquer aucun tarif : le prix
+d'un dollar est celui de la grille du commerce (`tours_au_cout`, `FAMILLES_AU_COUT`). Sans
+coût déclaré, le tour est refusé (`usage_unmeasured`) et le travail s'arrête ; rejoué, même
+deux fois en même temps, il n'est écrit qu'une fois (clé unique `idx_tool_calls_tour_au_cout`,
+`INSERT … ON CONFLICT DO NOTHING`). `oto_admin_model_spend` ne rapproche qu'Anthropic.
+
+Le frein, sur la clé de PLATEFORME, est le **quota du jour de l'accord, en micro-dollars**
+(`grant_quota_unit` de `providers/openrouter.py`) : un accord sans quota est refusé
+(`grant_quota_required`). À la première écriture de la ligne d'un tour, son coût est débité
+sur ce quota (`quotas.debiter_plateforme`), dans la même transaction — un rejeu ne débite
+rien. Avant chaque appel (`op=reserve`) et au lancement du travail, « utilisé contre
+plafond » se lit comme au refus d'un outil (`resolve._win_quota`) : plafond atteint, le tour
+est refusé (`platform_quota_exhausted`, 402) et le travail ne part pas. Le coût n'étant
+connu qu'après l'appel, le dépassement est borné au coût d'UN tour par travail en cours. La
+clé du tenant primaire n'a pas de quota d'accord : journalisée, jamais débitée.
+
 **Les appels au modèle de l'agent intégré** (`capabilities/copilot/cle.py`, `docs/copilot.md`) : le même chemin que les tours d'un agent hébergé (`reserver_tour` avant, `regler_tour` après), clé `copilot:<conversation>:<rang>` (lue `call_id` au rapprochement). Deux différences : une réservation que le registre n'a pas tenue hors du mode `off` (barème sans les lignes du modèle en `report`) REFUSE l'appel au lieu de le servir ; une erreur HTTP du fournisseur LIBÈRE la réservation (rien n'a été consommé).
 
 **Les échéances** (`credits_echeances.py`, boucle de fond, `OTO_CREDITS_ECHEANCES_ENABLED`) :

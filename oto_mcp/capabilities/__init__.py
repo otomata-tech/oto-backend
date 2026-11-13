@@ -18,6 +18,7 @@ import oto_mcp.capabilities.orgs.email_settings  # noqa: F401 — org.email_sett
 import oto_mcp.capabilities.orgs.mfa  # noqa: F401 — org.mfa.{get,set} (MFA obligatoire par org, miroir Logto)
 import oto_mcp.capabilities.orgs.favoris  # noqa: F401 — org.favorites.{list,add,remove} (pages et tableaux épinglés pour l'org)
 import oto_mcp.capabilities.orgs.model_subscriptions  # noqa: F401 — org.model_subscriptions.{get,set,set_mode} (plafond, pool d'org)
+import oto_mcp.capabilities.orgs.model_regions  # noqa: F401 — org.model_regions.{get,set} (modèles qui tournent en Chine)
 from . import scheduled_emails  # noqa: F401 — org.scheduled_email.{list,cancel} (envoi différé)
 import oto_mcp.capabilities.orgs.invites  # noqa: F401 — org.invite.{create,list,revoke,accept}
 # Invitation PLATEFORME (feature cascade, sommet) — onboarding admin, org cible optionnelle.

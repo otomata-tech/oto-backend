@@ -491,6 +491,10 @@ sources = [
   "oto_mcp/apify_releve.py",
   "oto_mcp/db/higgsfield_jobs.py",
   "oto_mcp/higgsfield_releve.py",
+  # Le tour d'un modèle facturé au coût (OpenRouter), journalisé au `meter` du runner.
+  "oto_mcp/tours_au_cout.py",
+  # Où une org laisse tourner les modèles de ses agents (`orgs.allow_cn_models`).
+  "oto_mcp/db/regions_de_modeles.py",
   "oto_mcp/anthropic_usage.py",
   "oto_mcp/time_saved.py",
   "oto_mcp/capabilities/runner_*.py",
@@ -521,6 +525,10 @@ tests = [
   "tests/**/test_preset_agents*.py",
   "tests/**/test_partage_agents*.py",
   "tests/**/test_partage_par_defaut.py",
+  "tests/**/test_tours_au_cout*.py",
+  "tests/**/test_regions_de_modeles*.py",
+  "tests/api/test_regions_de_modeles_rest.py",
+  "tests/**/test_modeles_ouverts_openrouter.py",
 ]
 
 [[volet]]

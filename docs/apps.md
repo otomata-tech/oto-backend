@@ -138,6 +138,14 @@ d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :**
 - **Route lourde** (`api/routes_lourdes.py`) : 240/min par jeton, 8 en parallèle — une
   app laissée ouverte relit ses tableaux en fond. L'appel relit le manifeste sans le
   HTML (`db.apps.get_for_call`).
+- **Une lecture = UN emprunt au pool** : `read_rows` et `read_aggregate` tiennent leur
+  chemin dans `db.reuse_connection()` (17 emprunts mesurés avant, ~3 allers-retours
+  chacun, pour une app qui ouvre son écran par huit à quinze lectures), une question déjà
+  posée dans l'appel n'y repart pas (`lecture_d_appel` sur le propriétaire et la ligne du
+  tableau), et la projection aux champs déclarés DESCEND au store
+  (`page_rows(fields=…)`) au lieu d'être faite après coup. Le chemin ne fait que lire —
+  condition de la portée, gardée par `tests/test_apps_appel_une_connexion.py`. Les
+  gestes restent hors de la portée : ils écrivent.
 - **Journal** : l'appel est tracé comme toute requête REST (`tool_calls`, `kind=rest`),
   mais la route y est réduite (`/api/me/apps/:id/call`) : le numéro de l'app et le
   tableau lu n'y sont pas. Aucun journal d'audit des lectures n'existe à ce jour.

@@ -370,6 +370,7 @@ _DECLARATIONS: tuple[str, ...] = (
     # no tool: the worker consumes it on the org's behalf.
     "anthropic",
     "mistral",
+    "openrouter",
 )
 
 _MODULES: dict = {}

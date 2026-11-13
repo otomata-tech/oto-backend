@@ -38,6 +38,7 @@ import psycopg
 
 from ._conn import _connect
 from .favoris import purger as purger_favoris
+from .lecture_d_appel import lecture_d_appel
 from ._partage_vivant import PARTAGE_VIVANT, PARTAGE_VIVANT_G, partage_vivant
 from .users import upsert_user
 
@@ -89,6 +90,7 @@ def get_datastore(owner_type: str, owner_id: str, namespace: str) -> Optional[di
         return dict(row) if row else None
 
 
+@lecture_d_appel
 def get_datastore_by_id(ns_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
@@ -99,10 +101,13 @@ def get_datastore_by_id(ns_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
+@lecture_d_appel
 def get_datastore_owner(ns_id: int) -> Optional[dict]:
     """`{owner_type, owner_id}` d'un tableau, ou `None` s'il n'existe pas — la lecture
     d'appartenance (`ownership.owner_of`), sans le `schema` jsonb que relisait et
-    décodait `get_datastore_by_id` à chaque contrôle d'accès (#1108)."""
+    décodait `get_datastore_by_id` à chaque contrôle d'accès (#1108). Lue une fois par
+    appel en lecture seule (`lecture_d_appel`) : une lecture d'app la demande deux fois
+    pour le même tableau (org où il vit, accès de l'auteur)."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT owner_type, owner_id FROM user_datastores WHERE id = %s",

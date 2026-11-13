@@ -28,7 +28,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import (_abonnement, _acces_agent, _cle_exigee, _limites_du_run,
                _lignes_reservables, _modele, _ordre_de_service)
-from .. import db, outils_du_travail, runner_consigne, runner_models, time_saved, tool_alias
+from .. import (db, outils_du_travail, runner_consigne, runner_models, time_saved, tool_alias,
+               tours_au_cout)
 from ..db import user_subscriptions
 from ..access import credits as budget
 from ..access import credits_tours as tours
@@ -673,6 +674,11 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
         # déclarée. La pose le refuse désormais (`_modele.exige_un_modele`) ; ceci
         # arrête ce qui a été posé avant, ou enfilé à la main, raison écrite.
         return _refuser_sans_cle(job, appelant, _SANS_MODELE)
+    if _modele.region_bloquee(job["org_id"], (job.get("payload") or {}).get("model")):
+        # L'org a ÉCARTÉ la région où tourne ce modèle (`orgs.allow_cn_models`) depuis
+        # que le travail a été posé : il n'est servi sur AUCUNE clé, la sienne comme la
+        # nôtre — ses données ne partent pas là où l'org l'a refusé. Arrêté, raison écrite.
+        return _refuser_sans_cle(job, appelant, _modele.RAISON_REGION_CN)
     if _abonnement.est_abonnement(famille):
         # ⚠️ **Aucune clé n'est cherchée ici, et c'est le fond du sujet** (OTO-130) :
         # ce travail tournera dans le sandbox de SON DEMANDEUR, sur le programme
@@ -760,7 +766,26 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
                                "qui ne mesure pas chaque appel — rendu à la file",
                                job.get("id"), job["org_id"], depot, appelant)
                 return None
-            if payeur is not None:
+            au_cout = tours_au_cout.au_cout((job.get("payload") or {}).get("model"))
+            if au_cout and payeur == tours_au_cout.RANG_A_QUOTA:
+                # Un modèle JOURNALISÉ AU COÛT (`tours_au_cout`) sur la clé de PLATEFORME :
+                # pas de plancher d'unités, mais le quota du jour de l'accord, en µ$, lu
+                # comme au tour (`_exiger_quota_du_tour`), au nom de son demandeur (un
+                # travail sans demandeur n'arrive pas ici : `_delegue` l'a refusé).
+                try:
+                    atteint = _cle_exigee.quota_partage_atteint(job["org_id"], depot,
+                                                                job["sub"])
+                except Exception:
+                    logger.warning("travail %s (org %s) : quota de la clé partagée `%s` "
+                                   "illisible au lancement", job.get("id"), job["org_id"],
+                                   depot, exc_info=True)
+                    return _doute_du_coffre(
+                        job, appelant, depot, f"quota de la clé partagée `{depot}` "
+                        "illisible à la réservation — travail ni exécuté ni arrêté, réessai")
+                if atteint is not None:
+                    return _refuser_sans_cle(
+                        job, appelant, _cle_exigee.raison_quota_atteint(depot, atteint))
+            if payeur is not None and not au_cout:
                 # LE PLANCHER (#1376, B) : l'entrée du premier tour ne se réserve pas ;
                 # un travail que le solde ne couvre pas ne part pas pour mourir au
                 # premier appel. AVANT l'estampille : refusé, il n'a rien consommé.
@@ -876,12 +901,37 @@ def _reserver_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, max_tokens: int)
     prise = _tentative_partagee(ctx, job_id)
     if prise is None:
         return {"ok": True, "held": False}
+    if tours_au_cout.au_cout(prise.get("model")):
+        # Un modèle journalisé AU COÛT ne se réserve pas — son prix n'est connu qu'après —,
+        # mais sur la clé de PLATEFORME, l'appel ne part pas au-delà du quota de l'accord.
+        _exiger_quota_du_tour(prise)
+        return {"ok": True, "held": False}
     try:
         r = tours.reserver_tour(tours.cle_du_tour(job_id, prise["attempts"], tour), prise["sub"],
                                  prise["org_id"], max_tokens, prise.get("model"))
     except tours.TourRefuse as e:
         raise AuthzDenied(_REFUS_DU_TOUR[e.code], e.code, str(e)) from None
     return {"ok": True, **r}
+
+
+def _exiger_quota_du_tour(prise: dict) -> None:
+    """Un tour au coût sur la clé de PLATEFORME : refusé (402 `platform_quota_exhausted`)
+    quand le quota du jour de l'accord est atteint — utilisé contre plafond, lu comme au
+    refus d'un outil (`_cle_exigee.quota_partage_atteint`). Le coût d'un tour n'est connu
+    qu'après lui : le dépassement est borné au coût d'UN tour. Une lecture qui échoue
+    refuse (503, rejouable) : rien ne part sur un doute."""
+    if prise["cle_partagee"].get("mode") != tours_au_cout.RANG_A_QUOTA:
+        return
+    depot = prise["cle_partagee"].get("depot")
+    try:
+        atteint = _cle_exigee.quota_partage_atteint(prise["org_id"], depot, prise["sub"])
+    except Exception:
+        logger.exception("travail : quota de la clé partagée `%s` illisible au tour", depot)
+        raise AuthzDenied(503, budget.INDISPONIBLE, "The shared key's quota could not be "
+                          "read: stop, the call was not sent.") from None
+    if atteint is not None:
+        raise AuthzDenied(402, "platform_quota_exhausted",
+                          _cle_exigee.raison_quota_atteint(depot, atteint))
 
 
 def _regler_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, usage: dict) -> dict:
@@ -912,6 +962,8 @@ def _regler_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, usage: dict) -> di
     if prise is None:
         return {"ok": True, "metered": False}
     est = prise["cle_partagee"]
+    if tours_au_cout.au_cout(prise.get("model")):
+        return _journaliser_un_tour(job_id, tour, usage, postes, prise)
     try:
         r = tours.regler_tour(
             tours.cle_du_tour(job_id, prise["attempts"], tour), prise["sub"], prise["org_id"],
@@ -933,6 +985,45 @@ def _regler_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, usage: dict) -> di
         return {"ok": True, "metered": False}
     return {"ok": True, "metered": True, "amount": r["amount"], "exceeded": r["exceeded"],
             "duplicate": not r["settled"]}
+
+
+def _journaliser_un_tour(job_id: int, tour: int, usage: dict, postes: dict,
+                         prise: dict) -> dict:
+    """Un appel au modèle d'une famille JOURNALISÉE AU COÛT (`tours_au_cout`), payé par une
+    clé partagée : le coût que le fournisseur a rendu (`usage_cost_usd`, USD) est écrit au
+    journal, une ligne par tour, et rien n'est tarifé ici.
+
+    - **Refusé** (422 `usage_unmeasured`) sans coût déclaré : le worker s'arrête plutôt que
+      de consommer une clé partagée dont personne ne saurait ce qu'elle a coûté.
+    - **Idempotent** : un tour déjà écrit ne l'est pas deux fois — `duplicate: true`.
+    - Un journal qu'on ne peut écrire refuse (503, le worker s'arrête, il rejouera)."""
+    cout = tours_au_cout.cout_declare(usage.get("usage_cost_usd"))
+    if cout is None:
+        raise AuthzDenied(422, "usage_unmeasured",
+                          "this model is billed on the cost the provider reports "
+                          "(`usage_cost_usd`): without it the call is not settled and the "
+                          "job stops.")
+    est = prise["cle_partagee"]
+    uid = tours.cle_du_tour(job_id, prise["attempts"], tour)
+    try:
+        r = tours_au_cout.journaliser_tour(
+            uid, model=prise["model"], sub=prise["sub"], org=prise["org_id"],
+            run_id=prise.get("run_id"), servi=usage.get("model"), cout_usd=cout,
+            tokens={k: v for k, v in postes.items() if v is not None},
+            key_mode=est.get("mode"),
+            meta={"runner_job_id": int(job_id), "attempt": prise["attempts"],
+                  "turn": int(tour),
+                  # L'hôte qui a servi ce tour (OpenRouter le nomme) : où il est parti.
+                  **({"host": usage["usage_host"]}
+                     if isinstance(usage.get("usage_host"), str) else {})})
+    except Exception:
+        logger.exception("travail %s : tour %s NON journalisé (clé partagée `%s`)", job_id,
+                         tour, est.get("depot"))
+        raise AuthzDenied(503, budget.INDISPONIBLE, "The usage journal could not be "
+                          "written: stop, the call is journaled when it is reported "
+                          "again.") from None
+    return {"ok": True, "metered": True, "microdollars": r["microdollars"],
+            "duplicate": not r["journaled"]}
 
 
 def _clore_la_tentative(job_id: int, conclu: dict) -> None:
@@ -1402,6 +1493,7 @@ def charge_et_modele(ctx: ResolvedCtx, inp: JobsInput) -> Optional[dict]:
         if model is not None and not isinstance(model, str):
             raise AuthzDenied(400, "invalid_model", "`payload.model` est un nom de modèle")
         _modele.famille_declaree(model)
+        _modele.exige_region_permise(ctx.org_id, model)
         charge.update(runner_models.charge(model))
         # Le QUATRIÈME chemin de pose (revue du 23/09/2026) : un travail enfilé à la
         # main sur un modèle d'abonnement passe la même garde qu'un agent posé —
@@ -1826,6 +1918,10 @@ CAPABILITIES += [
                           "`op=forfait` dont le rapport de sonde (`result.abonnement`) "
                           "est absent, mal formé, ou ne dit rien : aucun verdict n'est "
                           "rendu sur un forfait que rien n'a lu"),
+            DeclaredError(402, "platform_quota_exhausted",
+                          "`reserve` d'un tour d'un modèle journalisé au coût, sur la clé "
+                          "de plateforme, quand le quota du jour de l'accord (en µ$) est "
+                          "atteint : l'appel n'est pas envoyé, le worker s'arrête"),
             DeclaredError(409, "fleet_not_serving",
                           "`enqueue fleet_id=` désignant une automatisation ni armée ni en "
                           "cours (`draft`, `stopping`, `stopped`…) : l'exécution "

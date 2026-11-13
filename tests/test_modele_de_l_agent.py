@@ -317,6 +317,10 @@ def test_list_sert_le_catalogue_marque(monkeypatch):
     assert servis == {"claude-sonnet-5": True, "claude-opus-5": True,
                       "claude-haiku-4-5": True, "mistral-large-2512": False,
                       "mistral-medium-2604": False, "mistral-small-2603": False,
+                      # Les modèles ouverts d'OpenRouter : aucun worker ne les sert ici.
+                      "deepseek/deepseek-v4.1-flash-1017": False,
+                      "deepseek/deepseek-v4-pro": False,
+                      "minimax/minimax-m3": False,
                       # L'abonnement personnel (OTO-130) est un dépôt comme un
                       # autre pour le catalogue : servi quand un worker de cette
                       # famille sonde la file, et jamais proposé par défaut ici.

@@ -57,7 +57,11 @@ CREATE TABLE IF NOT EXISTS orgs (
     -- Hors d'un DM, l'app Slack ne répond qu'à qui la tague (`db/slack_reglage.py`).
     -- FALSE = une réponse dans un fil d'agent le relance sans mention. Base existante :
     -- révision `20261109_2100_slack_mention_only`.
-    slack_mention_only BOOLEAN NOT NULL DEFAULT FALSE
+    slack_mention_only BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Les agents de l'org peuvent tourner sur un modèle qui tourne en Chine
+    -- (`db/regions_de_modeles.py`). TRUE = toutes les orgs d'avant. Base existante :
+    -- révision `20261112_1900_allow_cn_models`.
+    allow_cn_models BOOLEAN NOT NULL DEFAULT TRUE
 );
 """
 

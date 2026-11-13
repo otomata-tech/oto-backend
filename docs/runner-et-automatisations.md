@@ -1093,6 +1093,46 @@ plafond faisait lever toute reprise d'un run qui raisonne (relevé en revue).
 `max_output_tokens` et applique sa variable d'hôte ; un worker d'après lève sur un
 travail avec effort produit par un backend d'avant.
 
+
+### Les modèles ouverts via OpenRouter : une famille, des hôtes épinglés (12/11/2026)
+
+La famille `openrouter` (`runner_models`) sert des modèles ouverts — DeepSeek V4.1 Flash,
+DeepSeek V4 Pro, MiniMax M3 — par OpenRouter, en Chat Completions : un worker
+oto-runner `OTO_RUNNER_PROVIDER=openai` sur `OTO_RUNNER_OPENAI_BASE=https://openrouter.ai/api/v1`,
+dont l'hôte NOMME le dépôt `openrouter`. Le dépôt est un porteur de clé
+(`providers/openrouter.py`, `kind="credential"`) : la clé de l'org (`byo_org`), ou la clé
+partagée de l'instance accordée à l'org (`platform`, fermée), sur laquelle chaque tour est
+JOURNALISÉ au coût qu'OpenRouter a rendu, sans tarif côté oto, et débité sur le quota du
+jour de l'accord, en micro-dollars, qui refuse le tour suivant une fois atteint
+(`tours_au_cout`, `docs/credits-au-moment-de-l-appel.md`).
+
+Chaque modèle déclare, en plus de son effort et de son plafond de complétion, les hôtes
+OpenRouter AUTORISÉS (`Modele.providers`, slugs d'endpoint : `deepinfra/fp8`). Le travail
+les emporte (`charge` → `payload.providers`) et le worker les envoie en `provider.order` +
+`provider.only`, avec `data_collection: deny` : un même id est servi par des dizaines
+d'hôtes, à des prix qui vont du simple au décuple et en quantifications différentes —
+l'épingle rend le tour prévisible et borne son prix. Les modèles
+ouverts sont placés APRÈS les familles d'avant : le défaut proposé ne bouge pas tant qu'une
+famille antérieure est servie.
+
+### Où tourne un modèle, et l'org qui écarte la Chine (12/11/2026)
+
+Chaque modèle du catalogue dit OÙ il tourne (`runner_models.hebergement`, servi par
+`runner.models[].hosting`) : ses hôtes dans l'ordre où ils sont essayés, chacun avec sa
+région (`us`, `eu`, `cn`), qui l'a construit, et le routeur entre les deux quand il y en a
+un (OpenRouter). La région du modèle est la PIRE de ses hôtes : `cn` dès qu'un seul, un
+secours compris, est en Chine. Les régions des hôtes viennent de
+`GET https://openrouter.ai/api/v1/providers` (`headquarters`, `datacenters`) et des
+conditions des hôtes, lus le 12/11/2026 (`runner_models.HOTES`) ; un hôte épinglé sans
+région fait échouer un banc. Le worker rapporte l'hôte qui a servi chaque tour
+(`usage_host`), écrit au journal du tour au coût (`args.host`).
+
+Une org peut écarter les modèles qui tournent en Chine (`orgs.allow_cn_models`, TRUE par
+défaut ; `oto_org_settings domain=model_regions`, REST `/api/orgs/{id}/model-regions`,
+admin de l'org). Écartés : `allowed: false` au catalogue (l'écran ne les propose pas),
+refusés à la pose (`model_region_blocked`, 403), et un travail déjà en file sur l'un d'eux
+est arrêté à la réservation, sur la clé de l'org comme sur la nôtre, raison écrite.
+
 ### Un agent tourne sur la clé de SON org — ou ne tourne pas (12/09/2026)
 
 La remise de clé (#874, ci-dessus) avait un envers que rien ne gardait : **une org

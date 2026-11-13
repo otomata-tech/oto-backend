@@ -476,6 +476,7 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # promettrait une attribution fausse. `provider` ne choisit plus rien, il
         # se déduit du modèle ; fourni, il doit le confirmer.
         famille = _modele.famille_declaree(inp.model, inp.provider)
+        _modele.exige_region_permise(ctx.org_id, inp.model)
         # Le modèle est OBLIGATOIRE (24/09/2026) : sans lui, le passage tournerait
         # sur le modèle du worker — notre clé — et aucune clé d'org ne serait exigée.
         _modele.exige_un_modele(famille)

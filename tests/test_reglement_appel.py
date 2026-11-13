@@ -3,7 +3,8 @@
 Ce que ces tests tiennent, dans l'ordre de ce qui coûterait cher :
 
 1. **Un seul débiteur.** Plus aucun outil ne débite : l'ancien `record_platform_usage`
-   n'existe plus, `debiter_plateforme` n'a qu'un appelant (le règlement), et le règlement
+   n'existe plus, `debiter_plateforme` n'a qu'un appelant par relevé (le règlement d'un
+   appel ; le tour de modèle au coût, qui n'est pas un appel d'outil), et le règlement
    n'est appelé que par les trois bords qui posent un relevé d'appel. Un débit ajouté
    ailleurs compterait deux fois.
 2. **Rien en silence.** Chaque outil d'un connecteur qui peut servir une clé plateforme
@@ -55,7 +56,12 @@ def test_plus_aucun_outil_ne_debite_lui_meme():
 
 
 def test_le_debit_plateforme_n_a_que_le_reglement_pour_appelant():
-    assert _appels("debiter_plateforme") == {"access/reglement.py": 1}
+    """Deux débiteurs, chacun pour un relevé DISTINCT : le règlement d'un appel d'outil, et
+    le tour de modèle journalisé à son coût (`tours_au_cout.journaliser_tour`), qui n'est
+    pas un appel d'outil — aucun bord ne le règle — et ne débite qu'à la première écriture
+    de sa ligne. Un troisième compterait deux fois."""
+    assert _appels("debiter_plateforme") == {"access/reglement.py": 1,
+                                             "tours_au_cout.py": 1}
 
 
 def test_le_reglement_n_est_appele_que_par_les_trois_bords():

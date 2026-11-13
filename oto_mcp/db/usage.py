@@ -23,7 +23,8 @@ from .. import deprecations
 from ..journal_secrets import masquer_urls, masquer_urls_des_valeurs
 from . import journal_calls, journal_jour
 from ._conn import _connect
-from .index_releve import OUVERTURE_PAR_RUN, PREDICAT_OUVERTURE
+from .index_releve import (OUTILS_AU_COUT, OUVERTURE_PAR_RUN, PREDICAT_OUVERTURE,
+                           PREDICAT_TOUR_AU_COUT)
 from .lecture_bornee import lecture_d_agregat
 
 
@@ -62,6 +63,63 @@ def increment_usage(sub: str, tool: str, amount: int = 1) -> int:
         return int(row["count"]) if row else 0
 
 
+_INSERT_TOOL_CALL = """
+INSERT INTO tool_calls
+    (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id,
+     run_id, org_id, client_id, sentry_event_id,
+     request_id, call_uid, effective_sub, error_kind,
+     token_id, token_kind, result_size, result_shape, quantity, key_mode,
+     view_as_sub, provider_credits)
+VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+
+def _valeurs_tool_call(row: dict) -> tuple:
+    """Les valeurs d'une ligne de `tool_calls`, dans l'ordre de `_INSERT_TOOL_CALL` — les
+    masques d'URL appliqués ici, au seul point d'écriture commun (cf. `insert_tool_call`)."""
+    error = row.get("error")
+    if error:
+        error = masquer_urls(str(error))
+    args = masquer_urls_des_valeurs(row.get("args"))
+    return (
+        row.get("server") or "oto", row.get("kind") or "mcp",
+        row.get("sub"), row.get("email"),
+        row["tool"], json.dumps(args) if args is not None else None,
+        bool(row.get("ok")), error, row.get("duration_ms"),
+        row.get("session_id"), row.get("run_id"), row.get("org_id"),
+        row.get("client_id"), row.get("sentry_event_id"),
+        # #117 — discriminant par appel. `request_id` et `effective_sub` sont
+        # absents des gestes REST ; `call_uid` y porte le geste de la requête
+        # (oto#273), NULL hors capacité. La ligne les porte à NULL, sans branche.
+        row.get("request_id"), row.get("call_uid"), row.get("effective_sub"),
+        # oto#25 lot (b1) — résultat de la taxonomie sur échec, NULL sur
+        # succès et sur les gestes REST (calllog._error_kind ne les touche pas).
+        row.get("error_kind"),
+        row.get("token_id"), row.get("token_kind"),
+        # oto-backend#340 — taille du texte servi. NULL partout où elle n'a
+        # pas été mesurée : les échecs (le middleware ne la calcule que sur le
+        # chemin heureux) et les gestes REST, qui ne passent pas par lui.
+        row.get("result_size"),
+        # oto-backend#644 — forme du résultat servi, même point d'écriture et
+        # même règle de NULL que la taille.
+        row.get("result_shape"),
+        # Métrage par unité (facturation du partenaire) — NULL = non tracé pour ce
+        # tool, un consommateur doit le traiter comme 1, pas 0.
+        row.get("quantity"),
+        # Mode du credential (facturation du partenaire) — NULL = non attribuable,
+        # donc non facturable ; l'inverse de la règle de `quantity`.
+        row.get("key_mode"),
+        # #572 point 4 — cible du « voir en tant que » (REST uniquement,
+        # `RestCallLogger` seul la pose). NULL = pas de consultation en
+        # cours, ou ligne antérieure à cette colonne (non reconstructible).
+        row.get("view_as_sub"),
+        # Crédits déduits par le fournisseur, dans son unité — NULL = non tracé,
+        # ni 1 ni 0 ; à côté de `quantity`, qui garde son sens.
+        row.get("provider_credits"),
+    )
+
+
 def insert_tool_call(row: dict) -> None:
     """Sink calllog (middleware inliné oto_mcp/calllog.py) : insère un row canonique (server, sub, email, tool,
     args, ok, error, duration_ms) + corrélation OTO-LOCALE (session_id, run_id ;
@@ -77,59 +135,31 @@ def insert_tool_call(row: dict) -> None:
     admins d'org. `args`, pareil, chaîne par chaîne (`masquer_urls_des_valeurs`) : une
     adresse pré-signée passée à un outil y écrivait sa signature en clair, et l'adresse
     d'une source de fichier (`{kind: "url", url}`) tombe entière, quel que soit l'outil."""
-    error = row.get("error")
-    if error:
-        error = masquer_urls(str(error))
-    args = masquer_urls_des_valeurs(row.get("args"))
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO tool_calls
-                (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id,
-                 run_id, org_id, client_id, sentry_event_id,
-                 request_id, call_uid, effective_sub, error_kind,
-                 token_id, token_kind, result_size, result_shape, quantity, key_mode,
-                 view_as_sub, provider_credits)
-            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                row.get("server") or "oto", row.get("kind") or "mcp",
-                row.get("sub"), row.get("email"),
-                row["tool"], json.dumps(args) if args is not None else None,
-                bool(row.get("ok")), error, row.get("duration_ms"),
-                row.get("session_id"), row.get("run_id"), row.get("org_id"),
-                row.get("client_id"), row.get("sentry_event_id"),
-                # #117 — discriminant par appel. `request_id` et `effective_sub` sont
-                # absents des gestes REST ; `call_uid` y porte le geste de la requête
-                # (oto#273), NULL hors capacité. La ligne les porte à NULL, sans branche.
-                row.get("request_id"), row.get("call_uid"), row.get("effective_sub"),
-                # oto#25 lot (b1) — résultat de la taxonomie sur échec, NULL sur
-                # succès et sur les gestes REST (calllog._error_kind ne les touche pas).
-                row.get("error_kind"),
-                row.get("token_id"), row.get("token_kind"),
-                # oto-backend#340 — taille du texte servi. NULL partout où elle n'a
-                # pas été mesurée : les échecs (le middleware ne la calcule que sur le
-                # chemin heureux) et les gestes REST, qui ne passent pas par lui.
-                row.get("result_size"),
-                # oto-backend#644 — forme du résultat servi, même point d'écriture et
-                # même règle de NULL que la taille.
-                row.get("result_shape"),
-                # Métrage par unité (facturation du partenaire) — NULL = non tracé pour ce
-                # tool, un consommateur doit le traiter comme 1, pas 0.
-                row.get("quantity"),
-                # Mode du credential (facturation du partenaire) — NULL = non attribuable,
-                # donc non facturable ; l'inverse de la règle de `quantity`.
-                row.get("key_mode"),
-                # #572 point 4 — cible du « voir en tant que » (REST uniquement,
-                # `RestCallLogger` seul la pose). NULL = pas de consultation en
-                # cours, ou ligne antérieure à cette colonne (non reconstructible).
-                row.get("view_as_sub"),
-                # Crédits déduits par le fournisseur, dans son unité — NULL = non tracé,
-                # ni 1 ni 0 ; à côté de `quantity`, qui garde son sens.
-                row.get("provider_credits"),
-            ),
-        )
+        conn.execute(_INSERT_TOOL_CALL, _valeurs_tool_call(row))
+
+
+def inserer_tour_au_cout(row: dict) -> bool:
+    """Écrit la ligne de relevé d'UN tour de modèle journalisé à son coût
+    (`tours_au_cout`), une seule fois par `(kind, tool, call_uid)` : `True` si elle est
+    écrite, `False` si ce tour l'était déjà. ATOMIQUE — deux rapports simultanés du même
+    tour n'en écrivent qu'un, l'autre attend puis n'écrit rien —, par la clé
+    `index_releve.TOUR_AU_COUT` que l'`ON CONFLICT` infère de son prédicat, mot pour mot.
+
+    Lève `ValueError` sur une ligne hors de cette clé (autre nature, autre outil, sans
+    `call_uid`) : elle ne serait pas dédoublonnée. Lève aussi, sans la clé en base
+    (aucune contrainte ne répond à l'`ON CONFLICT`) : rien ne s'écrit sans elle."""
+    if (row.get("kind") != journal_jour.KIND_RELEVE or row.get("tool") not in OUTILS_AU_COUT
+            or not row.get("call_uid")):
+        raise ValueError(f"not a cost-journaled turn: kind={row.get('kind')!r}, "
+                         f"tool={row.get('tool')!r}, call_uid={row.get('call_uid')!r}")
+    with _connect() as conn:
+        ecrit = conn.execute(
+            _INSERT_TOOL_CALL
+            + " ON CONFLICT (kind, tool, call_uid) WHERE "
+            + PREDICAT_TOUR_AU_COUT + " DO NOTHING RETURNING 1",
+            _valeurs_tool_call(row)).fetchone()
+    return ecrit is not None
 
 
 # ── Le run : UNE source, et c'est le JOURNAL ─────────────────────────────────

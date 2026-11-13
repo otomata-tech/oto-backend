@@ -90,7 +90,7 @@ def _org(ctx: ResolvedCtx, inp: OrgInput) -> dict:
 class OrgSettingsInput(BaseModel):
     op: Literal["get", "set", "preview"]
     domain: Literal["email", "mfa", "field_filters", "model_subscriptions", "time_saved",
-                    "partage_par_defaut", "apify_charge_cap", "slack"]
+                    "partage_par_defaut", "apify_charge_cap", "slack", "model_regions"]
     org_id: int
     # email (set) :
     connector: Optional[str] = None          # scaleway | resend
@@ -124,6 +124,9 @@ class OrgSettingsInput(BaseModel):
     usd: Optional[float] = None
     # slack (set) : hors d'un DM, l'app Slack ne répond qu'à qui la tague.
     mention_only: Optional[bool] = None
+    # model_regions (set) : les agents de l'org peuvent-ils tourner sur un modèle qui
+    # tourne en Chine.
+    allow_cn: Optional[bool] = None
 
 
 def _temps_gagne(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
@@ -200,6 +203,25 @@ def _slack(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     return {"org_id": inp.org_id, "mention_only": seule}
 
 
+def _regions_de_modeles(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
+    """Où l'org laisse tourner les modèles de ses agents (`db/regions_de_modeles.py`) :
+    `allow_cn` — les modèles dont un hôte est en Chine. Défaut : TRUE, l'état de toutes
+    les orgs d'avant. Écartés, ils ne sont plus proposés, plus posables, et un travail
+    déjà en file sur l'un d'eux est arrêté à la réservation, raison écrite."""
+    from .. import db
+    if inp.op not in ("get", "set"):
+        raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
+    if inp.op == "set":
+        if inp.allow_cn is None:
+            raise AuthzDenied(400, "missing_allow_cn", "`allow_cn` (true|false) requis pour set.")
+        if not db.regions_de_modeles.poser_chine_permise(inp.org_id, inp.allow_cn):
+            raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    permise = db.regions_de_modeles.chine_permise(inp.org_id)
+    if permise is None:
+        raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    return {"org_id": inp.org_id, "allow_cn": permise}
+
+
 def _plafond_apify(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     """Le plafond par lancement Apify de l'org (`connectors/apify_charge_cap.py`)."""
     cc = connectors_apify_charge_cap
@@ -220,6 +242,8 @@ def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
         return _temps_gagne(ctx, inp)
     if inp.domain == "slack":
         return _slack(ctx, inp)
+    if inp.domain == "model_regions":
+        return _regions_de_modeles(ctx, inp)
     if inp.domain == "partage_par_defaut":
         return _partage_par_defaut(ctx, inp)
     if inp.domain == "model_subscriptions":
@@ -448,7 +472,12 @@ CAPABILITIES += [
             "message an agent posted as the app restarts that agent, and a reply in a "
             "conversation with the in-app agent continues it, without tagging the app; "
             "true = outside a direct message, the app answers only a message that tags "
-            "it, replies included; direct messages are never affected). "
+            "it, replies included; direct messages are never affected) | model_regions "
+            "(where the org's agents' models may run: set takes `allow_cn` true|false; "
+            "default true; false = models with any host in China — `runner.models[].hosting"
+            ".region` = cn — are no longer offered (`allowed: false`), an agent cannot be "
+            "set on one (`model_region_blocked`), and a job already queued on one is "
+            "stopped at the claim with the reason written). "
             "op=get is member, set is org admin."),
         mcp="oto_org_settings",
     ),

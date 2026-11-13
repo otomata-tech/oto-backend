@@ -103,6 +103,8 @@ from . import (
     slack_agent_posts,
     # NON aplati : le réglage Slack d'une org (`mention_seule`) — `db.slack_reglage.<fn>`.
     slack_reglage,
+    # NON aplati : où une org laisse tourner ses modèles — `db.regions_de_modeles.<fn>`.
+    regions_de_modeles,
     # NON aplati : `noter`/`lire`/`marquer` sont trop communs — `db.apify_runs.<fn>`.
     apify_runs,
     # NON aplati, même raison — `db.higgsfield_jobs.<fn>`.

@@ -116,7 +116,7 @@ def test_seuls_les_depots_de_cle_se_declarent_MONO_et_on_sait_pourquoi():
     ajouter un est une décision explicite, qui casse ce test et se motive en revue.
     Voici le motif des trois premiers.
 
-    `anthropic` et `mistral` sont des DÉPÔTS DE CLÉ (`kind="credential"`) : ils ne
+    `anthropic`, `mistral` et `openrouter` sont des DÉPÔTS DE CLÉ (`kind="credential"`) : ils ne
     portent aucun outil, seulement la clé de modèle sur laquelle les agents
     programmés de l'org tournent. La dérivation les rendrait multi (c'est une
     `api_key`), donc l'écran proposerait d'en poser une deuxième — et
@@ -154,7 +154,7 @@ def test_seuls_les_depots_de_cle_se_declarent_MONO_et_on_sait_pourquoi():
     palier, que rien ne départagerait au moment de lancer la cascade."""
     assert sorted(c.name for c in providers._REGISTRY_LIST
                   if c.cardinality == "mono") == ["anthropic", "jev", "mistral",
-                                                  "pennylane_firm", "transcription",
+                                                  "openrouter", "pennylane_firm", "transcription",
                                                   "waterfall_company", "waterfall_email",
                                                   "waterfall_people", "waterfall_person",
                                                   "waterfall_phone", "waterfall_tech"]

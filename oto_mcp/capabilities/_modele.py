@@ -82,6 +82,32 @@ def famille_declaree(model: Optional[str],
     return f
 
 
+#: Ce que lit une org qui a écarté les modèles qui tournent en Chine
+#: (`db/regions_de_modeles.py`) : la raison d'un refus, à la pose comme à la réservation.
+RAISON_REGION_CN = (
+    "ce modèle tourne sur des serveurs en Chine, et un admin de l'organisation a écarté "
+    "les modèles qui tournent en Chine (`oto_org_settings domain=model_regions`). "
+    "Choisis un modèle qui tourne aux États-Unis ou en Europe, ou demande à un admin "
+    "de les permettre.")
+
+
+def region_bloquee(org_id: Optional[int], model: Optional[str]) -> bool:
+    """Le modèle tourne-t-il dans une région que l'org a écartée ? Aujourd'hui une seule :
+    la Chine (`runner_models.hebergement` → `cn`, `orgs.allow_cn_models`). Une org
+    inconnue ou un modèle sans hébergement connu ne bloquent rien."""
+    h = runner_models.hebergement(model)
+    if not org_id or not h or h["region"] != "cn":
+        return False
+    return db.regions_de_modeles.chine_permise(int(org_id)) is False
+
+
+def exige_region_permise(org_id: Optional[int], model: Optional[str]) -> None:
+    """Refuse de poser un agent sur un modèle d'une région que l'org a écartée. Lève
+    `model_region_blocked` (403)."""
+    if region_bloquee(org_id, model):
+        raise AuthzDenied(403, "model_region_blocked", RAISON_REGION_CN)
+
+
 def exige_un_modele(famille: Optional[str]) -> None:
     """Refuse de poser un agent hébergé sans modèle déclaré. Lève `model_required`.
 
@@ -155,5 +181,15 @@ def etat_servi(etat: dict, org_id: Optional[int] = None) -> dict:
     sans_cle = (_cle_exigee.manquantes(org_id, familles,
                                        routee=bool(etat.get("farm_routed")))
                 if org_id is not None and familles else [])
-    return {**etat, "families": familles,
-            "models": runner_models.catalogue(familles, sans_cle)}
+    modeles = runner_models.catalogue(familles, sans_cle)
+    # Lu seulement quand un modèle qui tourne en Chine est SERVI : sinon rien à écarter,
+    # et l'état du runner se lit à chaque écran d'agent — pas une lecture de plus.
+    if org_id is not None and any(m["served"] and (m.get("hosting") or {}).get("region")
+                                  == "cn" for m in modeles):
+        if db.regions_de_modeles.chine_permise(int(org_id)) is False:
+            # Écartés par l'org : jamais proposés, jamais par défaut — un défaut écarté
+            # proposerait un refus `model_region_blocked`.
+            for m in modeles:
+                if (m.get("hosting") or {}).get("region") == "cn":
+                    m["allowed"], m["default"] = False, False
+    return {**etat, "families": familles, "models": modeles}

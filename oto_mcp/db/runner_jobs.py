@@ -1264,13 +1264,13 @@ def estampiller_cle_partagee(job_id: int, worker_sub: str, depot: str,
 
 def tentative_en_cours(job_id: int, worker_sub: str) -> Optional[dict]:
     """La tentative en cours d'un travail réservé par ce worker : `org_id`, `sub`,
-    `attempts`, le modèle de sa charge (`model`, ou None) et l'estampille
+    `attempts`, son run (`run_id`), le modèle de sa charge (`model`, ou None) et l'estampille
     `cle_partagee` (ou None) — de quoi réserver et régler un appel au modèle au budget
     d'unités, au prix de CE modèle. None si le travail n'est plus à ce worker."""
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT org_id, sub, attempts, payload->>'model' AS model,
+            SELECT org_id, sub, attempts, run_id, payload->>'model' AS model,
                    payload->'_plateforme'->'cle_partagee' AS cle_partagee
               FROM runner_jobs
              WHERE id = %s AND claimed_by = %s AND status = 'claimed'

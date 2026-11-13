@@ -16,5 +16,6 @@ trial_ends_at TIMESTAMPTZ,
 time_saved_minutes JSONB,
 default_sharing JSONB,
 auto_created BOOLEAN NOT NULL DEFAULT FALSE,
-slack_mention_only BOOLEAN NOT NULL DEFAULT FALSE
+slack_mention_only BOOLEAN NOT NULL DEFAULT FALSE,
+allow_cn_models BOOLEAN NOT NULL DEFAULT TRUE
 );

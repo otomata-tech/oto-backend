@@ -722,7 +722,25 @@ def _consent(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
             "summary": resume}
 
 
+# Les lectures de tableau d'une app ouverte : UN emprunt au pool pour tout l'appel
+# (`db.reuse_connection`), au lieu d'un par lecture du chemin — l'app, son propriétaire,
+# l'org du tableau, l'accès de l'auteur, la résolution du tableau, son schéma, la page :
+# 17 emprunts mesurés pour un `read_rows`, ~3 allers-retours chacun. Une app ouvre son
+# écran par huit à quinze de ces lectures. Le chemin ne fait que lire (condition de
+# `reuse_connection`, en autocommit), gardé par un banc
+# (`tests/test_apps_appel_une_connexion.py`). Les gestes (écriture, lancement, dépôt)
+# restent hors de la portée : ils écrivent.
+_LECTURES_D_UN_EMPRUNT = frozenset({"read_rows", "read_aggregate"})
+
+
 def _call(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
+    if inp.action in _LECTURES_D_UN_EMPRUNT:
+        with db.reuse_connection():
+            return _appel(ctx, inp)
+    return _appel(ctx, inp)
+
+
+def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
     from .datastore import rows as R
 
     app = _app_pour(ctx, inp.app_id, inp.draft)
@@ -806,8 +824,15 @@ def _call(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         if q and t.get("fields") is not None:
             raise _refus(403, "search_needs_all_fields",
                          "Search runs over every field: it needs a table declared without a field list.")
+        # La projection DESCEND au store quand l'app déclare ses champs : il ne décode et
+        # n'aplatit que ces colonnes (`page_rows(fields=…)`), au lieu de toute la ligne
+        # jetée ensuite par `_projeter`. Les métadonnées que l'hôte relit (`_revision`
+        # pour écrire contre la version montrée, les dates) sont demandées avec.
+        champs = t.get("fields")
         page = R._list_rows(ctx, R.ListRowsInput(
             datastore=ns, limit=min(max(_entier(o, "limit", 50), 1), MAX_ROWS),
+            fields=(None if champs is None
+                    else [f for f in champs if isinstance(f, str)] + sorted(_META - {"_id"})),
             offset=max(_entier(o, "offset", 0), 0), order_by=order_by,
             order_dir="asc" if o.get("order_dir") == "asc" else "desc",
             q=q if isinstance(q, str) and q else None, filter=_filtre(t, o.get("filter"))))

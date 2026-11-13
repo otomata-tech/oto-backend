@@ -151,6 +151,10 @@ PUT /api/orgs/{id}/model-subscriptions/{family}/mode -> _handler
 OPTIONS /api/orgs/{id}/model-subscriptions/{family}/mode -> options_handler
 PUT /api/orgs/{id}/model-subscriptions/{family}/api-fallback -> _handler
 OPTIONS /api/orgs/{id}/model-subscriptions/{family}/api-fallback -> options_handler
+GET,HEAD /api/orgs/{id}/model-regions -> _handler
+OPTIONS /api/orgs/{id}/model-regions -> options_handler
+PUT /api/orgs/{id}/model-regions -> _handler
+OPTIONS /api/orgs/{id}/model-regions -> options_handler
 GET,HEAD /api/orgs/{id}/scheduled-emails -> _handler
 OPTIONS /api/orgs/{id}/scheduled-emails -> options_handler
 DELETE /api/orgs/{id}/scheduled-emails/{eid} -> _handler

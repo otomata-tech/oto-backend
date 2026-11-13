@@ -456,6 +456,50 @@ def _pied_de_l_org(org_footer: dict, en: bool) -> tuple[str, tuple | None]:
     return tete + ecrire + lien, ((url, libelle) if url else None)
 
 
+# Ce qu'un corps rendu depuis le markdown garde : la mise en forme d'un message, rien
+# qui s'exécute, se charge ou se déguise. Pas d'image (l'image de tête a son paramètre,
+# son `alt` exigé et son `https` vérifié), pas d'attribut de style ou d'événement.
+_MD_BALISES = frozenset({
+    "p", "br", "strong", "em", "b", "i", "del", "code", "pre", "blockquote", "hr",
+    "ul", "ol", "li", "h1", "h2", "h3", "h4", "a",
+    "table", "thead", "tbody", "tr", "th", "td",
+})
+_MD_ATTRIBUTS = {"a": {"href", "title"}, "th": {"align"}, "td": {"align"}}
+_MD_SCHEMAS = frozenset({"http", "https", "mailto"})
+# Les marges qu'un paragraphe ou une liste du corps texte porte déjà (`_charte.PARA`) :
+# posées APRÈS l'assainissement, qui retire tout attribut `style`.
+_MD_STYLES = {"p": _charte.PARA, "ul": f"{_charte.PARA};padding-left:24px",
+              "ol": f"{_charte.PARA};padding-left:24px",
+              "blockquote": f"{_charte.PARA};padding-left:12px;border-left:3px solid #ddd"}
+
+
+def corps_markdown(body: str) -> str:
+    """Le HTML du corps d'un email écrit en markdown : le MÊME rendu que `gmail`
+    (`_markdown_to_html_fragment` d'oto-core — tableaux, blocs de code, listes), puis
+    ASSAINI par liste blanche (`nh3`) : ce rendu laisse passer le HTML brut et les
+    attributs (`attr_list`), et un lien `javascript:` reste un lien. Ici le mail part
+    sous la charte d'une marque : seuls restent les balises de `_MD_BALISES`, les liens
+    `http(s)`/`mailto`, sans style ni gestionnaire d'événement."""
+    import nh3
+    from oto.tools.google.gmail.lib.gmail_client import _markdown_to_html_fragment
+
+    sur = nh3.clean(_markdown_to_html_fragment(body or ""), tags=set(_MD_BALISES),
+                    attributes={k: set(v) for k, v in _MD_ATTRIBUTS.items()},
+                    url_schemes=set(_MD_SCHEMAS), link_rel="noopener noreferrer")
+    for balise, style in _MD_STYLES.items():
+        sur = sur.replace(f"<{balise}>", f'<{balise} style="{style}">')
+    return sur
+
+
+def _apercu_markdown(html_corps: str) -> str:
+    """La ligne d'aperçu d'un corps markdown : le texte de son premier bloc, sans
+    balise ni syntaxe (« **bonjour** » s'afficherait tel quel dans la boîte)."""
+    import nh3
+
+    texte = _html.unescape(nh3.clean(html_corps, tags=set()))
+    return next((ligne.strip() for ligne in texte.splitlines() if ligne.strip()), "")
+
+
 def render_composed_email(
     body: str,
     *,
@@ -468,13 +512,15 @@ def render_composed_email(
     locale: str | None = None,
     unsubscribe_url: str | None = None,
     org_footer: dict | None = None,
+    markdown: bool = False,
 ) -> str:
     """Rend le HTML, à la charte de `brand`, d'un email dont le **contenu est fourni
     par l'agent** (prose brute + CTA optionnel + UNE image de tête).
 
     `body` = texte brut : les lignes vides séparent des paragraphes, les sauts de
     ligne simples deviennent des `<br>`. Échappé (jamais de HTML injecté par
-    l'agent). `footer` ajoute la signature de marque + l'opt-out par réponse.
+    l'agent). `markdown=True` : `body` est du markdown, rendu puis assaini
+    (`corps_markdown`). `footer` ajoute la signature de marque + l'opt-out par réponse.
     `image_url` + `image_alt` (les deux, ou aucun) placent une image AVANT le corps ;
     voir `_image_html` pour ce qui est refusé (`ValueError`).
 
@@ -489,11 +535,16 @@ def render_composed_email(
     avec la clé commune du mailer, ne l'accepte pas, et c'est délibéré."""
     m = _charte.marque(brand)
     image_html = _image_html(image_url, image_alt)
-    paras = [p.strip() for p in (body or "").split("\n\n") if p.strip()]
-    body_html = "".join(
-        f'<p style="{_charte.PARA}">{_esc(p).replace(chr(10), "<br>")}</p>'
-        for p in paras
-    )
+    if markdown:
+        body_html = corps_markdown(body)
+        premier = _apercu_markdown(body_html)
+    else:
+        paras = [p.strip() for p in (body or "").split("\n\n") if p.strip()]
+        body_html = "".join(
+            f'<p style="{_charte.PARA}">{_esc(p).replace(chr(10), "<br>")}</p>'
+            for p in paras
+        )
+        premier = paras[0] if paras else ""
     cta_html = _charte.bouton(m, cta_url, cta_text) if (cta_text and cta_url) else ""
     # Le pied MARKETING (pourquoi vous recevez ça, comment ne plus le recevoir) —
     # celui d'un transactionnel dit autre chose, cf. `email_templates`.
@@ -504,7 +555,7 @@ def render_composed_email(
     # enregistré quelque part (une réponse humaine ne persiste aucun refus).
     locale = locale or m.langue or None
     en = locale == "en"
-    apercu = paras[0] if paras else m.nom
+    apercu = premier or m.nom
     if footer and org_footer:
         if unsubscribe_url:
             raise ValueError("`org_footer` et `unsubscribe_url` s'excluent : le pied de "
@@ -560,6 +611,7 @@ def send_composed_email(
     locale: str | None = None,
     unsubscribe_url: str | None = None,
     cc: list[str] | None = None,
+    markdown: bool = False,
 ) -> bool:
     """Envoie un email à contenu libre (fourni par l'agent), rendu à la charte de
     `brand`, via le mailer Otomata (Scaleway TEM).
@@ -577,7 +629,8 @@ def send_composed_email(
                          "lien de désabonnement nominatif partirait aux copies.")
     html = render_composed_email(body, cta_text=cta_text, cta_url=cta_url, footer=footer,
                                  image_url=image_url, image_alt=image_alt, brand=brand,
-                                 locale=locale, unsubscribe_url=unsubscribe_url)
+                                 locale=locale, unsubscribe_url=unsubscribe_url,
+                                 markdown=markdown)
     # `require_env` seulement si `reply_to` est absent (court-circuit `or`) — sans
     # elle, le repli irait vers NOTRE boîte personnelle (#968).
     rt = reply_to or _contact_to()

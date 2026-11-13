@@ -101,7 +101,7 @@ attio_attribute	create create_option create_status get list options statuses	825
 attio_comment	create delete get thread threads	11ee4bf21160bf48
 attio_entry	create delete get query update	1ca5bd5bae801ccb
 attio_list	create get list update views	d45425a8287aee15
-attio_meeting	get list recording recordings transcript	d3214595a8f947a6
+attio_meeting	get list recording recordings transcript	71889a0d300d28de
 attio_note	create delete get list	9bee30057de50c5d
 attio_object	get list views	397c1ebea7d3e558
 attio_record	create delete get list merge search update	ccacd395dc0cd28f

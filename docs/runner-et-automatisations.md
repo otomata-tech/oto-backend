@@ -3014,6 +3014,22 @@ escalade.* La lentille `agents_en_echec` rendait la panne lisible ; rien ne l'an
   marque de l'org (`org_store.org_front` → `email_templates._envoyer`), hors des heures
   calmes par défaut (`scheduler.DEFAULT_QUIET_HOURS`, 20 h–8 h à Paris : un épisode vu
   la nuit part au premier passage du matin). Un envoi raté ne marque rien.
+- **Ce qu'il dit** (14/11/2026) : sous le réglage des alertes d'agents
+  (`OTO_ALERTES_SLACK_AGENTS_ENABLED`), il parle comme Slack. Le texte de chaque agent est
+  celui du problème de son épisode vivant (`alertes_slack_agents.message_du_probleme` : la
+  copie de la cause approuvée, sinon le texte du médecin, sinon la phrase de la classe ;
+  une lecture d'épisodes par org, `sante_agents.episodes_vivants`), et les agents dont le
+  client lirait exactement le même problème (titre, geste, lien) forment UN bloc qui les
+  nomme — chacun lien vers sa page (`agent`) quand l'instance la déclare — avec le geste
+  une fois et son bouton (`Le faire maintenant`, lien du tableau de bord seulement,
+  `links`). ⚠️ Le motif BRUT n'y entre jamais : un agent sans épisode lisible (boucle du
+  médecin éteinte, lecture en échec — ouvert, dit au journal) reçoit la phrase par défaut ;
+  une panne pas encore comprise (`cote = inconnu`) que le médecin n'a pas dite reçoit la
+  phrase de l'onglet Santé (« nous cherchons pourquoi… »), jamais celle d'une classe. Chaque
+  bloc dit depuis quand ses agents échouent (le plus ancien).
+  Tout texte est échappé. Toujours un courriel par org, au même destinataire, aux mêmes
+  heures, sous la même règle de tenant, marqué après l'envoi. Réglage éteint : le courriel
+  d'avant, motif compris, mot pour mot (`alerte_agents_bloques.problemes`).
 - **Où** : une boucle de fond déclarée `tiers=True` (`boucles_de_fond.py`,
   `alerte_agents_bloques`, un passage par quart d'heure) — ⚠️ **éteinte par défaut** :
   elle n'écrit que sur une instance qui déclare `OTO_ALERTE_AGENTS_ENABLED=1`, toute
@@ -3042,7 +3058,9 @@ passe AVANT l'alerte.
 - **L'épisode** (`agent_episodes`, `db/episodes_agents.py`) = la même définition que
   l'alerte (travaux morts d'un agent allumé depuis son dernier succès), mais ouvert dès
   le PREMIER travail mort. Un seul épisode vivant par agent (index unique partiel),
-  rafraîchi à chaque passage ; clos au premier succès postérieur (`gueri`) ou quand
+  réécrit seulement quand un champ change ou que son pouls `vu_at` a plus de
+  `episodes_agents.BATTEMENT` (10 min, bien en deçà de `FRAICHEUR`) — l'INSERT ne part
+  que sans épisode vivant, la séquence ne brûle plus un numéro par passage ; clos au premier succès postérieur (`gueri`) ou quand
   l'agent est éteint ou supprimé (`agent_eteint`). Aucune FK : il survit à l'agent.
   `classe` + `cote` (`plateforme` · `proprietaire` · `inconnu`) disent QUI peut réparer ;
   `statut` `ouvert → en_soin → escalade | clos` ; `reparations` = chaque geste, son
@@ -3086,6 +3104,19 @@ passe AVANT l'alerte.
   rare. ⚠️ Ni la relance automatique ni `op=rerun` ne lisent `result.tool_counts` : un
   refus passager après une écriture est relancé comme la file le relance déjà
   (`complete_job`) ; rien encore ne distingue, avant un `rerun`, un run qui a écrit.
+- **Le budget d'un passage, et les incidents** (13/11/2026) : la boucle relève TOUTES les
+  pannes avant de relancer, puis relâche les relances sous budget — `RELANCES_PAR_PASSAGE`
+  (20) au plus, servies à tour de rôle par org (la plus anciennement en panne d'abord :
+  une grosse org ne passe pas avant une petite), chacune avec une gigue de 0 à
+  `GIGUE_MAX_S` (240 s, `enqueue_job(delai_s=…)`). Ce qui n'est pas servi attend le
+  passage suivant sans rien dépenser de son plafond (`relances_differees` au bilan). Une
+  même classe du côté de la plateforme dans au moins `INCIDENT_ORGS` (3) orgs ET
+  `INCIDENT_PART` (30 %) des orgs en panne au même passage est un **incident** (la part
+  compte : à mille clients, trois orgs sur un refus passager sont le bruit de fond) : dit UNE fois chez nous à son ouverture (journal + suivi d'erreurs,
+  `INCIDENT —`), fini au journal quand plus aucune panne ne le porte ; ses relances se
+  bornent à `INCIDENT_SONDES` (2) par passage, et le plafond d'un de ses agents escalade
+  l'épisode SANS alerte par agent. ⚠️ L'incident vit dans la mémoire du processus
+  (`_INCIDENTS`) : un redémarrage le redit une fois.
 - **Ce qu'il ne fait jamais** : toucher une clé, une identité, une procédure, un horaire
   ou une donnée ; relancer une panne `inconnu` (un run qui a agi avant de mourir
   referait ses effets). Un épisode du titulaire passe `escalade` sans geste : c'est
@@ -3105,13 +3136,110 @@ passe AVANT l'alerte.
   statut, tentatives, `last_error` — ni son `result` ni `attempt_errors`, qui portent ce
   que l'agent a produit chez son titulaire) / `rerun` (les mêmes gardes que la boucle, plus : épisode clos,
   agent éteint, panne du titulaire ; un refus revient dans `refus`, pas en erreur) /
-  `diagnose` / `escalate` / `close`. Prêté à un agent hébergé de la plateforme par
+  `diagnose` / `escalate` / `close` / `causes` / `set_cause` (le catalogue, ci-dessus). Prêté à un agent hébergé de la plateforme par
   `platform_tools` : sans lui, un agent de notre org lit les pannes d'une autre org sans
   pouvoir rien y faire (`oto_trigger` agit en membre).
+- **Le catalogue des causes, en OMBRE** (13/11/2026) : la regex range trois classes, et
+  tout le reste `inconnu`, diagnostiqué par l'agent médecin un épisode à la fois — ce qu'il
+  trouve ne servait qu'à cet épisode, et deux diagnostics de la même erreur ont rendu deux
+  côtés opposés. Chaque panne reçoit l'EMPREINTE de son motif (`causes_pannes.de` :
+  adresses, courriels, identifiants, dates, nombres et texte cité retirés, minuscules ;
+  une apostrophe collée à une lettre est une élision, pas une citation), posée sur
+  l'épisode (`agent_episodes.empreinte`, sa clé hachée). Une empreinte neuve entre au
+  catalogue (`agent_causes`, `db/causes_agents.py`) `proposee`, avec la classe et le côté
+  de la regex — un lot par passage, `ON CONFLICT DO NOTHING` sur une clé texte : rien
+  n'est réécrit, aucune séquence brûlée. Un opérateur (ou l'agent médecin) l'approuve,
+  la refuse ou la corrige (`op=set_cause`) ; approuver une cause du TITULAIRE exige sa
+  copie au client par langue (`{fr|en: {headline, todo, action}}`), refusée si elle porte
+  un nom d'outil, un code, un identifiant, une adresse ou une variable autre que
+  `{marque}` (`causes_pannes.copie_refusee`). Ce qu'une cause couvre (épisodes, vivants,
+  orgs, `classes_vues`) se LIT par jointure (`op=causes`).
+  ⚠️ **Le catalogue ne décide d'AUCUN geste** : l'empreinte se calcule sur le motif
+  tronqué, deux erreurs qui ne diffèrent qu'au-delà de la tête la partagent, et relancer
+  ce qu'on nomme mal referait des effets. Le bilan du passage dit ce qu'il aurait décidé
+  (`catalogue_reconnues`, `catalogue_neuves`, `catalogue_sans_empreinte`, et les
+  `catalogue_desaccords` — cause approuvée d'une autre classe ou d'un autre côté que la
+  regex —, chacun dit au journal) : la regex décide. Une ombre qui casse ne coûte que son
+  bilan (`catalogue_erreur`), jamais le passage.
+  **Le catalogue qui décide** (`OTO_CATALOGUE_CAUSES_DECIDE`, éteint par défaut) : une
+  cause APPROUVÉE range une panne que la regex dit `inconnu` — sa classe et son côté,
+  donc qui l'alerte vise et ce que le client lit (`catalogue_decidees` au bilan). Jamais
+  au-delà : un verdict de la regex n'est pas défait, une classe posée à la main non plus,
+  et une cause ne donne jamais une classe que la boucle relance (`CLASSES_RELANCEES`) —
+  relancer reste décidé par la regex seule.
+- **Ce que lit le client, et combien de fois** (13/11/2026, sous
+  `OTO_ALERTES_SLACK_AGENTS_ENABLED`) : le problème servi sur un agent (`problem` de la
+  file) et l'alerte Slack prennent, dans cet ordre, la copie de la CAUSE approuvée de
+  l'épisode dans la langue de l'espace — si la cause est du même côté que l'épisode —,
+  sinon le texte que l'agent médecin a écrit pour CET épisode (`diagnose`, `client_*` :
+  une cause neuve), sinon la phrase de la classe (`alertes_slack_agents.
+  message_du_probleme`). Le texte du médecin se juge comme une copie (`copie_refusee` :
+  ni adresse, ni nom d'outil, ni code, ni identifiant — 400 `client_copy_refused`), part
+  TOUT DE SUITE, et devient la copie PROPOSÉE de la cause de l'épisode dans la langue de
+  l'org si elle n'en a pas encore (sans le lien, propre à l'org) : un opérateur
+  l'approuve une fois (`set_cause`), elle parle alors à toutes les orgs (D5, 13/11). `{marque}` y devient le nom de la marque ; l'action `credits`
+  mène à `billing`, `connectors` aux connecteurs. Une cause approuvée avec sa copie
+  alerte tout de suite, comme un texte du médecin. **Un message par problème, pas par
+  agent** (`grouper`) : les alertes d'une org dont le client lirait exactement le même
+  problème (titre, geste, lien) partent en UN message qui nomme les agents (cinq, puis
+  « et N autres »), avec le bouton du geste et, si l'instance déclare la vue
+  `agent_health`, celui de la santé des agents — et chaque agent nommé est un lien vers
+  sa page (`agent`) ; les retours d'un passage partent ensemble ; une réparation part seule. Chaque épisode du paquet est marqué après
+  l'envoi. Les GESTES (relancer, escalader) restent décidés par la regex.
+- **L'onglet Santé d'une org** (`capabilities/agent_health.py`, 13/11/2026) :
+  `GET /api/orgs/{id}/agent-health` (membres ; 404 `agent_alerts_off` sous le réglage
+  des alertes éteint, comme ses voisines) rend, en quelques requêtes pour toute l'org,
+  les agents allumés que l'appelant voit (`_acces_agent.niveaux`, comme la liste des
+  agents) et combien fonctionnent, `needs_you` — un problème par cause qui attend le
+  client, au texte et au regroupement de Slack, avec les agents qu'il arrête et depuis
+  quand —, `on_us` — ce qui est à nous, côté plateforme ou pas encore compris, une
+  phrase sans geste : DEUX états comme la carte d'un agent, ces agents-là ne
+  fonctionnent pas non plus ; une panne de la PLATEFORME se tait six heures
+  (`DUREE_LONGUE`, lu sur `ouvert_at`, pas sur l'incident en mémoire de la boucle) — la
+  carte de l'agent n'en dit rien non plus, son agent compte comme fonctionnant — puis se
+  dit par sa propre phrase, `lasting` : la ligne grise de D3, dans l'onglet seulement, ni
+  Slack ni courriel pour nos pannes —, `fixed` — les épisodes guéris après un geste du médecin
+  ces 30 jours (la note de réparation de l'agent, sinon la phrase d'une relance ;
+  `episode_id`, `undo`, `undone`, ci-dessous), `auto_repair`, et `covered` (false : org
+  d'un tenant tiers, que le médecin ne suit pas). `PUT` (admins) pose « laisser Tulina réparer mes agents »
+  (`agent_health_settings`, aucune ligne = ALLUMÉ) : éteint, la boucle ne relance plus
+  les agents de l'org (`reparation_eteinte` au bilan ; réglage illisible = aucune
+  relance) et un agent hébergé se voit refuser `rerun` et `add_tool`
+  (`auto_repair_off`) ; un opérateur garde la main, les épisodes et les messages
+  continuent.
+- **Défaire une réparation** (14/11/2026) : `POST /api/orgs/{id}/agent-health/undo`
+  `{episode_id}` (membres, sous le même réglage) — seul l'ajout d'un outil de lecture par
+  le médecin (`add_tool`) se défait ; une relance, non. Permis à qui peut MODIFIER l'agent
+  (`_acces_agent.exiger(ECRIRE)` : propriétaire, admin, éditeur ; un agent invisible est
+  404 `trigger_not_found`, un lecteur 403 `trigger_edit_forbidden`, comme un agent sur le
+  forfait personnel d'autrui sans prêt — le `can_edit` de la liste des agents) ; un
+  épisode d'une autre org est 404 `episode_not_found`, un épisode sans ajout à défaire (ou
+  déjà défait) 404 `repair_not_undoable`. Dans l'ordre : la marque durable
+  `runner_triggers.repair_undone_tools` (colonne JSONB, révision
+  `20261114_0900_outils_annules` et démarrage, hors de `_COLS` ; idempotente, posée
+  d'abord) ; l'annulation s'écrit sur l'épisode (`reparations` : `{action: annulation,
+  acteur, outils, detail}`, sous garde dans le WHERE — deux clics, un geste ; l'épisode
+  garde son statut, clos reste clos) ; l'outil sort des outils
+  de l'agent s'il y est encore (`updated_by` = la personne) ; la note « réparé par
+  Tulina » (`repair_note`) s'efface si elle date de cet épisode. Rend la santé relue.
+  Ensuite le médecin ne redonne plus cet outil à cet agent : `add_tool` → 409
+  `repair_undone`, et `missing_tools` le dit (`undone: true`) ; un ajout défait ne
+  compte plus comme réparation pour `rerun`. L'outil ajouté est rangé à part sur le geste
+  (`outil`, en plus du `detail` « + <outil> », qui reste lu pour les gestes d'avant).
+  Dans `GET`, chaque `fixed` porte `episode_id`, `undo` (un ajout pas encore défait, sur
+  un agent que l'appelant peut modifier) et `undone` (défaite : `what` le dit).
+- **L'écran Admin des causes** (`capabilities/agent_causes_admin.py`, 13/11/2026) :
+  `GET /api/admin/agent-causes` (`status`, `limit`) et `PUT /api/admin/agent-causes/{key}`
+  (`status`, `classe`, `cote`, `client_copy` par langue), admin plateforme, REST
+  seulement — les gardes de `set_cause` sans recopie (`agent_repair._decider_une_cause`) :
+  copie exigée pour approuver une cause du titulaire, copie illisible refusée, un agent
+  hébergé n'approuve jamais. Les incidents vivent dans la mémoire de la boucle et ne s'y
+  servent pas.
 - **Où** : boucle `tiers=True` (une relance refait agir un agent chez des tiers),
   ÉTEINTE tant que `OTO_MEDECIN_AGENTS_ENABLED=1` n'est pas déclaré — production seule.
-- Bancs : `tests/test_medecin_agents.py` (sans base), `tests/test_episodes_agents_db.py`
-  (le SQL), `tests/test_migration_20261027_agent_episodes.py`,
+- Bancs : `tests/test_medecin_agents.py` (sans base), `tests/test_causes_pannes.py`
+  (l'empreinte, la copie), `tests/test_episodes_agents_db.py` (le SQL, catalogue
+  compris), `tests/test_migration_20261027_agent_episodes.py`,
   `tests/test_alerte_agents_bloques.py` (le silence).
 
 ### `op=list` : la page dit ce qu'elle laisse dehors (#469, 01/09/2026)

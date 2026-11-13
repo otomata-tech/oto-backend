@@ -39,16 +39,23 @@ logger = logging.getLogger(__name__)
 _COTES = Literal["plateforme", "proprietaire", "inconnu"]
 
 
+#: Les champs d'une copie de cause, par langue, et leur longueur maximale. Plat : un
+#: schéma d'outil ne porte pas de `$defs` (`tests/test_with_signature_flat.py`).
+_COPIE_CHAMPS = {"headline": 300, "todo": 400, "action": 20}
+_COPIE_ACTIONS = ("credits", "connectors")
+
+
 class AgentRepairInput(BaseModel):
-    op: Literal["list", "get", "rerun", "diagnose", "escalate", "close", "add_tool"]
+    op: Literal["list", "get", "rerun", "diagnose", "escalate", "close", "add_tool",
+                "causes", "set_cause"]
     episode_id: Optional[int] = None
     statut: Optional[Literal["vivants", "ouvert", "en_soin", "escalade", "clos"]] = Field(
         default=None, description="list: filter; `vivants` = every episode not closed.")
     org_id: Optional[int] = Field(default=None, description="list: one org only.")
     cote: Optional[_COTES] = Field(default=None, description=(
-        "list: filter by who can fix it. diagnose: the corrected side."))
+        "list: filter by who can fix it. diagnose / set_cause: the corrected side."))
     classe: Optional[str] = Field(default=None, max_length=60, description=(
-        "diagnose: the corrected class (a short slug)."))
+        "diagnose / set_cause: the corrected class (a short slug)."))
     diagnostic: Optional[str] = Field(default=None, max_length=2000, description=(
         "diagnose/escalate: what you found, in one paragraph — read by the operator "
         "and, for an owner-side fault, the basis of what the owner is told."))
@@ -73,6 +80,20 @@ class AgentRepairInput(BaseModel):
         "refused. Becomes the message's button."))
     client_action: Optional[Literal["credits", "connectors"]] = Field(default=None, description=(
         "diagnose: the gesture, when it is one of these."))
+    cause_key: Optional[str] = Field(default=None, max_length=32, description=(
+        "set_cause: the cause to decide (`cle` from op=causes, `empreinte` on an "
+        "episode)."))
+    cause_status: Optional[Literal["proposee", "approuvee", "refusee"]] = Field(
+        default=None, description=(
+            "causes: filter. set_cause: approve (`approuvee`), refuse (`refusee`) or "
+            "reopen (`proposee`) the cause."))
+    client_copy: Optional[dict[Literal["fr", "en"], dict[str, str]]] = Field(
+        default=None, description=(
+            "set_cause: what the client reads for this cause, per language "
+            "(`{fr: {headline, todo, action}, en: {...}}`; `headline` required, "
+            "`action` = credits | connectors) — plain sentences, no tool names, codes, "
+            "ids or addresses; `{marque}` is the only placeholder. Required to approve "
+            "an owner-side cause."))
     client_note: Optional[str] = Field(default=None, max_length=300, description=(
         "add_tool: what you changed, in ONE plain sentence for the client, in the "
         "workspace's language, no tool names or codes (\"Nous avons ajouté la recherche "
@@ -90,6 +111,8 @@ class AgentRepair(BaseModel):
     relance: Optional[bool] = None
     refus: Optional[str] = None
     missing_tools: Optional[list[dict]] = None
+    causes: Optional[list[dict]] = None
+    cause: Optional[dict] = None
 
 
 def _episode(inp: AgentRepairInput) -> dict:
@@ -125,18 +148,19 @@ def _contexte(ep: dict) -> tuple[Optional[dict], Optional[dict]]:
     return agent, job
 
 
-#: Les gestes qui CHANGENT l'agent — après l'un d'eux, la relance est permise même du
-#: côté du titulaire : c'est précisément ce qui vient d'être réparé.
-_REPARATIONS = ("ajout_outil",)
-
-
 def _outils_manquants(t: dict, org_id: int) -> list[dict]:
     """Ce que la procédure de l'agent et les recettes qu'elle lance appellent, hors de ses
-    outils — `[{tool, called_by, read}]` (la même lecture que `missing_tools` d'oto_trigger)."""
+    outils — `[{tool, called_by, read, undone}]` (la même lecture que `missing_tools`
+    d'oto_trigger). `undone` : quelqu'un qui peut modifier l'agent a défait cet ajout du
+    médecin — `add_tool` le refuse (`repair_undone`)."""
     from . import runner_triggers as cap_triggers
     from .. import tool_registry
-    return [{"tool": nom, "called_by": par, "read": tool_registry.effet_de(nom) == "read"}
-            for nom, par in cap_triggers._outils_non_accordes(org_id, t)]
+    from ..db import runner_triggers as db_triggers
+    manquants = cap_triggers._outils_non_accordes(org_id, t)
+    annules = db_triggers.outils_annules(int(t["id"]), org_id) if manquants else set()
+    return [{"tool": nom, "called_by": par, "read": tool_registry.effet_de(nom) == "read",
+             "undone": nom in annules}
+            for nom, par in manquants]
 
 
 def _ajouter_un_outil(ctx: ResolvedCtx, ep: dict, inp: AgentRepairInput) -> dict:
@@ -163,6 +187,13 @@ def _ajouter_un_outil(ctx: ResolvedCtx, ep: dict, inp: AgentRepairInput) -> dict
         raise AuthzDenied(400, "client_note_required",
                           "`client_note` : ce que tu as changé, en une phrase pour le client.")
     outil = deprecations.tool_canonique(inp.tool.strip())
+    from ..db import runner_triggers as db_triggers
+    if outil in db_triggers.outils_annules(tid, org_id):
+        # Une personne qui peut modifier l'agent a défait cet ajout (onglet Santé,
+        # `agent_health._defaire`) : le redonner défairait SON geste.
+        raise AuthzDenied(409, "repair_undone",
+                          f"`{outil}` a été retiré de cet agent par une personne après ton "
+                          "ajout : ne le redonne pas — escalade au titulaire.")
     manquants = {m["tool"]: m for m in _outils_manquants(t, org_id)}
     if outil not in manquants:
         return {"episode": ep, "refus": (
@@ -174,8 +205,8 @@ def _ajouter_un_outil(ctx: ResolvedCtx, ep: dict, inp: AgentRepairInput) -> dict
             f"`{outil}` n'est pas une lecture : donner un outil qui écrit ou envoie revient "
             "au titulaire de l'agent — escalade-le"),
             "missing_tools": list(manquants.values())}
-    if episodes_agents.noter_reparation(int(ep["id"]), action="ajout_outil",
-                                        acteur=ctx.sub, detail=f"+ {outil}",
+    if episodes_agents.noter_reparation(int(ep["id"]), action=episodes_agents.AJOUT_OUTIL,
+                                        acteur=ctx.sub, detail=f"+ {outil}", outil=outil,
                                         maximum=5) is None:
         return {"episode": episodes_agents.lire(int(ep["id"])),
                 "refus": "épisode clos, ou plafond d'ajouts atteint"}
@@ -200,6 +231,11 @@ def _valider_le_message_client(ep: dict, client: dict) -> None:
     if not client["headline"]:
         raise AuthzDenied(400, "client_headline_required",
                           "`client_headline` est requis avec les autres `client_*`.")
+    from .. import causes_pannes
+    for champ in ("headline", "todo"):
+        refus = causes_pannes.copie_refusee(client[champ])
+        if refus:
+            raise AuthzDenied(400, "client_copy_refused", f"`client_{champ}` : {refus}.")
     if client["link"]:
         t = db.get_trigger(int(ep["trigger_id"]), int(ep["org_id"]))
         sub = (t or {}).get("sub")
@@ -207,6 +243,98 @@ def _valider_le_message_client(ep: dict, client: dict) -> None:
             raise AuthzDenied(400, "client_link_off_instance",
                               "`client_link` : un chemin ou une adresse du tableau de bord "
                               "du client seulement.")
+
+
+def _proposer_a_la_cause(ep: dict, client: dict, *, acteur: str) -> None:
+    """D5 : le texte du médecin part tout de suite (`message_du_probleme`) ET devient la
+    copie PROPOSÉE de la cause de l'épisode, dans la langue de l'org, si elle n'en a pas
+    encore dans cette langue — un opérateur l'approuve une fois pour toutes les orgs. Une
+    cause approuvée ou refusée ne se touche pas ; le lien, propre à l'org, ne s'y range
+    pas."""
+    from .. import alertes_slack_agents
+    from ..db import causes_agents
+    cause = causes_agents.lire(ep["empreinte"]) if ep.get("empreinte") else None
+    if cause is None or cause["statut"] != "proposee":
+        return
+    langue = alertes_slack_agents.langue(int(ep["org_id"]))
+    if langue in (cause.get("copie") or {}):
+        return
+    copie = {k: client[k] for k in ("headline", "todo", "action") if client.get(k)}
+    causes_agents.decider(cause["cle"], acteur=acteur, copie={langue: copie})
+
+
+def _copie_lue(brute: dict) -> dict:
+    """La copie par langue, champs connus seulement, bornés, `headline` exigé."""
+    copie = {}
+    for lang, champs in brute.items():
+        inconnus = set(champs) - set(_COPIE_CHAMPS)
+        if inconnus:
+            raise AuthzDenied(400, "client_copy_refused",
+                              f"`client_copy.{lang}` : champ inconnu {sorted(inconnus)}.")
+        c = {k: (v or "").strip() for k, v in champs.items() if (v or "").strip()}
+        if not c.get("headline"):
+            raise AuthzDenied(400, "client_copy_refused",
+                              f"`client_copy.{lang}.headline` est requis.")
+        for k, v in c.items():
+            if len(v) > _COPIE_CHAMPS[k]:
+                raise AuthzDenied(400, "client_copy_refused",
+                                  f"`client_copy.{lang}.{k}` : {_COPIE_CHAMPS[k]} caractères "
+                                  "au plus.")
+        if c.get("action") and c["action"] not in _COPIE_ACTIONS:
+            raise AuthzDenied(400, "client_copy_refused",
+                              f"`client_copy.{lang}.action` : credits ou connectors.")
+        copie[lang] = c
+    return copie
+
+
+def _decider_une_cause(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
+    """Un geste sur une cause du catalogue. Approuver une cause du côté du titulaire
+    exige sa copie au client (il la lira), et une copie se juge avant d'être écrite
+    (`causes_pannes.copie_refusee`). ⚠️ En ombre, une cause approuvée ne décide encore
+    d'aucun geste de la boucle : elle se compare à la regex (`catalogue_desaccords`)."""
+    from .. import causes_pannes
+    from ..db import causes_agents
+    if not inp.cause_key:
+        raise AuthzDenied(400, "cause_key_required", "`cause_key` est requis pour op=set_cause.")
+    cause = causes_agents.lire(inp.cause_key)
+    if cause is None:
+        raise AuthzDenied(404, "cause_not_found", "Aucune cause sous cette clé.")
+    if not (inp.cause_status or inp.classe or inp.cote or inp.client_copy):
+        raise AuthzDenied(400, "nothing_to_record",
+                          "`cause_status`, `classe`, `cote` ou `client_copy` : au moins un.")
+    copie = _copie_lue(inp.client_copy) if inp.client_copy else None
+    for c in (copie or {}).values():
+        for texte in (c.get("headline"), c.get("todo")):
+            refus = causes_pannes.copie_refusee(texte)
+            if refus:
+                raise AuthzDenied(400, "client_copy_refused", f"`client_copy` : {refus}.")
+    from ._outils_plateforme import _depuis_un_agent_heberge
+    if inp.cause_status == "approuvee" and _depuis_un_agent_heberge():
+        # L'agent médecin PROPOSE (classe, côté, copie) ; un opérateur approuve. Sans
+        # cette porte, la copie qu'il a écrite irait à toutes les orgs sans personne.
+        raise AuthzDenied(403, "approval_by_operator_only",
+                          "Une cause s'approuve par un opérateur, pas par un agent hébergé : "
+                          "propose la classe, le côté et la copie, et laisse-la `proposee`.")
+    cote = inp.cote or cause["cote"]
+    if (inp.cause_status or cause["statut"]) == "approuvee" and cote == "proprietaire" \
+            and not (copie or cause.get("copie")):
+        raise AuthzDenied(400, "client_copy_required",
+                          "Une cause du côté du titulaire s'approuve avec sa `client_copy`.")
+    logger.info("cause %s : %s par %s", inp.cause_key, inp.cause_status or "modifiée",
+                ctx.sub)
+    return causes_agents.decider(inp.cause_key, acteur=ctx.sub, statut=inp.cause_status,
+                                 classe=inp.classe, cote=inp.cote, copie=copie)
+
+
+def _exiger_la_reparation_permise(ep: dict) -> None:
+    """Un agent hébergé (l'agent médecin) ne relance ni ne répare l'agent d'une org qui a
+    éteint « laisser Tulina réparer mes agents » ; un opérateur, lui, garde la main."""
+    from ..db import sante_agents
+    from ._outils_plateforme import _depuis_un_agent_heberge
+    if _depuis_un_agent_heberge() and not sante_agents.auto_repair(int(ep["org_id"])):
+        raise AuthzDenied(403, "auto_repair_off",
+                          "Cette org a éteint « laisser Tulina réparer mes agents » : "
+                          "diagnostique et escalade, ne relance ni ne répare.")
 
 
 def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
@@ -217,6 +345,12 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
         return {"episodes": episodes_agents.lister(
             statut=inp.statut or "vivants", org_id=inp.org_id, cote=inp.cote,
             limit=inp.limit or 50)}
+    if inp.op == "causes":
+        from ..db import causes_agents
+        return {"causes": causes_agents.lister(statut=inp.cause_status,
+                                               limit=inp.limit or 50)}
+    if inp.op == "set_cause":
+        return {"cause": _decider_une_cause(ctx, inp)}
 
     ep = _episode(inp)
     if inp.op == "get":
@@ -226,6 +360,8 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
         return {"episode": ep, "agent": agent, "dernier_travail": job,
                 "missing_tools": manquants}
 
+    if inp.op in ("add_tool", "rerun"):
+        _exiger_la_reparation_permise(ep)
     if inp.op == "add_tool":
         return _ajouter_un_outil(ctx, ep, inp)
 
@@ -238,8 +374,10 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
             return {"episode": ep, "relance": False, "refus": "épisode clos"}
         if t is None or not t.get("enabled"):
             return {"episode": ep, "relance": False, "refus": "agent éteint ou supprimé"}
-        repare = any((r or {}).get("action") in _REPARATIONS
-                     for r in (ep.get("reparations") or []))
+        # Le geste qui CHANGE l'agent (`ajout_outil`) : après lui, la relance est permise
+        # même du côté du titulaire — c'est ce qui vient d'être réparé. Un ajout qu'une
+        # personne a défait ne compte plus.
+        repare = bool(episodes_agents.outils_a_defaire(ep.get("reparations")))
         if ep["cote"] == "proprietaire" and not repare:
             return {"episode": ep, "relance": False,
                     "refus": "panne du côté du titulaire : relancer ne la répare pas"}
@@ -270,6 +408,7 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
         if any(client.values()):
             from ..db import alertes_slack
             alertes_slack.poser_message_client(int(ep["id"]), client)
+            _proposer_a_la_cause(ep, client, acteur=ctx.sub)
         return {"episode": episodes_agents.lire(int(ep["id"]))}
 
     if inp.op == "escalate":
@@ -310,15 +449,28 @@ CAPABILITIES += [
             "the workspace's language, shown on the agent in the app and sent to the "
             "org's Slack) / escalate (hand "
             "it to a human, with your `diagnostic`) / close (`resolution`). "
-            "op=get also serves `missing_tools` ([{tool, called_by, read}]: what its "
-            "procedure or a published recipe it runs calls and the agent lacks). ONE "
+            "op=get also serves `missing_tools` ([{tool, called_by, read, undone}]: what "
+            "its procedure or a published recipe it runs calls and the agent lacks). ONE "
             "undoable repair, written on the episode before it is done and told to the "
             "client: add_tool (`tool`: ONE read tool from `missing_tools` — never a tool "
             "that writes or sends; `client_note`, one plain sentence in the workspace's "
             "language, required, served on the agent as `repair`). After it, `rerun` is "
-            "allowed even on an owner-side episode. Nothing here touches a key, an "
+            "allowed even on an owner-side episode. Someone who can edit the agent may "
+            "UNDO it from the Health tab: the tool is removed, and add_tool refuses that "
+            "tool on that agent from then on (409 `repair_undone`, `undone: true` in "
+            "`missing_tools`) — escalate instead. Nothing here touches a key, an "
             "identity, a procedure, a schedule or any data: those fixes belong to the "
-            "agent's owner — say what they are in `diagnostic`."),
+            "agent's owner — say what they are in `diagnostic`. The CAUSE CATALOGUE "
+            "(in shadow: it decides nothing yet, the loop compares it with its own "
+            "classification): each episode carries `empreinte`, the key of its failure "
+            "message with ids, dates, numbers and addresses stripped, the same for every "
+            "org. op=causes (`cause_status`, `limit` → each cause with the episodes, "
+            "live episodes and orgs it covers, and `classes_vues`: the classes the loop "
+            "gave them) / set_cause (`cause_key`, and `cause_status`, a corrected "
+            "`classe`/`cote`, `client_copy` — merged per language, required to approve "
+            "an owner-side cause; a hosted agent proposes, only an operator approves). "
+            "An org that turned off \"let Tulina fix my agents\" refuses rerun and add_tool "
+            "from a hosted agent (`auto_repair_off`)."),
         mcp="oto_admin_agent_repair",
     ),
 ]

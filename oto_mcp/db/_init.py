@@ -721,12 +721,22 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # la même que pose la révision `20261109_2110_note_de_reparation` : ordre indifférent.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_REPARATION):
         conn.execute(runner_triggers.DDL_COLONNE_REPARATION)
+    # Les outils qu'une personne a retirés après le médecin (`runner_triggers.
+    # annuler_outils`) — la même que pose la révision `20261114_0900_outils_annules` :
+    # ordre indifférent.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_OUTILS_ANNULES):
+        conn.execute(runner_triggers.DDL_COLONNE_OUTILS_ANNULES)
     # Le message au client et les messages Slack partis, sur l'épisode (`alertes_slack`) —
     # les mêmes que pose la révision `20261109_2120_alertes_slack` : ordre indifférent.
     from . import alertes_slack
     for _col, _ddl in zip(alertes_slack.COLONNES_EPISODES, alertes_slack.DDL_EPISODES):
         if _colonne_absente(conn, "agent_episodes", _col):
             conn.execute(_ddl)
+    # L'empreinte de l'épisode, clé du catalogue des causes (`causes_agents`) — la même
+    # que pose la révision `20261113_1830_causes_agents` : ordre indifférent.
+    from . import causes_agents
+    if _colonne_absente(conn, "agent_episodes", causes_agents.COLONNE_EMPREINTE):
+        conn.execute(causes_agents.DDL_COLONNE_EMPREINTE)
     if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_ISSUE):
         conn.execute(issues_des_travaux.DDL_COLONNE_ISSUE)
     if _colonne_absente(conn, "runner_jobs", issues_des_travaux.COLONNE_NOTE):

@@ -3,7 +3,8 @@
 Les propriétés qui font que ce passage répare quelque chose : un courriel PAR ORG, sous
 la marque de l'org ; la marque posée APRÈS l'envoi, et seulement s'il est parti ; rien
 pour une org d'un tenant tiers (comptée) ; rien aux heures calmes ; rien hors production
-(la boucle se déclare `tiers=True`)."""
+(la boucle se déclare `tiers=True`). Sous le réglage des alertes d'agents, le courriel
+parle comme Slack : un bloc par problème, le texte du client, jamais le motif brut."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ def bureau(monkeypatch):
     etat = {"lettres": [], "marques": [], "envoi_ok": True,
             "agents": [_agent(1, 7), _agent(2, 7), _agent(3, 9), _agent(4, 11)]}
     monkeypatch.setattr(M, "_ECARTEES_DITES", set())
+    monkeypatch.delenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", raising=False)
     etat["soignes"] = set()
     etat["fenetres"] = []
 
@@ -125,3 +127,107 @@ def test_des_episodes_illisibles_laissent_partir_le_courriel(bureau, monkeypatch
     monkeypatch.setattr(episodes_agents, "agents_soignes_par_nous", _casse)
     M.balayer(_JOUR)
     assert "agent 2" in bureau["lettres"][0][2]
+
+
+# ── Sous le réglage des alertes : le courriel parle comme Slack ─────────────────
+
+_COPIE = {"fr": {"headline": "La clé de l'outil d'emailing a été refusée.",
+                 "todo": "Recréez-la et collez-la dans Connecteurs.",
+                 "action": "connectors"}}
+
+
+def _episode(tid, **kw):
+    return {"id": 100 + tid, "org_id": 7, "trigger_id": tid, "classe": "cle_refusee",
+            "cote": "proprietaire", "statut": "ouvert", "motif": "HTTP 403 <Access denied>",
+            "message_client": None, "cause_copie": None, "cause_cote": None, **kw}
+
+
+@pytest.fixture()
+def comme_slack(bureau, monkeypatch):
+    from oto_mcp import links
+    from oto_mcp.db import sante_agents
+    monkeypatch.setenv("OTO_ALERTES_SLACK_AGENTS_ENABLED", "1")
+    monkeypatch.setattr(M, "_annonces_sur_slack", lambda ids: set())
+    bureau["vivants"] = {7: []}
+
+    def _vivants(org):
+        if bureau["vivants"] is None:
+            raise RuntimeError("base indisponible")
+        return list(bureau["vivants"].get(org, []))
+    monkeypatch.setattr(sante_agents, "episodes_vivants", _vivants)
+    base = "https://app.acme.test"
+    monkeypatch.setattr(links, "link_for", lambda kind, sub=None, **p: (
+        base if kind == "home" else f"{base}/{kind}/{p.get('id', '')}".rstrip("/")))
+    return bureau
+
+
+def test_les_agents_d_un_meme_probleme_forment_un_bloc_sans_le_motif(comme_slack):
+    comme_slack["vivants"][7] = [
+        _episode(1, cause_copie=_COPIE, cause_cote="proprietaire"),
+        _episode(2, cause_copie=_COPIE, cause_cote="proprietaire")]
+    M.balayer(_JOUR)
+    (to, sujet, html), = comme_slack["lettres"]
+    assert (to, sujet) == ("a@acme.test", "Un agent programmé est bloqué")
+    assert "Access denied" not in html and "HTTP 403" not in html, "jamais le motif brut"
+    assert html.count("La clé de l'outil") == 1, "un problème = un bloc, le texte une fois"
+    assert "agent 1" in html and "agent 2" in html
+    assert 'href="https://app.acme.test/agent/1"' in html, "chaque agent mène à sa page"
+    assert "https://app.acme.test/connectors" in html, "le bouton du geste"
+    assert comme_slack["marques"] == [1, 2], "marqués après l'envoi, comme avant"
+
+
+def test_deux_problemes_deux_blocs_et_le_lien_du_medecin_hors_produit_est_omis(comme_slack):
+    comme_slack["vivants"][7] = [
+        _episode(1, cause_copie=_COPIE, cause_cote="proprietaire"),
+        _episode(2, classe="inconnu", message_client={
+            "headline": "Le compte de l'agent n'a plus accès au tableur.",
+            "todo": "Partagez de nouveau le tableur avec lui.",
+            "link": "https://ailleurs.test/piege"})]
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "Le compte de l" in html and "Partagez de nouveau" in html
+    assert "La clé de l" in html
+    assert "ailleurs.test" not in html, "un lien qui mène hors du produit est omis"
+    assert "Access denied" not in html
+
+
+def test_un_agent_sans_episode_lisible_recoit_la_phrase_par_defaut(comme_slack):
+    comme_slack["vivants"] = None          # lecture des épisodes en échec : ouvert
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "Il s'est arrêté avant la fin de son travail." in html
+    assert "Access denied" not in html
+    assert comme_slack["marques"] == [1, 2]
+
+
+def test_le_texte_du_medecin_est_echappe(comme_slack):
+    comme_slack["vivants"][7] = [_episode(1, message_client={
+        "headline": "<script>x</script> refusé", "todo": None, "link": None})]
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "<script>" not in html and "&lt;script&gt;" in html
+
+
+def test_en_anglais_le_courriel_par_probleme(comme_slack, monkeypatch):
+    from oto_mcp.db import users as U
+    monkeypatch.setattr(U, "get_user", lambda s: {"locale": "en"})
+    M.balayer(_JOUR)
+    sujet, html = comme_slack["lettres"][0][1:]
+    assert sujet == "A scheduled agent is blocked"
+    assert "It stopped before finishing its work." in html
+
+
+def test_une_panne_pas_encore_comprise_ne_dit_pas_que_c_est_au_client(comme_slack):
+    """Côté `inconnu`, sans texte du médecin : la phrase de l'onglet Santé, jamais celle
+    d'une classe qui dirait au client de reconnecter quoi que ce soit."""
+    comme_slack["vivants"][7] = [_episode(1, classe="cle_refusee", cote="inconnu")]
+    M.balayer(_JOUR)
+    html = comme_slack["lettres"][0][2]
+    assert "Nous cherchons pourquoi il s" in html
+    assert "Reconnectez" not in html and "https://app.acme.test/connectors" not in html
+
+
+def test_le_courriel_par_probleme_dit_depuis_quand(comme_slack):
+    comme_slack["vivants"][7] = [_episode(1), _episode(2)]
+    M.balayer(_JOUR)
+    assert "En échec depuis le 2026-10-20 06:00 UTC" in comme_slack["lettres"][0][2]

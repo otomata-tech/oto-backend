@@ -1183,3 +1183,57 @@ def noter_reparation_pour_le_client(trigger_id: int, org_id: int, what: str) -> 
             "  'what', %s::text) WHERE id = %s AND org_id = %s",
             ((what or "")[:300], int(trigger_id), int(org_id)))
         return (cur.rowcount or 0) > 0
+
+
+def effacer_reparation_pour_le_client(trigger_id: int, org_id: int, *, depuis: Any,
+                                      jusqu_a: Any = None) -> bool:
+    """Retire la note `{at, what}` de l'agent quand elle date de cet épisode (posée entre
+    `depuis`, son ouverture, et `jusqu_a`, sa clôture) : une réparation défaite ne se dit
+    plus « réparé par Tulina ». Une note plus récente — la réparation d'un épisode
+    suivant — reste. Rend True si elle a été retirée."""
+    with _connect() as conn:
+        cur = conn.execute(
+            f"UPDATE runner_triggers SET {COLONNE_REPARATION} = NULL "
+            f"WHERE id = %s AND org_id = %s AND {COLONNE_REPARATION} IS NOT NULL "
+            f"  AND ({COLONNE_REPARATION}->>'at')::timestamptz "
+            "      >= date_trunc('second', %s::timestamptz) "
+            f"  AND (%s::timestamptz IS NULL OR ({COLONNE_REPARATION}->>'at')::timestamptz "
+            "      <= %s::timestamptz)",
+            (int(trigger_id), int(org_id), depuis, jusqu_a, jusqu_a))
+        return (cur.rowcount or 0) > 0
+
+
+# --- Les outils qu'une personne a RETIRÉS après le médecin (14/11/2026) ------------
+# Posée par la révision `20261114_0900_outils_annules` ET par le démarrage, sous garde
+# de catalogue — même DDL. Une liste de noms d'outils (canoniques) : quelqu'un qui peut
+# modifier l'agent a défait l'ajout du médecin (`POST /api/orgs/{id}/agent-health/undo`),
+# et le médecin ne les lui redonne plus (`add_tool` → 409 `repair_undone`). Hors de
+# `_COLS` : ce n'est pas la configuration de l'agent, et elle ne le date pas.
+COLONNE_OUTILS_ANNULES = "repair_undone_tools"
+DDL_COLONNE_OUTILS_ANNULES = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS "
+                              f"{COLONNE_OUTILS_ANNULES} JSONB")
+
+
+def outils_annules(trigger_id: int, org_id: int) -> set[str]:
+    """Les outils que le médecin ne donne plus à cet agent."""
+    with _connect() as conn:
+        r = conn.execute(
+            f"SELECT {COLONNE_OUTILS_ANNULES} AS o FROM runner_triggers "
+            "WHERE id = %s AND org_id = %s", (int(trigger_id), int(org_id))).fetchone()
+    return {str(o) for o in ((r or {}).get("o") or [])}
+
+
+def annuler_outils(trigger_id: int, org_id: int, outils: list[str]) -> bool:
+    """Ajoute ces outils à ceux que le médecin ne donne plus à l'agent (sans doublon).
+    Rend True si l'agent existe dans cette org."""
+    with _connect() as conn:
+        cur = conn.execute(
+            f"""
+            UPDATE runner_triggers SET {COLONNE_OUTILS_ANNULES} = (
+                     SELECT COALESCE(jsonb_agg(DISTINCT o ORDER BY o), '[]'::jsonb)
+                       FROM jsonb_array_elements_text(
+                              COALESCE({COLONNE_OUTILS_ANNULES}, '[]'::jsonb)
+                              || %s::jsonb) o)
+             WHERE id = %s AND org_id = %s
+            """, (json.dumps(sorted(set(outils))), int(trigger_id), int(org_id)))
+        return (cur.rowcount or 0) > 0

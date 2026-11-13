@@ -25,6 +25,8 @@ This module is PURE (no I/O, no `oto_mcp` import at module level): from a served
 - the PLATFORM key (mode `platform`, since 11/11/2026): resolved by the cascade like any shared key (grants, quota),
   each call noting the quantity its declared cost settles (`tools/decrits.py`); the probe function, which reads the
   account itself, is not served on it;
+- the ACCESS LEVELS (`auth.access_levels`, since 13/11/2026): the declaration `connectors.access_levels` reads like a
+  hand-written connector's `ACCESS_LEVELS`, its default level included (`auth.default_level`);
 - what the reader CANNOT serve, refused at mount, never approximated.
 """
 from __future__ import annotations
@@ -266,15 +268,34 @@ def _refus_du_moteur(description: dict, f: dict) -> Optional[str]:
 
 
 def _refus_de_la_fonction(description: dict, f: dict) -> list[str]:
-    # `async` (a job whose cost its collect settles) and `scopes` (an access level's) have no place in oto 1 yet;
-    # `checks` and `expect` raise a refusal without a status, which the error taxonomy does not classify yet.
-    raisons = [f"function {f['name']}: {cle}" for cle in ("async", "checks", "expect", "scopes") if cle in f]
+    # `async` (a job whose cost its collect settles) has no place in oto 1 yet; `checks` and `expect` raise a refusal
+    # without a status, which the error taxonomy does not classify yet. `scopes` (what an access level must grant) is
+    # served since 13/11/2026: `niveaux_d_acces`.
+    raisons = [f"function {f['name']}: {cle}" for cle in ("async", "checks", "expect") if cle in f]
     moteur = _refus_du_moteur(description, f)
     if moteur is not None:
         raisons.append(moteur)
     if f["class"] == "sensitive" and f.get("effect") not in _PAR_EFFET:
         raisons.append(f"function {f['name']}: sensitive without `effect` (send or destroy)")
     return raisons
+
+
+def niveaux_d_acces(description: dict) -> Optional[dict]:
+    """The access levels the description declares (`auth.access_levels`), in the form `connectors.access_levels`
+    validates: `levels` and `scope_implies` as tuples, `tools` = `{tool: {op: the scopes the function requires}}` for
+    the served pair, `default` = `auth.default_level` (else `full`), and `widening_needs_consent` false for a service
+    account, whose next assertion claims the wider scopes without asking anyone. `None` without levels."""
+    auth = description["connector"]["auth"]
+    if "access_levels" not in auth:
+        return None
+    return {
+        "levels": {nom: tuple(niveau["scopes"]) for nom, niveau in auth["access_levels"].items()},
+        "scope_implies": {s: tuple(v) for s, v in (auth.get("scope_implies") or {}).items()},
+        "tools": {outil: {f["name"]: tuple(f["scopes"]) for f in fonctions}
+                  for outil, fonctions in outils(description).items()},
+        "default": auth.get("default_level", "full"),
+        "widening_needs_consent": not compte_de_service(description),
+    }
 
 
 def refus_de_montage(description: dict) -> list[str]:
@@ -289,8 +310,6 @@ def refus_de_montage(description: dict) -> list[str]:
     if "settings" in connecteur:
         # The engine resolves them, but oto 1 keeps no setting of a described account to give it.
         raisons.append("connector.settings")
-    if "access_levels" in connecteur["auth"]:
-        raisons.append("auth.access_levels")
     for f in description["functions"]:
         raisons += _refus_de_la_fonction(description, f)
         if any(a in f["input"]["properties"] and "pagination" not in f for a in ARGUMENTS_DE_PAGINATION):

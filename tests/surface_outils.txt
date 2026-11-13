@@ -279,7 +279,7 @@ fr_groupe	ascendant descendant	7318954ed0007a7b
 fr_headquarters	-	b401f4a1c66f1bef
 fr_search	-	4f5ebcdbc4b4dab1
 fr_siret	-	2313e58b98a8154c
-fr_stock_enrich	-	8885ddf3f710e36e
+fr_stock_enrich	-	d3efe62a15bc9847
 fr_stock_etablissements	-	ed0d9ac4729d8ab8
 fr_stock_search	-	ab0a00d9aea4b4b4
 fr_stock_siege	-	b401f4a1c66f1bef

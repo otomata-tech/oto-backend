@@ -78,6 +78,28 @@ la requête qui lisait déjà leurs noms (`db.project_labels`) ; une seule requ�
 de plus, et seulement si un propriétaire est une équipe. Bancs :
 `tests/test_search_org_origine.py` (base réelle).
 
+## Requêtes longues : repli « le plus de termes », sources en parallèle (12/11/2026)
+
+Les agents envoient des phrases de cinq à dix mots. Trois règles, mesurées par
+`scripts/banc_recherche_volume.py` (une org synthétique de 26 500 pages, 27 000 lignes
+de tableau, 200 textes de fichier) :
+
+- **Repli borné** (`db/search.py::_repli_plus_de_termes`) : quand le ET de tous les
+  termes ne trouve rien, la source rend les contenus qui portent le PLUS de termes,
+  jamais « n'importe lequel ». Les candidats sont choisis dans le GIN par les termes
+  les plus RARES (fréquence lue bornée à `CANDIDATS_MAX`), le comptage des termes et
+  le classement lisent le vecteur matérialisé. Un contenu qui ne porte qu'un terme
+  fréquent (« ca ») ne sort plus devant un contenu qui en porte six. Limite connue :
+  si tous les termes sont fréquents, le seul terme le moins fréquent pilote, ce qui
+  borne le coût sans garantir le maximum.
+- **Sous-chaîne réservée aux saisies courtes** (`MOTS_MAX_SOUS_CHAINE` = 3) : au-delà,
+  l'`ILIKE '%saisie entière%'` (trigramme) ne trouve jamais rien et coûte cher.
+- **Sources en parallèle** (`search.py::_interroger`) : au plus `concurrence()` sources à
+  la fois (un huitième du pool, plafonné à 4 ; une seule sous une portée de connexion
+  partagée), une connexion par source, fusion dans l'ordre fixe des sources. L'embedding
+  de la requête part sur la boucle sans être attendu : les sources lexicales tournent
+  pendant ce temps, les sémantiques partent quand le vecteur arrive.
+
 ## Sémantique + RRF (20/07)
 
 **Sémantique + RRF (20/07, LIVE preprod)** : fusion LEXICAL + SÉMANTIQUE des pages.

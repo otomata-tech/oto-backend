@@ -104,7 +104,7 @@ def _vec(text_expr: str) -> str:
 
 
 def _lexical_ou_fragment(text_expr: str, tsq: str, raw: str,
-                         vecteur: Optional[str] = None) -> str:
+                         vecteur: Optional[str] = None, fragment: bool = True) -> str:
     """LE prédicat de la recherche plein texte, partagé par toutes les sources : le
     texte matche la tsquery `tsq` (mots/stems — GIN `_vec`) OU contient la saisie
     foldée `raw` en sous-chaîne (fragments, préfixes, symboles, stopwords — GIN
@@ -113,9 +113,14 @@ def _lexical_ou_fragment(text_expr: str, tsq: str, raw: str,
 
     `vecteur` remplace l'expression de la moitié lexicale quand la requête ne PEUT
     pas passer par le GIN et lira donc ligne à ligne : un vecteur matérialisé s'y lit
-    sans être recalculé (cf. `lignes_trouvees_sql`, portée `all`)."""
-    return (f"({vecteur or _vec(text_expr)} @@ {tsq} "
-            f"OR {_fold(text_expr)} ILIKE '%%' || {raw} || '%%')")
+    sans être recalculé (cf. `lignes_trouvees_sql`, portée `all`).
+
+    `fragment=False` retire la moitié sous-chaîne : une saisie longue
+    (`avec_sous_chaine`) ne figure telle quelle dans aucun texte."""
+    lexical = f"{vecteur or _vec(text_expr)} @@ {tsq}"
+    if not fragment:
+        return f"({lexical})"
+    return f"({lexical} OR {_fold(text_expr)} ILIKE '%%' || {raw} || '%%')"
 
 
 def _rang(rank_on: str, tsq: str) -> str:
@@ -397,6 +402,31 @@ def rang_des_lignes_sql(recherche) -> tuple[str, list]:
     return _rang(vec, tsq), list(recherche.mots)
 
 
+# ── Requêtes longues (repli borné, sous-chaîne réservée aux saisies courtes) ──────
+#
+# Au-delà de ce nombre de mots, la sous-chaîne de la saisie ENTIÈRE (`ILIKE '%…%'`,
+# index trigramme) ne sert plus : une phrase de huit mots ne figure telle quelle dans
+# aucun contenu, et la chercher coûte cher — le trigramme rend des milliers de candidats
+# à revérifier ligne à ligne pour n'en garder aucun. Elle reste pour les saisies
+# courtes, où elle fait son office : fragments, préfixes, identifiants, symboles.
+MOTS_MAX_SOUS_CHAINE = 3
+
+# Le repli d'une requête dont le ET ne trouve rien (`_repli_plus_de_termes`) ne classe
+# jamais plus que ce nombre de candidats, quelle que soit la fréquence des termes.
+CANDIDATS_MAX = 4_000
+
+# Un terme de la saisie, en tsquery d'un seul lexème. Le lexème vient déjà de la saisie
+# foldée (`to_tsvector`) : on le CITE tel quel, dans la syntaxe d'entrée d'une tsquery
+# (guillemets et barres obliques inverses doublés), au lieu de le réanalyser.
+_TERME_TSQ = ("('''' || replace(replace({l}, '\\', '\\\\'), '''', '''''') "
+              "|| '''')::tsquery")
+
+
+def avec_sous_chaine(q: str) -> bool:
+    """La saisie est-elle assez courte pour que sa sous-chaîne serve ?"""
+    return len(q.split()) <= MOTS_MAX_SOUS_CHAINE
+
+
 def _prose_query(table: str, text_expr: str, select_cols: str, headline_col: str,
                  where_scope: str, scope_params: tuple, q: str, limit: int,
                  rank_vec: str = "") -> list[dict]:
@@ -405,13 +435,16 @@ def _prose_query(table: str, text_expr: str, select_cols: str, headline_col: str
     headline sur la saisie brute contre le texte original.
 
     Robustesses (oto-backend#6, #67) via un CTE qui calcule la tsquery UNE fois :
-    - **substring toujours actif** (#67) : FTS tokenisée `OR` `ILIKE '%q%'` sur le texte
-      foldé (index TRIGRAMME) → les FRAGMENTS/PRÉFIXES matchent (« syl »→« Sylvie ») en
-      plus des mots/stems, et ça couvre aussi les symboles/stopwords (« € », « avoir » :
-      tsq vide ne matche rien, le substring oui). Rang : ts_rank classe les hits FTS
-      devant, les hits substring-seul (rank 0) en fin ;
+    - **substring pour une saisie courte** (#67, `avec_sous_chaine`) : FTS tokenisée
+      `OR` `ILIKE '%q%'` sur le texte foldé (index TRIGRAMME) → les FRAGMENTS/PRÉFIXES
+      matchent (« syl »→« Sylvie ») en plus des mots/stems, et ça couvre aussi les
+      symboles/stopwords (« € », « avoir » : tsq vide ne matche rien, le substring
+      oui). Rang : ts_rank classe les hits FTS devant, les hits substring-seul (rank 0)
+      en fin. Au-delà de `MOTS_MAX_SOUS_CHAINE` mots : la FTS seule ;
     - **fragments** de headline pré-nettoyés des pipes markdown (`_HL_OPTS`) ;
-    - **fallback OR** : si l'AND de tous les termes ne matche rien, on re-tente en OR.
+    - **repli « le plus de termes »** : si le ET de tous les termes ne matche rien, les
+      contenus qui portent le PLUS de termes de la saisie (`_repli_plus_de_termes`), à
+      coût borné — jamais « n'importe lequel des termes ». Sur la connexion du ET.
 
     `rank_vec` (#318) = l'expression de CLASSEMENT, quand la source a sa colonne de
     vecteur matérialisée (`rank_expr(table)`). Elle ne remplace QUE le `ts_rank_cd` :
@@ -421,36 +454,104 @@ def _prose_query(table: str, text_expr: str, select_cols: str, headline_col: str
     rank_on = rank_vec or _vec(text_expr)
     fold_q = _fold("%s")            # translate(%s, accents…)
     hl_text = f"replace({headline_col}, '|', ' ')"  # pas de coupe en plein tableau
+    ws = f"websearch_to_tsquery('french', {fold_q})"
+    sql = (
+        f"WITH qq AS (SELECT {ws} AS tsq, {fold_q} AS raw) "
+        f"SELECT {select_cols}, {_rang(rank_on, 'qq.tsq')} AS rank, "
+        f"ts_headline('french', {hl_text}, qq.tsq, '{_HL_OPTS}') AS headline "
+        f"FROM {table}, qq "
+        # FTS tokenisée (mots/stems, rangés par ts_rank) OR, pour une saisie courte,
+        # substring trigramme (fragments/préfixes « syl »→« Sylvie », rang 0 → en fin),
+        # qui couvre AUSSI les symboles/stopwords (numnode=0, tsq vide ne matche rien).
+        f"WHERE {_lexical_ou_fragment(text_expr, 'qq.tsq', 'qq.raw', fragment=avec_sous_chaine(q))} "
+        f"  AND ({where_scope}) "
+        # Départage par les trois premières colonnes servies (l'id ou la clé de la
+        # ligne dans chaque source) : les hits substring-seul sont TOUS à rang 0, et
+        # sans départage leur ordre suivait la place physique de la ligne — qu'un
+        # UPDATE déplace (le rattrapage du vecteur suffisait à les permuter).
+        "ORDER BY rank DESC, 1, 2, 3 LIMIT %s"
+    )
+    # Params : tsq (1×q) + raw (1×q) dans le CTE, puis scope, puis limit.
+    with _connect() as conn:
+        rows = [dict(r) for r in conn.execute(sql, (q, q, *scope_params, limit)).fetchall()]
+        if not rows and len(q.split()) > 1:
+            rows = _repli_plus_de_termes(
+                conn, table, text_expr, select_cols, hl_text, where_scope,
+                scope_params, q, limit, rank_on)
+        return rows
 
-    def _run(or_mode: bool) -> list[dict]:
-        ws = f"websearch_to_tsquery('french', {fold_q})"
-        # OR = passer les `&` de la tsquery en `|` (garde le stemming de websearch).
-        tsq = f"replace({ws}::text, '&', '|')::tsquery" if or_mode else ws
-        sql = (
-            f"WITH qq AS (SELECT {tsq} AS tsq, {fold_q} AS raw) "
-            f"SELECT {select_cols}, {_rang(rank_on, 'qq.tsq')} AS rank, "
-            f"ts_headline('french', {hl_text}, qq.tsq, '{_HL_OPTS}') AS headline "
-            f"FROM {table}, qq "
-            # FTS tokenisée (mots/stems, rangés par ts_rank) OR substring trigramme
-            # (fragments/préfixes « syl »→« Sylvie », rang 0 → en fin). Le substring
-            # couvre AUSSI les symboles/stopwords (numnode=0, tsq vide ne matche rien).
-            f"WHERE {_lexical_ou_fragment(text_expr, 'qq.tsq', 'qq.raw')} "
-            f"  AND ({where_scope}) "
-            # Départage par les trois premières colonnes servies (l'id ou la clé de la
-            # ligne dans chaque source) : les hits substring-seul sont TOUS à rang 0, et
-            # sans départage leur ordre suivait la place physique de la ligne — qu'un
-            # UPDATE déplace (le rattrapage du vecteur suffisait à les permuter).
-            "ORDER BY rank DESC, 1, 2, 3 LIMIT %s"
-        )
-        # Params : tsq (1×q) + raw (1×q) dans le CTE, puis scope, puis limit.
-        with _connect() as conn:
-            rows = conn.execute(sql, (q, q, *scope_params, limit)).fetchall()
-            return [dict(r) for r in rows]
 
-    rows = _run(or_mode=False)
-    if not rows and len(q.split()) > 1:
-        rows = _run(or_mode=True)  # aucun résultat en AND multi-termes → OR
-    return rows
+def _repli_plus_de_termes(conn, table: str, text_expr: str, select_cols: str,
+                          hl_text: str, where_scope: str, scope_params: tuple, q: str,
+                          limit: int, rank_on: str) -> list[dict]:
+    """Le repli d'une saisie de plusieurs mots dont le ET ne trouve rien : les contenus
+    qui portent le PLUS de termes de la saisie, départagés par `_rang`.
+
+    L'ancien repli élargissait au OU de tous les termes : avec un terme présent presque
+    partout (« ca », clé de chaque ligne d'un tableau de chiffre d'affaires), le OU
+    rendait la source entière, la classait entière, et un contenu qui ne portait que ce
+    terme pouvait passer devant un contenu qui en portait six.
+
+    Deux requêtes, sur la connexion du ET :
+
+    1. **la fréquence de chaque terme** dans le périmètre, lue par le GIN et BORNÉE à
+       `CANDIDATS_MAX` (savoir qu'un terme est fréquent ne demande pas de compter
+       jusqu'au bout) ;
+    2. **les candidats** : les contenus qui portent l'un des termes PILOTES — les plus
+       rares, pris tant que leurs fréquences cumulées restent sous `CANDIDATS_MAX`
+       (toujours au moins un). Chaque candidat compte les termes qu'il porte sur le
+       vecteur de classement matérialisé (#318, sans recalcul) ; seuls ceux qui en
+       portent le plus sont rendus.
+
+    Pourquoi c'est juste : un contenu qui porte au moins `m` des `n` termes porte
+    forcément l'un des `n - m + 1` plus rares. Avec `k` pilotes, tout contenu qui porte
+    `n - k + 1` termes ou plus est donc candidat, et un terme fréquent ne fait jamais
+    entrer à lui seul un contenu qui ne porte que lui. Quand TOUS les termes sont
+    fréquents, le pilote unique (le moins fréquent) borne le coût au lieu de garantir le
+    maximum : c'est la limite connue du repli."""
+    def _porte(tsq: str) -> str:            # le filtre, sur l'expression des GIN
+        return _lexical_ou_fragment(text_expr, tsq, "", fragment=False)
+
+    frequences = conn.execute(
+        f"SELECT l AS terme, (SELECT count(*) FROM (SELECT 1 FROM {table} "
+        f"  WHERE {_porte(_TERME_TSQ.format(l='l'))} AND ({where_scope}) "
+        f"  LIMIT %s) s) AS n "
+        f"FROM unnest(tsvector_to_array(to_tsvector('french', {_fold('%s')}))) AS l",
+        (*scope_params, CANDIDATS_MAX, q)).fetchall()
+    if not frequences:          # que des mots vides : rien à chercher par le sens
+        return []
+    termes = sorted(r["terme"] for r in frequences)
+    pilotes, cumul = [], 0
+    for r in sorted(frequences, key=lambda r: (r["n"], r["terme"])):
+        if pilotes and cumul + r["n"] > CANDIDATS_MAX:
+            break
+        pilotes.append(r["terme"])
+        cumul += r["n"]
+    un_terme = _TERME_TSQ.format(l="t")
+    rows = conn.execute(
+        "WITH qq AS (SELECT "
+        f"  (SELECT string_agg(({un_terme})::text, ' | ')::tsquery "
+        "     FROM unnest(%s::text[]) t) AS pilote, "
+        f"  (SELECT string_agg(({un_terme})::text, ' | ')::tsquery "
+        "     FROM unnest(%s::text[]) t) AS tsq, "
+        f"  (SELECT array_agg({un_terme}) FROM unnest(%s::text[]) t) AS termes) "
+        f"SELECT {select_cols}, portes.n AS termes_portes, "
+        f"{_rang(rank_on, 'qq.tsq')} AS rank, "
+        f"ts_headline('french', {hl_text}, qq.tsq, '{_HL_OPTS}') AS headline "
+        f"FROM {table} CROSS JOIN qq "
+        "CROSS JOIN LATERAL (SELECT count(*) AS n FROM unnest(qq.termes) u "
+        f"  WHERE {rank_on} @@ u) portes "
+        f"WHERE {_porte('qq.pilote')} AND ({where_scope}) "
+        "ORDER BY termes_portes DESC, rank DESC, 1, 2, 3 LIMIT %s",
+        (pilotes, termes, termes, *scope_params, limit)).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        if r["termes_portes"] < rows[0]["termes_portes"]:
+            break
+        d = dict(r)
+        del d["termes_portes"]
+        out.append(d)
+    return out
 
 
 def search_docs_fts(q: str, project_ids: list[int], *, limit: int = 20) -> list[dict]:
@@ -608,8 +709,8 @@ def search_file_contents(q: str, project_ids: list[int], *, limit: int = 20) -> 
     """Le CONTENU des fichiers déposés (#298) — kind=fichier, `matched_by='content'`.
 
     Même régime que les autres sources de prose (`_prose_query` : FTS foldée `OR`
-    substring indexé trigramme, fallback OR, headline sur le texte). Chercher « syl »
-    trouve donc « Sylvestre » dans un PDF comme dans une page — la mesure a tranché :
+    substring indexé trigramme pour une saisie courte, repli « le plus de termes »,
+    headline sur le texte). Chercher « syl » trouve donc « Sylvestre » dans un PDF comme dans une page — la mesure a tranché :
     la FTS seule ne rend RIEN sur un fragment interne (0 résultat), le trigramme le
     trouve en 2 ms, et sans lui l'`ILIKE` structurel de ce patron coûterait 2,5 s.
 
@@ -656,8 +757,8 @@ def search_datastore_rows_fts(q: str, ns_ids: list[int], *, limit: int = 20) -> 
     """Lignes de datastore des namespaces ACCESSIBLES (résolus par le caller, jamais
     ici — invariant « cherchable ⇔ lisible » : une ligne hérite de l'accès de son
     namespace) — kind=ligne (#67 V2.1). Même régime FTS que la prose (index GIN
-    d'expression `french` + repli d'accents + fallback OR + repli ILIKE symboles),
-    headline sur le JSON rendu (pipes dépipés). Retour : `ns_id, row_id` (deep-link)
+    d'expression `french` + repli d'accents + repli « le plus de termes » + repli ILIKE
+    symboles pour une saisie courte), headline sur le JSON rendu (pipes dépipés). Retour : `ns_id, row_id` (deep-link)
     + `headline`."""
     if not ns_ids:
         return []

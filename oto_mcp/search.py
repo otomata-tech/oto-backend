@@ -31,9 +31,11 @@ active (`None` = inconnue), cf. `_stamp_origins` et ADR 0071.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import logging
-from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Optional, Union
 
 from . import db, org_origin, ownership
 
@@ -65,6 +67,59 @@ def _headline_ok(h: Optional[str]) -> bool:
     return bool(h) and "<b>" in h
 
 
+def _pg(vec: list[float]) -> str:
+    from .embeddings import to_pg
+    return to_pg(vec)
+
+
+# Sources interrogées EN MÊME TEMPS, au plus. Chacune emprunte une connexion au pool le
+# temps de sa requête (une seule, repli compris) : une recherche en tient donc au plus
+# ce nombre à la fois, et jamais plus d'un huitième du pool — 3 sur les 24 par défaut,
+# de quoi laisser servir les autres appels pendant une rafale de recherches.
+SOURCES_EN_PARALLELE_MAX = 4
+_PART_DU_POOL = 8
+
+# Le vecteur de la requête : déjà là (une liste), à venir (un appel qui l'attend et le
+# rend), ou absent (`None`, recherche lexicale seule).
+Vecteur = Union[list[float], Callable[[], Optional[list[float]]], None]
+
+
+def concurrence() -> int:
+    """Combien de sources une recherche interroge à la fois.
+
+    Une : sous une portée de connexion PARTAGÉE (`reuse_connection`,
+    `transaction_d_ecriture`), dont toutes les requêtes passent par la même connexion —
+    elle ne se partage pas entre threads."""
+    if db.connexion_partagee():
+        return 1
+    return max(1, min(SOURCES_EN_PARALLELE_MAX, db.taille_du_pool() // _PART_DU_POOL))
+
+
+def _interroger(sources: list[tuple[Callable, Callable, bool]],
+                query_embedding: Vecteur) -> list[tuple[list, Callable]]:
+    """Joue les sources, `concurrence()` à la fois, et rend `(lignes, mise en forme)`
+    dans l'ORDRE des sources — celui de la fusion.
+
+    Les lexicales partent d'abord ; le vecteur de la requête est attendu ENSUITE, pendant
+    qu'elles tournent, puis les sémantiques partent. Sans vecteur (`None`), les
+    sémantiques ne sont pas jouées, comme avant. Chaque appel tourne dans une copie du
+    contexte de l'appelant (bornes de durée d'une portée de lecture comprises). Une
+    source qui lève fait lever la recherche, avec son exception : aucun repli."""
+    with ThreadPoolExecutor(max_workers=concurrence(),
+                            thread_name_prefix="recherche") as pool:
+        def lancer(appel: Callable, *args):
+            return pool.submit(contextvars.copy_context().run, appel, *args)
+
+        futurs = [None if semantique else lancer(appel)
+                  for appel, _, semantique in sources]
+        vecteur = query_embedding() if callable(query_embedding) else query_embedding
+        if vecteur is not None:
+            futurs = [lancer(appel, vecteur) if semantique else f
+                      for f, (appel, _, semantique) in zip(futurs, sources)]
+        return [(f.result(), to_hit)
+                for f, (_, to_hit, _) in zip(futurs, sources) if f is not None]
+
+
 def _snippet(text: str, cap: int = 160) -> str:
     t = " ".join((text or "").split())
     return t[:cap] + ("…" if len(t) > cap else "")
@@ -74,13 +129,18 @@ def search(sub: str, org_id: int, q: str, *,
            scope: str = "org", project_id: Optional[int] = None,
            kinds: Optional[list[str]] = None, limit: int = 20,
            connectors_catalog: Optional[list[dict]] = None,
-           query_embedding: Optional[list[float]] = None,
+           query_embedding: Vecteur = None,
            apps_catalog: Optional[list[dict]] = None) -> dict:
     """Le verbe « retrouver ». `scope='project'` restreint à UN projet (déjà validé
     accessible par le caller) ; défaut = tous les projets accessibles de l'org.
     `query_embedding` (fourni par le handler async, hors event loop) active la
     fusion LEXICAL + SÉMANTIQUE des pages par RRF (sinon lexical seul, dégradation
-    gracieuse : le sémantique n'est jamais un prérequis)."""
+    gracieuse : le sémantique n'est jamais un prérequis). Il peut être À VENIR (un
+    appel qui l'attend) : les sources lexicales tournent alors pendant qu'on le calcule.
+
+    Les sources sont interrogées EN PARALLÈLE, à concurrence bornée (`concurrence`),
+    et fusionnées dans un ordre fixe : le résultat ne dépend pas de qui finit le
+    premier."""
     wanted = set(kinds) if kinds else set(KINDS)
     per_source = min(max(limit, 10), 50)
 
@@ -93,49 +153,47 @@ def search(sub: str, org_id: int, q: str, *,
     namespaces = (_accessible_namespaces(sub, org_id)
                   if wanted & {"tableau", "ligne"} else [])
 
-    ranked: list[tuple[float, dict]] = []
+    # Les sources, dans l'ORDRE de la fusion : (appel, mise en forme, sémantique ?). Un
+    # appel lexical ne prend rien ; un appel sémantique prend le vecteur de la requête.
+    # L'ordre compte : à score égal, le RRF garde le premier hit rencontré.
+    sources: list[tuple[Callable, Callable, bool]] = []
 
-    def _add(rows: list[dict], to_hit) -> None:
-        for i, r in enumerate(rows):
-            hit = to_hit(r)
-            if hit is not None:
-                ranked.append((1.0 / (_RRF_K + i + 1), hit))
+    def _source(appel: Callable, to_hit: Callable, semantique: bool = False) -> None:
+        sources.append((appel, to_hit, semantique))
 
     # ── passages ────────────────────────────────────────────────────────────
     if "page" in wanted:
-        _add(db.search_docs_fts(q, pids, limit=per_source), lambda r: {
+        _source(lambda: db.search_docs_fts(q, pids, limit=per_source), lambda r: {
             "kind": "page", "ref": r["id"], "title": r["title"],
             "project_id": r["project_id"], "description": r.get("description") or None,
             "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
             "updated_at": r.get("updated_at"), "matched_by": "lexical"})
         # Sémantique (lot 3) : les pages proches du sens de la requête, fusionnées au
         # lexical par RRF (une page trouvée par les DEUX cumule ses deux rangs → remonte).
-        if query_embedding is not None:
-            from .embeddings import to_pg
-            _add(db.search_docs_semantic(to_pg(query_embedding), pids, limit=per_source),
-                 lambda r: {"kind": "page", "ref": r["id"], "title": r["title"],
-                            "project_id": r["project_id"], "description": r.get("description") or None,
-                            # Pas de surlignage lexical sur un hit sémantique pur → passage
-                            # de repli = début du corps (à défaut, le chapô), pour juger la
-                            # pertinence sans ouvrir la page (oto-backend#6).
-                            "passage": _snippet(r.get("body_excerpt") or r.get("description") or "") or None,
-                            "updated_at": r.get("updated_at"), "matched_by": "semantic"})
+        _source(lambda v: db.search_docs_semantic(_pg(v), pids, limit=per_source),
+                lambda r: {"kind": "page", "ref": r["id"], "title": r["title"],
+                           "project_id": r["project_id"], "description": r.get("description") or None,
+                           # Pas de surlignage lexical sur un hit sémantique pur → passage
+                           # de repli = début du corps (à défaut, le chapô), pour juger la
+                           # pertinence sans ouvrir la page (oto-backend#6).
+                           "passage": _snippet(r.get("body_excerpt") or r.get("description") or "") or None,
+                           "updated_at": r.get("updated_at"), "matched_by": "semantic"},
+                semantique=True)
     if "brief" in wanted:
-        _add(db.search_project_briefs(q, pids, limit=per_source), lambda r: {
+        _source(lambda: db.search_project_briefs(q, pids, limit=per_source), lambda r: {
             "kind": "brief", "ref": r["id"], "title": r["name"],
             "project_id": r["id"],
             "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
             "updated_at": r.get("updated_at"), "matched_by": "lexical"})
         # Sémantique sur les briefs (#6 C) — fusionnée au lexical par RRF, comme les pages.
-        if query_embedding is not None:
-            from .embeddings import to_pg
-            _add(db.search_briefs_semantic(to_pg(query_embedding), pids, limit=per_source),
-                 lambda r: {"kind": "brief", "ref": r["id"], "title": r["name"],
-                            "project_id": r["id"],
-                            "passage": _snippet(r.get("body_excerpt") or "") or None,
-                            "updated_at": r.get("updated_at"), "matched_by": "semantic"})
+        _source(lambda v: db.search_briefs_semantic(_pg(v), pids, limit=per_source),
+                lambda r: {"kind": "brief", "ref": r["id"], "title": r["name"],
+                           "project_id": r["id"],
+                           "passage": _snippet(r.get("body_excerpt") or "") or None,
+                           "updated_at": r.get("updated_at"), "matched_by": "semantic"},
+                semantique=True)
     if "procedure" in wanted:
-        _add(db.search_procedures_fts(q, org_id, limit=per_source), lambda r: {
+        _source(lambda: db.search_procedures_fts(q, org_id, limit=per_source), lambda r: {
             "kind": "procedure", "ref": r["slug"], "title": r["title"] or r["slug"],
             "description": r.get("description") or None,
             "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
@@ -144,35 +202,33 @@ def search(sub: str, org_id: int, q: str, *,
         # Guides PERSONNELS (`owner_type='user'`) : dans l'org perso seulement, comme
         # tout objet personnel d'une liste (décision du 28/09/2026). `None` : aucun.
         guide_sub = sub if ownership.perso_de_la_liste(sub, org_id) else None
-        _add(db.search_guides_fts(q, org_id, guide_sub, limit=per_source), lambda r: {
+        _source(lambda: db.search_guides_fts(q, org_id, guide_sub, limit=per_source), lambda r: {
             "kind": "guide", "ref": {"scope": r["scope"], "slug": r["slug"]},
             "title": r["title"] or r["slug"],
             "description": r.get("description") or None,
             "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
             "updated_at": r.get("updated_at"), "matched_by": "lexical"})
         # Sémantique sur les guides on-demand (#6 C).
-        if query_embedding is not None:
-            from .embeddings import to_pg
-            _add(db.search_guides_semantic(to_pg(query_embedding), org_id, guide_sub,
-                                           limit=per_source),
-                 lambda r: {"kind": "guide", "ref": {"scope": r["scope"], "slug": r["slug"]},
-                            "title": r["title"] or r["slug"],
-                            "description": r.get("description") or None,
-                            "passage": _snippet(r.get("body_excerpt") or "") or None,
-                            "updated_at": r.get("updated_at"), "matched_by": "semantic"})
+        _source(lambda v: db.search_guides_semantic(_pg(v), org_id, guide_sub,
+                                                    limit=per_source),
+                lambda r: {"kind": "guide", "ref": {"scope": r["scope"], "slug": r["slug"]},
+                           "title": r["title"] or r["slug"],
+                           "description": r.get("description") or None,
+                           "passage": _snippet(r.get("body_excerpt") or "") or None,
+                           "updated_at": r.get("updated_at"), "matched_by": "semantic"},
+                semantique=True)
 
     # ── conteneurs ──────────────────────────────────────────────────────────
     if "tableau" in wanted:
-        _add(_match_tableaux(q, namespaces), lambda r: r)
+        _source(lambda: _match_tableaux(q, namespaces), lambda r: r)
     # ── lignes de datastore (#67 V2.1/V2.2) — le contenu DANS les tableaux ────
     if "ligne" in wanted:
-        _add(_match_rows(q, namespaces), lambda r: r)
+        _source(lambda: _match_rows(q, namespaces), lambda r: r)
         # Sémantique (V2.2) : lignes des namespaces OPT-IN proches du sens de la
         # requête, fusionnées au lexical par RRF (comme les pages).
-        if query_embedding is not None:
-            _add(_match_rows_semantic(namespaces, query_embedding), lambda r: r)
+        _source(lambda v: _match_rows_semantic(namespaces, v), lambda r: r, semantique=True)
     if "fichier" in wanted:
-        _add(db.search_files_meta(q, pids, limit=per_source), lambda r: {
+        _source(lambda: db.search_files_meta(q, pids, limit=per_source), lambda r: {
             "kind": "fichier", "ref": r["id"],
             "title": r.get("title") or r["filename"],
             "description": r.get("description") or None,
@@ -185,16 +241,23 @@ def search(sub: str, org_id: int, q: str, *,
         # les deux : un fichier trouvé par son nom ET par son contenu cumule ses rangs
         # et remonte. `matched_by='content'` dit lequel des deux a répondu, et le
         # `passage` porte l'extrait — c'est lui qui montre POURQUOI le fichier sort.
-        _add(db.search_file_contents(q, pids, limit=per_source), lambda r: {
+        _source(lambda: db.search_file_contents(q, pids, limit=per_source), lambda r: {
             "kind": "fichier", "ref": r["id"],
             "title": r.get("title") or r["filename"],
             "passage": _snippet(r.get("headline") or "") or None,
             "project_id": r["project_id"],
             "updated_at": r.get("created_at"), "matched_by": "content"})
     if "connecteur" in wanted and connectors_catalog:
-        _add(_match_connectors(q, connectors_catalog), lambda r: r)
+        _source(lambda: _match_connectors(q, connectors_catalog), lambda r: r)
     if "app" in wanted and apps_catalog:
-        _add(_match_apps(q, apps_catalog), lambda r: r)
+        _source(lambda: _match_apps(q, apps_catalog), lambda r: r)
+
+    ranked: list[tuple[float, dict]] = []
+    for rows, to_hit in _interroger(sources, query_embedding):
+        for i, r in enumerate(rows):
+            hit = to_hit(r)
+            if hit is not None:
+                ranked.append((1.0 / (_RRF_K + i + 1), hit))
 
     # ── fusion RRF : dédup par (kind, ref) en SOMMANT les rangs réciproques ──
     # Une page trouvée par lexical ET sémantique cumule ses deux contributions →
@@ -440,8 +503,7 @@ def _match_rows_semantic(ns: list[dict], query_embedding: list[float]) -> list[d
     if not ns:
         return []
     names = {r["id"]: r["datastore"] for r in ns}
-    from .embeddings import to_pg
-    rows = db.search_datastore_rows_semantic(to_pg(query_embedding), list(names.keys()))
+    rows = db.search_datastore_rows_semantic(_pg(query_embedding), list(names.keys()))
     return _row_hits(rows, names, "semantic")
 
 

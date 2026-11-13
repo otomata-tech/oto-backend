@@ -22,6 +22,14 @@ coûte au pool que la ligne du journal REST (`RestCallLogger`, au-dessus), écri
 de la boucle comme pour tout appel, et qui garde le refus visible. Corps JSON de l'enveloppe d'erreur ordinaire
 (`{error, detail, details}`), avec les en-têtes CORS de l'origine : un navigateur le lit.
 
+**Une requête qui en vaut plusieurs** : un lot de lectures d'app (`me.app.call`,
+`action: "batch"`) passe la garde comme UNE requête — une place de concurrence, un
+appel au débit — puis son handler débite les lectures suivantes sur la MÊME fenêtre
+(`debiter_en_plus`, la fenêtre de la requête en cours, posée par la garde le temps de
+la requête) : un lot de dix coûte dix appels au débit, et il est refusé ENTIER
+(`429 rate_limited`, même corps) quand ce qui reste ne les couvre pas. Le corps n'est
+jamais lu ici : c'est la capacité qui sait combien de lectures elle sert.
+
 **Ce qu'il ne fait pas.** Les compteurs vivent dans le PROCESSUS : deux processus
 (bascule bleu/vert, canari) ont chacun les leurs. C'est une protection du pool de CE
 processus, lui aussi par processus — pas un quota de facturation. Le filtre global par
@@ -30,6 +38,7 @@ ni `/mcp` ni le reste de `/api/*`.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -37,8 +46,9 @@ import re
 import threading
 import time
 from collections import deque
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from .base import _cors_headers
 
@@ -47,6 +57,23 @@ _FENETRE_S = 60.0
 # grossit pas sans fin avec le nombre de jetons vus.
 _PURGE_AU_DELA = 10_000
 _ATTENTE_SATURATION_S = 2
+
+# Le débit de la requête EN COURS sur une route lourde : de quoi y débiter des appels de
+# plus (`debiter_en_plus`). Posé par la garde autour de la requête, vide ailleurs ; le
+# handler d'une capacité le lit depuis son thread (`run_in_threadpool` copie le contexte).
+_debit_de_la_requete: ContextVar[Optional[Callable[[int], Optional[tuple[int, int]]]]] = (
+    ContextVar("_debit_de_la_requete", default=None))
+
+
+def debiter_en_plus(n: int) -> Optional[tuple[int, int]]:
+    """Débite `n` appels DE PLUS au débit par jeton de la requête en cours (un lot qui
+    sert plusieurs lectures). Rend `None` — débité, ou hors d'une route lourde, ou
+    `n <= 0` — ou `(attente en s, débit par minute)` quand la fenêtre ne les couvre pas :
+    rien n'est alors débité, c'est à l'appelant de refuser."""
+    debit = _debit_de_la_requete.get()
+    if debit is None or n <= 0:
+        return None
+    return debit(n)
 
 
 @dataclass(frozen=True)
@@ -137,7 +164,9 @@ ROUTES_LOURDES: tuple[RouteLourde, ...] = (
                   "des tableaux de toute taille, appelés par un tableau de bord laissé "
                   "ouvert : sans borne, quelques onglets sur un grand tableau "
                   "reproduiraient #1141. Le débit couvre une page active (60/min) et sa "
-                  "relecture sur plusieurs onglets ; la concurrence garde le pool.")),
+                  "relecture sur plusieurs onglets ; la concurrence garde le pool. Un "
+                  "lot de lectures (`batch`, 10 au plus) prend UNE place de concurrence "
+                  "et paie au débit chacune de ses lectures (`debiter_en_plus`).")),
     RouteLourde(
         "POST", "/api/me/apps/{app_id}/consent", par_minute=240, concurrence=8,
         pourquoi=("Le consentement d'un geste d'app (`me.app.consent`) : depuis que le "
@@ -247,12 +276,15 @@ class GardeRoutesLourdes:
         if route is None:
             return await self.app(scope, receive, send)
 
-        refus = self._prendre(route, _empreinte(scope), time.monotonic())
+        cle = _empreinte(scope)
+        refus = self._prendre(route, cle, time.monotonic())
         if refus is not None:
             return await self._refuser(scope, send, *refus)
+        jeton = _debit_de_la_requete.set(functools.partial(self._prendre_en_plus, route, cle))
         try:
             await self.app(scope, receive, send)
         finally:
+            _debit_de_la_requete.reset(jeton)
             with self._c.verrou:
                 self._c.en_cours[route.gabarit] -= 1
 
@@ -280,6 +312,28 @@ class GardeRoutesLourdes:
             if fenetre is not None:
                 fenetre.append(maintenant)
                 self._purger(maintenant)
+        return None
+
+    def _prendre_en_plus(self, route: RouteLourde, cle: str, n: int,
+                         maintenant: Optional[float] = None) -> Optional[tuple[int, int]]:
+        """`n` appels de plus sur la fenêtre de `(route, cle)`, tous ou aucun : `None`
+        (débités) ou `(attente, par_minute)` — le temps qu'il faut pour que la fenêtre
+        les couvre tous."""
+        if route.par_minute <= 0:
+            return None
+        maintenant = time.monotonic() if maintenant is None else maintenant
+        with self._c.verrou:
+            fenetre = self._c.appels.setdefault((route.gabarit, cle), deque())
+            while fenetre and maintenant - fenetre[0] >= _FENETRE_S:
+                fenetre.popleft()
+            de_trop = len(fenetre) + n - route.par_minute
+            if de_trop > 0:
+                if de_trop > len(fenetre):
+                    # Plus d'appels que la fenêtre entière n'en tient : jamais servi.
+                    return (math.ceil(_FENETRE_S), route.par_minute)
+                attente = max(1, math.ceil(_FENETRE_S - (maintenant - fenetre[de_trop - 1])))
+                return (attente, route.par_minute)
+            fenetre.extend([maintenant] * n)
         return None
 
     def _purger(self, maintenant: float) -> None:

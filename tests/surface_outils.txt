@@ -412,7 +412,7 @@ lemlist_enrich	-	aa1900d7742752bf
 lemlist_enrich_bulk	-	c5e73348a4e3e4cc
 lemlist_enrich_lead	-	c389658f6f9b0b86
 lemlist_enrich_result	-	6bb4885070cf3589
-lemlist_get_activities	-	621eee7133b3b248
+lemlist_get_activities	-	f078c0515a85ad89
 lemlist_get_campaign	-	0fcf76c93412d4a7
 lemlist_get_campaign_stats	-	2272acb1171904d8
 lemlist_get_leads	-	0fcf76c93412d4a7

@@ -62,6 +62,7 @@ from dataclasses import asdict
 import datetime as _dt
 from typing import Literal, Optional
 
+import requests
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
@@ -444,8 +445,15 @@ def register(mcp: FastMCP) -> None:
         all_pages: bool = False,
         since: Optional[str] = None,
         max_pages: int = 50,
+        fields: Optional[list[str]] = None,
+        compact: bool = False,
     ) -> dict:
         """Get activity events (opens, clicks, replies, LinkedIn actions…).
+
+        Each event carries its whole lead (every personalised copy of the
+        sequence, in HTML, and the custom variables) and lemlist's metadata:
+        100 events run to hundreds of thousands of characters. Pass
+        `compact=True` unless you need a field it drops.
 
         Args:
             campaign_id: Restrict to a campaign.
@@ -465,18 +473,48 @@ def register(mcp: FastMCP) -> None:
                 paging route only takes the campaign and the date floor.
             since: With `all_pages`, keep only what is newer than this date.
             max_pages: Ceiling on the walk.
+            compact: The short view of each event: `_id`, `type`,
+                `createdAt`, `campaignId`, `campaignName`, `sequenceStep`,
+                `leadId`, `contactId`, `leadEmail`, `leadFirstName`,
+                `leadLastName`, `leadCompanyName`, `fromEmail` (who replied),
+                `sendUserEmail`, `subject`, and `excerpt`: the first 280
+                characters of the message body (text first, else lemlist's
+                preview, else the HTML body without its tags). Never HTML,
+                never the lead's variables.
+            fields: Keep only these keys of each event, a nested one by a
+                dotted path (`lead.variables.email`, lists traversed, no
+                indexes); a key an event lacks is skipped. With
+                `compact=True`, each field named is taken from the full event
+                and added to (or replaces) the short view's key of the same
+                first level. Neither: the events as lemlist sends them.
         """
         client, is_platform = _client()
-        if all_pages:
-            events = client.sync_activities(
-                campaign_id=campaign_id, since=since, max_pages=max_pages)
-        else:
-            events = client.get_activities(
-                campaign_id=campaign_id, limit=limit, offset=offset,
-                type=activity_type, lead_id=lead_id, is_first=is_first,
-                start_date=start_date, end_date=end_date,
-                min_date=min_date, max_date=max_date,
-            )
+        # Passed only when asked for: a call without a view stays the call lemlist
+        # has always received, whatever the installed client.
+        view = {}
+        if fields is not None:
+            view["fields"] = fields
+        if compact:
+            view["compact"] = compact
+        try:
+            if all_pages:
+                events = client.sync_activities(
+                    campaign_id=campaign_id, since=since, max_pages=max_pages,
+                    **view)
+            else:
+                events = client.get_activities(
+                    campaign_id=campaign_id, limit=limit, offset=offset,
+                    type=activity_type, lead_id=lead_id, is_first=is_first,
+                    start_date=start_date, end_date=end_date,
+                    min_date=min_date, max_date=max_date, **view,
+                )
+        except ValueError as e:
+            # A malformed `fields` or `compact`: the client refuses it before any
+            # request. Only then: `requests` has ValueErrors of its own (a bad URL,
+            # a body that is not JSON), which say nothing about the arguments.
+            if not view or isinstance(e, requests.RequestException):
+                raise
+            raise _bad(str(e)) from e
         return {"activities": events, "count": len(events)}
 
     @mcp.tool(annotations=LECTURE)

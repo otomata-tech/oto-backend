@@ -243,6 +243,140 @@ def test_les_activites_savent_marcher_les_pages():
         assert out["count"] == 1
 
 
+# --- Les activités : une page lisible (signal d'usage 1464) -----------------------
+# Chaque activité porte son lead entier (toutes les copies de la séquence, en HTML) :
+# 100 activités dépassent ce qu'un run d'agent lit. Le client d'oto-core façonne la
+# liste (`fields`, `compact`) ; le tool transmet, et rend en paramètre invalide ce que
+# le client refuse.
+
+@pytest.mark.parametrize("all_pages,method", [(False, "get_activities"),
+                                              (True, "sync_activities")])
+def test_la_vue_des_activites_est_transmise_au_client(all_pages, method):
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        getattr(inst, method).return_value = [{"type": "emailsSent"}]
+        out = _tool("lemlist_get_activities", "lemlist").fn(
+            campaign_id="cam_1", all_pages=all_pages, compact=True,
+            fields=["lead.variables.email"])
+        kwargs = getattr(inst, method).call_args.kwargs
+        assert kwargs["compact"] is True
+        assert kwargs["fields"] == ["lead.variables.email"]
+        assert kwargs["campaign_id"] == "cam_1"
+        assert out["count"] == 1
+
+
+@pytest.mark.parametrize("all_pages,method", [(False, "get_activities"),
+                                              (True, "sync_activities")])
+def test_sans_vue_l_appel_des_activites_est_inchange(all_pages, method):
+    """Ni `fields` ni `compact` : rien de neuf ne part au client — l'appel est celui
+    d'avant, quel que soit l'oto-core installé."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        getattr(inst, method).return_value = []
+        _tool("lemlist_get_activities", "lemlist").fn(all_pages=all_pages)
+        kwargs = getattr(inst, method).call_args.kwargs
+        assert "fields" not in kwargs and "compact" not in kwargs
+
+
+def test_une_vue_des_activites_refusee_par_le_client_est_un_parametre_invalide():
+    from mcp.types import INVALID_PARAMS
+    from oto_mcp.mcp_errors import McpError
+
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        client_cls.return_value.get_activities.side_effect = ValueError(
+            "fields is a non-empty list of field names")
+        with pytest.raises(McpError, match="non-empty list") as exc:
+            _tool("lemlist_get_activities", "lemlist").fn(fields=[])
+    assert exc.value.error.code == INVALID_PARAMS
+
+
+def test_une_erreur_de_transport_des_activites_n_est_pas_un_parametre_invalide():
+    """`requests` a ses propres ValueError (corps non JSON, URL invalide) : elles ne
+    disent rien des arguments. Et sans vue demandée, une ValueError reste la sienne."""
+    import requests
+
+    from oto_mcp.mcp_errors import McpError
+
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_activities.side_effect = requests.exceptions.InvalidJSONError("not json")
+        with pytest.raises(requests.exceptions.InvalidJSONError):
+            _tool("lemlist_get_activities", "lemlist").fn(compact=True)
+        inst.get_activities.side_effect = ValueError("x")
+        with pytest.raises(ValueError) as exc:
+            _tool("lemlist_get_activities", "lemlist").fn()
+        assert not isinstance(exc.value, McpError)
+
+
+def _activites_doublees(monkeypatch, body):
+    """Le vrai client d'oto-core, seul `requests` doublé : ce qui part à lemlist."""
+    import json
+
+    import requests
+
+    sent = []
+    texte = json.dumps(body)
+
+    class _Rep:
+        status_code = 200
+        ok = True
+        headers = {}
+        text = texte
+        content = texte.encode()
+
+        def json(self):
+            return body
+
+    def _request(method, url, **kw):
+        sent.append((method, url, kw.get("params")))
+        return _Rep()
+
+    monkeypatch.setattr(requests, "request", _request)
+    return sent
+
+
+def test_compact_des_activites_atteint_le_vrai_client(monkeypatch):
+    """Les tests ci-dessus doublent le client et ne voient pas qu'un oto-core sans la
+    vue lève `TypeError` au premier vrai appel. Sauté tant que l'oto-core installé n'a
+    pas `activity_views` (lemlist 1.4.0) ; il mord dès que le pin l'inclut."""
+    pytest.importorskip("oto.tools.lemlist.activity_views")
+    activity = {
+        "_id": "act_1", "type": "emailsSent", "createdAt": "2026-01-02T10:00:00Z",
+        "campaignId": "cam_1", "leadEmail": "ada@example.test", "subject": "An idea",
+        "messagePreview": "Hello Ada,",
+        "lead": {"variables": {f"h_e{n}": "<p>copy</p>" * 500 for n in range(1, 6)}},
+        "metaData": {"teamId": "tea_1"},
+    }
+    sent = _activites_doublees(monkeypatch, [activity])
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)):
+        out = _tool("lemlist_get_activities", "lemlist").fn(compact=True)
+
+    assert len(sent) == 1 and sent[0][0] == "GET"
+    assert "compact" not in (sent[0][2] or {}), "la vue ne part jamais à lemlist"
+    (event,) = out["activities"]
+    assert event == {"_id": "act_1", "type": "emailsSent",
+                     "createdAt": "2026-01-02T10:00:00Z", "campaignId": "cam_1",
+                     "leadEmail": "ada@example.test", "subject": "An idea",
+                     "excerpt": "Hello Ada,"}
+
+
+def test_des_fields_d_activites_malformes_sont_refuses_avant_toute_requete(monkeypatch):
+    from mcp.types import INVALID_PARAMS
+    from oto_mcp.mcp_errors import McpError
+
+    pytest.importorskip("oto.tools.lemlist.activity_views")
+    sent = _activites_doublees(monkeypatch, [])
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)):
+        with pytest.raises(McpError) as exc:
+            _tool("lemlist_get_activities", "lemlist").fn(fields=["a..b"])
+    assert exc.value.error.code == INVALID_PARAMS
+    assert not sent
+
+
 def test_les_credentials_de_boite_mail_ne_partent_pas_en_clair_au_journal():
     """`tool_calls` est lue par les surfaces de supervision : un mot de passe
     SMTP qui y arrive en clair y reste. Le masquage traverse le sous-dict."""

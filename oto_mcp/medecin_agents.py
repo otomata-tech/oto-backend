@@ -45,6 +45,14 @@ pas dans la boîte du client. Elle ne se tait que tant que la boucle VOIT l'épi
 
 ⚠️ Une classe posée à la main (`diagnose`) n'est plus réécrite par `classer`
 (`agent_episodes.classe_manuelle`).
+
+**Le catalogue des causes, en OMBRE** (13/11/2026) : chaque panne reçoit l'empreinte de son
+motif (`causes_pannes.de`), posée sur l'épisode ; une empreinte neuve entre au catalogue
+(`db/causes_agents.relever`, un lot par passage) avec la classe de la regex. Le catalogue
+ne décide d'AUCUN geste : le bilan dit ce qu'il aurait décidé (`catalogue_*`) — combien de
+pannes il reconnaît par une cause approuvée, combien d'empreintes neuves, et les
+DÉSACCORDS (cause approuvée d'une autre classe que la regex), dits au journal. Une ombre
+qui casse ne casse pas le passage : elle le dit.
 """
 from __future__ import annotations
 
@@ -86,6 +94,9 @@ REFUS_PLAFOND = "plafond de relances atteint"
 
 #: Les orgs d'un tenant tiers déjà dites au journal par CE processus.
 _ECARTEES_DITES: set[int] = set()
+
+#: Les désaccords du catalogue déjà dits au journal par CE processus : `(cle, classe)`.
+_DESACCORDS_DITS: set[tuple] = set()
 
 # Les classes, dans l'ordre où on les essaie : (classe, côté, motif reconnu). Un motif
 # est TRONQUÉ à `MOTIF_TETE` caractères (`pannes_en_cours`) : chaque fragment tient
@@ -248,14 +259,49 @@ def _soigner(panne: dict, episode: dict, maintenant: datetime) -> Optional[str]:
     return None
 
 
+def _ombre_du_catalogue(vues: list[tuple[str, str, str, str]]) -> dict:
+    """Ce que le catalogue aurait décidé pour les pannes de ce passage — sans rien
+    décider. `vues` = `(cle, empreinte, classe, cote)` de chaque panne rangée par la
+    regex. Fail-open : une erreur du catalogue ne coûte que ce bilan, et se dit."""
+    from .db import causes_agents
+    bilan = {"catalogue_reconnues": 0, "catalogue_neuves": 0,
+             "catalogue_desaccords": 0, "catalogue_sans_empreinte": 0}
+    avec = [v for v in vues if v[0]]
+    bilan["catalogue_sans_empreinte"] = len(vues) - len(avec)
+    try:
+        causes = causes_agents.relever(avec)
+    except Exception as e:  # noqa: BLE001 — l'ombre ne fait jamais échouer le passage
+        log.warning("médecin des agents : catalogue des causes illisible (%s)", e)
+        bilan["catalogue_erreur"] = 1
+        return bilan
+    bilan["catalogue_neuves"] = sum(1 for c in causes.values() if c.get("neuve"))
+    for cle_, _empreinte, classe, cote in avec:
+        cause = causes.get(cle_) or {}
+        if cause.get("statut") != "approuvee":
+            continue
+        bilan["catalogue_reconnues"] += 1
+        # Un désaccord, c'est la regex qui A un avis et en donne un autre : une cause
+        # approuvée là où la regex dit `inconnu` est ce que le catalogue AJOUTE.
+        if classe != "inconnu" and (cause.get("classe"), cause.get("cote")) != (classe, cote):
+            bilan["catalogue_desaccords"] += 1
+            if (cle_, classe) not in _DESACCORDS_DITS:
+                _DESACCORDS_DITS.add((cle_, classe))
+                log.info("médecin des agents : désaccord du catalogue — cause %s approuvée "
+                         "%s/%s, la regex dit %s/%s", cle_, cause.get("classe"),
+                         cause.get("cote"), classe, cote)
+    return bilan
+
+
 def balayer(maintenant: Optional[datetime] = None) -> dict:
     """Un passage : clôt les guéris, relève et range les pannes, soigne ce qui se soigne.
     Synchrone (la boucle le pousse hors de l'event loop). Une panne qui casse ne
     bloque pas les suivantes."""
+    from . import causes_pannes
     from .alerte_agents_bloques import org_a_nous
     from .db import episodes_agents
 
     maintenant = maintenant or datetime.now(timezone.utc)
+    vues: list[tuple] = []
     gueris = episodes_agents.clore_les_gueris()
     pannes, relances, erreurs = 0, 0, 0
     a_nous: dict[int, bool] = {}
@@ -275,10 +321,16 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
         pannes += 1
         try:
             classe, cote = classer(panne.get("motif"))
+            # La note libre d'un agent qui s'est dit bloqué ne s'empreinte pas : chaque
+            # note ferait sa cause, et un texte de l'agent n'entre pas au catalogue.
+            empreinte = (None if panne.get("motif_de_l_agent")
+                         else causes_pannes.de(panne.get("motif")))
+            cle_ = causes_pannes.cle(empreinte) if empreinte else None
+            vues.append((cle_, empreinte, classe, cote))
             episode = episodes_agents.ouvrir_ou_rafraichir(
                 org_id=panne["org_id"], trigger_id=panne["trigger_id"], classe=classe,
                 cote=cote, motif=panne.get("motif"), job_id=panne.get("job_id"),
-                travaux=panne.get("travaux") or 0)
+                travaux=panne.get("travaux") or 0, empreinte=cle_)
             if _soigner(panne, episode, maintenant) == "relance":
                 relances += 1
         except Exception as e:  # noqa: BLE001 — une panne illisible ne bloque pas les autres
@@ -287,7 +339,8 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
                         panne.get("trigger_id"), e)
     return {"pannes": pannes, "relances": relances, "gueris": len(gueris),
             "gueris_apres_soin": sum(1 for g in gueris if g.get("reparations")),
-            "erreurs": erreurs, "tenant_tiers_ecartes": len(ecartees)}
+            "erreurs": erreurs, "tenant_tiers_ecartes": len(ecartees),
+            **_ombre_du_catalogue(vues)}
 
 
 async def run_medecin_agents_loop(interval: int = INTERVALLE_S) -> None:
@@ -298,7 +351,8 @@ async def run_medecin_agents_loop(interval: int = INTERVALLE_S) -> None:
     while True:
         try:
             bilan = await asyncio.to_thread(balayer)
-            if bilan.get("relances") or bilan.get("gueris") or bilan.get("erreurs"):
+            if (bilan.get("relances") or bilan.get("gueris") or bilan.get("erreurs")
+                    or bilan.get("catalogue_neuves") or bilan.get("catalogue_desaccords")):
                 log.info("médecin des agents : %s", bilan)
         except Exception as e:  # noqa: BLE001 — un passage raté ne tue pas la boucle
             log.warning("médecin des agents : passage en échec : %s", e)

@@ -10,7 +10,10 @@ Ce module écrit ces messages-là, sur le Slack de l'org, par SON app (le connec
 de l'org), dans le canal réglé ou, sans canal, en message privé à la personne qui a
 connecté Slack (`db/alertes_slack.py`). Trois messages, un de chaque par épisode
 (`agent_episodes`), écrits dans la langue de l'espace, sous la marque de son tenant
-(`email_brand.marque` du tenant de l'org, lu au registre des tenants) :
+(`email_brand.marque` du tenant de l'org, lu au registre des tenants). **Une org reçoit
+UN message par problème, pas par agent** (13/11/2026, `grouper`) : douze agents qu'arrête
+la même clé refusée font un message qui les nomme, avec le geste une fois ; les retours
+d'un passage partent ensemble ; une réparation part seule :
 
 - **l'agent ne fonctionne plus** — seulement quand le CLIENT doit agir (`cote =
   proprietaire`) : depuis quand, pourquoi, le geste, un bouton vers l'endroit où le
@@ -82,6 +85,10 @@ def actives() -> bool:
 _PHRASES = {
     "fr": {
         "titre": "⚠️ *{agent}* ne fonctionne plus depuis {depuis}",
+        "titre_n": "⚠️ {n} agents ne fonctionnent plus depuis {depuis} : {agents}",
+        "retour_n": "✅ {agents} refonctionnent.",
+        "et_autres": "et {n} autres",
+        "sante": "Voir la santé des agents",
         "repare": "🔧 *{agent}* — réparé par {marque} : {quoi}",
         "retour": "✅ *{agent}* refonctionne.",
         "reparer": "Réparer avec {marque}",
@@ -101,6 +108,10 @@ _PHRASES = {
     },
     "en": {
         "titre": "⚠️ *{agent}* has not been working since {depuis}",
+        "titre_n": "⚠️ {n} agents have not been working since {depuis}: {agents}",
+        "retour_n": "✅ {agents} work again.",
+        "et_autres": "and {n} more",
+        "sante": "See agent health",
         "repare": "🔧 *{agent}* — fixed by {marque}: {quoi}",
         "retour": "✅ *{agent}* works again.",
         "reparer": "Fix it with {marque}",
@@ -141,12 +152,37 @@ def langue(org_id: int) -> str:
     return marque_de_l_org(org_id).langue or "fr"
 
 
+#: Le lien du tableau de bord où se fait le geste d'une action.
+_LIEN_DE_L_ACTION = {"connectors": "connectors", "credits": "billing"}
+
+
+def _copie_de_la_cause(episode: dict, langue_: str) -> Optional[dict]:
+    """La copie de la cause APPROUVÉE de l'épisode dans cette langue, si la cause est du
+    même côté que l'épisode : une cause approuvée « titulaire » ne parle pas au client
+    d'une panne que la boucle tient pour la nôtre."""
+    copie = episode.get("cause_copie") or {}
+    if episode.get("cause_cote") != episode.get("cote"):
+        return None
+    c = copie.get(langue_) if isinstance(copie, dict) else None
+    return c if isinstance(c, dict) and c.get("headline") else None
+
+
 def message_du_probleme(org_id: int, episode: dict, langue_: str, *, marque: str,
                         sub: Optional[str]) -> dict[str, Any]:
-    """`{headline, todo, action, link}` pour le client : celui que l'agent médecin a
-    écrit, sinon la phrase de la classe. `link` est une URL du tableau de bord de ce
-    compte (`links.lien_de_l_instance`), ou None — un lien qui mène ailleurs est omis."""
+    """`{headline, todo, action, link}` pour le client, dans cet ordre de préférence :
+    la copie de la CAUSE approuvée (`agent_causes`, la même pour toutes les orgs), sinon
+    ce que l'agent médecin a écrit pour CET épisode (une cause neuve), sinon la phrase de
+    la classe. `link` est une URL du tableau de bord de ce compte
+    (`links.lien_de_l_instance`), ou None — un lien qui mène ailleurs est omis."""
     from . import links
+    cause = _copie_de_la_cause(episode, langue_)
+    if cause:
+        action = cause.get("action") if cause.get("action") in ACTIONS else None
+        lien = (links.link_for(_LIEN_DE_L_ACTION[action], sub=sub, org=int(org_id))
+                if action else None)
+        return {"headline": cause["headline"].replace("{marque}", marque),
+                "todo": (cause.get("todo") or "").replace("{marque}", marque) or None,
+                "action": action, "link": lien}
     m = episode.get("message_client") or {}
     if m.get("headline"):
         return {"headline": m["headline"], "todo": m.get("todo"),
@@ -242,6 +278,71 @@ def composer(ep: dict, langue_: str, *, marque: str) -> tuple[str, Optional[list
     return "\n".join(lignes), blocs
 
 
+#: Au-delà, un message groupé nomme les premiers agents et compte les autres.
+AGENTS_NOMMES_MAX = 5
+
+
+def _nommer(eps: list[dict], langue_: str) -> str:
+    noms = [f"*{e.get('libelle') or '#' + str(e['trigger_id'])}*" for e in eps]
+    if len(noms) > AGENTS_NOMMES_MAX:
+        reste = len(noms) - AGENTS_NOMMES_MAX
+        noms = noms[:AGENTS_NOMMES_MAX] + [_PHRASES[langue_]["et_autres"].format(n=reste)]
+    return ", ".join(noms)
+
+
+def grouper(eps: list[dict], langue_: str, *, marque: str) -> list[list[dict]]:
+    """Les messages d'un passage pour UNE org, rangés en paquets d'un message chacun :
+    les alertes dont le client lirait EXACTEMENT le même problème (même titre, même
+    geste, même lien — la même cause) partent ensemble, les retours ensemble ; une
+    réparation part seule (chacune dit son geste). Un paquet d'un seul épisode est le
+    message d'avant, mot pour mot."""
+    paquets: dict[tuple, list[dict]] = {}
+    for ep in eps:
+        if ep["message"] == "alerte":
+            pb = message_du_probleme(int(ep["org_id"]), ep, langue_, marque=marque,
+                                     sub=ep.get("agent_sub"))
+            cle_ = ("alerte", pb["headline"], pb.get("todo"), pb.get("link"),
+                    pb.get("action"))
+        elif ep["message"] == "retour":
+            cle_ = ("retour",)
+        else:
+            cle_ = ("repare", ep["id"])
+        paquets.setdefault(cle_, []).append(ep)
+    return list(paquets.values())
+
+
+def composer_paquet(eps: list[dict], langue_: str, *,
+                    marque: str) -> tuple[str, Optional[list]]:
+    """Le message d'un paquet (`grouper`) : celui d'un épisode seul (`composer`), ou un
+    message qui nomme les agents qu'arrête la même cause, avec le geste une fois."""
+    from . import links
+    if len(eps) == 1:
+        return composer(eps[0], langue_, marque=marque)
+    p = _PHRASES[langue_]
+    premier = eps[0]
+    org, sub = int(premier["org_id"]), premier.get("agent_sub")
+    if premier["message"] == "retour":
+        return p["retour_n"].format(agents=_nommer(eps, langue_)), None
+    pb = message_du_probleme(org, premier, langue_, marque=marque, sub=sub)
+    ouverts = [e.get("ouvert_at") for e in eps if isinstance(e.get("ouvert_at"), datetime)]
+    depuis = _depuis(min(ouverts) if ouverts else premier.get("ouvert_at"), langue_)
+    lignes = [p["titre_n"].format(n=len(eps), depuis=depuis, agents=_nommer(eps, langue_)),
+              pb["headline"]] + ([pb["todo"]] if pb.get("todo") else [])
+    boutons = []
+    if pb.get("link"):
+        boutons.append({"type": "button", "style": "primary",
+                        "text": {"type": "plain_text", "text": p["faire"]},
+                        "url": pb["link"]})
+    sante = links.link_for("agent_health", sub=sub, org=org)
+    if sante:
+        boutons.append({"type": "button", "text": {"type": "plain_text", "text": p["sante"]},
+                        "url": sante})
+    blocs = [{"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lignes)}}]
+    if boutons:
+        blocs.append({"type": "actions", "elements": boutons})
+    return "\n".join(lignes), blocs
+
+
 def message_de_test(org_id: int) -> str:
     return _PHRASES[langue(org_id)]["test"].format(marque=marque_de_l_org(org_id).nom)
 
@@ -260,20 +361,23 @@ def balayer(maintenant: Optional[datetime] = None) -> dict:
         return {"heures_calmes": True}
     reglages = {o: r for o, r in alertes_slack.orgs_a_prevenir().items()
                 if org_a_nous(o, qui="alertes Slack des agents")}
-    envoyes, rates = 0, 0
-    par_org: dict[int, tuple[str, str]] = {}
+    envoyes, rates, messages = 0, 0, 0
+    par_org: dict[int, list[dict]] = {}
     for ep in alertes_slack.a_annoncer(list(reglages), attente_min=ATTENTE_MIN):
-        org = int(ep["org_id"])
-        if org not in par_org:
-            par_org[org] = (langue(org), marque_de_l_org(org).nom)
-        langue_, marque = par_org[org]
-        texte, blocs = composer(ep, langue_, marque=marque)
-        if poster(org, reglages[org], texte, blocs):
-            alertes_slack.marquer(int(ep["id"]), ep["message"])
-            envoyes += 1
-        else:
-            rates += 1
-    return {"orgs": len(reglages), "envoyes": envoyes, "rates": rates}
+        par_org.setdefault(int(ep["org_id"]), []).append(ep)
+    for org, eps in par_org.items():
+        langue_, marque = langue(org), marque_de_l_org(org).nom
+        for paquet in grouper(eps, langue_, marque=marque):
+            texte, blocs = composer_paquet(paquet, langue_, marque=marque)
+            if poster(org, reglages[org], texte, blocs):
+                for ep in paquet:
+                    alertes_slack.marquer(int(ep["id"]), ep["message"])
+                envoyes += len(paquet)
+                messages += 1
+            else:
+                rates += len(paquet)
+    return {"orgs": len(reglages), "envoyes": envoyes, "messages": messages,
+            "rates": rates}
 
 
 async def run_alertes_slack_loop(interval: int = INTERVALLE_S) -> None:
@@ -282,7 +386,7 @@ async def run_alertes_slack_loop(interval: int = INTERVALLE_S) -> None:
     while True:
         try:
             bilan = await asyncio.to_thread(balayer)
-            if bilan.get("envoyes") or bilan.get("rates"):
+            if bilan.get("envoyes") or bilan.get("rates"):  # `messages` ≤ `envoyes`
                 log.info("alertes Slack des agents : %s", bilan)
         except Exception as e:  # noqa: BLE001 — un passage raté ne tue pas la boucle
             log.warning("alertes Slack des agents : passage en échec : %s", e)

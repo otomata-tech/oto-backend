@@ -831,3 +831,30 @@ CREATE TABLE IF NOT EXISTS agent_alert_settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
+
+AGENT_CAUSES = """
+-- Le CATALOGUE des causes de panne d'agent (`db/causes_agents.py`, 13/11/2026) : une
+-- ligne par EMPREINTE de motif d'échec (`causes_pannes.de` : identifiants, dates,
+-- nombres, adresses et texte cité retirés), rangée une fois pour toutes les orgs.
+--   `cle`      — l'empreinte hachée, que porte `agent_episodes.empreinte` ;
+--   `classe` / `cote` — la cause et qui peut la réparer ; à la relève, celles de la
+--              regex de la boucle (`medecin_agents.classer`) ;
+--   `statut`   — `proposee` (relevée), `approuvee` (validée par un opérateur),
+--              `refusee` ;
+--   `copie`    — ce que le client lit, par langue : {fr: {headline, todo, action}, en: …} ;
+--   `gestes`   — qui a décidé quoi, quand : ajout seul.
+-- Clé TEXTE, insertion `ON CONFLICT DO NOTHING` : un passage ne réécrit rien et ne
+-- brûle aucune séquence. Aucune colonne de compte : l'auteur d'un geste vit dans
+-- `gestes`. Aucune FK : ce que couvre une cause se lit sur les épisodes, par jointure.
+CREATE TABLE IF NOT EXISTS agent_causes (
+    cle TEXT PRIMARY KEY,
+    empreinte TEXT NOT NULL,
+    classe TEXT NOT NULL,
+    cote TEXT NOT NULL CHECK (cote IN ('plateforme', 'proprietaire', 'inconnu')),
+    statut TEXT NOT NULL DEFAULT 'proposee'
+        CHECK (statut IN ('proposee', 'approuvee', 'refusee')),
+    copie JSONB,
+    gestes JSONB NOT NULL DEFAULT '[]'::jsonb,
+    vue_premiere_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""

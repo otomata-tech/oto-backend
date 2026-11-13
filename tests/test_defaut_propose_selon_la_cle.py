@@ -1,7 +1,7 @@
 """Le modèle PROPOSÉ par défaut à une org est un modèle qu'elle peut faire tourner.
 
 Le 14/09/2026, le premier worker Anthropic « clés clients seules » a fait de
-`claude-sonnet-5` — premier du catalogue — le défaut proposé à TOUTES les orgs, alors
+`claude-sonnet-5` — premier du catalogue d'alors — le défaut proposé à TOUTES les orgs, alors
 qu'aucune n'avait déposé de clé Anthropic et que la plateforme l'exigeait. Un agent
 qui suivait la proposition se faisait refuser `model_key_required` à la pose : le
 catalogue proposait exactement ce que la garde refusait.
@@ -40,13 +40,13 @@ def test_une_famille_sans_cle_n_est_PAS_proposee_mais_reste_servie():
     modeles = runner_models.catalogue(["anthropic", "mistral"], ["anthropic"])
     assert _defaut(modeles) == "mistral-large-2512"
     servis = {m["id"]: m["served"] for m in modeles}
-    assert servis["claude-sonnet-5"] is True, (
+    assert servis["claude-sonnet-5-5"] is True, (
         "toujours servi : l'org peut déposer sa clé et le choisir")
 
 
 def test_sans_famille_ecartee_le_defaut_d_avant_est_intact():
-    assert _defaut(runner_models.catalogue(["anthropic", "mistral"])) == "claude-sonnet-5"
-    assert _defaut(runner_models.catalogue(["anthropic", "mistral"], [])) == "claude-sonnet-5"
+    assert _defaut(runner_models.catalogue(["anthropic", "mistral"])) == "claude-sonnet-5-5"
+    assert _defaut(runner_models.catalogue(["anthropic", "mistral"], [])) == "claude-sonnet-5-5"
 
 
 def test_toutes_les_familles_servies_ecartees_ne_proposent_RIEN():
@@ -76,7 +76,7 @@ def test_l_etat_d_une_org_SANS_cle_propose_mistral(monkeypatch):
 def test_sans_org_nommee_la_cle_n_est_pas_lue(monkeypatch):
     monkeypatch.setattr(_modele._cle_exigee, "manquantes",
                         lambda *a, **k: pytest.fail("clé lue sans org"))
-    assert _defaut(_modele.etat_servi(dict(_ETAT))["models"]) == "claude-sonnet-5"
+    assert _defaut(_modele.etat_servi(dict(_ETAT))["models"]) == "claude-sonnet-5-5"
 
 
 def test_sans_famille_servie_la_cle_n_est_pas_lue(monkeypatch):
@@ -119,4 +119,4 @@ def test_la_liste_d_une_org_SANS_cle_anthropic_propose_mistral(plateforme):
 
 def test_la_liste_d_une_org_AVEC_sa_cle_propose_claude(plateforme):
     plateforme.add(("2", "anthropic"))
-    assert _defaut(_liste(2)["runner"]["models"]) == "claude-sonnet-5"
+    assert _defaut(_liste(2)["runner"]["models"]) == "claude-sonnet-5-5"

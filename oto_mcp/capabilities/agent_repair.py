@@ -19,7 +19,9 @@ de LECTURE que sa procédure appelle déjà (`add_tool`), dite au client
 (`runner_triggers.repair_note`). Elle ne touche ni une clé, ni une identité, ni une
 procédure, ni un horaire, ni une donnée — ces remèdes appartiennent au titulaire de
 l'agent. ⚠️ Réécrire une procédure n'est PAS ici : aucun mécanisme ne fait valider ce
-geste par une personne, et l'agent médecin agit sur toutes les orgs.
+geste par une personne, et l'agent médecin agit sur toutes les orgs. `op=get` sert la
+procédure que suit l'agent en LECTURE seule (`_procedure_suivie`), son corps à qui a déjà
+le droit de la lire.
 Chaque geste s'écrit sur l'épisode avec son auteur (`ctx.sub`), avant d'être fait.
 """
 from __future__ import annotations
@@ -90,6 +92,7 @@ class AgentRepair(BaseModel):
     relance: Optional[bool] = None
     refus: Optional[str] = None
     missing_tools: Optional[list[dict]] = None
+    procedure: Optional[dict] = None
 
 
 def _episode(inp: AgentRepairInput) -> dict:
@@ -137,6 +140,48 @@ def _outils_manquants(t: dict, org_id: int) -> list[dict]:
     from .. import tool_registry
     return [{"tool": nom, "called_by": par, "read": tool_registry.effet_de(nom) == "read"}
             for nom, par in cap_triggers._outils_non_accordes(org_id, t)]
+
+
+#: Le corps servi sur `op=get` est coupé à cette longueur (en caractères). Une procédure
+#: peut peser 128 Ko (`orgs.instructions._MAX_BODY_BYTES`) ; l'épisode, l'agent et le
+#: travail mort tiennent en quelques centaines d'octets, et la porte sert de quoi
+#: diagnostiquer, pas une copie. La coupe est DITE (`body_truncated`, `body_chars`).
+_CORPS_MAX = 20_000
+
+
+def _procedure_suivie(ctx: ResolvedCtx, t: dict, org_id: int) -> Optional[dict]:
+    """La procédure que suit l'agent, en LECTURE seule : `{slug, scope, version}`, au palier
+    où la cascade d'un travail la résout pour son propriétaire
+    (`_procedure_du_travail.palier_servi` : sa copie personnelle en service, puis l'org) ;
+    `scope`/`version` à None si elle ne se résout à aucun des deux. None sans procédure.
+
+    Le corps (`body_md`, borné à `_CORPS_MAX`) n'est servi qu'à qui a DÉJÀ le droit de lire
+    cette procédure par les règles des procédures : membre de l'org au palier org
+    (`roles.is_org_member`, la règle d'`oto_admin_guide`, verrou d'org compris), son
+    propriétaire au palier personnel. Être opérateur plateforme n'ouvre pas le contenu
+    d'une org tierce ; sinon, le slug et la version seuls."""
+    from .. import org_store, roles
+    from . import _procedure_du_travail
+    slug = t.get("procedure")
+    if not slug:
+        return None
+    proprietaire = t.get("sub")
+    palier = _procedure_du_travail.palier_servi(org_id, proprietaire, slug)
+    row, lisible = None, False
+    if palier == "user":
+        row = org_store.get_instruction_en_service("user", str(proprietaire), slug)
+        lisible = proprietaire is not None and str(ctx.sub) == str(proprietaire)
+    elif palier == "org":
+        row = org_store.get_instruction("org", org_id, slug)
+        lisible = roles.is_org_member(ctx.sub, org_id)
+    if row is None:
+        return {"slug": slug, "scope": None, "version": None}
+    out = {"slug": row["slug"], "scope": palier, "version": row["version"]}
+    if lisible:
+        corps = row.get("body_md") or ""
+        out.update(body_md=corps[:_CORPS_MAX], body_chars=len(corps),
+                   body_truncated=len(corps) > _CORPS_MAX)
+    return out
 
 
 def _ajouter_un_outil(ctx: ResolvedCtx, ep: dict, inp: AgentRepairInput) -> dict:
@@ -223,8 +268,9 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
         agent, job = _contexte(ep)
         t = db.get_trigger(int(ep["trigger_id"]), int(ep["org_id"]))
         manquants = None if t is None else _outils_manquants(t, int(ep["org_id"]))
+        procedure = None if t is None else _procedure_suivie(ctx, t, int(ep["org_id"]))
         return {"episode": ep, "agent": agent, "dernier_travail": job,
-                "missing_tools": manquants}
+                "missing_tools": manquants, "procedure": procedure}
 
     if inp.op == "add_tool":
         return _ajouter_un_outil(ctx, ep, inp)
@@ -311,7 +357,10 @@ CAPABILITIES += [
             "org's Slack) / escalate (hand "
             "it to a human, with your `diagnostic`) / close (`resolution`). "
             "op=get also serves `missing_tools` ([{tool, called_by, read}]: what its "
-            "procedure or a published recipe it runs calls and the agent lacks). ONE "
+            "procedure or a published recipe it runs calls and the agent lacks) and "
+            "`procedure` ({slug, scope, version} of the procedure it follows, read only; "
+            "+ `body_md` (first 20000 chars), `body_chars`, `body_truncated` only if you "
+            "may already read it: member of its org, or owner of a personal copy). ONE "
             "undoable repair, written on the episode before it is done and told to the "
             "client: add_tool (`tool`: ONE read tool from `missing_tools` — never a tool "
             "that writes or sends; `client_note`, one plain sentence in the workspace's "

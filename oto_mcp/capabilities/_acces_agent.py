@@ -63,7 +63,7 @@ propriétaire.
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 from .. import db, group_store, ownership, roles, runner_models
 from ._types import AuthzDenied, ResolvedCtx
@@ -104,20 +104,29 @@ ownership.register_kind(KIND, ownership.ResourceKind(
 
 # --- Le niveau d'accès ----------------------------------------------------------
 
-def niveaux(sub: str, org_id: int, agents: list[dict]) -> dict[int, Optional[str]]:
-    """Le niveau de `sub` sur chacun des `agents` (lignes de `runner_triggers` de
-    `org_id`) — None = il ne le voit pas. Une requête de partages pour toute la
-    liste."""
-    autrui = [t for t in agents if t.get("sub") != sub]
+#: Lit les partages d'une liste d'objets : (ids, principaux de l'appelant) →
+#: {id: 'write' | 'read'}, le meilleur partage vivant de chacun.
+LirePartages = Callable[[list[int], list[tuple[str, str]]], dict[int, str]]
+
+
+def niveaux_d_objets(sub: str, org_id: int, objets: list[dict],
+                     lire_partages: Optional[LirePartages]) -> dict[int, Optional[str]]:
+    """Le niveau de `sub` sur chacun des `objets` de `org_id` — des lignes qui portent
+    `id` et `sub` (leur propriétaire) — None = aucun niveau. Les niveaux des agents,
+    servis à tout objet d'org qui appartient à une personne ; seule la lecture des
+    partages lui est propre. `lire_partages=None` : un objet qui ne se partage pas —
+    ni éditeur ni lecteur, seulement son propriétaire et les admins de son org. Une
+    requête de partages pour toute la liste."""
+    autrui = [t for t in objets if t.get("sub") != sub]
     # Rien à lire quand l'appelant possède tout ce qu'on lui montre : le cas
     # courant, et celui d'une création — qui ne doit pas payer une lecture de rôle.
     admin = bool(autrui) and roles.is_org_admin(sub, org_id)
-    a_lire = [int(t["id"]) for t in autrui if not admin]
-    partages = (db.partages_d_agents(a_lire,
-                                     ownership.accessor_scope(sub).principal_pairs())
+    a_lire = [int(t["id"]) for t in autrui if not admin and lire_partages]
+    partages = (lire_partages(a_lire,
+                              ownership.accessor_scope(sub).principal_pairs())
                 if a_lire else {})
     out: dict[int, Optional[str]] = {}
-    for t in agents:
+    for t in objets:
         i = int(t["id"])
         if t.get("sub") == sub:
             out[i] = "owner"
@@ -126,6 +135,12 @@ def niveaux(sub: str, org_id: int, agents: list[dict]) -> dict[int, Optional[str
         else:
             out[i] = {"write": "editor", "read": "viewer"}.get(partages.get(i, ""))
     return out
+
+
+def niveaux(sub: str, org_id: int, agents: list[dict]) -> dict[int, Optional[str]]:
+    """Le niveau de `sub` sur chacun des `agents` (lignes de `runner_triggers` de
+    `org_id`) — None = il ne le voit pas."""
+    return niveaux_d_objets(sub, org_id, agents, db.partages_d_agents)
 
 
 def niveau(sub: str, org_id: int, agent: dict) -> Optional[str]:

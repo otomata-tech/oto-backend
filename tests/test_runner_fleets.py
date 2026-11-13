@@ -196,7 +196,8 @@ def test_descriptions_outils_ne_se_modifie_pas():
 def test_retirer_de_tools_un_outil_que_le_reglage_nomme_est_refuse(monkeypatch):
     from oto_mcp import db
     monkeypatch.setattr(db, "get_fleet", lambda fid, org: {
-        "id": fid, "descriptions_outils": {"entieres": ["data_rows", "data_write"]}})
+        "id": fid, "sub": "alexis",
+        "descriptions_outils": {"entieres": ["data_rows", "data_write"]}})
     monkeypatch.setattr(db, "update_fleet", lambda fid, org, champs: {"id": fid, **champs})
 
     with pytest.raises(AuthzDenied) as e:
@@ -656,3 +657,69 @@ def test_la_carte_de_list_sert_l_agent_declarant():
     assert "trigger_id" in RF.FleetCard.model_fields
     from oto_mcp import db
     assert "trigger_id" in db.runner_fleets._COLS
+
+
+# ── le droit par objet : modifier est au déclarant et aux admins ──────────────
+
+def _une_flotte_de(monkeypatch, proprietaire: str, *, admin: bool) -> list:
+    from oto_mcp import db, roles
+    ecrits: list = []
+    monkeypatch.setattr(db, "get_fleet", lambda fid, org: {
+        "id": fid, "sub": proprietaire, "tools": ["data_rows"]})
+    monkeypatch.setattr(db, "update_fleet",
+                        lambda fid, org, champs: ecrits.append(champs) or {"id": fid, **champs})
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: admin)
+    return ecrits
+
+
+def test_un_membre_ne_modifie_pas_l_automatisation_d_un_autre(monkeypatch):
+    ecrits = _une_flotte_de(monkeypatch, "collegue", admin=False)
+    for champs in ({"label": "x"}, {"input": "autre consigne"},
+                   {"tools": ["data_rows", "data_write"]}):
+        with pytest.raises(AuthzDenied) as e:
+            _appel(_ctx(), op="update", fleet_id=1, **champs)
+        assert (e.value.status, e.value.code) == (403, "fleet_edit_forbidden")
+    assert ecrits == [], "un refus n'écrit rien"
+
+
+def test_le_declarant_modifie_la_sienne(monkeypatch):
+    ecrits = _une_flotte_de(monkeypatch, "alexis", admin=False)
+    assert _appel(_ctx(), op="update", fleet_id=1, label="x")["fleet"]["label"] == "x"
+    assert ecrits == [{"label": "x"}]
+
+
+def test_un_admin_de_l_org_modifie_celle_d_un_autre(monkeypatch):
+    ecrits = _une_flotte_de(monkeypatch, "collegue", admin=True)
+    assert _appel(_ctx(), op="update", fleet_id=1, label="x")["fleet"]["label"] == "x"
+    assert ecrits == [{"label": "x"}]
+
+
+def test_le_refus_de_droit_est_declare():
+    cap = next(c for c in CAPABILITIES if c.key == "runner.fleets")
+    assert (403, "fleet_edit_forbidden") in {(e.status, e.code) for e in cap.errors}
+
+
+def test_un_membre_n_arrete_pas_l_automatisation_d_un_autre(monkeypatch):
+    _une_flotte_de(monkeypatch, "collegue", admin=False)
+    monkeypatch.setattr(RF, "_run_courant", lambda: None)
+    demandes: list = []
+    monkeypatch.setattr(RF.db, "demander_arret",
+                        lambda *a: demandes.append(a) or {"id": 1, "status": "stopping"})
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="stop", fleet_id=1)
+    assert (e.value.status, e.value.code) == (403, "fleet_stop_forbidden")
+    assert demandes == [], "un refus ne pose aucun ordre d'arrêt"
+
+
+@pytest.mark.parametrize("proprietaire, admin", [("alexis", False), ("collegue", True)])
+def test_le_declarant_et_l_admin_arretent(monkeypatch, proprietaire, admin):
+    _une_flotte_de(monkeypatch, proprietaire, admin=admin)
+    monkeypatch.setattr(RF, "_run_courant", lambda: None)
+    monkeypatch.setattr(RF.db, "demander_arret",
+                        lambda *a: {"id": 1, "status": "stopping"})
+    assert _appel(_ctx(), op="stop", fleet_id=1)["fleet"]["status"] == "stopping"
+
+
+def test_le_refus_d_arret_est_declare():
+    cap = next(c for c in CAPABILITIES if c.key == "runner.fleets")
+    assert (403, "fleet_stop_forbidden") in {(e.status, e.code) for e in cap.errors}

@@ -117,6 +117,8 @@ def test_stop_reste_ouvert_sans_worker(monkeypatch):
         return {"id": fleet_id, "status": "stopping", "stop_reason": raison}
 
     monkeypatch.setattr(RF.db, "demander_arret", _demander_arret)
+    # Le droit par objet lit la ligne, pas la présence d'un runner : c'est la sienne.
+    monkeypatch.setattr(RF.db, "get_fleet", lambda fid, org: {"id": fid, "sub": "alexis"})
 
     out = _appel(_ctx(), op="stop", fleet_id=1, reason="plus aucun runner")
     assert out["fleet"]["status"] == "stopping"

@@ -28,21 +28,23 @@ VIVANTS = ("ouvert", "en_soin", "escalade")
 
 _COLONNES = ("id, org_id, trigger_id, classe, cote, statut, motif, dernier_job_id, "
              "travaux_morts, reparations, diagnostic, classe_manuelle, ouvert_at, vu_at, "
-             "clos_at, resolution")
+             "clos_at, resolution, empreinte")
 
 
 def pannes_en_cours() -> list[dict[str, Any]]:
     """Les agents ALLUMÉS qui ont au moins un travail mort depuis leur dernier succès,
     dans la fenêtre de l'alerte. Une ligne par agent : org, libellé, modèle, le compte,
     le DERNIER travail mort (id, motif, genre, charge, identité) — de quoi le classer et
-    le relancer sans relire."""
+    le relancer sans relire. `motif_de_l_agent` : le motif est la NOTE que l'agent a
+    écrite sur un travail qu'il a conclu bloqué (`issues_des_travaux.motif`), pas une
+    erreur de la plateforme — un texte libre, qui ne s'empreinte pas."""
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             f"""
             SELECT t.id AS trigger_id, t.org_id, t.model,
                    COALESCE(NULLIF(t.label, ''), t.procedure) AS libelle,
                    f.travaux, d.id AS job_id, LEFT(d.motif, %(tete)s) AS motif,
-                   d.kind, d.payload, d.sub, d.finished_at AS dernier
+                   d.kind, d.payload, d.sub, d.finished_at AS dernier, d.motif_de_l_agent
               FROM runner_triggers t
               CROSS JOIN LATERAL (
                     SELECT MAX(j.finished_at) AS dernier_succes
@@ -56,7 +58,8 @@ def pannes_en_cours() -> list[dict[str, Any]]:
                        AND (s.dernier_succes IS NULL
                             OR j.finished_at > s.dernier_succes)) f
               CROSS JOIN LATERAL (
-                    SELECT j.id, {issues_des_travaux.motif()} AS motif, j.kind, j.payload, j.sub, j.finished_at
+                    SELECT j.id, {issues_des_travaux.motif()} AS motif, j.kind, j.payload, j.sub, j.finished_at,
+                           NULLIF(j.last_error, '') IS NULL AS motif_de_l_agent
                       FROM runner_jobs j
                      WHERE {_DU_DECLENCHEUR} AND {issues_des_travaux.mort()}
                        AND j.finished_at > NOW() - make_interval(days => %(fenetre)s)
@@ -70,30 +73,33 @@ def pannes_en_cours() -> list[dict[str, Any]]:
 
 def ouvrir_ou_rafraichir(*, org_id: int, trigger_id: int, classe: str, cote: str,
                          motif: Optional[str], job_id: Optional[int],
-                         travaux: int) -> dict[str, Any]:
+                         travaux: int, empreinte: Optional[str] = None) -> dict[str, Any]:
     """L'épisode vivant de l'agent, ouvert s'il n'existe pas, rafraîchi sinon (dernier
     travail, motif, compte, `vu_at`). La classe suit le DERNIER motif : une panne qui
     change de cause change de remède — sauf une classe posée à la main (`poser`,
     `classe_manuelle`) : un diagnostic d'humain ou de l'agent médecin n'est pas
-    défait au passage suivant par la regex qu'il corrigeait. Rend la ligne."""
+    défait au passage suivant par la regex qu'il corrigeait. `empreinte` = la clé de la
+    cause du dernier motif (`causes_agents`), qui suit le motif. Rend la ligne."""
     with _connect() as conn:
         return dict(conn.execute(
             f"""
             INSERT INTO agent_episodes (org_id, trigger_id, classe, cote, motif,
-                                        dernier_job_id, travaux_morts)
+                                        dernier_job_id, travaux_morts, empreinte)
             VALUES (%(org)s, %(trigger)s, %(classe)s, %(cote)s, %(motif)s, %(job)s,
-                    %(travaux)s)
+                    %(travaux)s, %(empreinte)s)
             ON CONFLICT (trigger_id) WHERE statut <> 'clos' DO UPDATE
                SET classe = CASE WHEN agent_episodes.classe_manuelle
                                  THEN agent_episodes.classe ELSE EXCLUDED.classe END,
                    cote = CASE WHEN agent_episodes.classe_manuelle
                                THEN agent_episodes.cote ELSE EXCLUDED.cote END,
                    motif = EXCLUDED.motif, dernier_job_id = EXCLUDED.dernier_job_id,
-                   travaux_morts = EXCLUDED.travaux_morts, vu_at = NOW()
+                   travaux_morts = EXCLUDED.travaux_morts,
+                   empreinte = EXCLUDED.empreinte, vu_at = NOW()
             RETURNING {_COLONNES}
             """,
             {"org": int(org_id), "trigger": int(trigger_id), "classe": classe,
-             "cote": cote, "motif": motif, "job": job_id, "travaux": int(travaux)},
+             "cote": cote, "motif": motif, "job": job_id, "travaux": int(travaux),
+             "empreinte": empreinte},
         ).fetchone())
 
 

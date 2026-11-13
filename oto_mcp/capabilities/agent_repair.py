@@ -39,16 +39,23 @@ logger = logging.getLogger(__name__)
 _COTES = Literal["plateforme", "proprietaire", "inconnu"]
 
 
+#: Les champs d'une copie de cause, par langue, et leur longueur maximale. Plat : un
+#: schéma d'outil ne porte pas de `$defs` (`tests/test_with_signature_flat.py`).
+_COPIE_CHAMPS = {"headline": 300, "todo": 400, "action": 20}
+_COPIE_ACTIONS = ("credits", "connectors")
+
+
 class AgentRepairInput(BaseModel):
-    op: Literal["list", "get", "rerun", "diagnose", "escalate", "close", "add_tool"]
+    op: Literal["list", "get", "rerun", "diagnose", "escalate", "close", "add_tool",
+                "causes", "set_cause"]
     episode_id: Optional[int] = None
     statut: Optional[Literal["vivants", "ouvert", "en_soin", "escalade", "clos"]] = Field(
         default=None, description="list: filter; `vivants` = every episode not closed.")
     org_id: Optional[int] = Field(default=None, description="list: one org only.")
     cote: Optional[_COTES] = Field(default=None, description=(
-        "list: filter by who can fix it. diagnose: the corrected side."))
+        "list: filter by who can fix it. diagnose / set_cause: the corrected side."))
     classe: Optional[str] = Field(default=None, max_length=60, description=(
-        "diagnose: the corrected class (a short slug)."))
+        "diagnose / set_cause: the corrected class (a short slug)."))
     diagnostic: Optional[str] = Field(default=None, max_length=2000, description=(
         "diagnose/escalate: what you found, in one paragraph — read by the operator "
         "and, for an owner-side fault, the basis of what the owner is told."))
@@ -73,6 +80,20 @@ class AgentRepairInput(BaseModel):
         "refused. Becomes the message's button."))
     client_action: Optional[Literal["credits", "connectors"]] = Field(default=None, description=(
         "diagnose: the gesture, when it is one of these."))
+    cause_key: Optional[str] = Field(default=None, max_length=32, description=(
+        "set_cause: the cause to decide (`cle` from op=causes, `empreinte` on an "
+        "episode)."))
+    cause_status: Optional[Literal["proposee", "approuvee", "refusee"]] = Field(
+        default=None, description=(
+            "causes: filter. set_cause: approve (`approuvee`), refuse (`refusee`) or "
+            "reopen (`proposee`) the cause."))
+    client_copy: Optional[dict[Literal["fr", "en"], dict[str, str]]] = Field(
+        default=None, description=(
+            "set_cause: what the client reads for this cause, per language "
+            "(`{fr: {headline, todo, action}, en: {...}}`; `headline` required, "
+            "`action` = credits | connectors) — plain sentences, no tool names, codes, "
+            "ids or addresses; `{marque}` is the only placeholder. Required to approve "
+            "an owner-side cause."))
     client_note: Optional[str] = Field(default=None, max_length=300, description=(
         "add_tool: what you changed, in ONE plain sentence for the client, in the "
         "workspace's language, no tool names or codes (\"Nous avons ajouté la recherche "
@@ -90,6 +111,8 @@ class AgentRepair(BaseModel):
     relance: Optional[bool] = None
     refus: Optional[str] = None
     missing_tools: Optional[list[dict]] = None
+    causes: Optional[list[dict]] = None
+    cause: Optional[dict] = None
 
 
 def _episode(inp: AgentRepairInput) -> dict:
@@ -209,6 +232,69 @@ def _valider_le_message_client(ep: dict, client: dict) -> None:
                               "du client seulement.")
 
 
+def _copie_lue(brute: dict) -> dict:
+    """La copie par langue, champs connus seulement, bornés, `headline` exigé."""
+    copie = {}
+    for lang, champs in brute.items():
+        inconnus = set(champs) - set(_COPIE_CHAMPS)
+        if inconnus:
+            raise AuthzDenied(400, "client_copy_refused",
+                              f"`client_copy.{lang}` : champ inconnu {sorted(inconnus)}.")
+        c = {k: (v or "").strip() for k, v in champs.items() if (v or "").strip()}
+        if not c.get("headline"):
+            raise AuthzDenied(400, "client_copy_refused",
+                              f"`client_copy.{lang}.headline` est requis.")
+        for k, v in c.items():
+            if len(v) > _COPIE_CHAMPS[k]:
+                raise AuthzDenied(400, "client_copy_refused",
+                                  f"`client_copy.{lang}.{k}` : {_COPIE_CHAMPS[k]} caractères "
+                                  "au plus.")
+        if c.get("action") and c["action"] not in _COPIE_ACTIONS:
+            raise AuthzDenied(400, "client_copy_refused",
+                              f"`client_copy.{lang}.action` : credits ou connectors.")
+        copie[lang] = c
+    return copie
+
+
+def _decider_une_cause(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
+    """Un geste sur une cause du catalogue. Approuver une cause du côté du titulaire
+    exige sa copie au client (il la lira), et une copie se juge avant d'être écrite
+    (`causes_pannes.copie_refusee`). ⚠️ En ombre, une cause approuvée ne décide encore
+    d'aucun geste de la boucle : elle se compare à la regex (`catalogue_desaccords`)."""
+    from .. import causes_pannes
+    from ..db import causes_agents
+    if not inp.cause_key:
+        raise AuthzDenied(400, "cause_key_required", "`cause_key` est requis pour op=set_cause.")
+    cause = causes_agents.lire(inp.cause_key)
+    if cause is None:
+        raise AuthzDenied(404, "cause_not_found", "Aucune cause sous cette clé.")
+    if not (inp.cause_status or inp.classe or inp.cote or inp.client_copy):
+        raise AuthzDenied(400, "nothing_to_record",
+                          "`cause_status`, `classe`, `cote` ou `client_copy` : au moins un.")
+    copie = _copie_lue(inp.client_copy) if inp.client_copy else None
+    for c in (copie or {}).values():
+        for texte in (c.get("headline"), c.get("todo")):
+            refus = causes_pannes.copie_refusee(texte)
+            if refus:
+                raise AuthzDenied(400, "client_copy_refused", f"`client_copy` : {refus}.")
+    from ._outils_plateforme import _depuis_un_agent_heberge
+    if inp.cause_status == "approuvee" and _depuis_un_agent_heberge():
+        # L'agent médecin PROPOSE (classe, côté, copie) ; un opérateur approuve. Sans
+        # cette porte, la copie qu'il a écrite irait à toutes les orgs sans personne.
+        raise AuthzDenied(403, "approval_by_operator_only",
+                          "Une cause s'approuve par un opérateur, pas par un agent hébergé : "
+                          "propose la classe, le côté et la copie, et laisse-la `proposee`.")
+    cote = inp.cote or cause["cote"]
+    if (inp.cause_status or cause["statut"]) == "approuvee" and cote == "proprietaire" \
+            and not (copie or cause.get("copie")):
+        raise AuthzDenied(400, "client_copy_required",
+                          "Une cause du côté du titulaire s'approuve avec sa `client_copy`.")
+    logger.info("cause %s : %s par %s", inp.cause_key, inp.cause_status or "modifiée",
+                ctx.sub)
+    return causes_agents.decider(inp.cause_key, acteur=ctx.sub, statut=inp.cause_status,
+                                 classe=inp.classe, cote=inp.cote, copie=copie)
+
+
 def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
     from .. import medecin_agents
     from ..db import episodes_agents
@@ -217,6 +303,12 @@ def _agent_repair(ctx: ResolvedCtx, inp: AgentRepairInput) -> dict:
         return {"episodes": episodes_agents.lister(
             statut=inp.statut or "vivants", org_id=inp.org_id, cote=inp.cote,
             limit=inp.limit or 50)}
+    if inp.op == "causes":
+        from ..db import causes_agents
+        return {"causes": causes_agents.lister(statut=inp.cause_status,
+                                               limit=inp.limit or 50)}
+    if inp.op == "set_cause":
+        return {"cause": _decider_une_cause(ctx, inp)}
 
     ep = _episode(inp)
     if inp.op == "get":
@@ -318,7 +410,15 @@ CAPABILITIES += [
             "language, required, served on the agent as `repair`). After it, `rerun` is "
             "allowed even on an owner-side episode. Nothing here touches a key, an "
             "identity, a procedure, a schedule or any data: those fixes belong to the "
-            "agent's owner — say what they are in `diagnostic`."),
+            "agent's owner — say what they are in `diagnostic`. The CAUSE CATALOGUE "
+            "(in shadow: it decides nothing yet, the loop compares it with its own "
+            "classification): each episode carries `empreinte`, the key of its failure "
+            "message with ids, dates, numbers and addresses stripped, the same for every "
+            "org. op=causes (`cause_status`, `limit` → each cause with the episodes, "
+            "live episodes and orgs it covers, and `classes_vues`: the classes the loop "
+            "gave them) / set_cause (`cause_key`, and `cause_status`, a corrected "
+            "`classe`/`cote`, `client_copy` — merged per language, required to approve "
+            "an owner-side cause; a hosted agent proposes, only an operator approves)."),
         mcp="oto_admin_agent_repair",
     ),
 ]

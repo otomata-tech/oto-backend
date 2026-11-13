@@ -205,3 +205,48 @@ def test_une_boucle_eteinte_ne_fait_plus_taire_l_alerte(agent):
     # La boucle repasse : l'épisode est de nouveau tenu.
     _ouvrir(agent, 2)
     assert episodes_agents.agents_soignes_par_nous([agent], vus_depuis=FRAICHEUR) == {agent}
+
+
+# --- Le catalogue des causes (`db/causes_agents.py`), sur une vraie base. --------------
+
+def test_l_empreinte_suit_le_motif_de_l_episode(agent):
+    from oto_mcp.db import episodes_agents
+    j = _travail(agent, "failed", 1, "HTTP 529")
+    ep = episodes_agents.ouvrir_ou_rafraichir(
+        org_id=ORG, trigger_id=agent, classe="refus_passager", cote="plateforme",
+        motif="HTTP 529", job_id=j, travaux=1, empreinte="aaaa")
+    assert ep["empreinte"] == "aaaa"
+    ep2 = episodes_agents.ouvrir_ou_rafraichir(
+        org_id=ORG, trigger_id=agent, classe="cle_refusee", cote="proprietaire",
+        motif="HTTP 401", job_id=j, travaux=2, empreinte="bbbb")
+    assert (ep2["id"], ep2["empreinte"]) == (ep["id"], "bbbb")
+
+
+def test_une_empreinte_s_insere_une_fois_et_ne_se_reecrit_pas(live):
+    from oto_mcp.db import causes_agents
+    un = causes_agents.relever([("c1", "http <n>", "refus_passager", "plateforme")])
+    assert un["c1"]["neuve"] and un["c1"]["statut"] == "proposee"
+    causes_agents.decider("c1", acteur="ops", statut="approuvee", classe="surcharge")
+    deux = causes_agents.relever([("c1", "http <n>", "inconnu", "inconnu"),
+                                  ("c2", "autre", "inconnu", "inconnu")])
+    assert not deux["c1"]["neuve"] and deux["c2"]["neuve"]
+    assert (deux["c1"]["statut"], deux["c1"]["classe"]) == ("approuvee", "surcharge")
+    assert causes_agents.relever([]) == {}
+
+
+def test_une_cause_dit_ce_qu_elle_couvre_et_qui_l_a_decidee(agent):
+    from oto_mcp.db import causes_agents, episodes_agents
+    causes_agents.relever([("c9", "http <n>", "refus_passager", "plateforme")])
+    j = _travail(agent, "failed", 1, "HTTP 529")
+    episodes_agents.ouvrir_ou_rafraichir(
+        org_id=ORG, trigger_id=agent, classe="refus_passager", cote="plateforme",
+        motif="HTTP 529", job_id=j, travaux=1, empreinte="c9")
+    c = causes_agents.decider("c9", acteur="ops", statut="approuvee",
+                              copie={"fr": {"headline": "Panne passagère."}})
+    assert c["copie"] == {"fr": {"headline": "Panne passagère."}}
+    assert [(g["acteur"], g["statut"]) for g in c["gestes"]] == [("ops", "approuvee")]
+    ligne = {x["cle"]: x for x in causes_agents.lister()}["c9"]
+    assert (ligne["episodes"], ligne["vivants"], ligne["orgs"]) == (1, 1, 1)
+    assert ligne["classes_vues"] == ["refus_passager"]
+    assert [x["cle"] for x in causes_agents.lister(statut="refusee")] == []
+    assert causes_agents.decider("absente", acteur="ops", statut="refusee") is None

@@ -3105,13 +3105,36 @@ passe AVANT l'alerte.
   statut, tentatives, `last_error` — ni son `result` ni `attempt_errors`, qui portent ce
   que l'agent a produit chez son titulaire) / `rerun` (les mêmes gardes que la boucle, plus : épisode clos,
   agent éteint, panne du titulaire ; un refus revient dans `refus`, pas en erreur) /
-  `diagnose` / `escalate` / `close`. Prêté à un agent hébergé de la plateforme par
+  `diagnose` / `escalate` / `close` / `causes` / `set_cause` (le catalogue, ci-dessus). Prêté à un agent hébergé de la plateforme par
   `platform_tools` : sans lui, un agent de notre org lit les pannes d'une autre org sans
   pouvoir rien y faire (`oto_trigger` agit en membre).
+- **Le catalogue des causes, en OMBRE** (13/11/2026) : la regex range trois classes, et
+  tout le reste `inconnu`, diagnostiqué par l'agent médecin un épisode à la fois — ce qu'il
+  trouve ne servait qu'à cet épisode, et deux diagnostics de la même erreur ont rendu deux
+  côtés opposés. Chaque panne reçoit l'EMPREINTE de son motif (`causes_pannes.de` :
+  adresses, courriels, identifiants, dates, nombres et texte cité retirés, minuscules ;
+  une apostrophe collée à une lettre est une élision, pas une citation), posée sur
+  l'épisode (`agent_episodes.empreinte`, sa clé hachée). Une empreinte neuve entre au
+  catalogue (`agent_causes`, `db/causes_agents.py`) `proposee`, avec la classe et le côté
+  de la regex — un lot par passage, `ON CONFLICT DO NOTHING` sur une clé texte : rien
+  n'est réécrit, aucune séquence brûlée. Un opérateur (ou l'agent médecin) l'approuve,
+  la refuse ou la corrige (`op=set_cause`) ; approuver une cause du TITULAIRE exige sa
+  copie au client par langue (`{fr|en: {headline, todo, action}}`), refusée si elle porte
+  un nom d'outil, un code, un identifiant, une adresse ou une variable autre que
+  `{marque}` (`causes_pannes.copie_refusee`). Ce qu'une cause couvre (épisodes, vivants,
+  orgs, `classes_vues`) se LIT par jointure (`op=causes`).
+  ⚠️ **Le catalogue ne décide d'AUCUN geste** : l'empreinte se calcule sur le motif
+  tronqué, deux erreurs qui ne diffèrent qu'au-delà de la tête la partagent, et relancer
+  ce qu'on nomme mal referait des effets. Le bilan du passage dit ce qu'il aurait décidé
+  (`catalogue_reconnues`, `catalogue_neuves`, `catalogue_sans_empreinte`, et les
+  `catalogue_desaccords` — cause approuvée d'une autre classe ou d'un autre côté que la
+  regex —, chacun dit au journal) : la regex décide. Une ombre qui casse ne coûte que son
+  bilan (`catalogue_erreur`), jamais le passage.
 - **Où** : boucle `tiers=True` (une relance refait agir un agent chez des tiers),
   ÉTEINTE tant que `OTO_MEDECIN_AGENTS_ENABLED=1` n'est pas déclaré — production seule.
-- Bancs : `tests/test_medecin_agents.py` (sans base), `tests/test_episodes_agents_db.py`
-  (le SQL), `tests/test_migration_20261027_agent_episodes.py`,
+- Bancs : `tests/test_medecin_agents.py` (sans base), `tests/test_causes_pannes.py`
+  (l'empreinte, la copie), `tests/test_episodes_agents_db.py` (le SQL, catalogue
+  compris), `tests/test_migration_20261027_agent_episodes.py`,
   `tests/test_alerte_agents_bloques.py` (le silence).
 
 ### `op=list` : la page dit ce qu'elle laisse dehors (#469, 01/09/2026)

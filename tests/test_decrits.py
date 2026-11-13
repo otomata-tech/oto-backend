@@ -674,6 +674,71 @@ def test_seranking_lists_come_back_reduced_to_what_an_agent_reads(seranking, ven
     assert rendu["total"] == 42 and "history_trend" not in json.dumps(rendu) and "volume" in json.dumps(rendu)
 
 
+# --- HeyReach and Instantly: one key each, a read side and an act side that reaches people --------------------------
+
+
+@pytest.fixture
+def prospection(vendeur, monkeypatch):
+    """The two real descriptions mounted as the registry inscribes them, the caller's key by `resolve_api_key`."""
+    monkeypatch.setattr(decrits.access, "resolve_api_key", lambda nom, *a, **k: (f"key-of-{nom}", False))
+    outils = {}
+    for nom in ("heyreach", "instantly"):
+        outils.update({t.name: t for t in decrits.monter(FastMCP(nom), nom, descriptions.charger(nom))})
+    yield outils
+    for nom in ("heyreach", "instantly"):
+        connector_verify._REGISTRY.pop(nom, None)
+        connector_verify._COUVERTURE.pop(nom, None)
+
+
+@pytest.mark.parametrize("nom", ["heyreach", "instantly"])
+def test_outreach_connectors_are_inscribed_with_the_customers_key(nom):
+    c = providers.REGISTRY[nom]
+    assert (c.namespaces, c.auth_modes, c.secret_kind, c.keyed, c.decrit) == (
+        (nom,), frozenset({"byo_user", "byo_org"}), "api_key", True, True)
+    assert descriptions.refus_de_montage(descriptions.charger(nom)) == []
+
+
+def test_outreach_what_reaches_people_is_on_the_act_side(prospection):
+    """Every function that sends, starts outreach or destroys is an op of `<ns>_act`, declared by the description's
+    class and effect; the reading side reads only."""
+    assert {"heyreach", "heyreach_act", "instantly", "instantly_act"} <= set(prospection)
+    for nom in ("heyreach", "instantly"):
+        assert prospection[nom].annotations == LECTURE and prospection[f"{nom}_act"].annotations == ACTE
+        assert effets.EFFETS[f"{nom}_act"] == descriptions.effets(descriptions.charger(nom))[f"{nom}_act"]
+    assert "send_message" in effets.EFFETS["heyreach_act"]["envoyer"].split()
+    assert "stop_lead_in_campaign" in effets.EFFETS["heyreach_act"]["detruire"].split()
+    assert "reply_to_email" in effets.EFFETS["instantly_act"]["envoyer"].split()
+    assert "move_leads" in effets.EFFETS["instantly_act"]["detruire"].split()
+
+
+def test_heyreach_lists_one_page_by_offset_each_item_projected(prospection, vendeur):
+    """heyreach 1.0.1: the page is `items`, each item keeps its declared keys; `totalCount` is not served, the next page
+    is `offset` + `limit`."""
+    vendeur.answers.append((200, {"totalCount": 1, "items": [
+        {"id": 1001, "name": "Q4", "status": "IN_PROGRESS", "excludeListsIds": [7], "campaignAccountIds": [3001]}]}))
+    rendu = _appel(prospection["heyreach"], op="list_campaigns", limit=50, offset=50, statuses=["IN_PROGRESS"])
+    assert "excludeListsIds" not in json.dumps(rendu) and "totalCount" not in json.dumps(rendu)
+    assert "Q4" in json.dumps(rendu)
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == ("POST", "https://api.heyreach.io/api/public/campaign/GetAll")
+    assert envoi["headers"]["x-api-key"] == "key-of-heyreach"
+    assert envoi["body"] == {"limit": 50, "offset": 50, "statuses": ["IN_PROGRESS"]}
+
+
+def test_instantly_move_leads_answers_its_job_projected(prospection, vendeur):
+    """instantly 1.0.1: `move_leads` does not paginate — its `limit` bounds the leads moved, sent as is — and its
+    answer, a background job, keeps its declared keys."""
+    vendeur.answers.append((200, {"id": "job-1", "type": "move-leads", "status": "pending", "progress": 0,
+                                  "workspace_id": "ws-1", "data": {"secret_like": "x"}}))
+    rendu = _appel(prospection["instantly_act"], op="move_leads", campaign="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+                   to_list_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d", limit=25)
+    assert rendu == {"id": "job-1", "type": "move-leads", "status": "pending", "progress": 0}
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == ("POST", "https://api.instantly.ai/api/v2/leads/move")
+    assert envoi["headers"]["authorization"] == "Bearer key-of-instantly"
+    assert envoi["body"]["limit"] == 25 and len(vendeur.requests) == 1
+
+
 # --- a login and a password, and the platform key (11/11/2026) ------------------------------------------------------
 
 

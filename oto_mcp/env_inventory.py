@@ -794,6 +794,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "les champs `client_*` du médecin. `1`, `true`, `yes`, `on` l'allument ; "
              "absente, vide ou un non l'éteignent ; toute autre valeur lève.",
              ("oto_mcp/alertes_slack_agents.py:79",)),
+    Variable("OTO_CATALOGUE_CAUSES_DECIDE", Classe.REGLAGE, "",
+             "Le catalogue des causes de panne d'agent DÉCIDE (`medecin_agents.py`) : une "
+             "cause approuvée range une panne que la regex dit `inconnu` — sa classe et son "
+             "côté, donc qui l'alerte vise et ce que le client lit ; jamais une relance. "
+             "Éteint, le catalogue reste en ombre. `1`, `true`, `yes`, `on` l'allument ; "
+             "absente, vide ou un non l'éteignent ; toute autre valeur lève.",
+             ("oto_mcp/medecin_agents.py:286",)),
     Variable("OTO_BILLING_RUNNER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : runner de facturation — AGIT sur un tiers "
              "(prélèvement), donc lu aussi par `est_la_production()`.",

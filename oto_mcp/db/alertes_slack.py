@@ -96,7 +96,8 @@ def poser_message_client(episode_id: int, message: dict[str, Any]) -> None:
 def a_annoncer(org_ids: list[int], attente_min: int = 120) -> list[dict[str, Any]]:
     """Les épisodes de ces orgs qui ont un message à envoyer, avec leur agent :
     - `alerte` : vivant, côté titulaire, jamais annoncé, pas réparé — dès que l'agent
-      médecin a écrit le message du client, sinon après `attente_min` minutes (le temps
+      médecin a écrit le message du client ou que sa cause APPROUVÉE du même côté a sa
+      copie (`agent_causes`, `cause_copie`), sinon après `attente_min` minutes (le temps
       de le laisser réparer ce qui se répare) ;
     - `repare` : une réparation dite au client (`runner_triggers.repair_note`) plus
       récente que l'ouverture de l'épisode et jamais annoncée ;
@@ -110,13 +111,15 @@ def a_annoncer(org_ids: list[int], attente_min: int = 120) -> list[dict[str, Any
                    e.diagnostic, e.message_client, e.ouvert_at, e.clos_at, e.resolution,
                    e.slack_alerte_at, e.slack_repare_at, e.slack_retour_at,
                    COALESCE(NULLIF(t.label, ''), t.procedure) AS libelle,
-                   t.repair_note, t.sub AS agent_sub,
+                   t.repair_note, t.sub AS agent_sub, e.empreinte,
+                   c.copie AS cause_copie, c.cote AS cause_cote,
                    CASE
                      WHEN e.statut <> 'clos' AND e.cote = 'proprietaire'
                           AND e.slack_alerte_at IS NULL
                           AND NOT (t.repair_note IS NOT NULL
                                    AND (t.repair_note->>'at')::timestamptz >= e.ouvert_at)
                           AND (e.message_client IS NOT NULL
+                               OR (c.copie IS NOT NULL AND c.cote = e.cote)
                                OR e.ouvert_at < NOW() - %s * INTERVAL '1 minute')
                           THEN 'alerte'
                      WHEN e.slack_repare_at IS NULL AND t.repair_note IS NOT NULL
@@ -128,6 +131,7 @@ def a_annoncer(org_ids: list[int], attente_min: int = 120) -> list[dict[str, Any
                    END AS message
               FROM agent_episodes e
               JOIN runner_triggers t ON t.id = e.trigger_id
+              LEFT JOIN agent_causes c ON c.cle = e.empreinte AND c.statut = 'approuvee'
              WHERE e.org_id = ANY(%s)
                AND (e.statut <> 'clos' OR e.clos_at > NOW() - INTERVAL '1 day')
              ORDER BY e.org_id, e.id
@@ -148,13 +152,15 @@ def marquer(episode_id: int, message: str) -> None:
 def problemes_vivants(org_id: int, trigger_ids: list[int]) -> dict[int, dict[str, Any]]:
     """L'épisode VIVANT de chacun de ces agents (s'il en a un) : de quoi servir `problem`
     sur leurs travaux — par agent : `dernier_job_id`, `cote`, `classe`, `motif`,
-    `message_client`."""
+    `message_client`, et la copie de sa cause approuvée (`cause_copie`, `cause_cote`)."""
     if not trigger_ids:
         return {}
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT trigger_id, dernier_job_id, cote, classe, motif, diagnostic, "
-            "message_client FROM agent_episodes WHERE org_id = %s "
-            "AND trigger_id = ANY(%s) AND statut <> 'clos'",
+            "SELECT e.trigger_id, e.dernier_job_id, e.cote, e.classe, e.motif, "
+            "e.diagnostic, e.message_client, e.empreinte, c.copie AS cause_copie, "
+            "c.cote AS cause_cote FROM agent_episodes e "
+            "LEFT JOIN agent_causes c ON c.cle = e.empreinte AND c.statut = 'approuvee' "
+            "WHERE e.org_id = %s AND e.trigger_id = ANY(%s) AND e.statut <> 'clos'",
             (int(org_id), [int(t) for t in trigger_ids])).fetchall()
     return {int(r["trigger_id"]): dict(r) for r in rows}

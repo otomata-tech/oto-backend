@@ -93,7 +93,10 @@ DEFAULT_PATHS: dict[str, str] = {
 # `agent` = the page of ONE hosted agent (`/org/{org}/agents?agent={id}`), and
 # `agent_repair` = the same page opened on its repair flow — where an agent alert sends a
 # person (`alertes_slack_agents`); without them, the alert carries no such button.
-DECLARED_ONLY_KINDS = frozenset({"app", "connect", "webhook", "agent", "agent_repair"})
+# `agent_health` = the org's agent health view (`/org/{org}/agents/health`), where a
+# grouped agent alert sends a person (`alertes_slack_agents.composer_paquet`).
+DECLARED_ONLY_KINDS = frozenset({"app", "connect", "webhook", "agent", "agent_repair",
+                                 "agent_health"})
 
 
 class InstancePathsInvalid(ValueError):

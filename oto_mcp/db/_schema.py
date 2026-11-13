@@ -100,6 +100,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.guides.GUIDE_REVISIONS,   # versions gardées des guides et readmes, et leur rétention
     schema.connectors.ACCOUNT_RULES,  # règles d'accès des comptes de connecteur, et leur journal
     schema.runs.AGENT_ALERT_SETTINGS,  # où une org est prévenue qu'un agent ne fonctionne plus
+    schema.orgs.ORG_FAVORITES,       # pages et tableaux épinglés pour tous les membres d'une org
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

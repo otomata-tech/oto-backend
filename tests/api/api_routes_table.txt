@@ -137,6 +137,12 @@ GET,HEAD /api/orgs/{id}/mfa -> _handler
 OPTIONS /api/orgs/{id}/mfa -> options_handler
 PUT /api/orgs/{id}/mfa -> _handler
 OPTIONS /api/orgs/{id}/mfa -> options_handler
+GET,HEAD /api/orgs/{id}/favorites -> _handler
+OPTIONS /api/orgs/{id}/favorites -> options_handler
+POST /api/orgs/{id}/favorites -> _handler
+OPTIONS /api/orgs/{id}/favorites -> options_handler
+DELETE /api/orgs/{id}/favorites/{kind}/{ref_id} -> _handler
+OPTIONS /api/orgs/{id}/favorites/{kind}/{ref_id} -> options_handler
 GET,HEAD /api/orgs/{id}/model-subscriptions/{family} -> _handler
 OPTIONS /api/orgs/{id}/model-subscriptions/{family} -> options_handler
 PUT /api/orgs/{id}/model-subscriptions/{family} -> _handler

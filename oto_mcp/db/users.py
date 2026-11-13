@@ -420,6 +420,10 @@ _UNIQUE_INDEX_SUB_TABLES = (
     # comptes de la personne nommés sur le même compte ⟹ la règle du survivant reste.
     ("connector_account_rules", "subject_user",
      ("instance_id", "subject_group", "subject_org"), None),
+    # Les favoris PERSONNELS d'un membre (`org_favorites_une_ligne`, NULLS NOT DISTINCT) :
+    # les deux comptes ont épinglé le même objet dans la même org ⟹ une ligne reste, à la
+    # date la plus ancienne des deux (posée juste avant le retrait, étape 2 quinquies).
+    ("org_favorites", "owner_sub", ("org_id", "kind", "ref_id"), None),
 )
 
 # Colonnes JSONB qui NOMMENT une personne (`user:<sub>`) et la SUIVENT à la fusion :
@@ -546,6 +550,13 @@ _SUB_COLUMNS = [
     # `runner_trigger_links.created_by` = qui a POSÉ un lien entre agents — colonne
     # d'AUTEUR, hors PK et sans FK : relue par l'écran des liens, elle suit la personne.
     ("runner_trigger_links", "created_by"),
+    # `org_favorites.added_by` = qui a ÉPINGLÉ un favori de l'org — colonne d'AUTEUR, hors
+    # de l'unicité et sans FK : la liste des favoris la sert, elle suit la personne.
+    ("org_favorites", "added_by"),
+    # `org_favorites.owner_sub` = le PROPRIÉTAIRE d'un favori personnel : sous l'unicité
+    # `org_favorites_une_ligne`, dédoublonné d'abord (`_UNIQUE_INDEX_SUB_TABLES`, étape
+    # 2 quinquies, qui garde la date la plus ancienne), puis repointé ici.
+    ("org_favorites", "owner_sub"),
     ("tool_calls", "effective_sub"),
     # Le JOURNAL des acceptations légales (#487) — la source de vérité du gate, donc
     # ce qui décide si le compte fusionné se voit redemander ses CGU. Aucune unicité :
@@ -784,6 +795,14 @@ def repointer_patrimoine(conn, old_sub: str, new_sub: str, *,
     #    reporté sur LES DEUX côtés — sans lui, on dédoublonnerait des lignes
     #    que l'index ne regarde même pas.
     #    Le repointage lui-même reste l'UPDATE nu de l'étape 3.
+    # Un favori personnel posé par LES DEUX comptes : celui qui reste garde la date
+    # de pose la plus ancienne — l'ordre de la liste est celui des poses, et la
+    # personne a épinglé l'objet dès la première fois.
+    conn.execute(
+        "UPDATE org_favorites n SET added_at = o.added_at FROM org_favorites o "
+        "WHERE n.owner_sub = %s AND o.owner_sub = %s AND o.org_id = n.org_id "
+        "AND o.kind = n.kind AND o.ref_id = n.ref_id AND o.added_at < n.added_at",
+        (new_sub, old_sub))
     for table, col, autres, predicat in _UNIQUE_INDEX_SUB_TABLES:
         meme_ligne = " AND ".join(f"a.{c} IS NOT DISTINCT FROM b.{c}"
                                   for c in autres) or "TRUE"

@@ -37,6 +37,7 @@ from typing import Optional
 import psycopg
 
 from ._conn import _connect
+from .favoris import purger as purger_favoris
 from ._partage_vivant import PARTAGE_VIVANT, PARTAGE_VIVANT_G, partage_vivant
 from .users import upsert_user
 
@@ -395,6 +396,7 @@ def delete_datastore_by_id(ns_id: int) -> bool:
                 (str(ns_id),),
             )
             cur = conn.execute("DELETE FROM user_datastores WHERE id = %s", (ns_id,))
+            purger_favoris(conn, "table", [ns_id])   # ses favoris d'org, toutes portées
     # Import LOCAL : l'index de clé métier vit avec les lignes, pas avec le tableau.
     # Le faire en tête créerait un cycle (les lignes connaissent déjà le tableau).
     from .datastore import KeyIndexStillEnforced, datastore_drop_key_index

@@ -16,6 +16,7 @@ import oto_mcp.capabilities.orgs.reads  # noqa: F401 — org.list/get/admin.list
 import oto_mcp.capabilities.orgs.field_filters  # noqa: F401 — org.field_filters.{get,set} (ADR 0015)
 import oto_mcp.capabilities.orgs.email_settings  # noqa: F401 — org.email_settings.{get,set} (envoi per-org)
 import oto_mcp.capabilities.orgs.mfa  # noqa: F401 — org.mfa.{get,set} (MFA obligatoire par org, miroir Logto)
+import oto_mcp.capabilities.orgs.favoris  # noqa: F401 — org.favorites.{list,add,remove} (pages et tableaux épinglés pour l'org)
 import oto_mcp.capabilities.orgs.model_subscriptions  # noqa: F401 — org.model_subscriptions.{get,set,set_mode} (plafond, pool d'org)
 from . import scheduled_emails  # noqa: F401 — org.scheduled_email.{list,cancel} (envoi différé)
 import oto_mcp.capabilities.orgs.invites  # noqa: F401 — org.invite.{create,list,revoke,accept}

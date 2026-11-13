@@ -304,6 +304,7 @@ chemins = [
   # 0057 et par le rejeu du démarrage, comme `index_concurrent`.
   "oto_mcp/db/contraintes_create_table.py",
   "oto_mcp/db/doc_grants.py",
+  "oto_mcp/db/favoris.py",
   "oto_mcp/db/entitlements.py",
   "oto_mcp/db/estampille.py",
   # L'attestation d'export qu'exige une révision de retrait (#1169) : lue par la migration

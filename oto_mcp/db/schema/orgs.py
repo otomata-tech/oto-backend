@@ -239,3 +239,31 @@ CREATE TABLE IF NOT EXISTS org_service_accounts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
+
+# les FAVORIS d'une org : pages et tableaux épinglés pour tous ses membres, ou pour soi
+ORG_FAVORITES = """
+-- Les favoris d'une org (`capabilities/orgs/favoris.py`, 13/11/2026) : une page
+-- (`kind = 'doc'`, `ref_id` = `docs.id`) ou un tableau (`kind = 'table'`, `ref_id` =
+-- `user_datastores.id`) épinglé dans l'org. `owner_sub` NULL = favori PARTAGÉ, que tous
+-- les membres voient ; `owner_sub` posé = favori PERSONNEL de ce membre dans cette org,
+-- que lui seul voit — retiré quand il quitte l'org (`org_store.remove_org_member`) ou
+-- quand son compte disparaît (FK). Chacun n'en LIT que ce que ses droits lui ouvrent :
+-- un favori n'accorde rien. `added_by` = l'auteur du geste (colonne d'AUTEUR). Aucune
+-- FK vers l'objet : supprimer une page ou un tableau retire ses lignes dans la même
+-- transaction (`db/favoris.purger`) ; une ligne morte restée est retirée à la lecture.
+-- Unicité NULLS NOT DISTINCT : un seul favori partagé par objet et par org.
+CREATE TABLE IF NOT EXISTS org_favorites (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    owner_sub TEXT REFERENCES users(sub) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('doc', 'table')),
+    ref_id BIGINT NOT NULL,
+    added_by TEXT,
+    added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT org_favorites_une_ligne UNIQUE NULLS NOT DISTINCT (org_id, owner_sub, kind, ref_id)
+);
+CREATE INDEX IF NOT EXISTS idx_org_favorites_owner ON org_favorites(owner_sub)
+    WHERE owner_sub IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_org_favorites_cible ON org_favorites(kind, ref_id);
+CREATE INDEX IF NOT EXISTS idx_org_favorites_added_by ON org_favorites(added_by)
+    WHERE added_by IS NOT NULL;
+"""

@@ -2,7 +2,9 @@
 (`db/regions_de_modeles.py`).
 
 A NEW column, `BOOLEAN NOT NULL DEFAULT TRUE` — the DDL is
-`db/regions_de_modeles.py::DDL_COLONNE`, run as is. TRUE = every org before the switch:
+`db/regions_de_modeles.py::DDL_COLONNE`, run as is. ⚠️ That DDL now says DEFAULT FALSE
+(13/11/2026): a base that replays this revision gets FALSE at once, and
+`20261113_2300_cn_models_opt_in` moves the others there. TRUE = every org before the switch:
 models that run in China stay allowed. Only an org admin turns it off
 (`oto_org_settings domain=model_regions`).
 

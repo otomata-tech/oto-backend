@@ -1127,8 +1127,12 @@ conditions des hôtes, lus le 12/11/2026 (`runner_models.HOTES`) ; un hôte épi
 région fait échouer un banc. Le worker rapporte l'hôte qui a servi chaque tour
 (`usage_host`), écrit au journal du tour au coût (`args.host`).
 
-Une org peut écarter les modèles qui tournent en Chine (`orgs.allow_cn_models`, TRUE par
-défaut ; `oto_org_settings domain=model_regions`, REST `/api/orgs/{id}/model-regions`,
+Les modèles qui tournent en Chine ne sont permis qu'à l'org qui l'a choisi
+(`orgs.allow_cn_models`, FALSE par défaut depuis le 13/11/2026 — révision
+`20261113_2300_cn_models_opt_in`, qui a remis toutes les orgs à FALSE : aucune ne pouvait
+encore les faire tourner). Depuis la même date, Flash et MiniMax M3 ne sont épinglés
+qu'à des hôtes aux États-Unis (DeepInfra puis GMI Cloud ; GMI Cloud puis Parasail) ;
+seul V4 Pro garde des hôtes en Chine (StreamLake, Baidu). Réglage : `oto_org_settings domain=model_regions`, REST `/api/orgs/{id}/model-regions`,
 admin de l'org). Écartés : `allowed: false` au catalogue (l'écran ne les propose pas),
 refusés à la pose (`model_region_blocked`, 403), et un travail déjà en file sur l'un d'eux
 est arrêté à la réservation, sur la clé de l'org comme sur la nôtre, raison écrite.

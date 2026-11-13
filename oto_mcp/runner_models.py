@@ -69,29 +69,36 @@ MODELES: tuple[Modele, ...] = (
     # même nom) : la voie bon marché des agents hébergés, en Chat Completions sur
     # `https://openrouter.ai/api/v1`. Placés APRÈS les familles d'avant : le défaut se dérive
     # du premier modèle servi, et un worker OpenRouter qui démarre ne le déplace pas.
-    # Hôtes épinglés en fp8, jamais fp4 ni alias `~`, et de prix VOISINS (écart ≤ 11 %
-    # sur la liste du 12/11/2026) : un tour sur la clé partagée est journalisé au coût
-    # qu'OpenRouter a rendu (`tours_au_cout`), aucune ligne de barème ne suit cette
-    # liste ; la garder serrée garde le coût d'un run prévisible. Le DERNIER hôte d'une
-    # liste est un secours de capacité, moins cher que les autres sur l'entrée et la
-    # sortie : `order` ne l'atteint que si les précédents refusent (429, panne).
+    # Hôtes épinglés en fp8, jamais fp4 ni alias `~`. Un tour sur la clé partagée est
+    # journalisé au coût qu'OpenRouter a rendu (`tours_au_cout`), aucune ligne de barème
+    # ne suit cette liste. Le premier hôte est le moins cher de ceux qu'on garde ; les
+    # suivants sont des secours de capacité, que `order` n'atteint que si les précédents
+    # refusent (429, panne) — un secours plus cher ne coûte donc qu'en cas de panne.
+    # ⚠️ Aux États-Unis par défaut (13/11/2026) : Flash et MiniMax n'ont plus aucun hôte
+    # en Chine, donc l'org qui n'a PAS permis la Chine (`orgs.allow_cn_models`, FALSE
+    # par défaut) les a quand même. V4 Pro reste servi en Chine (StreamLake, Baidu : la
+    # moitié du prix de GMI Cloud) et ne s'offre qu'à l'org qui l'a permis.
     # Le raisonnement partage le plafond de complétion avec la réponse : chacun déclare
     # le sien (`max_output_tokens`), comme les modèles Mistral qui raisonnent.
     #
     # DeepSeek V4.1 Flash (1017) : le modèle du banc « procédures réelles » — suit les
     # procédures, s'arrête sur une donnée manquante, ~×0,2 le coût de Claude. Contexte 1M.
+    # DeepInfra (0,098 / 0,294 / 0,0029 $/M, 13/11/2026) est désormais moins cher que
+    # StepFun en entrée et en sortie ; GMI Cloud (0,18 / 0,72) est le secours.
     Modele("deepseek/deepseek-v4.1-flash-1017", "DeepSeek V4.1 Flash", "openrouter",
            effort="medium", max_output_tokens=16000,
-           providers=("stepfun/fp8", "streamlake/fp8", "deepinfra/fp8")),
+           providers=("deepinfra/fp8", "gmicloud/fp8")),
     Modele("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro", "openrouter",
            effort="medium", max_output_tokens=16000,
            providers=("streamlake/fp8", "baidu/fp8", "gmicloud/fp8")),
     # GLM-5.3 (z-ai/glm-5.3) RETIRÉ le 12/11/2026 : sur un run long (60 tours), il conclut
     # par du texte après une écriture au lieu d'enchaîner (20 tours sur 60), ce qui
     # termine le travail dans la boucle. À ne remettre qu'après un run long qui enchaîne.
+    # MiniMax M3 : GMI Cloud (0,24 / 0,96, contexte 1M, 13/11/2026) puis Parasail (0,30 /
+    # 1,20, celui du run long de 60 tours du 12/11). StreamLake retiré : plus de Chine.
     Modele("minimax/minimax-m3", "MiniMax M3", "openrouter",
            effort="medium", max_output_tokens=16000,
-           providers=("parasail/fp8", "streamlake/fp8", "gmicloud/fp8")),
+           providers=("gmicloud/fp8", "parasail/fp8")),
     # ⚠️ L'ABONNEMENT de la personne (OTO-130), pas une clé : ces travaux tournent
     # dans SON sandbox, sur le programme Claude Code officiel où elle s'est
     # connectée elle-même. La famille est donc un dépôt qu'AUCUNE org ne dépose et
@@ -128,9 +135,10 @@ MODELES_PERSONNELS = tuple(m.id for m in MODELES if m.family in FAMILLES_PERSONN
 #: d'outils). Une RÉGION par hôte : `us`, `eu`, `cn`. Sources lues le 12/11/2026 :
 #: `GET https://openrouter.ai/api/v1/providers` (`headquarters`, `datacenters`) pour
 #: Anthropic (US), Mistral (FR), Baidu (CN), StreamLake (CN), DeepInfra (US),
-#: Parasail (US) et GMICloud (US, centres US) ; StepFun n'y a pas de siège : ses
-#: conditions (platform.stepfun.ai, « userservice ») relèvent du droit de Hong Kong,
-#: donc `cn`. ⚠️ Un hôte épinglé (`Modele.providers`) absent d'ici fait échouer un
+#: Parasail (US) et GMICloud (US, centres US) ; StepFun n'y avait pas de siège le
+#: 12/11 (ses conditions relèvent du droit de Hong Kong, donc `cn`) et y figure en CN
+#: le 13/11. StepFun et StreamLake ne sont plus épinglés (13/11), gardés ici pour
+#: qu'un retour en arrière dise encore où ils tournent. ⚠️ Un hôte épinglé (`Modele.providers`) absent d'ici fait échouer un
 #: banc : un modèle ne se sert jamais sans dire où il tourne.
 HOTES: dict[str, tuple[str, str]] = {
     "anthropic": ("Anthropic", "us"),

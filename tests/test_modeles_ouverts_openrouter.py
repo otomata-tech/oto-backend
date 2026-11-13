@@ -28,6 +28,8 @@ from oto_mcp.capabilities._types import AuthzDenied
 from oto_mcp.db import usage as db_usage
 
 FLASH = "deepseek/deepseek-v4.1-flash-1017"
+#: Le seul modèle ouvert qui garde des hôtes en Chine (13/11/2026).
+PRO = "deepseek/deepseek-v4-pro"
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +63,7 @@ def test_le_travail_emporte_les_hotes_epingles():
     c = runner_models.charge(FLASH)
     assert c["model_family"] == "openrouter" and c["effort"] == "medium"
     assert c["max_output_tokens"] == 16000
-    assert c["providers"] == ["stepfun/fp8", "streamlake/fp8", "deepinfra/fp8"]
+    assert c["providers"] == ["deepinfra/fp8", "gmicloud/fp8"]
     assert "providers" not in runner_models.charge("claude-sonnet-5")
 
 
@@ -293,13 +295,15 @@ def test_la_region_d_un_modele_est_la_pire_de_ses_hotes():
     assert runner_models.hebergement("claude-sonnet-5")["region"] == "us"
     assert runner_models.hebergement("mistral-large-2512")["region"] == "eu"
     flash = runner_models.hebergement(FLASH)
-    assert flash["region"] == "cn" and flash["router"] == {"name": "OpenRouter", "region": "us"}
-    assert [(h["name"], h["region"], h["role"]) for h in flash["hosts"]] == [
-        ("StepFun", "cn", "first"), ("StreamLake", "cn", "backup"),
-        ("DeepInfra", "us", "last_backup")]
-    # Premier hôte aux US, un secours en Chine : la Chine, dite.
-    minimax = runner_models.hebergement("minimax/minimax-m3")
-    assert minimax["hosts"][0]["region"] == "us" and minimax["region"] == "cn"
+    assert flash["region"] == "us" and flash["router"] == {"name": "OpenRouter", "region": "us"}
+    assert [(h["name"], h["region"]) for h in flash["hosts"]] == [
+        ("DeepInfra", "us"), ("GMI Cloud", "us")]
+    assert flash["hosts"][0]["role"] == "first"
+    # Les modèles ouverts par défaut tournent aux US (13/11/2026) ; seul V4 Pro garde la
+    # Chine — un secours en Chine suffit à la dire.
+    assert runner_models.hebergement("minimax/minimax-m3")["region"] == "us"
+    pro = runner_models.hebergement("deepseek/deepseek-v4-pro")
+    assert pro["region"] == "cn" and pro["hosts"][-1]["region"] == "us"
     assert runner_models.hebergement("inconnu") is None
 
 
@@ -327,20 +331,23 @@ def test_ecartee_la_chine_n_est_plus_proposee_ni_posable(chine):
     chine["permise"] = False
     etat = _modele.etat_servi({"families": ["openrouter", "anthropic"]}, 42)
     par_id = {m["id"]: m for m in etat["models"]}
-    assert par_id[FLASH]["allowed"] is False and par_id[FLASH]["default"] is False
+    assert par_id[PRO]["allowed"] is False and par_id[PRO]["default"] is False
     assert "allowed" not in par_id["claude-sonnet-5"]  # rien d'écarté hors de Chine
+    # Flash et MiniMax tournent aux US : la Chine écartée ne les touche pas.
+    assert "allowed" not in par_id[FLASH] and "allowed" not in par_id["minimax/minimax-m3"]
     with pytest.raises(AuthzDenied) as e:
-        _modele.exige_region_permise(42, FLASH)
+        _modele.exige_region_permise(42, PRO)
     assert (e.value.status, e.value.code) == (403, "model_region_blocked")
+    _modele.exige_region_permise(42, FLASH)
     _modele.exige_region_permise(42, "claude-sonnet-5")
     _modele.exige_region_permise(42, "mistral-large-2512")
 
 
-def test_permise_par_defaut_rien_ne_change(chine):
+def test_permise_rien_n_est_ecarte(chine):
     from oto_mcp.capabilities import _modele
     etat = _modele.etat_servi({"families": ["openrouter"]}, 42)
     assert all(m.get("allowed", True) for m in etat["models"])
-    _modele.exige_region_permise(42, FLASH)
+    _modele.exige_region_permise(42, PRO)
 
 
 def test_un_travail_deja_en_file_est_arrete_a_la_reservation(chine, monkeypatch):
@@ -348,7 +355,7 @@ def test_un_travail_deja_en_file_est_arrete_a_la_reservation(chine, monkeypatch)
     arrete = {}
     monkeypatch.setattr(runner_jobs.db, "arreter_definitivement",
                         lambda jid, qui, raison: arrete.update(jid=jid, raison=raison))
-    job = {"id": 5, "org_id": 42, "payload": {"model": FLASH, "model_family": "openrouter"}}
+    job = {"id": 5, "org_id": 42, "payload": {"model": PRO, "model_family": "openrouter"}}
     out = runner_jobs._avec_cle(job, "openrouter", "worker:x", worker=True, metre=True)
     assert arrete["jid"] == 5 and "Chine" in arrete["raison"]
     assert out["delegation_refusee"] == arrete["raison"]

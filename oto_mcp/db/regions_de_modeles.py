@@ -2,15 +2,19 @@
 
 **Models that run in China** (`oto_org_settings domain=model_regions`): a model whose
 hosts include one in China (`runner_models.hebergement`, region `cn`) — the open models
-served through OpenRouter. Allowed by default: the state of every org before the switch
-existed, so nothing changes until an org admin turns it off. Off, those models are
+served through OpenRouter. NOT allowed by default (13/11/2026, revision
+`20261113_2300_cn_models_opt_in`): agent turns carry customer data, so an org admin opts
+in. The default catalogue runs in the US (DeepSeek V4.1 Flash, MiniMax M3); only DeepSeek
+V4 Pro still has hosts in China. Off, those models are
 marked `allowed: false` in the catalogue (the picker hides them), an agent cannot be
 set on one (`_modele.exige_region_permise`), and a job already queued on one is stopped
 at the claim with the reason written (`runner_jobs._avec_cle`).
 
 The column is born in `CREATE TABLE orgs` (`db/schema/orgs.py`); an existing base gets
 it from the revision `20261112_1900_allow_cn_models` or from the boot, same DDL
-(`DDL_COLONNE`), in either order.
+(`DDL_COLONNE`), in either order. The default moved from TRUE to FALSE in
+`20261113_2300_cn_models_opt_in` (`DDL_DEFAUT`), which also turned every org off: no org
+could run these models yet (no worker, no key).
 
 Not flattened into `db.*` — callers write `db.regions_de_modeles.<fn>`.
 """
@@ -22,7 +26,9 @@ from ._conn import _connect
 
 COLONNE = "allow_cn_models"
 DDL_COLONNE = (f"ALTER TABLE orgs ADD COLUMN IF NOT EXISTS {COLONNE} "
-               "BOOLEAN NOT NULL DEFAULT TRUE")
+               "BOOLEAN NOT NULL DEFAULT FALSE")
+#: The default of a base where the column was born TRUE (`20261112_1900_allow_cn_models`).
+DDL_DEFAUT = f"ALTER TABLE orgs ALTER COLUMN {COLONNE} SET DEFAULT FALSE"
 
 
 def chine_permise(org_id: int) -> Optional[bool]:

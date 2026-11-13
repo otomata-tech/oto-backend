@@ -1,6 +1,6 @@
 """Où l'org laisse tourner les modèles de ses agents, SUR LA ROUTE et sur une vraie base :
 `GET|PUT /api/orgs/{id}/model-regions`. Lire est un geste de membre, régler un geste
-d'admin d'org ; permis par défaut.
+d'admin d'org ; écartés par défaut (13/11/2026).
 """
 from __future__ import annotations
 
@@ -75,22 +75,22 @@ def org(live):
             "route": f"/api/orgs/{oid}/model-regions"}
 
 
-def test_un_membre_lit_permis_par_defaut(client, org):
+def test_un_membre_lit_ecartee_par_defaut(client, org):
     r = client.get(org["route"], headers=_h(org["membre"]))
     assert r.status_code == 200, r.text
-    assert r.json() == {"org_id": org["id"], "allow_cn": True}
+    assert r.json() == {"org_id": org["id"], "allow_cn": False}
 
 
 def test_un_membre_ne_regle_pas_et_un_etranger_ne_lit_pas(client, org):
-    r = client.put(org["route"], json={"allow_cn": False}, headers=_h(org["membre"]))
+    r = client.put(org["route"], json={"allow_cn": True}, headers=_h(org["membre"]))
     assert r.status_code == 403, r.text
     assert client.get(org["route"], headers=_h(org["dehors"])).status_code in (403, 404)
 
 
-def test_un_admin_ecarte_puis_rouvre(client, org):
-    r = client.put(org["route"], json={"allow_cn": False}, headers=_h(org["admin"]))
-    assert r.status_code == 200, r.text
-    assert r.json()["allow_cn"] is False
-    assert client.get(org["route"], headers=_h(org["membre"])).json()["allow_cn"] is False
+def test_un_admin_permet_puis_ecarte(client, org):
     r = client.put(org["route"], json={"allow_cn": True}, headers=_h(org["admin"]))
+    assert r.status_code == 200, r.text
     assert r.json()["allow_cn"] is True
+    assert client.get(org["route"], headers=_h(org["membre"])).json()["allow_cn"] is True
+    r = client.put(org["route"], json={"allow_cn": False}, headers=_h(org["admin"]))
+    assert r.json()["allow_cn"] is False

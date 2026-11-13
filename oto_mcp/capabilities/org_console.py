@@ -205,8 +205,8 @@ def _slack(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
 
 def _regions_de_modeles(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     """Où l'org laisse tourner les modèles de ses agents (`db/regions_de_modeles.py`) :
-    `allow_cn` — les modèles dont un hôte est en Chine. Défaut : TRUE, l'état de toutes
-    les orgs d'avant. Écartés, ils ne sont plus proposés, plus posables, et un travail
+    `allow_cn` — les modèles dont un hôte est en Chine. Défaut : FALSE (13/11/2026), un
+    admin de l'org les permet. Écartés, ils ne sont plus proposés, plus posables, et un travail
     déjà en file sur l'un d'eux est arrêté à la réservation, raison écrite."""
     from .. import db
     if inp.op not in ("get", "set"):
@@ -474,7 +474,7 @@ CAPABILITIES += [
             "true = outside a direct message, the app answers only a message that tags "
             "it, replies included; direct messages are never affected) | model_regions "
             "(where the org's agents' models may run: set takes `allow_cn` true|false; "
-            "default true; false = models with any host in China — `runner.models[].hosting"
+            "default false (an org admin opts in); false = models with any host in China — `runner.models[].hosting"
             ".region` = cn — are no longer offered (`allowed: false`), an agent cannot be "
             "set on one (`model_region_blocked`), and a job already queued on one is "
             "stopped at the claim with the reason written). "

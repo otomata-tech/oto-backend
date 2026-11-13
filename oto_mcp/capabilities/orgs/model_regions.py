@@ -1,8 +1,8 @@
 """Capacité : OÙ l'org laisse tourner les modèles de ses agents (`orgs.allow_cn_models`).
 
 Un modèle tourne là où sont ses hôtes (`runner_models.hebergement`) ; `cn` dès qu'un seul
-de sa liste, un secours compris, est en Chine. Permis par défaut. Écartés par un admin de
-l'org : plus proposés (`allowed: false` au catalogue), plus posables
+de sa liste, un secours compris, est en Chine. Écartés par défaut (13/11/2026) : un
+admin de l'org les permet. Écartés : plus proposés (`allowed: false` au catalogue), plus posables
 (`model_region_blocked`), et un travail déjà en file sur l'un d'eux est arrêté à la
 réservation, raison écrite (`runner_jobs._avec_cle`).
 
@@ -63,7 +63,7 @@ CAPABILITIES += [
         authz=ORG_MEMBER_OF("org_id"), Output=RegionsDeModeles, errors=_ERREURS,
         description=("Read where the org lets its agents' models run: `allow_cn` = whether "
                      "models with any host in China (`runner.models[].hosting.region` = cn) "
-                     "may be used. Default true."),
+                     "may be used. Default false: an org admin opts in."),
         rest=RestBinding("GET", _PATH, _ID),
     ),
     Capability(

@@ -59,9 +59,10 @@ CREATE TABLE IF NOT EXISTS orgs (
     -- révision `20261109_2100_slack_mention_only`.
     slack_mention_only BOOLEAN NOT NULL DEFAULT FALSE,
     -- Les agents de l'org peuvent tourner sur un modèle qui tourne en Chine
-    -- (`db/regions_de_modeles.py`). TRUE = toutes les orgs d'avant. Base existante :
-    -- révision `20261112_1900_allow_cn_models`.
-    allow_cn_models BOOLEAN NOT NULL DEFAULT TRUE
+    -- (`db/regions_de_modeles.py`). FALSE par défaut : un admin de l'org le permet.
+    -- Base existante : révisions `20261112_1900_allow_cn_models` puis
+    -- `20261113_2300_cn_models_opt_in`.
+    allow_cn_models BOOLEAN NOT NULL DEFAULT FALSE
 );
 """
 

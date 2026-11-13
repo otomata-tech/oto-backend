@@ -861,6 +861,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "d'une procédure partagée par lien qui a de nouveaux lecteurs visibles. "
              "Absente (ou autre que 1/true/on) : le travail compte ce qu'il enverrait, "
              "n'envoie ni ne marque rien.", ("oto_mcp/digest_lecteurs.py:34",)),
+    Variable("OTO_EFFACEMENTS", Classe.REGLAGE, "",
+             "Ouvre le travail `effacements` (docs/effacement-d-org.md) : la purge des "
+             "orgs dont l'effacement est confirmé et le délai de grâce échu — base, "
+             "stockage, sièges Unipile, comptes Logto, archives du journal. Absente "
+             "(ou autre que 1/true/yes/on) : le travail liste ce qu'il ferait, n'écrit "
+             "rien. Prod seulement : la préprod partage la base.",
+             ("oto_mcp/effacement/travail.py:43",)),
     Variable("OTO_UNIPILE_FIN_DE_DROIT_DELAI_JOURS", Classe.REGLAGE, "7",
              "Jours entre le premier constat de la perte du droit `unipile` et la "
              "suppression du compte chez unipile. Entier ≥ 1, sinon le travail lève.",

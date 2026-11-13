@@ -701,6 +701,14 @@ def journal_jour(*, dry_run: bool = False) -> dict:
     return jj.maintenance(dry_run=dry_run)
 
 
+def effacements(*, dry_run: bool = False) -> dict:
+    """Fait avancer les effacements d'org confirmés dont le délai de grâce est échu
+    (`effacement.travail`, `docs/effacement-d-org.md`). À blanc : la liste de ce qui
+    avancerait, rien d'écrit."""
+    from .effacement import travail
+    return travail.passer(dry_run=dry_run)
+
+
 _TRAVAUX: dict[str, Callable[..., dict]] = {
     "journal-jour": journal_jour,
     "retention": retention,
@@ -724,6 +732,7 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "slack-agent-posts": slack_agent_posts,
     "apify-runs": apify_runs,
     "higgsfield-jobs": higgsfield_jobs,
+    "effacements": effacements,
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
@@ -742,11 +751,14 @@ _ACTES = ("journal-tokens", "residu-projete", "cles-plateforme-au-format")
 # (`OTO_ACTIVATION` vide) il ne lit rien.
 # Elle lit `org_entitlements`, qu'oto-commerce tient seul (#1097) : aucun travail d'ici
 # ne le réaligne avant elle.
+# ⚠️ `effacements` aussi, et c'est le timer quotidien (prod seulement) qui le tire : la
+# préprod partage la base, elle ne doit jamais purger. Une purge attend l'échéance des
+# jetons des comptes supprimés (une heure) : elle se termine au tir du lendemain.
 # ⚠️ `journal-jour` est EN TÊTE de `_ALL` : la veille doit être consolidée tôt, avant
 # qu'un travail plus long (re-projection, index) ne consomme la fenêtre du timer.
 _ALL = ("journal-jour", "retention", "revisions", "blocks", "key-indexes", "alertes-credential",
         "instagram-tokens", "unipile-fin-de-droit", "apollo-phones", "activation", "digest-lecteurs", "copilot",
-        "app-files", "slack-agent-posts", "apify-runs", "higgsfield-jobs")
+        "app-files", "slack-agent-posts", "apify-runs", "higgsfield-jobs", "effacements")
 
 
 def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:

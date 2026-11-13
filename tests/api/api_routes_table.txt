@@ -935,6 +935,14 @@ GET,HEAD /api/copilot/attachments -> _handler
 OPTIONS /api/copilot/attachments -> options_handler
 POST /api/copilot/actions/{revert_id}/revert -> _handler
 OPTIONS /api/copilot/actions/{revert_id}/revert -> options_handler
+POST /api/orgs/{id}/erasure -> _handler
+OPTIONS /api/orgs/{id}/erasure -> options_handler
+POST /api/org-erasures/confirmation -> _handler
+OPTIONS /api/org-erasures/confirmation -> options_handler
+GET,HEAD /api/service/org-erasures -> _handler
+OPTIONS /api/service/org-erasures -> options_handler
+POST /api/service/org-erasures/{id}/commerce-erased -> _handler
+OPTIONS /api/service/org-erasures/{id}/commerce-erased -> options_handler
 POST /api/billing/webhook -> webhook
 OPTIONS /api/billing/webhook -> options_handler
 GET,HEAD /api/me/billing/invoices/{id}/pdf -> invoice_pdf

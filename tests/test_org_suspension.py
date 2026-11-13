@@ -213,6 +213,9 @@ def _admin_env(monkeypatch, existe=True):
 
     monkeypatch.setattr(cap.org_store, "suspend_org", _suspend)
     monkeypatch.setattr(cap.org_store, "resume_org", _resume)
+    # Aucun effacement confirmé : la levée reste ouverte (le refus a son banc,
+    # tests/effacement/test_cycle_effacement.py).
+    monkeypatch.setattr(cap, "_effacement_confirme", lambda i: None)
     return cap
 
 

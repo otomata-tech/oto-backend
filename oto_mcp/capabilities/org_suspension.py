@@ -68,10 +68,28 @@ def _vue(org_id: int, etat: Optional[dict], *, changed: bool) -> dict:
     }
 
 
+def _effacement_confirme(org_id: int) -> Optional[dict]:
+    """La demande d'effacement CONFIRMÉE (`scheduled`, `running`) de l'org, s'il y en a
+    une (`docs/effacement-d-org.md`)."""
+    from ..effacement import demandes
+    d = demandes.vivante(org_id)
+    return d if d and d["state"] in ("scheduled", "running") else None
+
+
 def _org_suspension(ctx: ResolvedCtx, inp: OrgSuspensionInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     if inp.op == "resume":
+        # Une org dont l'effacement est confirmé reste suspendue jusqu'à sa purge : la
+        # rouvrir (un abonnement repris par le commerce, un super admin) ferait travailler
+        # ses membres sur des données promises à l'effacement. L'annulation de
+        # l'effacement (`org.erasure` op=cancel) est le seul geste qui la rouvre.
+        en_cours = _effacement_confirme(inp.org_id)
+        if en_cours:
+            raise AuthzDenied(409, "erasure_scheduled",
+                              f"L'org #{inp.org_id} a un effacement confirmé "
+                              f"(demande #{en_cours['id']}) : l'annuler d'abord "
+                              "(`org.erasure` op=cancel), ce qui lève la suspension.")
         try:
             change = org_store.resume_org(inp.org_id)
         except TenantDesactive as e:
@@ -103,6 +121,9 @@ _ERREURS = (
     DeclaredError(404, "unknown_org", "aucune org ne porte cet id"),
     DeclaredError(400, "missing_reason", "op=suspend sans `reason`"),
     DeclaredError(400, "reason_too_long", f"`reason` dépasse {_MOTIF_MAX} caractères"),
+    DeclaredError(409, "erasure_scheduled",
+                  "op=resume sur une org dont l'effacement est confirmé : l'annuler d'abord "
+                  "(`org.erasure` op=cancel)"),
     DeclaredError(409, "tenant_disabled",
                   "op=resume sur une org dont le tenant est désactivé : elle rouvre avec "
                   "lui (`admin.tenant_disablement` op=enable)"),

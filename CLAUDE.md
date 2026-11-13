@@ -65,7 +65,8 @@ Paliers `member < admin < super_admin` ; clé résolue à chaque appel par le **
 **multi-compte** · ⚠️ compte nommé introuvable ⇒ « introuvable », **jamais un repli plateforme silencieux**
 (`docs/roles-and-resolution.md`, `docs/connector-vault.md`).
 **Mettre un compte en pause** (03/09/2026) : le cran qui manquait entre « vivant » et « supprimé » — et **la
-suppression n'existe pas** comme geste de produit, le seul `DELETE FROM users` étant l'étape 4 de `migrate_sub`. Un
+suppression d'un compte n'existe pas** comme geste à part : hors l'étape 4 de `migrate_sub`, un compte ne part
+qu'avec l'**effacement de sa seule org** (`org.erasure`, `docs/effacement-d-org.md`). Un
 compte en pause ne peut plus rien faire **dès la requête suivante, jeton déjà émis compris** (les deux branches
 d'`api.base._authenticate`, la levée d'`upsert_user`, et un middleware MCP sur **`on_request`** — pas `on_call_tool`,
 sinon un compte sorti lirait encore les instructions d'org du handshake) · ⚠️ **rien n'est détruit ni détaché** :
@@ -239,6 +240,9 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   résurrection automatique
 - `orgs-suspendues.md` — arrêter un ESPACE sans rien détruire : six portes gardées
   (capacités, outils, réservation, webhook, cron, projet publié sans login), ce qui reste ouvert et pourquoi
+- `effacement-d-org.md` — EFFACER une org (RGPD art. 17) : demande, lien au titulaire, 7 j de grâce, purge
+  hors processus par le classement de l'export + une décision écrite par table qu'il laisse (refus sinon),
+  pierre tombale pour les pièces comptables, comptes dont c'était la seule org, archives froides réécrites
 - `contributions-forks.md` — recevoir une PR de fork : trois pièges, pin oto-core sur le tronc
 - `deploiement.md` — le modèle tronc unique : main = préprod, tag = prod, garde « préprod verte », domaines servis, pièges du tag
 - `namespace-fr.md` — sources `fr_`, deux stocks SIRENE, `dirigeants` vide à trois lectures, `data.oto.zone`

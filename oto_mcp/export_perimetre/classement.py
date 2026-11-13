@@ -349,6 +349,8 @@ CLASSEMENT: dict[str, Table] = {
                                       "légaux"),
     "outreach_sends": exclue(ParSub(), "nos relances de plateforme"),
     "outreach_optouts": exclue(ParSub(), "nos relances de plateforme"),
+    "org_erasures": exclue(ParOrg(), "la preuve de NOS effacements d'org (RGPD art. 5 "
+                           "§2) : elle reste chez l'instance qui a effacé"),
     # Le budget d'unités (`docs/credits-au-moment-de-l-appel.md`) est VERSÉ par le
     # commerce de l'instance, qui le relit par son curseur : la cible reçoit le sien de
     # son propre commerce (un solde d'ouverture), jamais une copie de celui-ci.

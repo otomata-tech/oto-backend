@@ -467,10 +467,11 @@ _MD_BALISES = frozenset({
 _MD_ATTRIBUTS = {"a": {"href", "title"}, "th": {"align"}, "td": {"align"}}
 _MD_SCHEMAS = frozenset({"http", "https", "mailto"})
 # Les marges qu'un paragraphe ou une liste du corps texte porte déjà (`_charte.PARA`) :
-# posées APRÈS l'assainissement, qui retire tout attribut `style`.
-_MD_STYLES = {"p": _charte.PARA, "ul": f"{_charte.PARA};padding-left:24px",
-              "ol": f"{_charte.PARA};padding-left:24px",
-              "blockquote": f"{_charte.PARA};padding-left:12px;border-left:3px solid #ddd"}
+# posées APRÈS l'assainissement, qui retire tout attribut `style`. Lues à l'appel, pas à
+# l'import : `email_brand` importe ce module, et l'import à froid de l'un ou l'autre
+# passe par un module à moitié initialisé (`tests/test_email_cycle_import_a_froid.py`).
+_MD_MARGES_EN_PLUS = {"p": "", "ul": ";padding-left:24px", "ol": ";padding-left:24px",
+                      "blockquote": ";padding-left:12px;border-left:3px solid #ddd"}
 
 
 def corps_markdown(body: str) -> str:
@@ -486,8 +487,8 @@ def corps_markdown(body: str) -> str:
     sur = nh3.clean(_markdown_to_html_fragment(body or ""), tags=set(_MD_BALISES),
                     attributes={k: set(v) for k, v in _MD_ATTRIBUTS.items()},
                     url_schemes=set(_MD_SCHEMAS), link_rel="noopener noreferrer")
-    for balise, style in _MD_STYLES.items():
-        sur = sur.replace(f"<{balise}>", f'<{balise} style="{style}">')
+    for balise, en_plus in _MD_MARGES_EN_PLUS.items():
+        sur = sur.replace(f"<{balise}>", f'<{balise} style="{_charte.PARA}{en_plus}">')
     return sur
 
 

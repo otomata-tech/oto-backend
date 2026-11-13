@@ -405,7 +405,7 @@ lemlist_campaign_start	-	0fcf76c93412d4a7
 lemlist_company	delete list note_create notes upsert	c15f227b415cd75b
 lemlist_contact	delete get list list_create list_export list_manage lists upsert	0482ce6445884ec4
 lemlist_create_lead	-	387e97092baaa729
-lemlist_database	companies filters people personas	9fcb94c3b1147639
+lemlist_database	companies filters people personas	d5e1722342b3e863
 lemlist_delete_activity_transcript	-	fe06e63ff8d96fd8
 lemlist_deliverability	create delete get list update	718c62b34a9ad5ec
 lemlist_enrich	-	aa1900d7742752bf

@@ -80,7 +80,9 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # critère qui blanchissait : c'est une exception tranchée, la seule à ce jour.
 # 210 → 208 le même jour : seranking et seranking_act payés (seranking 1.1.0, oto-core
 # v1.217.0 : chaque liste paginée déclare `output.projection` ou `strip`).
-_PLAFOND = 208
+# 208 → 207 le 2026-11-13 : lemlist_database payé (`fields` et `compact`, appliqués par le
+# client d'oto-core, `oto.tools.lemlist.database_views`) — le défaut reste la page brute.
+_PLAFOND = 207
 
 
 def _debt() -> set[str]:

@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .. import db, deprecations
 from . import audit_log, monitoring
-from ._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
+from ._authz import COMMERCE_SERVICE, ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._lecture_bornee import bornee
 from ._types import (cap_limit, AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
@@ -759,6 +759,19 @@ class OrgBillableCalls(BaseModel):
     unknown_run_ids: list[str] = Field(default_factory=list)
 
 
+# La même ligne pour la SEULE face de service du commerce : plus la personne qui a fait
+# l'appel. Le commerce tient les limites de dépense du jour par personne et par équipe
+# (`docs/limites-de-depense.md`) ; la lentille membre, elle, reste sans identité.
+class ServiceBillableCallRow(BillableCallRow):
+    # `tool_calls.sub` : la personne au nom de qui l'appel a tourné — l'auteur d'un
+    # agent hébergé pour ses appels. `None` = ligne sans identité.
+    sub: Optional[str] = None
+
+
+class ServiceBillableCalls(OrgBillableCalls):
+    calls: list[ServiceBillableCallRow]
+
+
 # Une page de runs côté app en montre 50 ; la borne laisse de la marge sans ouvrir
 # une lecture de tout le journal par une liste de runs interminable.
 MAX_BILLABLE_RUNS = 100
@@ -820,6 +833,14 @@ def _refus_de_fenetre(e: "db.FenetreDeReleveRefusee") -> AuthzDenied:
 
 
 def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
+    return _releve(inp, avec_personne=False)
+
+
+def _billable_calls_service(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
+    return _releve(inp, avec_personne=True)
+
+
+def _releve(inp: OrgBillableCallsInput, *, avec_personne: bool) -> dict:
     # Refus NOMMÉS (`AuthzDenied` : message rendu tel quel par les deux faces), même
     # code que l'adaptateur pour une entrée invalide — le contrat ne change pas, le
     # client apprend enfin pourquoi.
@@ -842,7 +863,7 @@ def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
     try:
         page = db.list_billable_calls_for_org(
             inp.org_id, inp.tool, run_ids=inp.run_id, since=inp.since, until=inp.until,
-            limit=limit, before=before)
+            limit=limit, before=before, avec_personne=avec_personne)
     except db.FenetreDeReleveRefusee as e:
         raise _refus_de_fenetre(e) from e
     nxt = page["next"]
@@ -855,7 +876,8 @@ def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
                    "provider_credits": r.get("provider_credits"),
                    "key_mode": r.get("key_mode"),
                    "job_id": r.get("job_id"), "found": r.get("found"),
-                   "run_id": r.get("run_id")}
+                   "run_id": r.get("run_id"),
+                   **({"sub": r.get("sub")} if avec_personne else {})}
                   for r in page["calls"]],
         "total": page["total"],
         "since_effectif": page["since_effectif"],
@@ -1102,6 +1124,17 @@ CAPABILITIES += [
                Input=OrgBillableCallsInput, authz=_MEMBER_OF, mcp=None,
                Output=OrgBillableCalls, errors=(_REFUS_FENETRE, _REFUS_LIMITE),
                rest=RestBinding("GET", "/api/orgs/{id}/usage/calls", _ID)),
+    # Le même relevé pour le COMMERCE, avec la personne de chaque appel : c'est ce qui
+    # lui permet d'appliquer une limite de dépense par personne ou par équipe. REST
+    # seule, sous `/api/service/`, comme toute sa face.
+    Capability(key="service.org.usage.calls", handler=bornee(_billable_calls_service),
+               Input=OrgBillableCallsInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=ServiceBillableCalls, errors=(_REFUS_FENETRE, _REFUS_LIMITE),
+               description="[service commerce] The billable calls of an org, as "
+                           "`org.usage.calls` serves them to members, plus `sub`: the "
+                           "person each call ran for. Same window, page and cursor "
+                           "contract.",
+               rest=RestBinding("GET", "/api/service/orgs/{id}/usage/calls", _ID)),
     # Le même relevé, sommé par outil en une lecture (#1145) : remplace une requête
     # `usage/calls` par outil. Même lentille membre, `mcp=None` pour la même raison.
     Capability(key="org.usage.tools", handler=bornee(_billable_tools),

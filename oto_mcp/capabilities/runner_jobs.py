@@ -33,6 +33,7 @@ from .. import (db, outils_du_travail, runner_consigne, runner_models, time_save
 from ..db import user_subscriptions
 from ..access import credits as budget
 from ..access import credits_tours as tours
+from ..access import limite_du_jour
 from ._authz import WORKER_OR_ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
@@ -766,6 +767,12 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
                                "qui ne mesure pas chaque appel — rendu à la file",
                                job.get("id"), job["org_id"], depot, appelant)
                 return None
+            if payeur is not None and (
+                    bloc := limite_du_jour.refus(job.get("sub"), job["org_id"])) is not None:
+                # LA LIMITE DU JOUR : un admin de l'org a fixé une limite de dépense que
+                # l'auteur de l'agent (ou l'org entière) a atteinte. Le travail ne part
+                # pas sur notre clé ; la clé de l'org, elle, reste servie (pas ici).
+                return _refuser_sans_cle(job, appelant, _limite_du_jour(job, bloc))
             au_cout = tours_au_cout.au_cout((job.get("payload") or {}).get("model"))
             if au_cout and payeur == tours_au_cout.RANG_A_QUOTA:
                 # Un modèle JOURNALISÉ AU COÛT (`tours_au_cout`) sur la clé de PLATEFORME :
@@ -896,11 +903,17 @@ def _reserver_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, max_tokens: int)
 
     - Refusé en `enforce` seulement : `insufficient_credits` (402), `credits_unpriced`
       (422), `spend_ledger_unavailable` (503, rejouable). `report` réserve quand même.
+    - Refusé quel que soit le mode : `daily_spend_limit` (429), l'auteur du travail ou
+      son org a atteint une limite de dépense du jour (`access/limite_du_jour`).
     - **Idempotent** : le même tour redemandé rend la même réponse.
     - Un travail servi par la clé de SON org n'a rien à réserver : `held: false`."""
     prise = _tentative_partagee(ctx, job_id)
     if prise is None:
         return {"ok": True, "held": False}
+    # Une limite de dépense du jour (fixée par un admin de l'org, appliquée par le
+    # commerce) : l'agent compte pour son AUTEUR, et l'org entière peut être bloquée.
+    if (bloc := limite_du_jour.refus(prise["sub"], prise["org_id"])) is not None:
+        raise AuthzDenied(429, limite_du_jour.CODE, limite_du_jour.message(bloc))
     if tours_au_cout.au_cout(prise.get("model")):
         # Un modèle journalisé AU COÛT ne se réserve pas — son prix n'est connu qu'après —,
         # mais sur la clé de PLATEFORME, l'appel ne part pas au-delà du quota de l'accord.
@@ -1247,6 +1260,22 @@ def _sous_le_plancher(job: dict) -> str:
     un agent à horloge ; un travail ponctuel doit être relancé."""
     return _SOUS_LE_PLANCHER.format(
         suite=_SUITE_RECURRENT if _agent_a_horloge(job) else _SUITE_PONCTUEL)
+
+
+_PORTEE_DU_JOUR = {"member": "celle de l'auteur de l'agent",
+                   "group": "celle d'une équipe de l'auteur de l'agent",
+                   "org": "celle de l'org"}
+
+
+def _limite_du_jour(job: dict, bloc: dict) -> str:
+    """La raison d'un travail arrêté par une limite de dépense du jour."""
+    fin = bloc["until"].strftime("%Y-%m-%d %H:%M UTC")
+    suite = (_SUITE_RECURRENT if _agent_a_horloge(job)
+             else f"relance ce travail après {fin}.")
+    return (f"{limite_du_jour.CODE} : limite de dépense du jour atteinte "
+            f"({_PORTEE_DU_JOUR.get(bloc['scope'], 'une limite')}), fixée par un admin de "
+            f"l'org, jusqu'à {fin}. Travail non exécuté sur la clé partagée. Un admin peut "
+            f"relever la limite (Réglages → Usage) ; sinon {suite}")
 
 
 _ATTEND_UN_WORKER_QUI_MESURE = (
@@ -1921,6 +1950,11 @@ CAPABILITIES += [
                           "`reserve` d'un tour d'un modèle journalisé au coût, sur la clé "
                           "de plateforme, quand le quota du jour de l'accord (en µ$) est "
                           "atteint : l'appel n'est pas envoyé, le worker s'arrête"),
+            DeclaredError(429, "daily_spend_limit",
+                          "`reserve` d'un tour sur une clé refacturée quand l'auteur du "
+                          "travail, une de ses équipes ou l'org a atteint une limite de "
+                          "dépense du jour (`access/limite_du_jour`) : l'appel n'est pas "
+                          "envoyé, le worker s'arrête (4xx, non rejoué)"),
             DeclaredError(409, "fleet_not_serving",
                           "`enqueue fleet_id=` désignant une automatisation ni armée ni en "
                           "cours (`draft`, `stopping`, `stopped`…) : l'exécution "

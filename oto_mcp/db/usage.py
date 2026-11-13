@@ -1647,7 +1647,7 @@ def list_billable_calls_for_org(
     org_id: int, tool: Optional[str] = None, *, run_ids: Optional[list[str]] = None,
     since: Optional[str] = None,
     until: Optional[str] = None, limit: int = 1000,
-    before: Optional[tuple[str, int]] = None,
+    before: Optional[tuple[str, int]] = None, avec_personne: bool = False,
 ) -> dict:
     """Les appels FACTURABLES d'un outil et/ou d'un run sous une org — la lentille membre du
     relevé de consommation (`org.usage.calls`). Rend
@@ -1676,6 +1676,10 @@ def list_billable_calls_for_org(
     ni `error`, ni aucun autre argument — la lentille est lisible par tout
     membre, et ce qu'il lit est ce que son org consomme, pas qui a fait quoi.
     Seuls les appels `ok` : un échec n'a rien consommé chez le fournisseur.
+
+    `avec_personne=True` ajoute `sub` — pour la SEULE face de service du commerce
+    (`service.org.usage.calls`), qui tient les limites de dépense par personne et par
+    équipe (`docs/limites-de-depense.md`). La lentille membre ne le passe jamais.
 
     `run_ids` (et la colonne rendue `run_id`) : ce qu'un ou plusieurs runs ont
     consommé, tous outils confondus — `idx_tool_calls_run` sert le filtre. Il reste
@@ -1715,7 +1719,7 @@ def list_billable_calls_for_org(
         rows = conn.execute(
             f"""
             SELECT l.id, l.call_uid, l.tool, l.quantity, l.provider_credits, l.key_mode,
-                   l.run_id,
+                   l.run_id{", l.sub" if avec_personne else ""},
                    {_BILLABLE_JOB_ID_SQL} AS job_id,
                    {_BILLABLE_FOUND_SQL},
                    {_AUDIT_KEYSET_AT} AS created_at

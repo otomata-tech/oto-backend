@@ -23,16 +23,22 @@ Un payeur est `org:<id>` ou `user:<sub>`, et doit exister. Mêmes règles que
 """
 from __future__ import annotations
 
+import logging
 import re
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..access import limite_du_jour
 from ..db import credits as db_credits
+from ..db import spend_blocks as db_spend_blocks
 from ._authz import COMMERCE_SERVICE
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding, cap_limit
 from .registry import CAPABILITIES
 from .service_commerce import ServiceNoInput, _compte_ou_404, _iso, _org_ou_404
+
+logger = logging.getLogger(__name__)
 
 _ID = {"id": "org_id"}
 _PAYEUR = re.compile(r"^(org:(?P<org>[0-9]+)|user:(?P<sub>.+))$")
@@ -145,6 +151,11 @@ class CreditMovement(BaseModel):
     reason: Optional[str] = None
     idempotency_key: Optional[str] = None
     call_uid: Optional[str] = None
+    # La PERSONNE qui a agi pour l'appel (sa réservation l'a notée), quel que soit le
+    # payeur : c'est par elle que le commerce tient une limite de dépense par personne
+    # ou par équipe (`docs/limites-de-depense.md`). `None` = un versement, une
+    # réservation d'avant la colonne, ou un travail sans auteur.
+    sub: Optional[str] = None
     connector: Optional[str] = None
     function: Optional[str] = None
     quantity: Optional[int] = None
@@ -313,4 +324,133 @@ CAPABILITIES += [
                            "complete, `settled_as_of` up to when its calls are settled "
                            "(those of `payer` only, when given).",
                rest=RestBinding("GET", "/api/service/credits/movements")),
+]
+
+
+# ── les blocages du jour (limites de dépense) ───────────────────────────────
+#
+# Un admin d'org fixe chez le commerce des limites de dépense QUOTIDIENNES (org, équipe,
+# personne) ; le commerce compte la dépense du jour et, quand une limite est atteinte,
+# pousse ici la liste de ce qui est bloqué jusqu'à la remise à zéro. Le cœur applique la
+# liste aux seules clés refacturées (`access/limite_du_jour`, `docs/limites-de-depense.md`).
+
+#: Un blocage du JOUR : au-delà, c'est une suspension, qui a son propre geste
+#: (`service.org.suspension`). La borne empêche qu'une date fausse bloque pour des mois.
+_HORIZON_MAX = 48 * 3600
+_BLOCAGES_MAX = 2000
+
+
+class SpendBlock(BaseModel):
+    # `None` (ou omis) = TOUTE l'org — exige `scope="org"`.
+    sub: Optional[str] = None
+    scope: Literal["org", "group", "member"] = Field(
+        description="Which limit was reached: the org's, a team's (`group_id`), or the "
+                    "person's own.")
+    group_id: Optional[int] = Field(None, description="The team whose limit was reached "
+                                                     "(scope `group` only).")
+    until: datetime = Field(description="When the block ends (the daily reset), ISO 8601 "
+                                        "with its offset; at most 48 h ahead.")
+
+
+class SpendBlocksPutInput(BaseModel):
+    org_id: int
+    blocks: list[SpendBlock] = Field(default_factory=list,
+                                     description="The org's whole list: it REPLACES the "
+                                                 "previous one; `[]` lifts every block.")
+
+
+class SpendBlocksInput(BaseModel):
+    org_id: int
+
+
+class SpendBlockRow(BaseModel):
+    sub: Optional[str] = None
+    scope: str
+    group_id: Optional[int] = None
+    until: str
+    active: bool
+
+
+class SpendBlocks(BaseModel):
+    org_id: int
+    blocks: list[SpendBlockRow]
+
+
+def _vue_des_blocages(org_id: int, lignes: list[dict]) -> dict:
+    maintenant = datetime.now(timezone.utc)
+    return {"org_id": org_id, "blocks": [
+        {"sub": l["sub"] or None, "scope": l["scope"], "group_id": l.get("group_id"),
+         "until": l["until"].isoformat(), "active": l["until"] > maintenant}
+        for l in lignes]}
+
+
+def _spend_blocks_put(ctx: ResolvedCtx, inp: SpendBlocksPutInput) -> dict:
+    _org_ou_404(inp.org_id)
+    if len(inp.blocks) > _BLOCAGES_MAX:
+        raise AuthzDenied(400, "too_many_blocks",
+                          f"au plus {_BLOCAGES_MAX} blocages par org ({len(inp.blocks)}).")
+    maintenant = datetime.now(timezone.utc)
+    vus, lignes = set(), []
+    for b in inp.blocks:
+        if b.until.tzinfo is None:
+            raise AuthzDenied(422, "until_without_timezone",
+                              "`until` doit porter son fuseau (`Z` ou `+HH:MM`).")
+        if (b.until - maintenant).total_seconds() > _HORIZON_MAX:
+            raise AuthzDenied(422, "until_too_far",
+                              "`until` est à plus de 48 h : un blocage du jour finit à la "
+                              "remise à zéro (une suspension a son propre geste).")
+        sub = (b.sub or "").strip()
+        if (sub == "") != (b.scope == "org"):
+            raise AuthzDenied(400, "invalid_block",
+                              "`scope=org` bloque toute l'org, sans `sub` ; `group` et "
+                              "`member` bloquent une personne, `sub` exigé.")
+        if (b.group_id is not None) != (b.scope == "group"):
+            raise AuthzDenied(400, "invalid_block",
+                              "`group_id` est exigé pour `scope=group`, et seulement là.")
+        if sub in vus:
+            raise AuthzDenied(400, "duplicate_block",
+                              f"deux blocages pour {sub or 'l’org'} : un seul par personne "
+                              "(celui qui finit le plus tard).")
+        vus.add(sub)
+        lignes.append({"sub": sub, "scope": b.scope, "group_id": b.group_id,
+                       "until": b.until})
+    posees = db_spend_blocks.remplacer(inp.org_id, lignes)
+    limite_du_jour.invalider()
+    logger.info("limites du jour : org=%s, %d blocage(s) posé(s) par %s", inp.org_id,
+                len(posees), ctx.sub)
+    return _vue_des_blocages(inp.org_id, posees)
+
+
+def _spend_blocks_get(ctx: ResolvedCtx, inp: SpendBlocksInput) -> dict:
+    _org_ou_404(inp.org_id)
+    return _vue_des_blocages(inp.org_id, db_spend_blocks.de_l_org(inp.org_id))
+
+
+_ERREURS_BLOCAGES = (
+    _ORG_INCONNUE,
+    DeclaredError(400, "invalid_block", "portée et personne ou équipe incohérentes"),
+    DeclaredError(400, "duplicate_block", "deux blocages pour la même personne"),
+    DeclaredError(400, "too_many_blocks", f"plus de {_BLOCAGES_MAX} blocages"),
+    DeclaredError(422, "until_without_timezone", "`until` sans fuseau"),
+    DeclaredError(422, "until_too_far", "`until` à plus de 48 h"),
+)
+
+CAPABILITIES += [
+    Capability(key="service.org.spend_blocks.put", handler=_spend_blocks_put,
+               Input=SpendBlocksPutInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=SpendBlocks, errors=_ERREURS_BLOCAGES,
+               description="[service commerce] Replace the org's daily spend blocks: who "
+                           "reached a daily credit limit an org admin set (the org, a "
+                           "team, a person) and until when. A blocked person — or every "
+                           "member, for an org block — is refused (`daily_spend_limit`) "
+                           "every call on a key the operator re-bills (tools, hosted "
+                           "agents' model turns, the in-app agent); their own keys still "
+                           "work. A block ends by itself at `until`. `[]` lifts all.",
+               rest=RestBinding("PUT", "/api/service/orgs/{id}/spend-blocks", _ID)),
+    Capability(key="service.org.spend_blocks.get", handler=_spend_blocks_get,
+               Input=SpendBlocksInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=SpendBlocks, errors=(_ORG_INCONNUE,),
+               description="[service commerce] The org's daily spend blocks as last "
+                           "pushed, ended ones included (`active: false`).",
+               rest=RestBinding("GET", "/api/service/orgs/{id}/spend-blocks", _ID)),
 ]

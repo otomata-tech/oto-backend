@@ -318,6 +318,8 @@ CLASSEMENT: dict[str, Table] = {
     "credit_holds": instance("réservations en vol du budget d'unités de l'instance"),
     "credit_movements": instance("mouvements du budget d'unités de l'instance, relus par "
                                  "son commerce"),
+    "spend_blocks": exclue(ParOrg(), "blocages du jour poussés par le commerce : il les "
+                           "repousse à sa prochaine évaluation, et chacun finit à minuit UTC"),
     "limite_refus_jour": instance("palmarès des refus des limiteurs de l'instance "
                                   "(#1232) : empreintes, trente jours"),
     "usage": possedee(ParSub(), "compteurs par compte, sans org"),

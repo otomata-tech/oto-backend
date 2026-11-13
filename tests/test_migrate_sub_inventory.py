@@ -120,6 +120,12 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         # of the current UTC day under the sub that spent it: after a merge, the new sub
         # starts its day at zero — at most one day's ceiling more, never a lost record.
         ("copilot_threads", "sub"), ("copilot_undos", "sub"), ("copilot_spend", "sub"),
+        # Daily spend limits (`docs/limites-de-depense.md`). A block is pushed by commerce
+        # for the current UTC day and replaced on its next evaluation, under the sub it
+        # then reads: after a merge, the old row ends at the reset by itself. The person
+        # a reservation was made for is a RECORD of who acted then, read back by commerce
+        # to count that day's spend — rewriting it would rewrite what was billed.
+        ("spend_blocks", "sub"), ("credit_holds", "acting_sub"),
         # A file attached to one of its messages lives as long as the conversation that
         # carries it (30 days at most) and is shown to the model only on the turn it
         # came with: after a merge, the person attaches it again.

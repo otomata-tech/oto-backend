@@ -659,6 +659,8 @@ GET,HEAD /api/orgs/{id}/monitoring/calls -> _handler
 OPTIONS /api/orgs/{id}/monitoring/calls -> options_handler
 GET,HEAD /api/orgs/{id}/usage/calls -> _handler
 OPTIONS /api/orgs/{id}/usage/calls -> options_handler
+GET,HEAD /api/service/orgs/{id}/usage/calls -> _handler
+OPTIONS /api/service/orgs/{id}/usage/calls -> options_handler
 GET,HEAD /api/orgs/{id}/usage/tools -> _handler
 OPTIONS /api/orgs/{id}/usage/tools -> options_handler
 GET,HEAD /api/orgs/{id}/usage/connections -> _handler
@@ -685,6 +687,8 @@ GET,HEAD /api/orgs/{id}/monitoring/tool-quality -> _handler
 OPTIONS /api/orgs/{id}/monitoring/tool-quality -> options_handler
 GET,HEAD /api/service/orgs -> _handler
 OPTIONS /api/service/orgs -> options_handler
+GET,HEAD /api/service/orgs/{id}/groups -> _handler
+OPTIONS /api/service/orgs/{id}/groups -> options_handler
 GET,HEAD /api/service/orgs/{id}/members -> _handler
 OPTIONS /api/service/orgs/{id}/members -> options_handler
 GET,HEAD /api/service/orgs/{id}/usage -> _handler
@@ -719,6 +723,10 @@ GET,HEAD /api/service/credits/balance -> _handler
 OPTIONS /api/service/credits/balance -> options_handler
 GET,HEAD /api/service/credits/movements -> _handler
 OPTIONS /api/service/credits/movements -> options_handler
+PUT /api/service/orgs/{id}/spend-blocks -> _handler
+OPTIONS /api/service/orgs/{id}/spend-blocks -> options_handler
+GET,HEAD /api/service/orgs/{id}/spend-blocks -> _handler
+OPTIONS /api/service/orgs/{id}/spend-blocks -> options_handler
 POST /api/resources -> _handler
 OPTIONS /api/resources -> options_handler
 POST /api/resources/v2 -> _handler

@@ -101,3 +101,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_movements_idempotence
 CREATE INDEX IF NOT EXISTS idx_credit_movements_curseur
     ON credit_movements(xid, id);
 """
+
+# QUI a agi pour une réservation — la personne, pas le payeur. Le payeur est l'org par
+# défaut (`credit_payer_modes`) : sans cette colonne, un mouvement réglé ne dit plus
+# quelle personne l'a consommé, et le commerce ne peut pas tenir une limite de dépense
+# PAR PERSONNE (`docs/limites-de-depense.md`). Posée à la réservation, jamais réécrite ;
+# NULL = réservation d'avant la colonne, ou sans personne (travail sans auteur).
+ACTEUR_DES_RESERVATIONS = """
+ALTER TABLE credit_holds ADD COLUMN IF NOT EXISTS acting_sub TEXT;
+"""
+
+# Les BLOCAGES DU JOUR poussés par le commerce : une personne (`sub`) ou toute l'org
+# (`sub = ''`) a atteint une limite de dépense qu'un admin de l'org a fixée. Le cœur ne
+# compte rien et ne connaît aucune limite : il APPLIQUE la liste, et seulement sur les
+# clés que l'opérateur refacture. `until` = la remise à zéro : passé cet instant, la
+# ligne ne bloque plus, même si le commerce ne l'a pas retirée. Une ligne par (org,
+# personne) : le commerce remplace la liste d'une org d'un bloc.
+SPEND_BLOCKS = """
+CREATE TABLE IF NOT EXISTS spend_blocks (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    sub TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL CHECK (scope IN ('org', 'group', 'member')),
+    group_id BIGINT,
+    until TIMESTAMPTZ NOT NULL,
+    set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, sub),
+    CHECK ((sub = '') = (scope = 'org')),
+    CHECK ((group_id IS NOT NULL) = (scope = 'group'))
+);
+"""

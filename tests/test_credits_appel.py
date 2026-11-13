@@ -750,6 +750,8 @@ def test_le_resolveur_reserve_sur_la_cle_du_tenant_primaire_apres_son_quota():
     aucune réservation."""
     src = (pathlib.Path(credits.__file__).parent / "resolve.py").read_text()
     branche = src[src.index('win.mode == "tenant":'):src.index('if win.mode != "platform":')]
-    assert branche.index("tenant_budget.enforce(") < branche.index("credits.reserver(")
+    assert branche.index("tenant_budget.enforce(") < branche.index("limite_du_jour.reserver(")
     assert "credits.rang_refacture(win.mode, win.entity_id)" in branche
-    assert 'credits.reserver(sub, heritage.org_des_cles(sub, active_org), "tenant")' in branche
+    # `limite_du_jour.reserver` = la limite de dépense du jour, puis `credits.reserver`.
+    assert ('limite_du_jour.reserver(sub, heritage.org_des_cles(sub, active_org), "tenant")'
+            in branche)

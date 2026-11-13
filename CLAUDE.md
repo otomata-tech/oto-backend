@@ -239,6 +239,9 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   résurrection automatique
 - `orgs-suspendues.md` — arrêter un ESPACE sans rien détruire : six portes gardées
   (capacités, outils, réservation, webhook, cron, projet publié sans login), ce qui reste ouvert et pourquoi
+- `limites-de-depense.md` — les limites de dépense du jour (org, équipe, personne) : le commerce décide, le cœur
+  applique la liste poussée aux seules clés refacturées (`daily_spend_limit`), fail-open, et rend au commerce la
+  personne de chaque appel
 - `contributions-forks.md` — recevoir une PR de fork : trois pièges, pin oto-core sur le tronc
 - `deploiement.md` — le modèle tronc unique : main = préprod, tag = prod, garde « préprod verte », domaines servis, pièges du tag
 - `namespace-fr.md` — sources `fr_`, deux stocks SIRENE, `dirigeants` vide à trois lectures, `data.oto.zone`

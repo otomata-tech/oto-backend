@@ -23,7 +23,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from .. import db, entitlements_catalogue as catalogue, org_store
+from .. import db, entitlements_catalogue as catalogue, group_store, org_store
 from ..db import entitlements as db_entitlements
 from ._authz import COMMERCE_SERVICE
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding, cap_limit
@@ -128,6 +128,30 @@ def _members(ctx: ResolvedCtx, inp: ServiceOrgInput) -> dict:
             "members": [{**r, "joined_at": _iso(r["joined_at"]),
                          "last_activity_at": _iso(r["last_activity_at"])}
                         for r in db.org_members_by_seniority(inp.org_id)]}
+
+
+# ── Les équipes ──────────────────────────────────────────────────────────────
+
+class ServiceGroupRow(BaseModel):
+    id: int
+    name: str
+    # TOUS les membres de l'équipe — pas seulement ceux dont elle est l'équipe ACTIVE
+    # (`is_active`) : une limite de dépense d'équipe est un pot commun de ses membres
+    # (`docs/limites-de-depense.md`).
+    members: list[str]
+
+
+class ServiceGroups(BaseModel):
+    org_id: int
+    groups: list[ServiceGroupRow]
+
+
+def _groups(ctx: ResolvedCtx, inp: ServiceOrgInput) -> dict:
+    _org_ou_404(inp.org_id)
+    return {"org_id": inp.org_id, "groups": [
+        {"id": g["id"], "name": g["name"],
+         "members": [m["sub"] for m in group_store.list_group_members(g["id"])]}
+        for g in group_store.list_groups(inp.org_id)]}
 
 
 # ── L'usage ──────────────────────────────────────────────────────────────────
@@ -502,6 +526,12 @@ CAPABILITIES += [
                            "paginated by `after_id`, each with its effective `tenant` "
                            "(`oto` = ours; anything else belongs to a partner).",
                rest=RestBinding("GET", "/api/service/orgs")),
+    Capability(key="service.org.groups", handler=_groups, Input=ServiceOrgInput,
+               authz=COMMERCE_SERVICE, mcp=None, Output=ServiceGroups,
+               errors=(_ORG_INCONNUE,),
+               description="[service commerce] The org's teams by name, each with every "
+                           "member's `sub` (whichever team each has active).",
+               rest=RestBinding("GET", "/api/service/orgs/{id}/groups", _ID)),
     Capability(key="service.org.members", handler=_members, Input=ServiceOrgInput,
                authz=COMMERCE_SERVICE, mcp=None, Output=ServiceMembers,
                errors=(_ORG_INCONNUE,),

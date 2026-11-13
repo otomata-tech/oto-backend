@@ -470,12 +470,16 @@ _PORTE = (DeclaredError(403, "api_token_forbidden",
 _PLAFOND = DeclaredError(429, "copilot_daily_cap",
                          "the account has reached today's spend ceiling "
                          "(`OTO_COPILOT_DAILY_CAP_USD`)")
+_LIMITE_DU_JOUR = DeclaredError(429, "daily_spend_limit",
+                               "on a key the operator re-bills, the person, one of their "
+                               "teams or the org reached a daily spend limit an org admin "
+                               "set (`access/limite_du_jour`)")
 
 CAPABILITIES += [
     Capability(
         key="copilot.turn", handler=_turn, Input=TurnInput, Output=CopilotEvent,
         authz=ORG_MEMBER, mcp=None,
-        errors=(*_PORTE, _PLAFOND,
+        errors=(*_PORTE, _PLAFOND, _LIMITE_DU_JOUR,
                 DeclaredError(400, "unknown_attachment",
                               "an id of `attachments` is not the caller's in this org, or "
                               "does not exist")),
@@ -487,7 +491,7 @@ CAPABILITIES += [
                     "approval card or a page action; the matching route resumes it."),
     Capability(
         key="copilot.client_result", handler=_client_result, Input=ClientResultInput,
-        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=(*_PORTE, _PLAFOND),
+        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=(*_PORTE, _PLAFOND, _LIMITE_DU_JOUR),
         rest=RestBinding("POST", "/api/copilot/threads/{thread_id}/client-results",
                          media=_SSE, provisoire=True,
                          allow_api_token=False),
@@ -495,7 +499,7 @@ CAPABILITIES += [
                     "and the page's actions now (`client_tools`); resumes the stream."),
     Capability(
         key="copilot.approval", handler=_approval, Input=ApprovalInput,
-        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=(*_PORTE, _PLAFOND),
+        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=(*_PORTE, _PLAFOND, _LIMITE_DU_JOUR),
         rest=RestBinding("POST", "/api/copilot/threads/{thread_id}/approvals/{approval_id}",
                          media=_SSE, provisoire=True,
                          allow_api_token=False),

@@ -202,7 +202,8 @@ def reserver_tour(uid: str, sub: str, org: Optional[int], max_tokens: int,
         r = db_credits.reserver(
             call_uid=uid, payer=qui, connector=MODELE_CONNECTOR, function=fonction,
             unit=_UNITE_RESERVEE, scale_version=lu["version"], quantity=max_tokens,
-            reserved=reserve, deadline_s=budget.hold_max_s(), forcer=(m == "report"))
+            reserved=reserve, deadline_s=budget.hold_max_s(), forcer=(m == "report"),
+            acting_sub=sub)
     except TourRefuse:
         raise
     except Exception:
@@ -257,7 +258,7 @@ def regler_tour(uid: str, sub: str, org: Optional[int], tokens: dict,
             call_uid=uid, payer=budget.payeur(sub, org, lu["personnes"]),
             connector=MODELE_CONNECTOR, function=fonction, unit=_UNITE_RESERVEE,
             scale_version=version, quantity=sortie, reserved=hold["reserved"],
-            deadline_s=budget.hold_max_s(), forcer=True)
+            deadline_s=budget.hold_max_s(), forcer=True, acting_sub=sub)
     montant = sum(budget._paquets(int(tokens[u]), *hold_lignes[u])
                   for u in UNITES_DU_MODELE)
     depasse = montant > int(hold["reserved"])

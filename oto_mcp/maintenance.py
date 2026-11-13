@@ -59,6 +59,11 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             défaut ; jamais les credentials sans
                                             `--credentials --preavis-echu AAAA-MM-JJ`
                                             échu — PAS un travail : voir plus bas
+    oto-mcp maintenance partages-office --dry-run
+                                            compte, par org, les partages d'org posés
+                                            d'office sur les agents que la révision
+                                            `20261111_2000_office_en_lecture` rabat en
+                                            lecture — LECTURE SEULE, PAS un travail
     oto-mcp maintenance key-index-rebuild   (#421 — voir plus bas, PAS dans `all`)
     oto-mcp maintenance journal-tokens      purge rétroactive des jetons écrits en
                                             clair dans le journal (#558) — À BLANC
@@ -857,12 +862,46 @@ def orphelins(argv: list[str]) -> int:
     return ORPHELINS_RESTE if on.reste(rapport) else ORPHELINS_FAIT
 
 
+# Codes de sortie de `partages-office`. Pas un travail : un compte d'exploitant, joué
+# avant la révision qui rabat, dont l'échec doit se lire au code.
+PARTAGES_OFFICE_COMPTES = 0
+PARTAGES_OFFICE_ERREUR = 2     # base injoignable, lecture en échec
+
+
+def partages_office(argv: list[str]) -> int:
+    """`oto-mcp maintenance partages-office --dry-run` : compte, par org, les partages
+    d'org posés d'office sur les agents que la révision
+    `db.partages_office.REVISION` rabattra en lecture. Lecture seule : transaction
+    `READ ONLY`, `statement_timeout` 15 s ; rien ne s'écrit ici, la révision écrit."""
+    from .db import partages_office as po
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance partages-office",
+        description=("Compte, par org, les partages d'org posés d'office sur les agents "
+                     f"que la révision {po.REVISION} rabat en lecture. N'écrit rien."))
+    p.add_argument("--dry-run", action="store_true", required=True,
+                   help=("obligatoire : la commande ne fait que compter ; le changement "
+                         f"est la révision {po.REVISION} (oto-mcp migrer upgrade head)"))
+    p.parse_args(argv)
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    try:
+        compte = po.compter_a_blanc()
+    except Exception:
+        logger.error("partages-office : ERREUR — aucun compte", exc_info=True)
+        return PARTAGES_OFFICE_ERREUR
+    print("\n".join(po.lignes_du_compte(compte)))
+    return PARTAGES_OFFICE_COMPTES
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "index-concurrents":
         return index_concurrents(argv[1:])
     if argv and argv[0] == "orphelins":
         return orphelins(argv[1:])
+    if argv and argv[0] == "partages-office":
+        return partages_office(argv[1:])
     p = argparse.ArgumentParser(
         prog="oto-mcp maintenance",
         description="Les travaux de maintenance du backend (ADR 0065, lot 0).")

@@ -2465,9 +2465,16 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
   people: n}` sur `list`/`get`/`create` (`db.visibilites_d_agents`, une lecture pour
   toute la liste). `org=null, people=0` = privé (propriétaire et admins seuls) ; le front
   l'affiche sur chaque ligne, comme les tableaux.
-- **Les agents d'avant restent ouverts** : la révision `0035_agents_partages_a_l_org`
-  a posé un partage `editor` à l'org sur chaque agent existant au 02/10/2026 ; son
-  propriétaire le retire depuis l'écran.
+- **Les agents d'avant restent visibles, plus modifiables par toute l'org** : la révision
+  `0035_agents_partages_a_l_org` a posé un partage `editor` à l'org sur chaque agent
+  existant au 02/10/2026, sans geste d'une personne ; la révision
+  `20261111_2000_office_en_lecture` le rabat en `viewer` (`db/partages_office.py`, sous sa
+  propre marque, retour arrière exact). Les membres gardent la vue, l'écriture se confie
+  nommément (`op=share`) ; le propriétaire et les admins de l'org n'y perdent rien. Un
+  partage reposé par une personne avait perdu la marque et ne bouge pas. Le compte par org,
+  avant de jouer la révision : `oto-mcp maintenance partages-office --dry-run` (lecture
+  seule, même choix de lignes). Une fois jouée, plus aucun partage d'org ne porte la marque
+  0035 : `MARQUES_D_ORG_EN_POOL` n'ouvre plus rien.
 - **La file de l'org reste lisible, pas ce qu'un agent exécute** : `runner.jobs`
   (`list`, `get`) sert toujours les travaux de toute l'org, mais la charge d'un travail
   enfilé par un agent que l'appelant ne peut pas MODIFIER est réduite à de quoi le

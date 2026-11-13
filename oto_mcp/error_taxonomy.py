@@ -391,6 +391,17 @@ def _refus_nomme_hors_http(exc):
     return None
 
 
+def _refus_nomme_d_un_403(exc):
+    """The refusal a connector DESCRIPTION names under a 403 that does not mark the key: a right the account lacks on
+    one resource (a property shared Restricted, where submitting needs Owner or Full). Its message is ours and says
+    the gesture, so it is served under its own code — never "check that the connector is connected", which sends
+    people replacing a key that works (13/11/2026)."""
+    for e in _chain(exc):
+        if type(e).__name__ == "RefusNomme":
+            return e if e.status_code == 403 and not e.credential_rejected else None
+    return None
+
+
 def _is_expected_error(exc) -> bool:
     """Handled error, NOT to be reported to Sentry: upstream 4xx OR user input/config
     refusal OR rejected args OR OAuth exchange refusal OR unmounted tool (toolbox
@@ -612,6 +623,9 @@ def classify(exc, parametres: Optional[list] = None) -> ErrorInfo:
         if sc == 404:
             return ErrorInfo("not_found", False,
                              raw or "Resource not found on the upstream service.")
+        refus = _refus_nomme_d_un_403(exc) if sc == 403 else None
+        if refus is not None:
+            return ErrorInfo(refus.code, False, str(refus))
         if sc in (401, 403):
             return ErrorInfo("not_authorized", False,
                              raw or "Access denied by the upstream service.",

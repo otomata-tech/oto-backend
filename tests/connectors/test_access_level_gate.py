@@ -336,3 +336,36 @@ def test_un_defaut_non_couvert_rend_op_obligatoire():
     s = gate.restrict_schema(SCHEMA, frozenset({"get"}))
     assert "default" not in s["properties"]["op"]
     assert "op" in s["required"] and "module" in s["required"]
+
+
+# --- Search Console : `read` par défaut, sans réglage -------------------------------
+
+def test_sans_reglage_search_console_masque_et_refuse_l_envoi(contexte):
+    """Le défaut de la description (`read`) mord comme un réglage : l'outil d'envoi sort de
+    la boîte, son appel est refusé, et le refus dit le geste (passer l'org en `full`) sans
+    promettre un nouveau consentement qu'un compte de service ne demande pas."""
+    assert gate.hidden_tools({"google_search_console", "google_search_console_act"}, ORG,
+                             EQUIPE) == {"google_search_console_act"}
+    _appel("google_search_console", {"op": "list_sites"})
+    with pytest.raises(McpError) as e:
+        _appel("google_search_console_act", {"op": "add_sitemap"})
+    data = e.value.error.data
+    assert (data["code"], data["level"], data["scope"]) == ("access_level_denied", "read",
+                                                            "default")
+    message = e.value.error.message
+    assert "level='full'" in message and f"org_id={ORG}" in message
+    assert "no new consent" in message and "needs a new consent" not in message
+
+
+def test_en_full_l_envoi_est_servi(contexte):
+    regler, _ = contexte
+    regler(google_search_console={"org": "full"})
+    assert gate.hidden_tools({"google_search_console_act"}, ORG, EQUIPE) == set()
+    _appel("google_search_console_act", {"op": "add_sitemap"})
+    assert gate.level_of_the_call("google_search_console") == "full"
+
+
+def test_le_niveau_de_l_appel_sans_sub_est_le_defaut(monkeypatch):
+    monkeypatch.setattr(call_axes, "current_user_sub_from_token", lambda: None)
+    assert gate.level_of_the_call("google_search_console") == "read"
+    assert gate.level_of_the_call("serper") == al.FULL

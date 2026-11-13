@@ -274,14 +274,15 @@ CAPABILITIES += [
         }, fields=("op", "scope")),
         refresh_visibility=True,
         description=(
-            "Access level of an OAuth connector that declares levels (e.g. zoho, zohodesk: "
-            "`read`, `full`). op=get (the level set at this scope, the one in force, the "
+            "Access level of a connector that declares levels (e.g. zoho, zohodesk: "
+            "`read`, `full`; google_search_console: `read` by default, `full` to submit "
+            "sitemaps). op=get (the level set at this scope, the one in force, the "
             "declared levels and their scopes) / set (`name`, `level`) / clear (back to the "
-            "level above). scope=org (`org_id`, org admin) | group (`group_id`, team lead; "
-            "restrict-only, a level wider than the org's is refused). Under a level other "
-            "than `full`, the tools and ops it does not cover are hidden and refused "
-            "(`access_level_denied`), and the consent asks only for its scopes; widening "
-            "needs a new consent."),
+            "level above, else the connector's default). scope=org (`org_id`, org admin) | "
+            "group (`group_id`, team lead; restrict-only, a level wider than the org's is "
+            "refused). Under a level other than `full`, the tools and ops it does not cover "
+            "are hidden and refused (`access_level_denied`); an OAuth consent asks only for "
+            "the level's scopes, and widening it needs a new consent."),
         mcp="oto_connector_access_level",
     ),
     Capability(

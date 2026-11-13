@@ -646,7 +646,7 @@ oto_node	-	6f84b227f939a8dc
 oto_node_edit	create delete move update	e8856bdb2454bfca
 oto_node_rows	-	047893f7d081bd5b
 oto_org	accept_invite archive create invite list_invites list_loans reject_invite update	5c434083bbbc6421
-oto_org_monitoring	adoption agents_en_echec call calls connectors export gaps run runs signals summary tool_quality	68b48d4595668b72
+oto_org_monitoring	adoption agents_en_echec call calls connectors export gaps run runs signals summary tool_quality	52f8af9af69f2165
 oto_org_settings	get preview set	ad720edfff1c3c29
 oto_procedure	archive create delete describe fork get library_get library_list list publish rename set share_get share_publish share_readers share_set share_unpublish unarchive unpublish	95e5d9b6e91cef3a
 oto_procedure_comment	-	147f9e0286ed060e

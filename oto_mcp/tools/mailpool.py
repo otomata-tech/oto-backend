@@ -9,7 +9,9 @@ Five tools, one per business object:
 - `mailpool_domain_fix` — the only tool that edits DNS: SPF hard fail, DMARC
   report address, tracking CNAME, single records. `dry_run=True` by default,
   with a real diff;
-- `mailpool_mailboxes` — list, read;
+- `mailpool_mailboxes` — list, read, create (on slots already paid for;
+  `dry_run=True` by default), export to a sending platform (Mailpool carries
+  the passwords; `dry_run=True` by default) and its batches;
 - `mailpool_spam_checks` — run (free), read, list, delete;
 - `mailpool_account` — subscription slots, warmup.
 
@@ -21,8 +23,13 @@ registrant owners through allowlists of their own (an owner's name, address and
 phone are not served) — a field Mailpool adds tomorrow is not served until it
 is listed.
 
-⚠️ **Nothing billed is served**: registering, transferring or renewing a domain,
-creating a mailbox, changing slots, enrolling in warmup, inbox placement.
+⚠️ **Nothing billed is BOUGHT**: registering, transferring or renewing a domain,
+buying slots, enrolling in warmup, inbox placement are not served. Creating a
+mailbox is, because it only takes a slot the workspace already pays for: the
+client (`plan_mailboxes`) reads the slots, domains and existing addresses and
+refuses before sending anything when a slot is missing, a domain is not active
+or is of another type, or an address exists. A create that gets no answer
+(`mailbox_outcome_unknown`) may have landed: list the mailboxes before retrying.
 
 DNS behaviour (observed live on 2026-10-05, encoded in `mailpool_dns`): a DNS
 write REPLACES the whole record set — the fix tool reads, plans, and hands the
@@ -85,6 +92,18 @@ class DnsRecord(BaseModel):
     key: Optional[str] = Field(None, description="host label; null = apex")
     value: str = Field(min_length=1)
     priority: Optional[int] = Field(None, description="MX only")
+
+
+class NewMailbox(BaseModel):
+    """One mailbox to create."""
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, description="full address, on a workspace domain")
+    firstName: str = Field(min_length=1)
+    lastName: str = Field(min_length=1)
+    type: Literal["google", "outlook", "shared"]
+    forwardTo: Optional[str] = Field(None, description="address replies are forwarded to")
+    signature: Optional[str] = None
 
 
 def _refuse_ignored(op: str, **provided) -> None:
@@ -217,6 +236,8 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
 def register(mcp: FastMCP) -> None:
     import requests
     from oto.tools.common.errors import UpstreamHTTPError
+    from oto.tools.mailpool import (MailpoolCreatePartial, MailpoolCreateRefused,
+                                    MailpoolExportRefused)
     from oto.tools.mailpool.client import MailpoolClient, MailpoolDnsWriteError, strip_secrets
 
     connector_verify.register("mailpool", _verify)
@@ -466,9 +487,16 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def mailpool_mailboxes(
-        op: Literal["list", "get"] = "list",
+        op: Literal["list", "get", "create", "export", "export_login",
+                    "export_batches", "export_batch"] = "list",
         mailbox_id: Optional[int] = None,
         domain_id: Optional[int] = None,
+        mailboxes: Optional[List[NewMailbox]] = None,
+        platform: Optional[Literal["instantly", "smartlead", "reachinbox", "reply", "saleshandy",
+                                   "warmbox", "emelia", "lemlist", "plusvibe"]] = None,
+        mailbox_ids: Optional[List[int]] = None,
+        batch_id: Optional[int] = None,
+        dry_run: bool = True,
         limit: int = 50,
         offset: int = 0,
     ) -> Any:
@@ -481,15 +509,52 @@ def register(mcp: FastMCP) -> None:
         - `list` — the workspace's mailboxes, optionally of one `domain_id`.
           `limit` (1-100) / `offset` paginate.
         - `get` — one mailbox (`mailbox_id`).
+        - `create` — new mailboxes (`mailboxes`, up to 50), each taking one
+          subscription slot ALREADY PAID for (nothing is bought).
+          `dry_run=True` (the default) checks everything and sends nothing:
+          free slots per type, each domain active and of the same type (an
+          `unassigned` domain takes the type of its first mailbox; one domain
+          = one type), addresses not taken. Re-call with `dry_run=False` to
+          create (one Mailpool call per domain). Google/Outlook mailboxes come
+          back `pending` while the provider provisions them, and their MX, SPF
+          and DKIM appear once provisioned. On error reason
+          `mailbox_outcome_unknown` or `partially_applied` some mailboxes may
+          exist: `op="list"` before calling again.
+        - `export` — hand `mailbox_ids` to a sending `platform` (e.g. lemlist):
+          Mailpool connects them there itself, passwords included, so none
+          passes through here. `dry_run=True` (default) checks only: the
+          platform login is saved in Mailpool, each mailbox exists and is
+          `active`. Asynchronous: follow the returned batch with
+          `op="export_batch"`. Types the platform refuses are listed in
+          `errors`. On `export_outcome_unknown`, `op="export_batches"` before
+          calling again.
+        - `export_login` — is a `platform` login saved in Mailpool (never its
+          value). Saving it is done in the Mailpool dashboard.
+        - `export_batches` / `export_batch` (`batch_id`) — export progress.
 
         Args:
-            op: list or get.
+            op: list, get, create, export, export_login, export_batches or export_batch.
             mailbox_id: Mailpool mailbox id (op="get").
             domain_id: only the mailboxes of this domain (op="list").
+            mailboxes: mailboxes to create (op="create").
+            platform: sending platform (op="export"/"export_login").
+            mailbox_ids: mailboxes to export (op="export").
+            batch_id: export batch id (op="export_batch").
+            dry_run: op="create"/"export" — preview only (default True).
             limit: page size, 1-100.
             offset: items to skip.
         """
         c = _client()
+        if op.startswith("export"):
+            _refuse_ignored(op, mailbox_id=mailbox_id, domain_id=domain_id,
+                            mailboxes=mailboxes or None)
+            return _export_op(c, op, platform, mailbox_ids, batch_id, dry_run, limit, offset)
+        _refuse_ignored(op, platform=platform, mailbox_ids=mailbox_ids or None,
+                        batch_id=batch_id)
+        if op == "create":
+            _refuse_ignored(op, mailbox_id=mailbox_id, domain_id=domain_id)
+            return _create_mailboxes(c, _need(mailboxes, "mailboxes", op), dry_run)
+        _refuse_ignored(op, mailboxes=mailboxes or None)
         if op == "get":
             _refuse_ignored(op, domain_id=domain_id)
             return _slim_mailbox(_run(lambda: c.get_mailbox(
@@ -497,6 +562,101 @@ def register(mcp: FastMCP) -> None:
         _refuse_ignored(op, mailbox_id=mailbox_id)
         return _page(_run(lambda: c.list_mailboxes(
             limit=limit, offset=offset, domain_id=domain_id)), _slim_mailbox)
+
+    def _create_mailboxes(c: MailpoolClient, mailboxes: List[NewMailbox], dry_run: bool) -> Any:
+        items = [m.model_dump(exclude_none=True) for m in mailboxes]
+        if dry_run:
+            def _plan():
+                try:
+                    return c.plan_mailboxes(items)
+                except MailpoolCreateRefused as e:
+                    raise _bad(str(e), reason="create_refused")
+            plan = _run(_plan)  # upstream, timeout and input errors as tool errors
+            return {"dry_run": True, **plan,
+                    "message": f"Ready to create {len(plan['mailboxes'])} mailbox(es); "
+                               "nothing was sent. Re-call with dry_run=False."}
+        try:
+            out = strip_secrets(c.create_mailboxes(items))
+        except MailpoolCreatePartial as e:
+            raise _after_write(
+                "partially_applied",
+                f"Partially applied: mailboxes created on {', '.join(e.done)}, not on "
+                f"{', '.join(e.not_done)} ({_cause(e.cause)}). List the mailboxes of the "
+                "domains not done before calling again with only those.",
+                created=[_slim_mailbox(m) for m in strip_secrets(e.created)],
+                done=e.done, not_done=e.not_done)
+        except MailpoolCreateRefused as e:
+            raise _bad(str(e), reason="create_refused")
+        except UpstreamHTTPError as e:
+            if e.status_code < 500:
+                raise _bad(_upstream_message(e), reason="upstream_refused")
+            raise _create_unknown(e)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            raise _create_unknown(e)
+        except ValueError as e:
+            raise _bad(str(e))
+        except RuntimeError as e:
+            # Mailpool accepted the call but its answer lists no mailbox (the library
+            # refuses to read that as "none created"): the mailboxes may exist.
+            raise _create_unknown(e)
+        created = [_slim_mailbox(m) for m in out.get("created") or []]
+        return {"dry_run": False, "created": created, "slots": out["plan"]["slots"],
+                "domains": out["plan"]["domains"],
+                "message": f"Created {len(created)} mailbox(es). Passwords stay in the "
+                           "Mailpool dashboard; pending ones turn active on their own."}
+
+    def _export_op(c: MailpoolClient, op: str, platform, mailbox_ids, batch_id,
+                   dry_run: bool, limit: int, offset: int) -> Any:
+        if op == "export_batch":
+            _refuse_ignored(op, platform=platform, mailbox_ids=mailbox_ids or None)
+            return _run(lambda: c.get_export_batch(_need(batch_id, "batch_id", op)))
+        _refuse_ignored(op, batch_id=batch_id)
+        if op == "export_batches":
+            _refuse_ignored(op, platform=platform, mailbox_ids=mailbox_ids or None)
+            return _run(lambda: c.list_export_batches(limit=limit, offset=offset))
+        p = _need(platform, "platform", op)
+        if op == "export_login":
+            _refuse_ignored(op, mailbox_ids=mailbox_ids or None)
+            return _run(lambda: c.export_credentials_status(p))
+        ids = _need(mailbox_ids, "mailbox_ids", op)
+
+        def _plan():
+            try:
+                return c.plan_export(p, ids)
+            except MailpoolExportRefused as e:
+                raise _bad(str(e), reason="export_refused")
+        plan = _run(_plan)
+        if dry_run:
+            return {"dry_run": True, **plan,
+                    "message": f"Ready to export {len(plan['mailboxes'])} mailbox(es) to "
+                               f"{p}; nothing was sent. Re-call with dry_run=False."}
+        try:
+            batch = strip_secrets(c.export_mailboxes(p, ids))
+        except MailpoolExportRefused as e:
+            raise _bad(str(e), reason="export_refused")
+        except UpstreamHTTPError as e:
+            if e.status_code < 500:
+                raise _bad(_upstream_message(e), reason="upstream_refused")
+            raise _export_unknown(e)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            raise _export_unknown(e)
+        except ValueError as e:
+            raise _bad(str(e))
+        return {"dry_run": False, "batch": batch,
+                "message": "Export scheduled: follow it with op=\"export_batch\"."}
+
+    def _export_unknown(e: Exception) -> McpError:
+        return _after_write(
+            "export_outcome_unknown",
+            f"Outcome unknown: the export got no usable answer ({_cause(e)}). A batch may "
+            "exist — read mailpool_mailboxes(op=\"export_batches\") before calling again.")
+
+    def _create_unknown(e: Exception) -> McpError:
+        return _after_write(
+            "mailbox_outcome_unknown",
+            f"Outcome unknown: the create got no usable answer ({_cause(e)}). The "
+            "mailboxes may or may not exist — list them with mailpool_mailboxes("
+            "op=\"list\", domain_id=…) before calling again.")
 
     # --- spam checks -----------------------------------------------------------
 

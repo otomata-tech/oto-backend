@@ -499,7 +499,7 @@ lusha_search_and_enrich	-	e86d72ca8cc28d6e
 mailpool_account	slots warmup warmup_available warmup_inbox	552b0a74bd7d7499
 mailpool_domain_fix	-	3539e4aca88c21f5
 mailpool_domains	audit availability dns get google_workspace_check list microsoft_365_check owners suggestions	1526c667c1fa1a3e
-mailpool_mailboxes	get list	288069208083e42f
+mailpool_mailboxes	create export export_batch export_batches export_login get list	4057be9e209b16a1
 mailpool_spam_checks	delete get list run	be330a34d38bd97c
 make_get_scenario	-	c3aaa574e143cf35
 make_get_scenario_blueprint	-	c3aaa574e143cf35

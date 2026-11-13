@@ -78,6 +78,36 @@ class DocInput(BaseModel):
         "the whole page everywhere; a list of names picks columns."))
 
 
+# Les ops qui désignent leur projet par `project_id` (cf. `reads`, `writes`).
+_OPS_PAR_PROJET = frozenset({"create", "bulk_create", "list", "search"})
+
+
+def _projet_de_l_appel(inp: DocInput) -> DocInput:
+    """`_project=` (le jeton d'appel, ADR 0038) tient lieu de `project_id` sur les ops
+    qui en prennent un (signal d'usage 1471) : la consigne servie dit « `_project=<id>`
+    sur chaque appel », et l'agent qui la suivait perdait son appel.
+
+    Le jeton est déjà gardé (`call_axes._pin_project` : lecture du projet, verrou de
+    sous-domaine) ; l'écriture garde toujours son propre droit (`common.can`, write).
+    Les deux donnés et différents : refus nommé — deviner lequel des deux l'appelant
+    voulait rangerait une page dans un projet qu'il n'a pas choisi. Ailleurs (ops par
+    `doc_id`, `shared_with_me`, `move` et son `to_project`), le jeton ne désigne rien :
+    il reste le contexte de l'appel, sans effet sur l'op. La face REST ne pose jamais ce
+    jeton (`access.current_project` y vaut None) : rien n'y change."""
+    if inp.op not in _OPS_PAR_PROJET:
+        return inp
+    from ... import access
+    pid = access.current_project()
+    if pid is None:
+        return inp
+    if inp.project_id is None:
+        return inp.model_copy(update={"project_id": int(pid)})
+    require(int(inp.project_id) == int(pid), "project_conflict",
+            f"`project_id`={inp.project_id} and `_project`={pid} name two different "
+            "projects. Pass one of them (both name the same thing on oto_doc).")
+    return inp
+
+
 def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
     sub = ctx.sub
     if sub is None:
@@ -117,6 +147,8 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
         require(inp.op in ("delete", "patch"), "unsupported_dry_run",
                 "`dry_run` only applies to op=delete and op=patch — the other ops "
                 "have no simulation mode and would run for real. Remove it.")
+
+    inp = _projet_de_l_appel(inp)
 
     if inp.op == "create":
         return writes.create(sub, inp)

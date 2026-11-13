@@ -41,6 +41,11 @@ def face_de_l_appel() -> str:
     return db.DOC_FACE_REST
 
 
+# Le refus `missing_project` des ops par projet (create, bulk_create, list, search) :
+# sur la face MCP, le jeton d'appel `_project` en tient lieu (`core._projet_de_l_appel`).
+PROJET_REQUIS = "`project_id` is required (on MCP, the `_project` call token works too)."
+
+
 def require(cond, code: str, msg: str, status: int = 400) -> None:
     if not cond:
         raise AuthzDenied(status, code, msg)

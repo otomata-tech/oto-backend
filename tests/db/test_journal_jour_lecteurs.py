@@ -348,6 +348,34 @@ def test_echecs_de_connecteur(registre, jours, org_id):
     assert _trie(neuf["by_provider"], "provider") == _trie(ref["by_provider"], "provider")
 
 
+def _ref_entonnoir(days):
+    """L'entonnoir d'activation tel qu'il lisait le journal seul, avant #1455."""
+    fen = "created_at >= NOW() - make_interval(days => %s)"
+    with _connect() as conn:
+        def n(sql, params):
+            return int(conn.execute(sql, params).fetchone()["n"])
+        return {
+            "active": n(f"SELECT COUNT(DISTINCT sub) AS n FROM tool_calls "
+                        f"WHERE kind = 'mcp' AND sub IS NOT NULL AND {fen}", (days,)),
+            "rest_only": n(f"""SELECT COUNT(*) AS n FROM (
+                                 SELECT sub FROM tool_calls WHERE kind = 'rest'
+                                    AND sub IS NOT NULL AND {fen}
+                                 EXCEPT
+                                 SELECT sub FROM tool_calls WHERE kind = 'mcp'
+                                    AND sub IS NOT NULL AND {fen}) q""", (days, days)),
+            "blocked_by_connector": n(f"SELECT COUNT(DISTINCT sub) AS n FROM tool_calls "
+                                      f"WHERE kind = 'connector' AND sub IS NOT NULL "
+                                      f"AND {fen}", (days,)),
+        }
+
+
+@pytest.mark.parametrize("jours", FENETRES_GLISSANTES)
+def test_entonnoir_d_activation(registre, jours):
+    neuf = db.activation_funnel(active_window_days=jours)
+    ref = _ref_entonnoir(jours)
+    assert {k: neuf[k] for k in ref} == ref
+
+
 @pytest.mark.parametrize("jours", FENETRES_GLISSANTES)
 def test_adoption(registre, jours):
     neuf = db.org_adoption(1, active_window_days=jours)

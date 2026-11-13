@@ -10,8 +10,9 @@ scopes is in the closure of the level's scopes by `scope_implies`.
 Three things this module holds:
 
 - **The declaration is DATA** (`ACCESS_LEVELS` in `providers/<name>.py`, aggregated by
-  `providers._ACCESS_LEVELS_BY_CONNECTOR`), validated here once at import: a malformed
-  declaration fails the boot, it is never half-read.
+  `providers._ACCESS_LEVELS_BY_CONNECTOR`; for a connector served from its description, its
+  `auth.access_levels`, read by `descriptions.niveaux_d_acces`), validated here once at
+  import: a malformed declaration fails the boot, it is never half-read.
 - **`full` filters nothing.** Every reader of a level asks `restricts(level)` first: at
   `full` the behaviour is exactly the one of a connector without levels — visibility,
   served schemas, call guard and consent alike.
@@ -20,7 +21,9 @@ Three things this module holds:
   cardinality snapshot: a restriction set on one color must hold on all of them at the
   next call. One query per call for every leveled connector (`lecture_d_appel`).
   Resolution: the active team's value if it has one, otherwise the org's, otherwise
-  `full`. Monotone like activation (ADR 0012): a team can narrow its org's level, never
+  the connector's DEFAULT level — `full`, unless its declaration names another (a service
+  account whose description says `default_level: read`: the keys installed before it
+  gained a write level keep reading only, without anyone's gesture). Monotone like activation (ADR 0012): a team can narrow its org's level, never
   widen it — refused when set, and if the org narrows later, the org's level is the
   ceiling (a team value wider than it never applies).
 """
@@ -55,6 +58,11 @@ class AccessLevels:
     scope_implies: Mapping[str, tuple[str, ...]]
     # tool → required scopes, or tool → {op → required scopes}
     tools: Mapping[str, object]
+    #: The level of an org and a team that set none.
+    default: str = FULL
+    #: Widening the level needs a new consent (OAuth: a token obtained for a narrower
+    #: level lacks its scopes). False for a service account: its next assertion claims them.
+    widening_needs_consent: bool = True
 
     def closure(self, level: str) -> frozenset[str]:
         """The level's scopes and everything they imply, transitively."""
@@ -101,8 +109,9 @@ def _scopes(valeur, ou: str) -> tuple[str, ...]:
 
 def _valider(connector: str, data: Mapping) -> AccessLevels:
     """Builds the declaration of `connector`, or RAISES at import (never half-read)."""
-    if set(data) - {"levels", "scope_implies", "tools"}:
-        raise ValueError(f"{connector}: unknown keys {sorted(set(data) - {'levels', 'scope_implies', 'tools'})}")
+    connues = {"levels", "scope_implies", "tools", "default", "widening_needs_consent"}
+    if set(data) - connues:
+        raise ValueError(f"{connector}: unknown keys {sorted(set(data) - connues)}")
     levels = {nom: _scopes(s, f"{connector}.levels.{nom}")
               for nom, s in (data.get("levels") or {}).items()}
     if FULL not in levels:
@@ -120,13 +129,33 @@ def _valider(connector: str, data: Mapping) -> AccessLevels:
                            for op, s in decl.items()}
         else:
             tools[tool] = _scopes(decl, f"{connector}.tools.{tool}") if decl else ()
-    return AccessLevels(connector, levels, implies, tools)
+    defaut = data.get("default", FULL)
+    if defaut not in levels:
+        raise ValueError(f"{connector}: the default level `{defaut}` is not declared")
+    consentement = data.get("widening_needs_consent", True)
+    if not isinstance(consentement, bool):
+        raise ValueError(f"{connector}: widening_needs_consent is a bool, got {consentement!r}")
+    return AccessLevels(connector, levels, implies, tools, defaut, consentement)
+
+
+def _declarations() -> dict:
+    """The raw declarations: the hand-written connectors' `ACCESS_LEVELS`, then those the
+    descriptions of the inscribed connectors declare. One connector, one source."""
+    from . import descriptions
+    out = dict(providers._ACCESS_LEVELS_BY_CONNECTOR)
+    for c in descriptions.inscrits():
+        data = descriptions.niveaux_d_acces(descriptions.charger(c.name))
+        if data is None:
+            continue
+        if c.name in out:
+            raise ValueError(f"{c.name}: access levels declared by hand AND by its description")
+        out[c.name] = data
+    return out
 
 
 #: The validated declarations, by connector name.
 DECLARED: dict[str, AccessLevels] = {
-    nom: _valider(nom, data)
-    for nom, data in providers._ACCESS_LEVELS_BY_CONNECTOR.items()}
+    nom: _valider(nom, data) for nom, data in _declarations().items()}
 
 
 def declared(connector: str) -> Optional[AccessLevels]:
@@ -204,7 +233,8 @@ def settings(org_id: Optional[int], group_id: Optional[int]) -> dict[str, dict]:
 def resolve(connector: str, org_id: Optional[int], group_id: Optional[int],
             valeurs: Optional[dict] = None) -> tuple[str, str]:
     """`(level, source)` in force for `connector` under (org, active team). `source` ∈
-    `group` | `org` | `default`. A connector without levels is `(full, default)`.
+    `group` | `org` | `default` (the connector's default level, `AccessLevels.default`). A
+    connector without levels is `(full, default)`.
     `valeurs` = an already read `settings(org, group)` (the visibility reads it once for
     every connector)."""
     decl = DECLARED.get(connector)
@@ -212,7 +242,7 @@ def resolve(connector: str, org_id: Optional[int], group_id: Optional[int],
         return FULL, "default"
     lu = (valeurs if valeurs is not None else settings(org_id, group_id)).get(
         _carrier(connector), {})
-    org_level = lu.get("org") or FULL
+    org_level = lu.get("org") or decl.default
     group_level = lu.get("group")
     if group_level is not None and decl.narrower_or_equal(group_level, org_level):
         return group_level, "group"
@@ -245,7 +275,8 @@ def set_level(scope_type: str, scope_id: int, connector: str, level: str,
 
 
 def clear_level(scope_type: str, scope_id: int, connector: str) -> bool:
-    """Removes the setting: the scope falls back on the level above (org, then `full`)."""
+    """Removes the setting: the scope falls back on the level above (org, then the
+    connector's default level)."""
     from ..db import connector_settings
     require_declared(connector)
     return connector_settings.clear_connector_setting(

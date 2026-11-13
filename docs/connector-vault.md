@@ -635,7 +635,9 @@ connecteur, lui, n'a pas d'alias : `http` refuse en nommant `api` (`providers.CO
 refus « connecteur inconnu » ; source de fichier `kind="http"` → `kind="api"`). Les données suivent en deux temps : le **coffre** par une étape de démarrage
 (`api_operations.copier_depuis_http`, COPIE re-chiffrée — l'AAD porte le nom du connecteur — qui laisse les
 lignes `http` en place, garde le partage de la ligne (`share_*`) et recopie la définition de chaque instance) ;
-le reste par la révision `20261112_1200_connecteur_api`, à jouer après le tag : sélections, activations,
+le reste par la révision `20261112_1200_connecteur_api`, à jouer APRÈS la copie — après le tag chez nous ; sur
+une cible, qui migre avant de démarrer, la porte joue la copie d'abord (`oto-mcp maintenance copies-du-coffre`,
+`instance-cible.md` § Les migrations) : sélections, activations,
 réglages, kits, listes d'outils, et ce qui DÉSIGNE une instance `http` — règles d'accès des comptes
 (`connector_account_rules`), arêtes `grants`, liens de projet (`target_ref`, `instance_ref`, `identity_ref`) —
 repointé vers la copie `api` du même propriétaire et du même compte. Pourquoi la révision et pas le démarrage :

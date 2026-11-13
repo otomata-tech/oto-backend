@@ -198,6 +198,7 @@ def register(mcp: FastMCP) -> None:
         to: str,
         subject: str,
         body: str,
+        markdown: bool = False,
         cc: Optional[list[str]] = None,
         from_email: Optional[str] = None,
         cta_text: Optional[str] = None,
@@ -248,10 +249,15 @@ def register(mcp: FastMCP) -> None:
                 name. No hidden copy. Under the platform address, `to` +
                 `cc` count toward a daily cap of recipients per org.
             subject: subject line (oto funnel voice: lowercase, formal "vous" address).
-            body: plain-text body. Blank lines separate paragraphs;
+            body: plain-text body by default. Blank lines separate paragraphs;
                 single line breaks are kept. HTML is escaped
                 (don't inject tags). Write real, personalized content —
                 never invent anything about the recipient's account.
+            markdown: render `body` from markdown (bold, links, lists, headings,
+                tables) — the same rendering as `gmail`. Default false: plain text,
+                as before. The HTML is sanitized: raw HTML tags and images in the
+                body are dropped, links keep only `http(s)`/`mailto`. The header
+                image stays `image_url`.
             from_email: sender address. MUST be a declared address of the active
                 org. Omitted = the org's default address (or the platform's
                 address if the org has none — super_admin only).
@@ -319,7 +325,8 @@ def register(mcp: FastMCP) -> None:
         pied = "org" if pied_org else "platform"
         html = mailer.render_composed_email(body, cta_text=cta_text, cta_url=cta_url,
                                             image_url=image_url, image_alt=image_alt,
-                                            brand=marque_expediteur, org_footer=pied_org)
+                                            brand=marque_expediteur, org_footer=pied_org,
+                                            markdown=markdown)
         org_id = route["org_id"]
         from_hdr = mailer.format_from(route["from_email"], route["from_name"]) or mailer._mail_from()
         transport = route["transport"]
@@ -379,7 +386,8 @@ def register(mcp: FastMCP) -> None:
             ok = mailer.send_composed_email(
                 to, subject, body, cta_text=cta_text, cta_url=cta_url, reply_to=rt,
                 from_email=route["from_email"], from_name=route["from_name"],
-                image_url=image_url, image_alt=image_alt, brand=marque_expediteur, cc=copies)
+                image_url=image_url, image_alt=image_alt, brand=marque_expediteur, cc=copies,
+                markdown=markdown)
 
         if not ok:
             hint = ("Resend key invalid/missing" if transport == "resend"

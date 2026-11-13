@@ -278,7 +278,8 @@ def _canonical_li_identifier(identifier: str, genre: str = "in") -> str:
     A full profile URL (`https://www.linkedin.com/<genre>/<slug>/?…`) gets the SAME
     misleading 403 (#1353): it is brought back to its slug (`genre` = `in` for a
     member, `company` for a company). Any other LinkedIn URL (Sales Navigator, a post,
-    the other genre) is refused by name rather than sent."""
+    the other genre) is refused by name rather than sent. A bare slug is
+    percent-decoded too (#1447): `chlo%C3%A9-dupr%C3%A9` → `chloe-dupre`."""
     ident = identifier.strip()
     if "linkedin.com" in ident.lower() or ident.lower().startswith(("http:", "https:")):
         parts = urlsplit(ident if "://" in ident else "https://" + ident)
@@ -292,6 +293,10 @@ def _canonical_li_identifier(identifier: str, genre: str = "in") -> str:
                 "slug (the segment after "
                 f"`/{genre}/`) or the URN (`ACoAA…`); nothing was sent.")))
         ident = segments[1]
+    else:
+        # A bare slug copied from an address bar arrives percent-encoded
+        # (`chlo%C3%A9-dupr%C3%A9`): decoded like a URL segment (#1447).
+        ident = unquote(ident)
     return "".join(
         c for c in unicodedata.normalize("NFKD", ident)
         if not unicodedata.combining(c)

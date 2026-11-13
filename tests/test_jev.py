@@ -8,9 +8,10 @@ balance problems without losing billing, send window, state size cap).
 import asyncio
 import json
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from oto_mcp import providers
 from oto_mcp.connectors import verify as connector_verify
@@ -107,7 +108,8 @@ def test_verify_probe_registered(monte):
 
 def test_probe_fails_for_a_key_that_would_be_refused(monte):
     """A key that is not shared fails the probe WITHOUT a call (a green card would lie)."""
-    with patch("oto.tools.jev.client.JevClient") as cls:
+    with patch("oto.tools.jev.client.JevClient") as cls, \
+            patch("oto_mcp.tools.jev.requests.get", side_effect=requests.ConnectionError):
         with pytest.raises(ValueError, match="TENANT"):
             jev._verify({"key": "sk-or-x"}, {}, instance=("org", "7", ""))
         assert cls.call_count == 0
@@ -115,6 +117,47 @@ def test_probe_fails_for_a_key_that_would_be_refused(monte):
         jev._verify({"key": "sk-or-x"}, {}, instance=("platform", "Main", ""))
         jev._verify({"key": "sk-or-x"}, {})  # before saving: key only
         assert cls.return_value.decide.call_count == 3
+
+
+def _openrouter_key(status=200, data=None, raises=None):
+    r = MagicMock()
+    r.ok = status < 400
+    r.status_code = status
+    r.json.return_value = {"data": data} if data is not None else {}
+    return patch("oto_mcp.tools.jev.requests.get",
+                 side_effect=raises, return_value=None if raises else r)
+
+
+def test_probe_reads_the_openrouter_key_limit(monte):
+    """The shared key's spending limit is the only balance an inference key can read
+    (`/api/v1/credits` needs a management key): returned as the probe's quota."""
+    with patch("oto.tools.jev.client.JevClient"), \
+            _openrouter_key(data={"limit": 50, "limit_remaining": 12.5,
+                                  "limit_reset": "monthly", "usage": 37.5}) as get:
+        mesure = jev._verify({"key": "sk-or-x"}, {}, instance=("platform", "tulina", ""))
+    assert mesure == {"quota": {"restant": 12.5, "unite": "usd", "limite": 50,
+                                "remise": "monthly"}}
+    assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-or-x"}
+
+
+@pytest.mark.parametrize("ctx", [
+    dict(data={"limit": None, "limit_remaining": None, "usage": 3}),  # no limit set
+    dict(status=401, data={}),
+    dict(raises=requests.Timeout),
+    dict(data={"limit_remaining": "?"}),
+])
+def test_probe_without_a_readable_limit_measures_nothing(monte, ctx):
+    """No limit, or an unreadable read: "not measured" (None), never zero, never a
+    failed probe — the decision call already proved the key."""
+    with patch("oto.tools.jev.client.JevClient"), _openrouter_key(**ctx):
+        assert jev._verify({"key": "sk-or-x"}, {}) is None
+
+
+def test_probe_a_used_up_limit_is_an_empty_account(monte):
+    with patch("oto.tools.jev.client.JevClient"), \
+            _openrouter_key(data={"limit": 20, "limit_remaining": 0}):
+        with pytest.raises(connector_verify.QuotaEpuise, match="spending limit"):
+            jev._verify({"key": "sk-or-x"}, {})
 
 
 # --- the rule: shared key only (tenant or instance platform key) ------------

@@ -86,9 +86,43 @@ def _microdollars(cout: Optional[float]) -> int:
     return math.ceil(round(float(cout) * 1e6, 6)) if cout else 0
 
 
+#: OpenRouter's "current key" read: free, works with the inference key Jev holds
+#: (`GET /api/v1/key` — the account balance, `/api/v1/credits`, needs a MANAGEMENT key,
+#: which this connector never holds). It says what is left of the key's OWN spending
+#: limit (`limit_remaining`, US$), `null` when the key has no limit.
+_OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+
+
+def _limite_openrouter(key: str) -> Optional[dict]:
+    """`{"quota": …}` when the key carries a spending limit OpenRouter states, else
+    `None` (no limit set, or the read failed: "not measured", never zero). Never raises:
+    the decision call above already proved the key; this only adds a measurement."""
+    try:
+        r = requests.get(_OPENROUTER_KEY_URL, headers={"Authorization": f"Bearer {key}"},
+                         timeout=10)
+        data = (r.json() or {}).get("data") if r.ok else None
+    except (requests.RequestException, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    restant = connector_verify.nombre_lu(data.get("limit_remaining"))
+    limite = connector_verify.nombre_lu(data.get("limit"))
+    if restant is None:
+        return None
+    quota = {"restant": restant, "unite": "usd"}
+    if limite is not None:
+        quota["limite"] = limite
+    if isinstance(data.get("limit_reset"), str):
+        quota["remise"] = data["limit_reset"]
+    return {"quota": quota}
+
+
 def _verify(fields: dict, config: dict | None = None,  # noqa: ARG001
-            instance: tuple | None = None) -> None:
-    """"Test connection" probe: the smallest possible call (one word, one yes/no).
+            instance: tuple | None = None) -> Optional[dict]:
+    """"Test connection" probe: the smallest possible call (one word, one yes/no), then
+    what is left of the OpenRouter key's spending limit, when it has one
+    (`_limite_openrouter`) — so a shared key nearing its limit shows a balance in
+    `oto_admin_platform_balances` instead of `auth` only.
 
     ⚠️ A key on any rung but a shared one (TENANT, PLATFORM) fails here without a call:
     it would be refused at use. Without `instance` (check before saving), only the key
@@ -103,6 +137,13 @@ def _verify(fields: dict, config: dict | None = None,  # noqa: ARG001
         {"ok": {"type": "noul", "instructions": "Is this word 'test'?",
                 "criteria": {"true": "the word is test", "false": "another word"}}},
         timeout=20)
+    mesure = _limite_openrouter(fields["key"])
+    if mesure and mesure["quota"]["restant"] <= 0:
+        raise connector_verify.QuotaEpuise(
+            "The Jev key authenticates, but its OpenRouter spending limit is used up "
+            f"(${mesure['quota'].get('limite', '?')}). Raise the limit or top up at "
+            "openrouter.ai/settings/keys — reconnecting would change nothing.")
+    return mesure
 
 
 def client_partage(units: int = 1):

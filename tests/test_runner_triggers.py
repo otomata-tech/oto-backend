@@ -473,6 +473,7 @@ def creation(monkeypatch):
                                      "families": ["anthropic"]})
     monkeypatch.setattr(RT.db, "triggers_for_procedure", lambda o, p: [])
     monkeypatch.setattr(RT.tool_alias, "canonical_names", lambda noms, sub: list(noms))
+    monkeypatch.setattr(OP.access, "is_platform_operator", lambda sub: sub == "alexis")
     monkeypatch.setattr(outils_du_travail.db, "charge_du_travail", lambda job: {
         "tools": ["fr_siret", "data_write", "oto_trigger"], "trigger_id": 5})
     vu: dict = {}
@@ -528,6 +529,52 @@ def test_une_personne_cree_un_agent_avec_n_importe_quelle_liste(creation):
     _appel(_ctx(), op="create", procedure="veille", cron="5 6 * * *",
            tools=["fr_siret", "apollo_search_people", "oto_admin_org"])
     assert creation.vu["tools"] == ["fr_siret", "apollo_search_people", "oto_admin_org"]
+
+
+def test_un_membre_ne_cree_pas_un_agent_avec_un_outil_d_operateur(creation):
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(sub="membre"), op="create", procedure="veille", cron="5 6 * * *",
+               tools=["fr_siret", "oto_admin_org"])
+    assert (e.value.status, e.value.code) == (403, "admin_tools_operator_only")
+    assert "oto_admin_org" in e.value.message
+    assert creation.vu == {}, "rien n'est écrit"
+
+
+# ── un `oto_admin_*` réservé : un opérateur seul l'ajoute (`admin_tools_operator_only`) ─
+
+def test_un_non_operateur_n_ajoute_pas_un_outil_d_operateur(agent_d_operateur):
+    """L'éditeur de l'agent d'un opérateur n'y ajoute pas un `oto_admin_*`."""
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(sub="editeur"), op="update", trigger_id=3,
+               tools=["fr_siret", "oto_admin_org", "oto_admin_signal", "oto_admin_user"])
+    assert (e.value.status, e.value.code) == (403, "admin_tools_operator_only")
+    assert "oto_admin_user" in e.value.message and "oto_admin_org" not in e.value.message
+    assert agent_d_operateur == {}, "rien n'est écrit"
+
+
+@pytest.mark.parametrize("outils", [
+    ["fr_siret", "oto_admin_org", "oto_admin_signal", "data_rows"],  # rien d'admin ajouté
+    ["fr_siret"],                                                    # réduite
+])
+def test_un_non_operateur_repose_ou_reduit_une_liste_d_operateur(agent_d_operateur, outils):
+    _appel(_ctx(sub="editeur"), op="update", trigger_id=3, tools=outils)
+    assert agent_d_operateur == {"tools": outils}
+
+
+def test_un_outil_d_admin_ouvert_a_un_role_d_org_s_ajoute(agent_d_operateur):
+    """`oto_admin_org_member` sert un responsable d'organisation : pas réservé."""
+    outils = ["fr_siret", "oto_admin_org", "oto_admin_signal", "oto_admin_org_member"]
+    _appel(_ctx(sub="editeur"), op="update", trigger_id=3, tools=outils)
+    assert agent_d_operateur == {"tools": outils}
+
+
+def test_un_operateur_ajoute_un_outil_d_operateur(monkeypatch):
+    monkeypatch.setattr(OP.access, "is_platform_operator", lambda sub: sub == "alexis")
+    OP.exiger_outils_d_admin_a_sa_portee("alexis", ["oto_admin_user"])
+    with pytest.raises(AuthzDenied) as e:
+        OP.exiger_outils_d_admin_a_sa_portee("membre", ["fr_siret", "oto_admin_user"],
+                                             ["fr_siret"])
+    assert e.value.code == "admin_tools_operator_only"
 
 
 def test_platform_tools_ne_se_pose_pas_a_la_creation():

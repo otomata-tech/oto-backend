@@ -494,6 +494,7 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # d'organisation ; en pool, il faut qu'un membre y prête un abonnement.
         _abonnement.exiger_a_la_pose(ctx.sub, None, famille, flotte=True,
                                      org_id=ctx.org_id)
+        _outils_plateforme.exiger_outils_d_admin_a_sa_portee(ctx.sub, inp.tools)
         descriptions = _descriptions_outils.valider(inp.descriptions_outils, inp.tools)
         cible = _cible_a_la_declaration(ctx, inp.namespace)
         return {"fleet": db.create_fleet(
@@ -760,6 +761,8 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # liste, elle, est posée par une personne.
         if actuelle:
             _outils_plateforme.exiger_aucun_ajout_d_agent(actuelle, inp.tools)
+        _outils_plateforme.exiger_outils_d_admin_a_sa_portee(
+            ctx.sub, inp.tools, (actuelle or {}).get("tools"))
         retires = _descriptions_outils.outils_nommes_retires(
             (actuelle or {}).get("descriptions_outils"), inp.tools)
         if retires:

@@ -3394,7 +3394,7 @@ défaut, `{}` les rend tous. Colonne `orgs.time_saved_minutes` (révision
 
 ## Outils d'admin d'un agent — `platform_tools` (2026-10-19)
 
-**Le besoin.** Sous `OTO_VERROU_ROLES_PLATEFORME=enforce` (docs/org-context.md), un agent
+**Le besoin.** Sous `OTO_VERROU_ROLES_PLATEFORME=enforce` (le défaut, docs/org-context.md), un agent
 hébergé est lu `member` : les agents d'exploitation de l'opérateur (tri des retours,
 activation des inscrits, veille des crédits) perdent leurs `oto_admin_*`. Exempter une org
 entière leur rendait TOUT l'admin — un agent qui lit du contenu extérieur portait alors le
@@ -3413,6 +3413,14 @@ pour une liste non vide (`platform_tools_operator_only`). Au plus 10 noms
 `give`/`take_over` la vident : posée pour le rôle de l'ancien propriétaire, elle ne le suit
 pas. Retirer un outil de `tools` ne la réécrit pas — l'outil y devient inerte, la liste
 d'outils du travail le refusant de toute façon (`tool_not_in_job`).
+
+**Qui ajoute un outil d'opérateur à `tools` (2026-11-11).** Un `oto_admin_*` réservé au rôle
+plateforme (le plancher que déclare son autorisation, celui qui le masque à `tools/list`)
+n'entre dans la liste d'un agent ou d'une campagne, à la création comme à la modification,
+que par un opérateur plateforme (`admin_tools_operator_only`, 403,
+`_outils_plateforme.exiger_outils_d_admin_a_sa_portee`). Reposer ou réduire une liste qui le
+porte déjà passe ; un `oto_admin_*` qu'un rôle d'org suffit à appeler
+(`oto_admin_org_member`) aussi.
 
 **Quand elle vaut.** Seulement pour un agent que son porteur SEUL peut changer : abonnement
 personnel, aucun éditeur nommé (`db.outils_plateforme_du_travail`). Ailleurs elle est lue

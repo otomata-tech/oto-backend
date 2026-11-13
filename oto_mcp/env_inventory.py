@@ -278,6 +278,16 @@ _REGLAGES: tuple[Variable, ...] = (
              "(poste de dev, tests) : rien n'engage un tiers. Une valeur hors des "
              "deux lève `EnvironnementAmbigu`.",
              ("oto_mcp/config.py:108",)),
+    Variable("OTO_TOOL_PREFIX", Classe.REGLAGE, None,
+             "Repli du préfixe d'outils du tenant primaire (`tenants.tool_prefix` de "
+             "sa ligne, qui fait foi) : lu seulement si la base est illisible quand le "
+             "registre d'émetteurs se construit (boot, rechargement à chaud). Même "
+             "forme que la colonne (`[a-z][a-z0-9]{1,23}`, sans `_`). Absente ou vide "
+             "avec une base illisible ⟹ `PrefixeOutilsIndetermine` : le boot s'arrête, "
+             "un rechargement garde le registre d'avant — jamais `oto_*` par défaut. "
+             "Posée et différente de la ligne ⟹ la ligne gagne, l'écart est alerté. "
+             "Une instance dont le primaire déclare un préfixe la pose à cette valeur.",
+             ("oto_mcp/tenancy.py:577",)),
     Variable("OTO_FUNCTIONS_SANDBOX_DIR", Classe.REGLAGE, "",
              "Répertoire du bac à sable des fonctions (ADR 0073), posé par "
              "`scripts/installer_bac_a_sable.py`. Absente : `<arbre>/.bac-a-sable`, que le "

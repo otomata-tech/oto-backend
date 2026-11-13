@@ -563,3 +563,247 @@ async def test_un_handshake_qui_echoue_sert_lannonce_canonique(
     rendu = await ToolAliasMiddleware().on_initialize(
         ctx, lambda _c: _renvoie(_handshake()))
     assert rendu.serverInfo.name == "oto"
+
+
+# ── 8. Le tenant PRIMAIRE qui déclare un préfixe ─────────────────────────────
+#
+# Le primaire (subs nus) était exclu par construction : sa ligne n'entrait pas au
+# registre (émetteur = l'env) et `_entry_of_tenant` le court-circuitait. Une instance
+# dont le primaire DÉCLARE un `tool_prefix` (ici `initech`) servait donc `oto_*`
+# à tous ses comptes. Désormais : déclaré ⟹ appliqué, exactement comme pour un tiers ;
+# rien de déclaré ⟹ l'octet d'avant (l'instance historique ne bouge pas).
+
+_PRIMAIRE_ISS = "https://auth.oto.ninja/oidc"
+
+
+@pytest.fixture
+def primaire_avec_prefixe():
+    """Le primaire déclare `initech` (≠ son slug `oto` en test : un préfixe se DÉCLARE,
+    il ne se dérive pas), le tiers `acme` garde le sien."""
+    avant = tenancy.current()
+    tenancy.install(tenancy.IssuerRegistry(tenancy.build(
+        _PRIMAIRE_ISS, drain_issuers=["https://auth-alt.oto.ninja/oidc"],
+        tenants=[{"slug": "acme", "name": "Acme",
+                  "issuer": "https://auth.acme.test/oidc", "tool_prefix": "acme"}],
+        primary_tool_prefix="initech")))
+    yield
+    tenancy.install(avant)
+
+
+def test_le_prefixe_du_primaire_est_porte_par_ses_deux_emetteurs():
+    """L'émetteur de l'env ET son drain : un compte servi pendant une bascule d'annuaire
+    ne doit pas changer de noms d'outils selon l'émetteur de son jeton."""
+    entrees = tenancy.build(_PRIMAIRE_ISS, drain_issuers=["https://auth-alt.oto.ninja/oidc"],
+                            primary_tool_prefix="initech")
+    assert {e.tool_prefix for e in entrees.values()} == {"initech"}
+    # Seul le préfixe est repris : ni nom (découverte PRM, marque), ni hosts.
+    assert {e.name for e in entrees.values()} == {""}
+
+
+def test_sans_declaration_lentree_du_primaire_est_celle_davant():
+    assert tenancy.build(_PRIMAIRE_ISS) == tenancy.build(_PRIMAIRE_ISS, primary_tool_prefix="")
+
+
+@pytest.mark.asyncio
+async def test_le_primaire_qui_declare_un_prefixe_liste_les_noms_du_produit(
+        primaire_avec_prefixe, monkeypatch):
+    noms = {t.name for t in await _liste_servie(monkeypatch, _SUB_PLATEFORME)}
+    assert "initech_doc" in noms and "oto_doc" not in noms
+    assert "data_write" in noms and "run_start" in noms and "feedback" in noms
+    # Le tiers garde SON préfixe : le primaire ne déteint pas.
+    noms_acme = {t.name for t in await _liste_servie(monkeypatch, _SUB_TENANT)}
+    assert "acme_doc" in noms_acme and "initech_doc" not in noms_acme
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("demande", ["initech_doc", "oto_doc"])
+async def test_le_primaire_appelle_sous_les_deux_noms(
+        primaire_avec_prefixe, monkeypatch, demande):
+    """Les procédures, guides et allowlists déjà écrits citent `oto_*` : ils doivent
+    continuer d'aboutir. En aval, un seul nom (journal, toggles, `<tool:slug>`)."""
+    assert await _nom_recu_par_le_serveur(monkeypatch, _SUB_PLATEFORME, demande) == "oto_doc"
+
+
+@pytest.mark.asyncio
+async def test_le_handshake_du_primaire_porte_son_prefixe(
+        primaire_avec_prefixe, monkeypatch):
+    """`name` = le préfixe déclaré ; `title` = la marque déclarée de l'instance
+    (`OTO_BRAND_NAME`), puisque le registre ne reprend pas le `name` de la ligne."""
+    monkeypatch.setenv("OTO_BRAND_NAME", "Initech")
+    info = await _serverinfo_servi(monkeypatch, _SUB_PLATEFORME)
+    assert (info.name, info.title) == ("initech", "Initech")
+    assert info.version == "1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_la_prose_servie_au_primaire_cite_ses_noms(primaire_avec_prefixe, monkeypatch):
+    monkeypatch.setattr(instructions, "_c_layers", lambda sub, org_id: [])
+    artefact = instructions.compose_session(_SUB_PLATEFORME, None)
+    assert "initech_procedure" in artefact
+    assert not re.search(r"\boto_[a-z]", artefact)
+
+
+@pytest.mark.asyncio
+async def test_un_travail_du_runner_garde_les_noms_canoniques_sous_le_primaire(
+        primaire_avec_prefixe, monkeypatch):
+    """Le worker confronte `tools/list` à une allowlist écrite en canonique : lui
+    servir `initech_*` le ferait tourner sans un seul outil, sans erreur."""
+    monkeypatch.setattr(tool_alias, "sert_un_worker", lambda: True)
+    noms = {t.name for t in await _liste_servie(monkeypatch, _SUB_PLATEFORME)}
+    assert "oto_doc" in noms and not any(n.startswith("initech_") for n in noms)
+    info = await _serverinfo_servi(monkeypatch, _SUB_PLATEFORME)
+    assert (info.name, info.title) == ("oto", None)
+    # Ses écritures, elles, reviennent toujours au canonique (préfixe DÉCLARÉ).
+    assert tool_alias.canonical_names(["initech_doc"], _SUB_PLATEFORME) == ["oto_doc"]
+
+
+@pytest.mark.asyncio
+async def test_le_primaire_sans_prefixe_ne_change_rien(tenant_avec_prefixe, monkeypatch):
+    """L'instance historique : primaire muet ⟹ noms, prose ET handshake à l'octet
+    d'avant — y compris PAS de `title`, contrairement à un tiers sans préfixe."""
+    monkeypatch.setenv("OTO_BRAND_NAME", "Oto")
+    noms = {t.name for t in await _liste_servie(monkeypatch, _SUB_PLATEFORME)}
+    assert "oto_doc" in noms and not any(n.startswith(("initech_", "acme_")) for n in noms)
+    info = await _serverinfo_servi(monkeypatch, _SUB_PLATEFORME)
+    assert (info.name, info.title) == ("oto", None)
+    assert tool_alias.prefix_for(_SUB_PLATEFORME) == ""
+    assert tool_alias.declared_prefix_of_tenant(tenancy.primary_slug()) == ""
+
+
+@pytest.mark.asyncio
+async def test_un_prefixe_refuse_au_primaire_laisse_tout_inchange(monkeypatch):
+    """Un préfixe invalide sur la ligne primaire (`Initech` : majuscule) se dégrade en
+    noms canoniques ET en handshake d'avant — pas en `title` seul."""
+    avant = tenancy.current()
+    tenancy.install(tenancy.IssuerRegistry(tenancy.build(
+        _PRIMAIRE_ISS, primary_tool_prefix="Initech")))
+    try:
+        noms = {t.name for t in await _liste_servie(monkeypatch, _SUB_PLATEFORME)}
+        assert "oto_doc" in noms
+        info = await _serverinfo_servi(monkeypatch, _SUB_PLATEFORME)
+        assert (info.name, info.title) == ("oto", None)
+    finally:
+        tenancy.install(avant)
+
+
+# ── 8 bis. D'où vient le préfixe du primaire : la base, sinon la variable, sinon
+# une ERREUR. Jamais `oto_*` par défaut quand on ne sait pas.
+
+def _base(monkeypatch, valeur=None, illisible=False):
+    from oto_mcp import db
+
+    def _lire():
+        if illisible:
+            raise RuntimeError("base indisponible")
+        return valeur
+    monkeypatch.setattr(db, "primary_tenant_tool_prefix", _lire)
+
+
+def test_base_lisible_le_prefixe_est_celui_de_la_ligne(monkeypatch):
+    monkeypatch.delenv("OTO_TOOL_PREFIX", raising=False)
+    _base(monkeypatch, "initech")
+    assert tenancy.load_primary_tool_prefix() == "initech"
+
+
+def test_base_lisible_la_ligne_fait_foi_et_un_ecart_est_alerte(monkeypatch):
+    """La variable n'est qu'un repli : la ligne gagne, mais l'écart est un refus alerté
+    — à la prochaine base illisible, l'instance changerait de noms sans le dire."""
+    alertes = []
+    monkeypatch.setattr(tenancy, "_refus", lambda msg, *a: alertes.append(msg % a))
+    monkeypatch.setenv("OTO_TOOL_PREFIX", "globex")
+    _base(monkeypatch, "initech")
+    assert tenancy.load_primary_tool_prefix() == "initech"
+    assert len(alertes) == 1 and "globex" in alertes[0] and "initech" in alertes[0]
+    # Identiques : rien à dire.
+    monkeypatch.setenv("OTO_TOOL_PREFIX", "initech")
+    assert tenancy.load_primary_tool_prefix() == "initech"
+    assert len(alertes) == 1
+
+
+def test_base_illisible_le_prefixe_est_celui_de_la_variable(monkeypatch):
+    monkeypatch.setenv("OTO_TOOL_PREFIX", "initech")
+    _base(monkeypatch, illisible=True)
+    assert tenancy.load_primary_tool_prefix() == "initech"
+    entrees = tenancy.build(_PRIMAIRE_ISS,
+                            primary_tool_prefix=tenancy.load_primary_tool_prefix())
+    assert {e.tool_prefix for e in entrees.values()} == {"initech"}
+
+
+@pytest.mark.parametrize("variable", [None, ""])
+def test_base_illisible_et_variable_absente_leve(monkeypatch, variable):
+    """Sans la base, rien ne dit que la ligne ne déclare pas de préfixe : rendre `""`
+    servirait `oto_*` à une instance qui en déclare un, sans une erreur. Vaut pour
+    TOUTE instance — une variable vide ne déclare rien."""
+    if variable is None:
+        monkeypatch.delenv("OTO_TOOL_PREFIX", raising=False)
+    else:
+        monkeypatch.setenv("OTO_TOOL_PREFIX", variable)
+    _base(monkeypatch, illisible=True)
+    with pytest.raises(tenancy.PrefixeOutilsIndetermine,
+                       match="OTO_TOOL_PREFIX"):
+        tenancy.load_primary_tool_prefix()
+
+
+def test_base_illisible_le_rechargement_leve_et_garde_le_registre(monkeypatch):
+    """Au rechargement à chaud, l'erreur remonte et le registre d'avant reste entier :
+    les comptes gardent les noms qu'ils avaient."""
+    monkeypatch.setenv("LOGTO_ENDPOINT", "https://auth.oto.ninja")
+    monkeypatch.delenv("LOGTO_ENDPOINT_ALT", raising=False)
+    monkeypatch.delenv("OTO_TOOL_PREFIX", raising=False)
+    monkeypatch.setattr(tenancy, "load_tenants", lambda: [])
+    avant = tenancy.current()
+    tenancy.install(tenancy.IssuerRegistry(tenancy.build(
+        _PRIMAIRE_ISS, primary_tool_prefix="initech")))
+    try:
+        _base(monkeypatch, illisible=True)
+        with pytest.raises(tenancy.PrefixeOutilsIndetermine):
+            server.reload_tenant_registry()
+        assert tool_alias.prefix_for(_SUB_PLATEFORME) == "initech"
+    finally:
+        tenancy.install(avant)
+
+
+@pytest.mark.asyncio
+async def test_sans_prefixe_en_base_les_noms_restent_canoniques(monkeypatch):
+    """L'instance qui ne déclare rien : base lisible, ligne sans préfixe, variable
+    absente ⟹ `""`, donc `oto_*` et le handshake d'avant."""
+    monkeypatch.delenv("OTO_TOOL_PREFIX", raising=False)
+    _base(monkeypatch, None)
+    prefixe = tenancy.load_primary_tool_prefix()
+    assert prefixe == ""
+    avant = tenancy.current()
+    tenancy.install(tenancy.IssuerRegistry(tenancy.build(
+        _PRIMAIRE_ISS, primary_tool_prefix=prefixe)))
+    try:
+        noms = {t.name for t in await _liste_servie(monkeypatch, _SUB_PLATEFORME)}
+        assert "oto_doc" in noms and not any(n.startswith("initech_") for n in noms)
+        info = await _serverinfo_servi(monkeypatch, _SUB_PLATEFORME)
+        assert (info.name, info.title) == ("oto", None)
+    finally:
+        tenancy.install(avant)
+
+
+def test_le_prefixe_du_primaire_vient_de_sa_ligne_en_base(live, monkeypatch):
+    """De bout en bout sur le schéma réel : la ligne primaire n'est PAS un émetteur
+    (`list_tenant_issuers` ne la rend pas), mais son `tool_prefix` atteint le registre
+    que bâtissent le boot ET le rechargement (`_registry_and_issuers`, partagé)."""
+    from oto_mcp import db
+    from oto_mcp.db._conn import _connect
+
+    def _poser(valeur):
+        with _connect() as conn:
+            conn.execute("UPDATE tenants SET tool_prefix = %s WHERE slug = %s",
+                         (valeur, tenancy.primary_slug()))
+
+    monkeypatch.setenv("LOGTO_ENDPOINT", "https://auth.oto.ninja")
+    monkeypatch.delenv("LOGTO_ENDPOINT_ALT", raising=False)
+    assert db.primary_tenant_tool_prefix() == ""
+    _poser("initech")
+    try:
+        assert db.primary_tenant_tool_prefix() == "initech"
+        assert tenancy.primary_slug() not in {r["slug"] for r in db.list_tenant_issuers()}
+        registre, _ = server._registry_and_issuers()
+        primaires = [e for e in registre.entries() if e.slug == tenancy.primary_slug()]
+        assert primaires and {e.tool_prefix for e in primaires} == {"initech"}
+    finally:
+        _poser(None)

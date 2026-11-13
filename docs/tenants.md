@@ -281,6 +281,24 @@ l'administrons) est une autre décision non prise (`tenancy.ForeignTenantDirecto
 >   réponse après son envoi (`docs/guides.md`, `middleware/_handshake.py`). Depuis,
 >   `name` part ; **`title` ne peut pas partir** — les options de session de la
 >   bibliothèque MCP n'ont pas ce champ.
+>   **Le tenant PRIMAIRE aussi (08/11/2026)** : sa ligne n'est pas un émetteur (l'env
+>   le tient), donc son `tool_prefix` n'atteignait jamais le registre et
+>   `_entry_of_tenant` l'excluait — une instance dont le primaire déclare un préfixe
+>   servait `oto_*`. Le registre reprend désormais ce SEUL champ de la ligne primaire
+>   (`db.primary_tenant_tool_prefix` → `tenancy.build(primary_tool_prefix=…)`, boot et
+>   rechargement à chaud) ; ni son nom, ni hosts, ni palette (`entry_for_slug` rend
+>   toujours None pour le primaire). Déclaré ⟹ noms, prose et `serverInfo.name` suivent,
+>   `title` = `OTO_BRAND_NAME` ; rien de déclaré ⟹ l'octet d'avant, `title` compris
+>   (plus strict qu'un tiers sans préfixe). Travaux du runner : canoniques, comme partout.
+>   ⚠️ **Tous les comptes** d'une instance dont le primaire déclare un préfixe voient
+>   leurs noms d'outils changer (les deux noms restent acceptés à l'appel).
+>   **Base illisible** (`tenancy.load_primary_tool_prefix`) : repli sur la variable
+>   d'instance `OTO_TOOL_PREFIX`, qui redit la valeur de la ligne ;
+>   absente ⟹ `PrefixeOutilsIndetermine` (le boot s'arrête, un rechargement garde le
+>   registre d'avant), jamais `oto_*` par défaut — sans la base, rien ne dit que la
+>   ligne ne déclare rien. Base lisible : la ligne fait foi, un écart avec la variable
+>   est alerté (`_refus`). Une instance à préfixe pose la variable AVANT de servir ce
+>   code ; une instance sans préfixe ne la pose pas.
 >
 > **Le suivi est un ÉCRAN depuis le 15/08** (`capabilities/tenants_admin.py` + `db.list_tenants_overview`,
 > REST `/api/admin/tenants[/{slug}]`, MCP `oto_admin_tenant`, dashboard `/platform/tenants`) : qui est

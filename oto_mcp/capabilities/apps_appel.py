@@ -35,7 +35,27 @@ lecteur voient tous deux (les mêmes que l'écran de l'agent montre au lecteur) 
 pour les runs que le LECTEUR a lancés — l'erreur du run d'un autre peut citer ses
 données.
 
-**La règle : droits d'une app = droits de son AUTEUR ∩ droits de son LECTEUR.**
+**Qui clique** (13/11/2026) : une app se partage en View (`viewer` : la voir), Use
+(`contributor` : la voir ET cliquer), Edit, Manage. Un geste (`GESTES`) exige Use ou
+plus (`peut_cliquer`) — à l'émission du consentement, à l'appel et au dépôt ; View
+reçoit 403 `app_view_only`.
+
+**Les droits de l'APP, quand son auteur peut partager** (13/11/2026). Ce qu'une app
+déclare, elle le sert avec les droits de son AUTEUR, borné à son manifeste, à qui
+l'app est partagée — sans que le lecteur ait son propre accès au tableau ou à
+l'agent — dès que l'auteur pourrait partager CE tableau (`ownership.can_govern`) ou
+CET agent (son propriétaire, un admin de son org) lui-même : partager l'app, c'est
+alors partager ce que l'app en montre, ce qu'il pouvait faire directement. Sinon, la
+règle d'avant (ci-dessous) : le lecteur y va avec ses propres droits. L'écriture reste
+celle du LECTEUR au journal des révisions (`geste` : l'acteur est le porteur de la
+session, jamais le store) ; un run lancé par l'app tourne au nom de l'AUTEUR (son
+forfait, ses connexions — comme sur son horaire), et le lecteur qui l'a lancé
+(`app_consents.job_id`) en lit seul l'erreur, le résultat et les fichiers. Un invité
+du dehors avec Use le lance aussi (13/11/2026) : l'app ne partage pas l'agent, elle le
+lance, bornée à son manifeste, chaque lancement consenti.
+
+**La règle d'avant, quand l'auteur ne peut pas partager : droits de son AUTEUR ∩
+droits de son LECTEUR.**
 L'auteur (`apps.updated_by`, le dernier à avoir écrit l'app) choisit ce qu'elle
 touche ; le lecteur l'ouvre avec ses propres droits. Sans la règle, quelqu'un qui peut
 éditer l'app sans lire un tableau le déclarerait et le ferait lire par la session d'un
@@ -87,6 +107,10 @@ MAX_RUNS = 50
 _JOB_DONE = frozenset({"done", "failed", "expired"})
 # Ce qui écrit, lance ou dépose : servi seulement avec un consentement du lecteur.
 GESTES = frozenset({"write_cell", "add_row", "start_agent", "upload_file"})
+# Le rôle de partage qui CLIQUE sans modifier l'app (« Use ») ; Edit et Manage aussi.
+ROLE_USE = frozenset({"contributor"})
+# Qui peut PARTAGER un agent (`_acces_agent`) : son propriétaire, un admin de son org.
+_PARTAGENT_L_AGENT = frozenset({"owner", "admin"})
 # Un accord = un jeton = UN geste, celui que le résumé décrit : jamais un lot sur un clic.
 GESTES_PAR_ACCORD = 1
 # Ce qu'une requête de cadre annonce (`Sec-Fetch-Dest`) : jamais l'écran hôte.
@@ -189,6 +213,10 @@ class AppCallOut(BaseModel):
     total: Optional[int] = None
     groups: Optional[list[dict]] = None
     row: Optional[dict] = None
+    # write_cell / add_row : vrai quand l'écriture a été servie avec les droits de l'APP
+    # (son auteur peut partager le tableau) — le lecteur n'a peut-être aucun accès propre
+    # au tableau : l'hôte ne propose pas de l'annuler par les routes de tableau.
+    through_app: Optional[bool] = None
     job_id: Optional[int] = None
     runs: Optional[list[AppRun]] = None
     run: Optional[AppRun] = None
@@ -227,11 +255,25 @@ def _refus(status: int, code: str, msg: str) -> AuthzDenied:
     return AuthzDenied(status, code, msg)
 
 
-def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False) -> dict:
+def peut_cliquer(sub: str, app_id: int) -> bool:
+    """Use ou plus : modifier l'app (propriétaire, Edit, Manage), ou un partage
+    `contributor`. View (`viewer`) la voit sans en cliquer les boutons."""
+    rid = str(app_id)
+    return (ownership.can_access(sub, APP_RTYPE, rid, "write")
+            or ownership.has_role_grant(sub, APP_RTYPE, rid, ROLE_USE))
+
+
+def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False,
+              geste_: bool = False) -> dict:
+    from .. import org_suspension
+
     app = db.apps.get_for_call(int(app_id))
     if (app is None or app.get("archived_at") is not None
             or not ownership.can_access(ctx.sub, APP_RTYPE, str(app["id"]), "read")):
         raise _refus(404, "unknown_app", f"App {app_id} doesn't exist or isn't shared with you.")
+    # L'org de l'APP, pas celle de l'appel : un invité de l'extérieur l'ouvre depuis son
+    # espace à lui (`org_suspension.JUGEES_PAR_L_APP`).
+    org_suspension.exiger(org_de_l_app(app))
     if draft:
         # L'APERÇU du brouillon (`docs/apps.md` § Brouillon et publication) : ses seuls
         # éditeurs l'ouvrent, et il se juge comme une app à part entière — SON
@@ -243,13 +285,20 @@ def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False) -> dict:
         if brouillon is None:
             raise _refus(404, "no_draft", "This app has no draft.")
         app = {**app, "manifest": brouillon["manifest"], "updated_by": brouillon["by"]}
+    # Après le brouillon : un lecteur qui le demande reçoit le refus du brouillon, qu'il
+    # en existe un ou non — jamais un indice.
+    if geste_ and not peut_cliquer(ctx.sub, int(app["id"])):
+        raise _refus(403, "app_view_only",
+                     "You can view this app but not use its buttons: ask its owner for Use.")
     if not app.get("updated_by"):
         raise _refus(403, "app_author_unknown",
                      "Nobody is known to have written this app, so it can't act for anyone.")
     return app
 
 
-def _table(app: dict, alias: Optional[str], want: str = "read") -> tuple[str, dict]:
+def _table(app: dict, alias: Optional[str], want: str = "read") -> tuple[str, dict, bool]:
+    """Le tableau DÉCLARÉ sous `alias`, et s'il se sert avec les droits de l'app
+    (son auteur peut le partager) plutôt qu'avec ceux du lecteur."""
     t = (app["manifest"].get("tables") or {}).get(alias or "")
     if not isinstance(t, dict) or not str(t.get("table") or "").isdigit():
         raise _refus(400, "undeclared_table", f"This app doesn't declare a table named “{alias}”.")
@@ -260,7 +309,17 @@ def _table(app: dict, alias: Optional[str], want: str = "read") -> tuple[str, di
     if not ownership.can_access(app["updated_by"], ownership.TYPE_RESSOURCE_DATASTORE, ns, want):
         raise _refus(403, "app_author_lost_access",
                      f"This app's author can no longer {want} table {ns}: the app can't either.")
-    return ns, t
+    return ns, t, ownership.can_govern(app["updated_by"], ownership.TYPE_RESSOURCE_DATASTORE, ns)
+
+
+def _acteur(ctx: ResolvedCtx, app: dict, par_l_app: bool) -> ResolvedCtx:
+    """Sous QUI le store lit et écrit : l'auteur quand l'app sert ses droits, sinon le
+    lecteur. Jamais la session de l'auteur — il n'est pas là : un contexte neuf, dans
+    l'org de l'app, tableau désigné par son NUMÉRO. L'acteur du journal des révisions
+    reste le porteur de la session (`geste`), le lecteur qui a cliqué."""
+    if not par_l_app:
+        return ctx
+    return ResolvedCtx(sub=app["updated_by"], org_id=org_de_l_app(app), channel=ctx.channel)
 
 
 def _filtre(t: dict, raw: Any) -> Optional[str]:
@@ -294,26 +353,37 @@ def _projeter(t: dict, row: dict) -> dict:
 
 def _agent(app: dict, alias: Optional[str], org: Optional[int], viewer: str, *,
            run: bool) -> dict:
-    """L'agent DÉCLARÉ sous `alias`, vu dans l'org de l'app : le lecteur doit
-    le voir, l'auteur le voir (lire ses runs) ou l'écrire (le lancer)."""
+    """L'agent DÉCLARÉ sous `alias`, vu dans l'org de l'app : l'auteur doit le voir
+    (lire ses runs) ou l'écrire (le lancer). S'il peut le partager (propriétaire,
+    admin de l'org), l'app le sert à son lecteur (`par_l_app`) ; sinon le lecteur doit
+    le voir lui-même."""
     a = (app["manifest"].get("agents") or {}).get(alias or "")
     if not isinstance(a, dict) or not str(a.get("id") or "").isdigit():
         raise _refus(400, "undeclared_agent", f"This app doesn't declare an agent named “{alias}”.")
     if run and not a.get("run"):
         raise _refus(403, "agent_not_runnable", f"This app may read “{alias}” but not start it.")
     trig = db.get_trigger(int(a["id"]), int(org)) if org is not None else None
-    if trig is None or _acces_agent.niveau(viewer, int(org), trig) is None:
+    niveau_auteur = (_acces_agent.niveau(app["updated_by"], int(org), trig)
+                     if trig is not None else None)
+    # Servi à QUICONQUE l'app est partagée, invité du dehors compris (décision de
+    # Julien du 13/11/2026) : un agent ne se PARTAGE qu'à l'intérieur de son org
+    # (`_acces_agent`), mais l'app ne le partage pas — elle le LANCE, borné à son
+    # manifeste (`run`, `input`), chaque lancement résumé par l'hôte et consenti, au nom
+    # de l'auteur, avec les seuls fichiers de CE clic.
+    par_l_app = niveau_auteur in _PARTAGENT_L_AGENT
+    if trig is None or (not par_l_app and _acces_agent.niveau(viewer, int(org), trig) is None):
         raise _refus(404, "unknown_agent", f"Agent {a['id']} isn't one you can see here.")
-    niveau_auteur = _acces_agent.niveau(app["updated_by"], int(org), trig)
     if niveau_auteur is None or (run and niveau_auteur not in _acces_agent.ECRIRE):
         raise _refus(403, "app_author_lost_access",
                      f"This app's author can no longer {'run' if run else 'see'} agent "
                      f"{a['id']}: the app can't either.")
-    return {**a, "trigger": trig}
+    return {**a, "trigger": trig, "par_l_app": par_l_app}
 
 
-def _run(job: dict, viewer: str, resultats: dict) -> dict:
-    mine = job.get("sub") == viewer
+def _run(job: dict, viewer: str, resultats: dict, lances: frozenset[int] = frozenset()) -> dict:
+    # Le sien : lancé en son nom, ou par son clic dans l'app (un run servi par l'app
+    # tourne au nom de l'auteur — `lances`, lu sur `app_consents.job_id`).
+    mine = job.get("sub") == viewer or int(job["id"]) in lances
     r = (resultats.get(job.get("run_id") or "") or {}) if mine else {}
     note = r.get("note")
     # L'erreur d'un run d'un AUTRE lecteur ne se sert pas : elle peut citer ses données.
@@ -359,6 +429,11 @@ def _resume(app: dict, action: str, target: dict, content: dict, text: str) -> d
             "target": target, "content": content, "text": text}
 
 
+def _comme(par_l_app: bool) -> str:
+    """Sous quels droits le geste agit, tel que le résumé le dit."""
+    return ("through this app (recorded as your change)" if par_l_app else "as you")
+
+
 def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
     """Juge un geste qui écrit ou lance — TOUT ce que l'appel jugera, sans rien
     faire — et rend `(faire, résumé)` : de quoi le faire, et ce que l'écran hôte
@@ -367,7 +442,7 @@ def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
     from .datastore import rows as R
 
     if inp.action == "write_cell":
-        ns, t = _table(app, inp.table, "write")
+        ns, t, par_l_app = _table(app, inp.table, "write")
         allowed = (t.get("set") or {}).get(inp.field or "")
         if not allowed:
             raise _refus(403, "undeclared_write", f"This app may not change “{inp.field}”.")
@@ -381,19 +456,19 @@ def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
                          "An app's write names the row's `_revision` as it was shown.")
 
         def faire(_consent_id: int) -> dict:
-            row = R._update_row(ctx, R.UpdateRowInput(
+            row = R._update_row(_acteur(ctx, app, par_l_app), R.UpdateRowInput(
                 datastore=ns, row_id=inp.row_id, patch={inp.field: inp.value},
                 expected_revision=inp.expected_revision))
-            return {"row": _projeter(t, row)}
+            return {"row": _projeter(t, row), "through_app": par_l_app}
         return faire, _resume(
             app, inp.action,
             {"table": inp.table, "table_id": ns, "row_id": inp.row_id, "field": inp.field},
             {"set": {inp.field: inp.value}},
             f"Set “{inp.field}” to “{inp.value}” on row {inp.row_id} of table "
-            f"“{inp.table}”, as you.")
+            f"“{inp.table}”, {_comme(par_l_app)}.")
 
     if inp.action == "add_row":
-        ns, t = _table(app, inp.table, "write")
+        ns, t, par_l_app = _table(app, inp.table, "write")
         values = inp.values or {}
         cols = t.get("add") or []
         if not cols:
@@ -405,11 +480,12 @@ def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
             raise _refus(400, "empty_row", "The new row is empty.")
 
         def faire(_consent_id: int) -> dict:
-            row = R._append_row(ctx, R.AppendRowInput(datastore=ns, row=values))
-            return {"row": _projeter(t, row)}
+            row = R._append_row(_acteur(ctx, app, par_l_app),
+                                R.AppendRowInput(datastore=ns, row=values))
+            return {"row": _projeter(t, row), "through_app": par_l_app}
         return faire, _resume(
             app, inp.action, {"table": inp.table, "table_id": ns}, {"row": values},
-            f"Add a row to table “{inp.table}”, as you: "
+            f"Add a row to table “{inp.table}”, {_comme(par_l_app)}: "
             + "; ".join(f"{k} = {_valeur(v)}" for k, v in values.items()) + ".")
 
     if inp.action == "upload_file":
@@ -452,18 +528,22 @@ def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
                          "A run of this agent is already waiting for a worker: it will "
                          "start as soon as one is free.")
         remis = _remis_a_l_agent(app, fichiers, handoff)
-        # Lancé dans l'org de l'app, au nom du lecteur : `run_now` juge son
-        # accès en écriture à l'agent, son abonnement, le modèle, la clé.
-        out = _triggers_sync(ResolvedCtx(sub=ctx.sub, org_id=int(org)),
+        # Lancé dans l'org de l'app, au nom de l'AUTEUR quand l'app sert l'agent (son
+        # forfait, ses connexions, comme sur son horaire), sinon du lecteur : `run_now`
+        # juge l'accès en écriture de ce nom-là, son abonnement, le modèle, la clé.
+        lanceur = app["updated_by"] if a["par_l_app"] else ctx.sub
+        out = _triggers_sync(ResolvedCtx(sub=lanceur, org_id=int(org)),
                              TriggerInput(op="run_now", trigger_id=int(a["id"]),
                                           handoff=remis))
         job_id = int(out["job"]["id"])
-        db.apps.consent_job(consent_id, job_id)
+        db.apps.consent_job(consent_id, job_id, [int(f["id"]) for f in fichiers])
         return {"job_id": job_id}
     joints = [{"id": int(f["id"]), "name": f["name"], "media_type": f["media_type"],
                "size": int(f["size"])} for f in fichiers]
     nom = (a.get("trigger") or {}).get("label") or inp.agent
-    texte = f"Start the agent “{nom}”, as you (the run acts in your name)"
+    texte = (f"Start the agent “{nom}”, through this app (the run acts in the name of "
+             "the app's author)" if a["par_l_app"]
+             else f"Start the agent “{nom}”, as you (the run acts in your name)")
     if inp.input:
         texte += f", with this input: “{inp.input}”"
     if joints:
@@ -569,7 +649,7 @@ def deposer(ctx: ResolvedCtx, app_id: int, consent: Optional[str], name: str,
     jugement est ICI, la route n'adapte que le multipart. L'annonce (nom, taille, type
     déclaré) est ce que le consentement a signé ; les octets reçus doivent y répondre,
     et leur type se juge sur eux (`type_servi`)."""
-    app = _app_pour(ctx, app_id, draft)
+    app = _app_pour(ctx, app_id, draft, geste_=True)
     annonce = {"name": name, "size": len(data), "media_type": _type_normal(declared_type)}
     inp = AppCallInput(app_id=app_id, action="upload_file", file=annonce, draft=draft)
     _annonce(app, annonce)
@@ -661,6 +741,25 @@ def _tableur_neutralise(data: bytes, media_type: str) -> bytes:
     return sortie.getvalue().encode("utf-8")
 
 
+def pour_qui(app: dict, sub: str) -> tuple[str, Optional[frozenset[int]]]:
+    """Pour qui un run travaille dans cette app, et ce qu'il peut relire de lui :
+    `(sub, None)` — le nom du run, tous ses fichiers de l'app — sauf quand le TRAVAIL du
+    jeton vient d'un clic dans l'app qui le fait tourner au nom de son auteur : alors
+    `(celui qui a cliqué, les fichiers remis à CE run)`. Le travail se lit sur le jeton
+    de délégation (`verrou_org.travail_de_la_requete`, posé par le serveur à la
+    vérification du jeton), jamais sur un identifiant de run que l'appel annoncerait
+    (`_run_id=`, `X-Oto-Run`, qui RATTACHENT sans rien décider)."""
+    from .. import verrou_org
+
+    v = verrou_org.travail_de_la_requete()
+    if v is None or v.job_id is None or v.sub != sub:
+        return sub, None
+    clic = db.apps.clicker_of_job(int(app["id"]), int(v.job_id), sub)
+    if clic is None:
+        return sub, None
+    return clic["sub"], clic["file_ids"]
+
+
 def rendre(sub: str, app: dict, name: str, media_type: Optional[str], data: bytes) -> dict:
     """Un fichier qu'un AGENT rend à l'app (`oto_apps op=put_file`), pour le lecteur au
     nom duquel il tourne : mêmes types, même taille, même plafond que le dépôt du
@@ -712,7 +811,7 @@ def _consent(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
     _depuis_l_hote(ctx)
     if inp.action not in GESTES:
         raise AuthzDenied(400, "consent_not_needed", f"`{inp.action}` doesn't take a consent.")
-    app = _app_pour(ctx, inp.app_id, inp.draft)
+    app = _app_pour(ctx, inp.app_id, inp.draft, geste_=True)
     _, resume = _geste(ctx, app, inp)
     jeton = secrets.token_urlsafe(32)
     ttl = CONSENT_TTL_UPLOAD if inp.action == "upload_file" else CONSENT_TTL
@@ -743,7 +842,7 @@ def _call(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
 def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
     from .datastore import rows as R
 
-    app = _app_pour(ctx, inp.app_id, inp.draft)
+    app = _app_pour(ctx, inp.app_id, inp.draft, geste_=inp.action in GESTES)
     o = inp.options or {}
 
     if inp.action == "upload_file":
@@ -795,8 +894,10 @@ def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         a = _agent(app, inp.agent, org, ctx.sub, run=False)
         jobs = db.apps.agent_jobs(int(org), int(a["id"]),
                                   min(max(_entier(o, "limit", 10), 1), MAX_RUNS))
-        resultats = db.apps.run_results(j.get("run_id") for j in jobs if j.get("sub") == ctx.sub)
-        return {"runs": [_run(j, ctx.sub, resultats) for j in jobs]}
+        lances = db.apps.jobs_started_by(int(app["id"]), ctx.sub, [int(j["id"]) for j in jobs])
+        resultats = db.apps.run_results(j.get("run_id") for j in jobs
+                                        if j.get("sub") == ctx.sub or int(j["id"]) in lances)
+        return {"runs": [_run(j, ctx.sub, resultats, lances) for j in jobs]}
 
     if inp.action == "run_result":
         if inp.job_id is None:
@@ -806,14 +907,19 @@ def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         declares = {str(a.get("id")): alias
                     for alias, a in (app["manifest"].get("agents") or {}).items()
                     if isinstance(a, dict)}
-        # Un run que le LECTEUR a lancé, d'un agent que l'app déclare.
-        if job is None or job.get("sub") != ctx.sub or job.get("trigger_id") not in declares:
+        # Un run que le LECTEUR a lancé (en son nom, ou par son clic dans l'app), d'un
+        # agent que l'app déclare.
+        lances = (db.apps.jobs_started_by(int(app["id"]), ctx.sub, [int(job["id"])])
+                  if job is not None else frozenset())
+        if (job is None or (job.get("sub") != ctx.sub and int(job["id"]) not in lances)
+                or job.get("trigger_id") not in declares):
             raise _refus(404, "unknown_run", "No run you started of this app's agents has that id.")
         _agent(app, declares[job["trigger_id"]], org, ctx.sub, run=False)
         resultats = db.apps.run_results([job.get("run_id")]) if job["status"] in _JOB_DONE else {}
-        return {"run": _run(job, ctx.sub, resultats)}
+        return {"run": _run(job, ctx.sub, resultats, lances)}
 
-    ns, t = _table(app, inp.table)
+    ns, t, par_l_app = _table(app, inp.table)
+    lecteur = _acteur(ctx, app, par_l_app)
 
     if inp.action == "read_rows":
         order_by = o.get("order_by")
@@ -829,7 +935,7 @@ def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         # jetée ensuite par `_projeter`. Les métadonnées que l'hôte relit (`_revision`
         # pour écrire contre la version montrée, les dates) sont demandées avec.
         champs = t.get("fields")
-        page = R._list_rows(ctx, R.ListRowsInput(
+        page = R._list_rows(lecteur, R.ListRowsInput(
             datastore=ns, limit=min(max(_entier(o, "limit", 50), 1), MAX_ROWS),
             fields=(None if champs is None
                     else [f for f in champs if isinstance(f, str)] + sorted(_META - {"_id"})),
@@ -856,7 +962,7 @@ def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         # Pas de `where` par métrique : il filtrerait sur un champ non déclaré.
         propres.append({"op": m["op"], **({"field": m["field"]} if m.get("field") else {}),
                         "label": m.get("label") if isinstance(m.get("label"), str) else f"m{i}"})
-    out = R._aggregate(ctx, R.AggregateInput(
+    out = R._aggregate(lecteur, R.AggregateInput(
         datastore=ns, group_by=group_by, metrics=json.dumps(propres),
         filter=_filtre(t, o.get("filter"))))
     return {"groups": out.get("groups") or []}
@@ -871,9 +977,11 @@ CAPABILITIES += [
             "rows or aggregates of a declared table (declared fields only), set a "
             "declared field to a declared value (with the row's `_revision`), add a "
             "row with declared columns, start a declared agent, follow its runs. "
-            "Allowed only when BOTH the app's author and its viewer may do it, on "
-            "tables and agents of the app's organization. Writing and "
-            "starting need `consent`, from `POST /api/me/apps/{app_id}/consent`. "
+            "Tables and agents of the app's organization only. When the app's author "
+            "could share a table or agent, the app serves it with the author's rights "
+            "to anyone it is shared with; otherwise the viewer needs their own access "
+            "too. Writing and starting need the Use role (or Edit/Manage) and "
+            "`consent`, from `POST /api/me/apps/{app_id}/consent`. "
             "Interactive sessions only (no API token)."
         ),
         mcp=None,

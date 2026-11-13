@@ -58,6 +58,12 @@ def s(monkeypatch):
         return droits.get((sub, rid, want), False)
 
     monkeypatch.setattr(ownership, "can_access", can_access)
+    # Le partage de l'auteur (`can_govern`) et le rôle Use (`contributor`) : absents par
+    # défaut — la règle d'avant, auteur ∩ lecteur ; un test les pose pour l'éprouver.
+    monkeypatch.setattr(ownership, "can_govern",
+                        lambda sub, rtype, rid: droits.get((sub, rid, "govern"), False))
+    monkeypatch.setattr(ownership, "has_role_grant",
+                        lambda sub, rtype, rid, roles: droits.get((sub, "app_role")) in roles)
     monkeypatch.setattr(db.apps, "get_for_call", lambda i: dict(APP) if i == 5 else None)
     monkeypatch.setattr(C, "org_de_l_app", lambda app: ORG)
     monkeypatch.setattr(C, "tableau_de_l_org", lambda ns, org: org == ORG)
@@ -89,8 +95,13 @@ def s(monkeypatch):
     monkeypatch.setattr(db.apps, "consent_issue", issue)
     monkeypatch.setattr(db.apps, "consent_burn", burn)
     monkeypatch.setattr(db.apps, "consent_job",
-                        lambda cid, jid: list(rec["consents"].values())[cid - 1].update(job=jid))
+                        lambda cid, jid, files=None: list(rec["consents"].values())[cid - 1].update(
+                            job=jid, files=files))
     monkeypatch.setattr(db.apps, "agent_jobs", lambda org, tid, limit: rec["jobs"][:limit])
+    # Les travaux que le lecteur a lancés d'un clic dans l'app (`app_consents.job_id`).
+    rec["lances"] = set()
+    monkeypatch.setattr(db.apps, "jobs_started_by",
+                        lambda app_id, sub, ids: frozenset(i for i in ids if (sub, i) in rec["lances"]))
     monkeypatch.setattr(db.apps, "run_results",
                         lambda ids: {i: rec["results"][i] for i in ids if i in rec["results"]})
     monkeypatch.setattr(db.apps, "job_of_org",

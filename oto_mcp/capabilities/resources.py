@@ -34,7 +34,11 @@ from .. import config
 log = logging.getLogger(__name__)
 
 # ADR 0048 — projection RÔLE ↔ permission (plan contenu) + audiences de publication.
-_PERMISSION_OF_ROLE = {"viewer": "read", "editor": "write", "manager": "write"}
+_PERMISSION_OF_ROLE = {"viewer": "read", "contributor": "read", "editor": "write",
+                       "manager": "write"}
+# Le rôle `contributor` (« Use » à l'écran) n'a de sens que sur une APP : la voir et
+# cliquer ses boutons, qui agissent avec les droits de l'app (`apps_appel`).
+ROLES_D_APP_SEULEMENT = frozenset({"contributor"})
 _ROLE_FROM_PERMISSION = {"read": "viewer", "write": "editor"}
 _PUBLICATION_AUDIENCE = {"public": "anonymous", "secret": "secret"}  # projets uniquement
 
@@ -79,6 +83,8 @@ class ResourceInput(BaseModel):
     audience: Optional[Literal["private", "person", "team", "org",
                                "public", "secret"]] = None
     # RÔLE du grant (viewer=lecteur, editor=éditeur, manager=gérant/gouvernance grantable).
+    # ⚠️ Sous le cliquet du schéma servi : le rôle `contributor` d'une app (« Use »)
+    # n'entre QUE sur `oto_resource_v2` (`resources_v2.ResourceInputV2.role`).
     role: Optional[Literal["viewer", "editor", "manager"]] = None
     # ADR 0068 — « partager » veut dire « qu'il puisse le lire ». Ce défaut valait
     # `"write"`, annoté « rétro-compat » : un héritage, jamais une intention.
@@ -811,6 +817,10 @@ def _gouverner(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         perm = _PERMISSION_OF_ROLE.get(role, "write")
         if inp.resource_type == "doc":
             page.require_viewer(role)
+        if role in ROLES_D_APP_SEULEMENT and inp.resource_type != "app":
+            raise AuthzDenied(400, "role_for_apps_only",
+                              f"The role `{role}` (Use) only exists on an app: pick viewer, "
+                              "editor or manager.")
         try:
             ptype, pid, plabel = _share_principal(ctx.sub, inp)
         except AuthzDenied as e:
@@ -890,9 +900,11 @@ TRANSFER_PROCEDURE = (
 # Une APP (`oto_apps`) se gouverne comme un tableau — servi aux deux surfaces.
 APP_DESCRIPTION = (
     "APPS (resource_type=app): an app has its OWN owner and shares — viewer opens and "
-    "uses it, editor changes it, manager re-shares it; op=transfer moves it to a person, "
-    "a team or an org. The projects it is filed in give no access. No `cascade`, no "
-    "`credentials`: an open app acts as its viewer, bounded by its author.")
+    "reads it, contributor (oto_resource_v2 only) also uses its buttons, editor changes "
+    "it, manager re-shares it; op=transfer moves it to a person, a team or an org. The "
+    "projects it is filed in give no access. No `cascade`, no `credentials`: what the "
+    "app declares is served with its author's rights when the author could share it, "
+    "otherwise with the viewer's own, bounded by the author.")
 
 
 # #480 — le texte servi aux deux surfaces (héritée et stricte), écrit une fois.

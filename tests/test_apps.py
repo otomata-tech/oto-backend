@@ -49,6 +49,8 @@ def seams(monkeypatch):
                         lambda sub, t, rid, want="read": (projet if t == "project" else rights)[want])
     monkeypatch.setattr(ownership, "can_access_many",
                         lambda sub, t, owners, want="read": {k: k != "8" for k in owners})
+    # Le rôle Use (`contributor`) : aucun par défaut ; `can_use` suit alors `can_edit`.
+    monkeypatch.setattr(ownership, "has_role_grant", lambda sub, t, rid, roles: False)
     monkeypatch.setattr(db.apps, "get", lambda i: dict(ROW, id=i) if i == 5 else None)
     # Aucun brouillon par défaut : une app d'avant, publiée à chaque écriture.
     monkeypatch.setattr(db.app_versions, "draft", lambda i: None)

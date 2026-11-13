@@ -146,7 +146,7 @@ def test_la_projection_descendue_rend_ce_que_rendait_la_projection_apres_coup(mo
     from oto_mcp.capabilities.datastore import rows as R
     ctx = ResolvedCtx(sub=monde["lecteur"], org_id=monde["org"])
     app = C._app_pour(ctx, monde["app"])
-    ns, t = C._table(app, "t")
+    ns, t, _ = C._table(app, "t")
     entier = R._list_rows(ctx, R.ListRowsInput(datastore=ns, limit=50, order_by="score",
                                                order_dir="asc"))
     avant = [C._projeter(t, r) for r in entier["rows"]]

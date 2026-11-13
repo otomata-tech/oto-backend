@@ -655,7 +655,7 @@ oto_project	activity archive copy create get handoff inventory link lint list li
 oto_project_files	delete list	21fe316bf162e607
 oto_recipe	create describe get list propose publish run sample test versions	ede9e37c55ae35be
 oto_resource	get list share transfer unshare	40a9d7eaa2b6e5f8
-oto_resource_v2	get list share transfer unshare	637bc809e5097167
+oto_resource_v2	get list share transfer unshare	2f58c80585346ce6
 oto_run_thread	append read	44bbcd76833e2fd0
 oto_scheduled_emails	cancel list	8667993dedb8c784
 oto_search	-	18ffe4e9d63c0a93

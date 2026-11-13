@@ -190,12 +190,34 @@ def outil_garde(tool_name: str) -> bool:
     return tool_name not in OUTILS_OUVERTS and tool_name not in _outils_de_capacite()
 
 
+#: Les capacités d'une APP, jugées par l'org de l'APP et non par celle de l'appel
+#: (13/11/2026). Un invité de l'extérieur ouvre une app partagée depuis SON org maison,
+#: celle de l'appel (`ORG_MEMBER`, `SUB_ONLY`) : quand l'essai de cet espace à lui finit,
+#: l'app d'une org qui paie ne doit pas s'éteindre pour lui — ni s'ouvrir quand c'est
+#: l'org de l'app qui est suspendue. L'adaptateur les laisse passer ; leur handler
+#: appelle `exiger` sur la bonne org (`capabilities/apps.py`, `apps_appel._app_pour`) :
+#: celle de l'app pour un geste sur une app, l'org de l'appel pour créer ou lister.
+JUGEES_PAR_L_APP = frozenset({"me.app", "me.app.call", "me.app.consent"})
+
+
+def exiger(org_id: Optional[int]) -> None:
+    """Refuse (403 `org_suspended`) si `org_id` est suspendue — la garde que le handler
+    d'une capacité de `JUGEES_PAR_L_APP` pose lui-même, sur l'org qu'il sait juger."""
+    if org_id is None:
+        return
+    if (texte := refus(int(org_id))):
+        from .capabilities._types import AuthzDenied
+        raise AuthzDenied(403, CODE, texte)
+
+
 def garde_capacite(cap_key: str, ctx) -> None:
     """La garde des capacités, posée dans les DEUX adaptateurs juste après la règle
     d'autz (l'org de l'appel n'est connue qu'à ce moment, champ d'entrée compris).
     Un worker de plateforme n'a pas d'org : ses travaux sont gardés à la réservation."""
     if ctx.platform_worker or ctx.org_id is None or ouverte(cap_key):
         return
+    if cap_key in JUGEES_PAR_L_APP:
+        return  # jugée par son handler, sur l'org de l'app (`exiger`)
     if (texte := refus(ctx.org_id)):
         from .capabilities._types import AuthzDenied
         raise AuthzDenied(403, CODE, texte)

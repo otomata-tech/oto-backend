@@ -65,6 +65,11 @@ class ResourceInputV2(ResourceInput):
     resource_id: Optional[str] = Field(
         None, pattern=r"^\d+$",
         description="Identifiant numérique de la ressource (clé primaire).")
+    # Le SEUL champ redéclaré, et pour ÉLARGIR : `contributor` (« Use », 13/11/2026),
+    # le rôle d'une APP qui la voit et clique ses boutons sans la modifier. L'héritée
+    # est sous cliquet (`resources_input_legacy.json`) ; le handler refuse ce rôle hors
+    # d'une app (400 `role_for_apps_only`). C'est par ici que le front partage.
+    role: Optional[Literal["viewer", "contributor", "editor", "manager"]] = None
     # ⚠️ `permission` n'est PAS redéclaré ici, et c'est délibéré. Son défaut « partager
     # = laisser lire » (ADR 0068) est posé sur l'entrée HÉRITÉE dont cette classe
     # dérive — décision d'Alexis du 04/09 : « pas de v2 » pour ce changement-là, on
@@ -106,7 +111,8 @@ CAPABILITIES += [
             "group of an org you belong to) / `org` (`org_id`, a whole org, client delivery) → a "
             "grant; `public`/`secret` → PUBLISH the project (public = listed, secret = "
             "unguessable link) with `mcp_tools` (defaults to the already-published set); "
-            "`private` → unpublish. ROLE (`role`) = what they can do: `viewer` (read), `editor` "
+            "`private` → unpublish. ROLE (`role`) = what they can do: `viewer` (read), "
+            "`contributor` (an APP only: open it and use its buttons, without editing it), `editor` "
             "(write), `manager` (GOVERNANCE — re-share / delete / publish, grantable, but NOT "
             "ownership transfer); public/secret force viewer. " + PUBLICATION_DESCRIPTION
             + " Legacy `permission` read|write is "

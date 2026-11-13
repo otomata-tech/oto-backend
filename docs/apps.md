@@ -38,13 +38,24 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
   (`oto_org_settings domain=partage_par_defaut`, type `app` : `aucun` | `lecture` |
   `ecriture`) ; ce partage d'office est MARQUÉ et se retire seul. `ecriture` est
   permis pour une app (refusé pour un agent) : une app n'a pas d'identité à elle,
-  chaque geste agit au nom de son lecteur, borné par son auteur.
-- **Lecteur / éditeur / gérant**, les rôles d'ADR 0048, par `oto_resource`
-  (`resource_type=app` : `get`, `share`, `unshare`, `transfer`) — la même surface et le
-  même écran « Partager » qu'un projet. Lire l'app = `can_access` lecture (l'ouvrir,
-  s'en servir) ; la modifier = écriture ; la repartager = gouvernance (propriétaire,
-  admin, gérant). Transférer l'app à l'org ou à une équipe la rend à tous leurs
-  membres.
+  chaque geste agit sous les droits de son auteur ou de son lecteur (ci-dessous). Le
+  partage d'office et un lien d'invitation donnent View.
+- **View / Use / Edit / Manage** (13/11/2026) — `viewer`, `contributor`, `editor`,
+  `manager`, par `oto_resource_v2` (`resource_type=app` : `get`, `share`, `unshare`,
+  `transfer` ; l'héritée `oto_resource` est sous cliquet et ne prend pas
+  `contributor`) — le même écran « Partager » qu'un projet. View = `can_access` lecture
+  (l'ouvrir, la lire) ; **Use** = la lire ET cliquer ses boutons
+  (`apps_appel.peut_cliquer` : écriture sur l'app, ou un partage `contributor`), sans la
+  modifier — projection contenu `read`, refusé hors d'une app (400
+  `role_for_apps_only`) ; Edit = la modifier ; Manage = la repartager (gouvernance :
+  propriétaire, admin, gérant). Les partages `viewer` d'avant le 13/11 sont restés
+  View : ils ne cliquent plus. Transférer l'app à l'org ou à une équipe la rend à tous
+  leurs membres (propriétaires : ils cliquent).
+- **Un invité de l'extérieur** (pas membre de l'org de l'app) reçoit l'app seule, View
+  ou Use, par son lien — il ne rejoint pas l'org. L'app se juge par l'org de l'APP, pas
+  par son espace à lui (`docs/orgs-suspendues.md` §3) ; avec Use, il lance les agents
+  que l'app déclare, comme un membre. Le front l'ouvre en plein écran, sans le reste de
+  Tulina (`/apps/<id>`).
 - **L'org d'une app** (`apps_manifeste.org_de_l_app`) est celle de son propriétaire :
   l'org, l'org de l'équipe, et pour une app perso l'org où elle a été créée (sinon
   l'org perso de la personne). C'est là que vivent ses tableaux et ses agents, et là
@@ -118,19 +129,36 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
   et sur l'appel) : un jeton `oto_`, délégation d'agent hébergé comprise, est refusé
   en 403 `api_token_forbidden`. Un agent écrit une app par `oto_apps`, en MCP.
 
-## Une app ouverte — auteur ∩ lecteur (`me.app.call`)
+## Une app ouverte — les droits de l'app, ou auteur ∩ lecteur (`me.app.call`)
 
 Une app ouverte ne parle qu'à `POST /api/me/apps/{app_id}/call` (face REST seule, pas
 d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :**
 `read_rows`, `read_aggregate` (lire), `write_cell`, `add_row`, `start_agent`,
 `upload_file` (gestes, avec consentement), `list_files`, `agent_runs`, `run_result`.
 
-- **Droits d'une app = droits de son auteur ∩ droits de son lecteur.** L'auteur est
-  `updated_by` ; il est jugé par l'ownership SEUL (numéro du tableau), jamais par sa
-  session. Le lecteur est jugé en exécutant POUR LUI les capacités existantes (lignes,
-  agrégat). Auteur inconnu ou qui a perdu l'accès : 403 `app_author_unknown` /
+- **Les droits de l'APP quand son auteur pourrait partager** (13/11/2026). L'auteur est
+  `updated_by`, jugé par l'ownership SEUL (numéro du tableau), jamais par sa session.
+  Un tableau qu'il peut partager lui-même (`ownership.can_govern` : propriétaire,
+  gérant, admin de l'org propriétaire) se lit et s'écrit SOUS L'AUTEUR, borné au
+  manifeste, pour quiconque l'app est partagée — sans accès propre au tableau :
+  partager l'app, c'est partager ce qu'elle en montre, ce qu'il pouvait faire
+  directement. Un agent dont il est propriétaire ou admin de l'org, pareil — invité du
+  dehors compris (13/11/2026) : l'app ne PARTAGE pas l'agent (ce qui reste réservé à
+  son org, `_acces_agent`), elle le LANCE, bornée à son manifeste (`run`, `input`),
+  chaque lancement résumé et consenti, au nom de l'auteur, avec les seuls fichiers de
+  ce clic.
+- **Sinon, droits de son auteur ∩ droits de son lecteur** (la règle d'avant) : le
+  lecteur est jugé en exécutant POUR LUI les capacités existantes (lignes, agrégat,
+  `run_now`). Auteur inconnu ou qui a perdu l'accès : 403 `app_author_unknown` /
   `app_author_lost_access` ; tableau sorti de l'org du projet depuis l'écriture :
-  403 `table_outside_project_org`.
+  403 `table_outside_project_org`. ⚠️ L'auteur est le DERNIER à avoir écrit l'app : un
+  éditeur qui peut partager plus que l'auteur d'avant élargit ce que l'app sert.
+- **Qui écrit au journal** : toujours le lecteur. Le journal des révisions prend
+  l'acteur du `geste` (le porteur de la session), jamais le sub du store — une écriture
+  servie sous l'auteur reste celle du lecteur qui a cliqué ; `app_consents` dit de
+  quelle app elle vient. La réponse d'un `write_cell` / `add_row` dit `through_app`
+  (servi avec les droits de l'app) : le lecteur n'a peut-être aucun accès propre au
+  tableau, l'hôte ne propose pas de l'annuler par les routes de tableau.
 - **Borné au manifeste, côté serveur** : projection aux champs déclarés (plus `_id`,
   `_revision`, les dates), filtre / tri / regroupement / mesure sur ces champs seuls,
   recherche plein texte seulement sans liste de champs. `limit` et `offset` sont des
@@ -151,6 +179,11 @@ d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :**
   tableau lu n'y sont pas. Aucun journal d'audit des lectures n'existe à ce jour.
 
 ### Écrire, ajouter, lancer, déposer — l'accord du lecteur, donné hors de l'app (`me.app.consent`, #1386)
+
+**Use d'abord** : un geste exige Use, Edit ou Manage (`peut_cliquer`), jugé à
+l'émission du consentement, à l'appel et au dépôt — après le refus du brouillon, pour
+ne rien dire de son existence. View reçoit 403 `app_view_only`. Le résumé dit sous
+quels droits le geste agit (« as you » / « through this app »).
 
 **Le clic dans l'app VAUT accord, jugé par l'hôte** (décision du 31/10/2026, qui remplace
 celle du 29/10). Le serveur ne distingue pas un clic du lecteur d'un appel que l'app fait
@@ -232,9 +265,13 @@ entrée remise à un agent. Le manifeste, auteur ∩ lecteur et le journal reste
 - `write_cell` : un champ déclaré (`set`), à une valeur déclarée, avec la `_revision`
   montrée (sinon 400 `revision_required`) ; l'auteur doit pouvoir ÉCRIRE le tableau.
 - `add_row` : colonnes déclarées (`add`) seules.
-- `start_agent` : un agent déclaré `run: true`, dans l'org du PROJET de l'app, au nom
-  du lecteur par `run_now` (accès en écriture du lecteur, abonnement, modèle, clé) ;
-  l'auteur doit pouvoir écrire l'agent. L'entrée (`input: true`, ≤ 300 caractères)
+- `start_agent` : un agent déclaré `run: true`, dans l'org du PROJET de l'app, par
+  `run_now` : **au nom de l'AUTEUR** quand l'app sert l'agent (son forfait, ses
+  connexions — comme sur son horaire), sinon au nom du lecteur (son accès en écriture,
+  abonnement, modèle, clé) ; l'auteur doit pouvoir écrire l'agent. Le travail est
+  rattaché au clic (`app_consents.job_id`) : le lecteur qui a cliqué en lit l'erreur,
+  le résultat, et les fichiers que le run dépose ou relit (`apps_appel.pour_qui`,
+  `db.apps.clicker_of_run`), jamais l'auteur à sa place. L'entrée (`input: true`, ≤ 300 caractères)
   arrive au run comme donnée venue de l'app, après sa consigne. **Dédupliqué même
   avec une entrée** (409 `run_already_queued`), ce que `run_now` ne fait pas pour un
   `handoff`.
@@ -349,12 +386,13 @@ par l'hôte, après l'accord du lecteur :
 
 ### Suivre les runs
 
-- `agent_runs` : les derniers runs d'un agent déclaré que l'auteur et le lecteur voient
-  tous deux — statut, dates. L'erreur (`error`, le `last_error` du travail) et ce que
-  l'agent a conclu (`outcome`, `note`) seulement pour les runs que le LECTEUR a lancés
-  (`mine`) : l'erreur du run d'un autre peut citer ses données.
-- `run_result` : un run que le lecteur a lancé, d'un agent déclaré ; sinon 404
-  `unknown_run`.
+- `agent_runs` : les derniers runs d'un agent déclaré que l'auteur voit, et le lecteur
+  aussi — sauf quand l'app le sert — statut, dates. L'erreur (`error`, le `last_error`
+  du travail) et ce que l'agent a conclu (`outcome`, `note`) seulement pour les runs que
+  le LECTEUR a lancés (`mine` : en son nom, ou d'un clic dans l'app —
+  `db.apps.jobs_started_by`) : l'erreur du run d'un autre peut citer ses données.
+- `run_result` : un run que le lecteur a lancé (même sens), d'un agent déclaré ; sinon
+  404 `unknown_run`.
 
 ## Révisions et conflits
 

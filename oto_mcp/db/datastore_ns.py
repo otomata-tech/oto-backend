@@ -477,7 +477,10 @@ def count_datastore_rows_for_ns(ns_id: int) -> int:
 
 
 # ADR 0048 — le rôle est la source de vérité ; `permission` (plan CONTENU) en dérive.
-_ROLE_TO_PERMISSION = {"viewer": "read", "editor": "write", "manager": "write"}
+# `contributor` : une app seulement (`resources.ROLES_D_APP`) — la lire et cliquer ses
+# boutons. Sur le plan CONTENU, une lecture : il ne modifie pas l'app.
+_ROLE_TO_PERMISSION = {"viewer": "read", "contributor": "read", "editor": "write",
+                       "manager": "write"}
 _PERMISSION_TO_ROLE = {"read": "viewer", "write": "editor"}
 
 

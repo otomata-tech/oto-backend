@@ -53,7 +53,9 @@ UI admin **dérivée**. ⚠️ **Migration en cours** : `user_datastores.sub` + 
 sont des reliques nullable, **DROP différé** (Phase H) après cutover prod vérifié.
 
 > **Partage unifié « audience × rôle » (ADR 0048, amende 0030/0032).** Le grant porte
-> désormais un **RÔLE** (`resource_grants.role ∈ {viewer, editor, manager}`) et non plus
+> désormais un **RÔLE** (`resource_grants.role ∈ {viewer, contributor, editor, manager}` ;
+> `contributor` = « Use » d'une APP seulement, projection `read`, lu par
+> `ownership.has_role_grant` — `docs/apps.md`) et non plus
 > seulement `permission ∈ {read, write}`. `permission` reste **la projection CONTENU
 > appariée** (viewer→read, editor/manager→write), dérivée du rôle à l'écriture
 > (`db.grant_resource`) → **tout le SQL du plan contenu est inchangé** (`max(g.permission)`,
@@ -293,7 +295,7 @@ résolution des `[[…]]` (`db/backlinks`). Pour un tableau, il est écrit et pl
 ## Partage unifié audience × rôle (ADR 0048)
 
 > **Partage unifié audience × rôle (ADR 0048).** Le grant porte un **rôle**
-> `resource_grants.role ∈ {viewer, editor, manager}` (`permission` read/write reste la
+> `resource_grants.role ∈ {viewer, contributor, editor, manager}` (`contributor` : une app seulement) (`permission` read/write reste la
 > projection CONTENU dérivée → SQL du plan contenu inchangé). `manager` (gérant) rend la
 > **gouvernance grantable** : `can_govern = owner ∪ grant gérant ∪ escalade roles.py` ; le
 > **transfert** reste `can_transfer = owner ∪ escalade` (jamais un gérant). Surface unique

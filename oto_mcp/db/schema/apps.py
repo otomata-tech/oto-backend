@@ -138,6 +138,14 @@ FICHIERS_ORIGINE = """
 ALTER TABLE app_files ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'upload';
 """
 
+CONSENTEMENT_FICHIERS = """
+-- Les fichiers qu'un clic a remis au run qu'il a lancé (`start_agent`, `files`). Un run
+-- que l'app sert au nom de son AUTEUR ne relit que CEUX-LÀ du lecteur qui a cliqué
+-- (`apps_appel.pour_qui`), jamais ses autres fichiers. Colonne AJOUTÉE (révision
+-- `20261113_1900_app_use_role`) : le fragment `CONSENTEMENTS` a déjà été joué.
+ALTER TABLE app_consents ADD COLUMN IF NOT EXISTS file_ids BIGINT[];
+"""
+
 VERSIONS = """
 -- Brouillon et versions publiées d'une app (`docs/apps.md` § Brouillon et publication).
 -- `drafts_enabled` : les modifications du manifeste et du HTML vont au BROUILLON, que

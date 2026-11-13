@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS resource_grants (
     -- pour tout le SQL du plan contenu (max(g.permission)/g.permission='write') ; `role`
     -- porte en plus la GOUVERNANCE grantable (`manager` → can_govern). Source de vérité = role.
     permission TEXT NOT NULL DEFAULT 'write' CHECK (permission IN ('read', 'write')),
-    role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('viewer', 'editor', 'manager')),
+    -- `contributor` (13/11/2026) : une APP seulement — la voir et cliquer ses boutons
+    -- (`apps_appel`), sans la modifier. Projection CONTENU : read.
+    role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('viewer', 'contributor', 'editor', 'manager')),
     granted_by TEXT,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- otomata-tech/oto#39 : l'échéance du partage. NULL = sans échéance. Échu, le

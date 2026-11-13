@@ -1,0 +1,1 @@
+ALTER TABLE app_consents ADD COLUMN IF NOT EXISTS file_ids BIGINT[];

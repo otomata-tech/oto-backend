@@ -1411,9 +1411,11 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # dérivée du rôle à l'écriture (grant_resource) — le plan contenu est inchangé.
     conn.execute("ALTER TABLE resource_grants ADD COLUMN IF NOT EXISTS role TEXT "
                  "NOT NULL DEFAULT 'editor'")
+    # ⚠️ `contributor` (Use d'une app, projection `read`) n'est pas un rôle à
+    # recalculer : sans lui dans la liste, chaque boot le ramènerait à `viewer`.
     conn.execute("UPDATE resource_grants SET role = "
                  "CASE permission WHEN 'read' THEN 'viewer' ELSE 'editor' END "
-                 "WHERE role NOT IN ('viewer', 'manager')")
+                 "WHERE role NOT IN ('viewer', 'contributor', 'manager')")
     # Préférence de langue de l'UI dashboard (2026-07-07) : NULL = pas de
     # préférence explicite (le front retombe sur la langue du navigateur).
     # Validée à 'en'|'fr' en amont (capacité me.locale.set) ; colonne libre.

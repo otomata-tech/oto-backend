@@ -745,6 +745,19 @@ def _has_manager_grant(sub: str, resource_type: str, resource_id: str) -> bool:
     return False
 
 
+def has_role_grant(sub: str, resource_type: str, resource_id: str,
+                   roles_: frozenset[str]) -> bool:
+    """L'acteur détient-il, via l'un de ses principals (perso / org / équipe), un grant
+    VIVANT dont le rôle est dans `roles_` ? Sert le rôle `contributor` d'une app (Use :
+    la voir et cliquer ses boutons, `capabilities/apps_appel.py`), que la projection
+    CONTENU (`read`) ne distingue pas d'un `viewer`."""
+    for ptype, pid in accessor_scope(sub).principal_pairs():
+        g = db.get_resource_grant(resource_type, resource_id, ptype, pid)
+        if g is not None and g.get("role") in roles_:
+            return True
+    return False
+
+
 def _gouverne(owner: Optional[tuple], transfere: Callable[[], bool],
               gerant: Callable[[], bool]) -> bool:
     """LA règle de gouvernance d'une ressource sans parent gouvernant (ADR 0048), écrite

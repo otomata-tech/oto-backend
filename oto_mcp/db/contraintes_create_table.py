@@ -146,8 +146,12 @@ ORG_INSTRUCTION_REVISIONS_OWNER = Cle(
 RESOURCE_GRANTS_ROLE = Verification(
     nom="resource_grants_role_check",
     table="resource_grants",
-    expression="role IN ('viewer', 'editor', 'manager')",
-    definition="CHECK ((role = ANY (ARRAY['viewer'::text, 'editor'::text, 'manager'::text])))",
+    # La forme du `CREATE TABLE` d'AUJOURD'HUI (`db/schema/grants.py`), `contributor`
+    # compris depuis la révision 20261113_1900_app_use_role : une base neuve la porte,
+    # une base versionnée l'a reçue de cette révision ; 0057 ne s'y rejoue pas.
+    expression="role IN ('viewer', 'contributor', 'editor', 'manager')",
+    definition=("CHECK ((role = ANY (ARRAY['viewer'::text, 'contributor'::text, "
+                "'editor'::text, 'manager'::text])))"),
 )
 
 CLES: tuple[Cle, ...] = (PROJECTS_MCP_SLUG, ORG_INSTRUCTIONS_OWNER,

@@ -57,6 +57,14 @@ sans org, n'est jamais gardé — c'est par eux qu'on suspend et qu'on lève. C�
 outils hors capacité : `oto_whoami`, `oto_tool_schema` et `oto_call` lui-même (sa
 cible repasse par la garde, dans l'org que ses axes posent).
 
+**Les capacités d'une app se jugent par l'org de l'APP** (`org_suspension.JUGEES_PAR_L_APP` :
+`me.app`, `me.app.call`, `me.app.consent`, 13/11/2026). Un invité de l'extérieur ouvre
+une app partagée depuis SON espace (l'org de l'appel) : l'essai de cet espace fini, l'app
+d'une org qui paie reste ouverte pour lui ; l'org de l'app suspendue, elle se ferme à
+tous. L'adaptateur les laisse passer, leur handler appelle `org_suspension.exiger` sur
+l'org de l'app (geste sur une app existante, dépôt compris — `apps_appel._app_pour`) ou
+sur l'org de l'appel (lister, créer).
+
 Les routes REST écrites à la main (export CSV d'un tableau, logo, fichiers de projet
 en upload) ne passent pas par ces gardes : exporter ses propres données reste
 possible, c'est voulu. `tools/list` et le handshake non plus — la liste est servie,

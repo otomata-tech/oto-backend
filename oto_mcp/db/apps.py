@@ -369,11 +369,43 @@ def consent_burn(app_id: int, sub: str, action: str, fingerprint: str,
     return int(row["id"]) if row else None
 
 
-def consent_job(consent_id: int, job_id: int) -> None:
-    """Le travail qu'un consentement a lancé — le journal dit quel run vient de l'app."""
+def consent_job(consent_id: int, job_id: int, file_ids: Optional[list[int]] = None) -> None:
+    """Le travail qu'un consentement a lancé, et les fichiers remis à ce run — le
+    journal dit quel run vient de l'app, et ce qu'il peut relire du lecteur."""
     with _connect() as conn:
-        conn.execute("UPDATE app_consents SET job_id = %s WHERE id = %s",
-                     (job_id, consent_id))
+        conn.execute("UPDATE app_consents SET job_id = %s, file_ids = %s WHERE id = %s",
+                     (job_id, list(file_ids) if file_ids else None, consent_id))
+
+
+def jobs_started_by(app_id: int, sub: str, job_ids: list[int]) -> frozenset[int]:
+    """Parmi `job_ids`, les travaux que `sub` a lancés d'un clic dans CETTE app (son
+    consentement brûlé porte le travail) — un run que l'app sert tourne au nom de son
+    auteur : `runner_jobs.sub` ne dit plus qui a cliqué."""
+    if not job_ids:
+        return frozenset()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT job_id FROM app_consents WHERE app_id = %s AND sub = %s "
+            "AND action = 'start_agent' AND job_id = ANY(%s)",
+            (app_id, sub, list(job_ids)),
+        ).fetchall()
+    return frozenset(int(r["job_id"]) for r in rows)
+
+
+def clicker_of_job(app_id: int, job_id: int, job_sub: str) -> Optional[dict]:
+    """Qui a lancé, d'un clic dans CETTE app, le travail `job_id` tournant au nom de
+    `job_sub`, et les fichiers remis à ce run : `{"sub", "file_ids"}` — None si ce
+    travail ne vient pas d'un clic dans l'app."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT c.sub, c.file_ids FROM app_consents c JOIN runner_jobs j ON j.id = c.job_id "
+            "WHERE c.app_id = %s AND c.action = 'start_agent' AND c.job_id = %s "
+            "AND j.sub = %s ORDER BY c.id DESC LIMIT 1",
+            (app_id, job_id, job_sub),
+        ).fetchone()
+    if not row:
+        return None
+    return {"sub": row["sub"], "file_ids": frozenset(int(i) for i in (row["file_ids"] or []))}
 
 
 def agent_jobs(org_id: int, trigger_id: int, limit: int) -> list[dict]:

@@ -61,7 +61,7 @@ def s(monkeypatch):
 
     monkeypatch.setattr(db.apps, "consent_issue", issue)
     monkeypatch.setattr(db.apps, "consent_burn", burn)
-    monkeypatch.setattr(db.apps, "consent_job", lambda cid, jid: None)
+    monkeypatch.setattr(db.apps, "consent_job", lambda cid, jid, files=None: None)
 
     def upload_object(prefix, owner, data, ct, name, *, max_bytes=None, propre_au_depot=False):
         key = f"{prefix}/{owner}/{len(rec['objects'])}/{name}"

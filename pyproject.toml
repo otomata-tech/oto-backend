@@ -51,6 +51,15 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.228.0 = jefacture : User-Agent explicite sur les demandes de jeton (le pare-feu de la
+    # plateforme refusait l'échange du code en 403 HTML sur l'UA par défaut de `requests`) ;
+    # emporte v1.227.0 (openai 1.0.0 : générer et retoucher une image). Aucun extra.
+    # v1.226.0 = google_search_console 1.1.0 : deux niveaux d'accès (`read` par défaut, `full` ajoute
+    # add_sitemap), que le moteur reçoit à chaque appel (`access_level=`) ; heyreach et instantly
+    # 1.0.1 : listes projetées par élément, pagination par offset + limit ; mailpool 1.1.1 : une
+    # création acceptée sans liste de boîtes après un premier domaine est `MailpoolCreatePartial`.
+    # Un oto-core plus ancien refuse la description de Search Console : épingle et lecteur vont
+    # ensemble. Aucun extra.
     # v1.225.0 = n8n : créer, modifier, supprimer un workflow et poser ses tags (`workflow_body`
     # rend les clés non écrivables qu'il écarte) ; mailpool 1.1.0 : créer des boîtes sur des
     # créneaux déjà payés, les exporter vers une plateforme d'envoi (client Python, hors
@@ -538,7 +547,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.225.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.228.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

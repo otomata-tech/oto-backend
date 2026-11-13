@@ -183,10 +183,11 @@ def _upstream_message(e, is_platform: bool = False) -> str:
     return f"Pipecorn refused the request (HTTP {status}): {_error(e)}"
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
+def _verify(fields: dict, config: dict | None = None) -> dict:  # noqa: ARG001
     """"Test the connection" probe: the balance (`GET /credits`), free — it also says
     whether enrichment credits are left. An unreadable answer or balance is an outage,
-    never a refused key nor a healthy account."""
+    never a refused key nor a healthy account. Returns that balance (`{"quota": …}`):
+    it used to be read then thrown away, so the platform key showed `balance: null`."""
     from oto.tools.common.credentials import MissingCredential
     from oto.tools.common.errors import UpstreamHTTPError
     from oto.tools.pipecorn import PipecornClient, PipecornUnreadable
@@ -208,6 +209,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
                            f"{str(balance)[:200]}")
     if left <= 0:
         raise connector_verify.QuotaEpuise("Pipecorn: no enrichment credits left.")
+    return {"quota": {"restant": left, "unite": "credits"}}
 
 
 def register(mcp: FastMCP) -> None:

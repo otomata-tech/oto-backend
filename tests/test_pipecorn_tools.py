@@ -370,7 +370,7 @@ def test_sonde(client):
     with pytest.raises(verify.QuotaEpuise):
         pipecorn._verify({"key": KEY})
     client.return_value.probe.return_value = {"credits": {"enrichment": 12}}
-    pipecorn._verify({"key": KEY})
+    assert pipecorn._verify({"key": KEY}) == {"quota": {"restant": 12, "unite": "credits"}}
     client.return_value.probe.side_effect = _upstream(401, {"error": "Invalid API key"})
     with pytest.raises(verify.NonAutorise):
         pipecorn._verify({"key": KEY})

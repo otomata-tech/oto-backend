@@ -50,6 +50,12 @@ def test_une_url_encodee_et_accentuee_rend_le_slug_ascii():
     assert canon("https://www.linkedin.com/in/chlo%C3%A9-dupr%C3%A9/") == "chloe-dupre"
 
 
+def test_un_slug_nu_encode_en_pourcentage_rend_le_slug_ascii():
+    """#1447 : le slug nu encodé partait tel quel → INVALID_ARGUMENT de l'amont."""
+    assert canon("chlo%C3%A9-dupr%C3%A9-123456") == "chloe-dupre-123456"
+    assert canon(canon("chlo%C3%A9-dupr%C3%A9")) == "chloe-dupre"
+
+
 def test_une_url_d_entreprise_est_ramenee_au_slug():
     assert canon("https://www.linkedin.com/company/acme-corp/about/", "company") == "acme-corp"
 

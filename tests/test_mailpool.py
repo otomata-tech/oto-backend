@@ -616,7 +616,42 @@ def test_create_accepted_without_mailboxes_is_not_masked():
         e = _err("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW], "dry_run": False})
     assert sent == [("POST", "/mailboxes")]
     assert _reason(e) == "mailbox_outcome_unknown"
-    assert "lists none" in e.message
+    assert "lists none" in e.message and "example-outreach.test" in e.message
+    assert "created" not in (e.data or {})
+
+
+def test_second_domain_accepted_without_mailboxes_is_partial_by_the_real_client():
+    """mailpool 1.1.1: an accepted create whose answer lists no mailbox, AFTER a first
+    domain landed, is `MailpoolCreatePartial` in the library. The tool serves it as the
+    named `partially_applied`: the mailboxes created are returned, the accepted domain
+    comes first in `not_done` and is named `uncertain` — never a success, nothing lost."""
+    from oto.tools.mailpool.client import MailpoolClient
+
+    other = dict(DOMAIN, id=1202, domain="other-outreach.test", type="unassigned")
+    second = dict(NEW, email="ben@other-outreach.test", firstName="Ben")
+    landed = dict(MAILBOX, type="google", domain=dict(MAILBOX["domain"], type="google"))
+    real = MailpoolClient(api_key="mp_k")
+    real.get_subscription_slots = lambda: {"slots": {"google": 4}, "mailboxes": {}}
+    real.list_domains = lambda **kw: {"data": [dict(DOMAIN, type="unassigned"), other],
+                                      "total": 2}
+    real.list_mailboxes = lambda **kw: {"data": [], "total": 0}
+    answers = [{"emails": [landed]}, {"emails": None}]
+    sent = []
+
+    def request(method, path, **kw):
+        sent.append((method, path, kw["json"][0]["email"]))
+        return answers.pop(0)
+    real._request = request
+    with patch("oto.tools.mailpool.client.MailpoolClient", return_value=real):
+        e = _err("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW, second],
+                                        "dry_run": False})
+    assert [m[2] for m in sent] == [NEW["email"], second["email"]]
+    assert _reason(e) == "partially_applied"
+    assert e.data["done"] == ["example-outreach.test"]
+    assert e.data["not_done"][0] == e.data["uncertain"] == "other-outreach.test"
+    assert [m["email"] for m in e.data["created"]] == [MAILBOX["email"]]
+    assert "other-outreach.test" in e.message and "may exist" in e.message
+    assert not [k for k in _keys(e.data) if SECRET.search(k)]
 
 
 @pytest.mark.parametrize("args", [
@@ -649,6 +684,7 @@ def test_create_partial_lists_what_exists(client):
     e = _err("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW], "dry_run": False})
     assert _reason(e) == "partially_applied"
     assert e.data["done"] == ["example-outreach.test"]
+    assert e.data["uncertain"] == "other-outreach.test"
     assert e.data["created"][0]["email"] == MAILBOX["email"]
     assert not [k for k in _keys(e.data) if SECRET.search(k)]
 

@@ -518,7 +518,8 @@ def register(mcp: FastMCP) -> None:
           create (one Mailpool call per domain). Google/Outlook mailboxes come
           back `pending` while the provider provisions them, and their MX, SPF
           and DKIM appear once provisioned. On error reason
-          `mailbox_outcome_unknown` or `partially_applied` some mailboxes may
+          `mailbox_outcome_unknown` or `partially_applied` (it lists those
+          `created` and names the `uncertain` domain) some mailboxes may
           exist: `op="list"` before calling again.
         - `export` — hand `mailbox_ids` to a sending `platform` (e.g. lemlist):
           Mailpool connects them there itself, passwords included, so none
@@ -578,13 +579,19 @@ def register(mcp: FastMCP) -> None:
         try:
             out = strip_secrets(c.create_mailboxes(items))
         except MailpoolCreatePartial as e:
+            # Never a success: what landed is returned, and the domain that failed
+            # (`not_done[0]`) is UNCERTAIN — its call may have been accepted.
+            incertain, reste = e.not_done[0], e.not_done[1:]
             raise _after_write(
                 "partially_applied",
-                f"Partially applied: mailboxes created on {', '.join(e.done)}, not on "
-                f"{', '.join(e.not_done)} ({_cause(e.cause)}). List the mailboxes of the "
-                "domains not done before calling again with only those.",
+                f"Partially applied: mailboxes created on {', '.join(e.done)}. On "
+                f"{incertain} the outcome is unknown ({_cause(e.cause)}): its mailboxes may "
+                "exist — list them with mailpool_mailboxes(op=\"list\", domain_id=…) before "
+                "calling again."
+                + (f" Not attempted: {', '.join(reste)}." if reste else "")
+                + " Call again with only the mailboxes that do not exist.",
                 created=[_slim_mailbox(m) for m in strip_secrets(e.created)],
-                done=e.done, not_done=e.not_done)
+                done=e.done, not_done=e.not_done, uncertain=incertain)
         except MailpoolCreateRefused as e:
             raise _bad(str(e), reason="create_refused")
         except UpstreamHTTPError as e:

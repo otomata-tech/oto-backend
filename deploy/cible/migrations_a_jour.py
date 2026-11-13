@@ -22,9 +22,9 @@ Trois modes :
   (aucune table : le démarrage crée le schéma et y pose la tête) ; 3 si elle est EN RETARD
   sur une chaîne linéaire du registre du tag (`--migrer` la rattrape) ; 1 sinon.
 - `--migrer` — MONTÉE (#1195) : une cible suit le tronc sans geste humain, donc une base EN
-  RETARD sur une chaîne LINÉAIRE est migrée ici (`oto-mcp migrer upgrade head`, depuis cet
-  arbre), puis relue : elle doit être à la tête, sinon refus. Le journal dit « de → vers ».
-  Sortie 0 (à jour, neuve, ou migrée) ou 1.
+  RETARD sur une chaîne LINÉAIRE est migrée ici (`oto-mcp maintenance copies-du-coffre`,
+  puis `oto-mcp migrer upgrade head`, depuis cet arbre), puis relue : elle doit être à la
+  tête, sinon refus. Le journal dit « de → vers ». Sortie 0 (à jour, neuve, ou migrée) ou 1.
 - `--retour` — RETOUR ARRIÈRE (#1195) : l'arbre est celui de la couleur précédente. Sa base
   doit être EXACTEMENT à la tête de son registre ; une révision qu'il ne connaît pas (une
   montée l'a migrée depuis) refuse — on corrige vers l'avant, par un nouveau tag. Sortie
@@ -139,25 +139,43 @@ def lire_base(dsn: str) -> tuple[EtatRegistre, list[str]]:
     return etat, versions
 
 
-def migrer_la_base() -> None:
-    """`oto-mcp migrer upgrade head` DEPUIS CET ARBRE — le registre du tag qu'on monte.
+#: Ce que la montée joue depuis cet arbre, dans l'ordre, sur une base EN RETARD.
+#: D'abord les copies du coffre des connecteurs renommés (`oto_mcp.maintenance.
+#: copies_declarees`) : notre instance les fait au démarrage, qui précède sa migration ;
+#: ici la migration précède le démarrage, et une révision de renommage repointe vers ces
+#: copies — sans elles, elle lève (`20261112_1200_connecteur_api`). Additives et
+#: idempotentes : l'ancien code, qui sert encore, n'en voit rien.
+COPIES_DU_COFFRE = ("maintenance", "copies-du-coffre")
+MIGRATION = ("migrer", "upgrade", "head")
 
-    Il hérite de l'environnement du lanceur (`DATABASE_URL` comprise), plus le plafond de
-    construction des index (`PLAFOND_INDEX_LIGNES`) — posé sur cette commande seulement,
-    jamais dans l'environnement de la porte ; sa sortie va au journal du run. Un échec
-    refuse : la couleur ne démarre pas, et la base peut s'être arrêtée entre deux révisions
-    — le refus dit comment le lire."""
-    commande = [str(ARBRE / ".venv" / "bin" / "oto-mcp"), "migrer", "upgrade", "head"]
-    environnement = {**os.environ,
-                     index_concurrent.PLAFOND_ENV: str(PLAFOND_INDEX_LIGNES)}
+
+def _jouer(arguments: tuple[str, ...], environnement: dict, apres_echec: str) -> None:
+    """`oto-mcp <arguments>` DEPUIS CET ARBRE, borné à `DELAI_MIGRATION_S` ; sa sortie va
+    au journal du run. Un échec ou un dépassement refuse, en disant quoi lire."""
+    nom = " ".join(arguments)
+    commande = [str(ARBRE / ".venv" / "bin" / "oto-mcp"), *arguments]
     try:
         fini = subprocess.run(commande, timeout=DELAI_MIGRATION_S, env=environnement)
     except subprocess.TimeoutExpired as depasse:
-        raise Refus(f"`migrer upgrade head` n'a pas fini en {DELAI_MIGRATION_S} s") from depasse
+        raise Refus(f"`{nom}` n'a pas fini en {DELAI_MIGRATION_S} s") from depasse
     if fini.returncode != 0:
-        raise Refus(f"`migrer upgrade head` a échoué (code {fini.returncode}, sortie "
-                    "ci-dessus) — la base peut s'être arrêtée entre deux révisions : "
-                    "lire `migrer current` avant toute relance")
+        raise Refus(f"`{nom}` a échoué (code {fini.returncode}, sortie ci-dessus) — "
+                    f"{apres_echec}")
+
+
+def migrer_la_base() -> None:
+    """Les copies du coffre, puis `oto-mcp migrer upgrade head`, DEPUIS CET ARBRE — le
+    registre du tag qu'on monte.
+
+    Elles héritent de l'environnement du lanceur (`DATABASE_URL` et la clé maîtresse
+    comprises) ; la migration reçoit en plus le plafond de construction des index
+    (`PLAFOND_INDEX_LIGNES`) — posé sur cette commande seulement, jamais dans
+    l'environnement de la porte. Un échec refuse : la couleur ne démarre pas."""
+    _jouer(COPIES_DU_COFFRE, dict(os.environ),
+           "rien n'est migré ; les copies déjà faites restent (additives, idempotentes)")
+    _jouer(MIGRATION, {**os.environ, index_concurrent.PLAFOND_ENV: str(PLAFOND_INDEX_LIGNES)},
+           "la base peut s'être arrêtée entre deux révisions : lire `migrer current` "
+           "avant toute relance")
 
 
 def _une_revision(etat: EtatRegistre, versions: list[str]) -> str:
@@ -248,7 +266,8 @@ def main(argv: Sequence[str] = (),
             depuis = versions[0]
             print(message, file=sys.stderr)
             print(f"migrations : on joue `migrer upgrade head` depuis l'arbre du tag "
-                  f"({depuis} → {tete})")
+                  f"({depuis} → {tete}), après `maintenance copies-du-coffre` (le coffre "
+                  "des connecteurs renommés, que le démarrage copierait trop tard)")
             print(f"migrations : un index CONCURRENTLY se construit jusqu'à "
                   f"{PLAFOND_INDEX_LIGNES:_} lignes (défaut "
                   f"{index_concurrent.CONSTRUCTION_MAX_LIGNES:_}) ; au-delà, "

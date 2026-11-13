@@ -259,6 +259,7 @@ CLASSEMENT: dict[str, Table] = {
     # où l'org est prévenue qu'un agent ne fonctionne plus (canal ou personne Slack) :
     # un réglage de l'org, il part avec elle.
     "agent_alert_settings": possedee(ParOrg()),
+    "agent_health_settings": possedee(ParOrg()),
     # les pages et tableaux épinglés dans l'org : partagés (`owner_sub` NULL) ou
     # PERSONNELS d'un membre (`owner_sub` = son compte, la ligne est celle d'UN compte
     # dans l'org) ; `added_by` = l'auteur du geste, pas un compte. Ils partent avec elle.
@@ -272,6 +273,9 @@ CLASSEMENT: dict[str, Table] = {
     "agent_episodes": exclue(ParOrg(), "état d'exploitation de la PLATEFORME sur les agents "
                              "de l'org (pannes, relances, diagnostics d'opérateur) : la "
                              "boucle le reconstruit sur la cible à partir de `runner_jobs`"),
+    "agent_causes": instance("catalogue de la PLATEFORME des causes de panne d'agent, une "
+                             "par empreinte de motif, sans org ni propriétaire : la boucle "
+                             "le remplit sur la cible, un opérateur y redécide"),
     "access_requests": possedee(ParOrg()),
     "copilot_threads": exclue(ParOrg(), "conversation de l'agent intégré : un état de travail éphémère (le journal des appels, lui, part)"),
     "copilot_undos": exclue(ParSub(), "annulation offerte, valable une heure"),

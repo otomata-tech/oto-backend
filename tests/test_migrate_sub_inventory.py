@@ -458,6 +458,8 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("user_api_tokens", "scopes"), ("user_datastores", "schema"),
         # Le profil de la personne : il suit SA ligne (étape 2), rien à réécrire dedans.
         ("user_account_profile", "profile"),
+        # La copie d'une cause au client : des phrases, jamais un compte.
+        ("agent_causes", "copie"),
     }
     # Journaux et instantanés : une trace historique garde ce qui a été dit au moment
     # du geste — on ne la réécrit pas (même règle que `connector_loan_events.target`).
@@ -469,6 +471,8 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("access_shadow_l7", "sample"), ("credential_disparitions", "agents"),
         # Qui a soigné un agent (`medecin`, ou le sub de l'opérateur) : un journal du geste.
         ("agent_episodes", "reparations"),
+        # Qui a décidé d'une cause du catalogue (le sub de l'opérateur) : même règle.
+        ("agent_causes", "gestes"),
         ("portee_elargissements", "destinataires"),
         # Un transfert de solde entre deux comptes fusionnés nomme les deux payeurs.
         ("credit_movements", "meta"),

@@ -239,7 +239,7 @@ fireflies_org	analytics apps audit_events contacts rule_executions	3f5dcd2c0f5d2
 fireflies_transcript	confirm_upload create_upload_url delete get list share unshare update_channel update_privacy update_title upload	cc3edc4bf10b57fd
 fireflies_user	get groups list set_role	77b0d1d3676c9574
 folk_group	add_member create create_custom_field custom_fields get_custom_field list members remove_member update update_custom_field update_member	bf6723bd67fd7e3b
-folk_record	add_to_group create delete get mark_done mark_todo search update	b2fd3a16da240901
+folk_record	add_to_group create delete get mark_done mark_todo search update	58847d3e5bbed823
 folk_user	get list	02d1b68b122ff1cc
 folk_webhook	create list update	e24f68442bee5678
 foncier_beges	-	bad8103ac158d1db

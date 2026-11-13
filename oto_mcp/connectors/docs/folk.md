@@ -12,6 +12,7 @@ manage your folk crm (people/contacts, companies, deals or any other custom obje
 - "add jean dupont, cto at acme" → `folk_record(op="create")` (entity `person`)
 - "log a call on this contact" → `folk_record(op="create")` (entity `interaction`, type/title/content)
   - ⚠️ `date_time` is **required** by folk even though it reads as optional; if omitted, it defaults to now. Until 27/08/2026 omitting it returned an opaque 422
+  - ⚠️ folk only takes date-times in **UTC with a trailing `Z`** (`2026-11-13T09:00:00Z`) — interaction `date_time`/`dateTime` as well as a task's `completedAt` on `mark_done`; any other ISO 8601 form is a 422 `Invalid datetime`. A value with an offset (`+02:00`) is converted to UTC for you; one with no timezone is refused before the call
 - "what did we say to each other with dupont?" → `folk_record(op="search", entity="interaction", entity_id="per_…")`: emails, calendar events, whatsapp messages and logged interactions that folk keeps on this record, then `op="get"` (with the same `entity_id`) for the full body of a single one
   - ⚠️ **correction**: this document long claimed that folk only told you *when* you had talked to someone, never *what* was said. That was false — it was true of the connector, which only exposed interaction creation, not of folk, whose read endpoints already existed (in open beta)
   - an interaction is not addressable on its own: `entity_id` (the person/company that carries it) is **mandatory** for search, read, update and delete

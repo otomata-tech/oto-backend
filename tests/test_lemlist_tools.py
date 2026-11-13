@@ -640,6 +640,71 @@ def test_campaign_stats_reads_the_real_counters_over_the_whole_life():
         assert out["nbLeads"] == 12
 
 
+# Signal d'usage 1744 : une fenêtre d'UN jour (start_date = end_date, dates seules)
+# partait telle quelle chez lemlist, qui lit `2026-11-12` comme minuit : une fenêtre
+# de largeur nulle, tous les compteurs à 0 alors que `nbLeads` (qui ne dépend pas de
+# la fenêtre) restait juste. Une date seule désigne désormais le jour UTC entier.
+
+def test_window_date_only_bounds_cover_the_whole_utc_day():
+    from oto_mcp.tools.lemlist import _default_window
+
+    assert _default_window("2026-11-12", "2026-11-12") == (
+        "2026-11-12T00:00:00.000Z", "2026-11-12T23:59:59.999Z")
+    # Plusieurs jours : le dernier est compris, il n'est plus perdu.
+    assert _default_window("2026-11-01", "2026-11-30") == (
+        "2026-11-01T00:00:00.000Z", "2026-11-30T23:59:59.999Z")
+
+
+def test_window_instants_pass_through_untouched():
+    from oto_mcp.tools.lemlist import _default_window
+
+    start, end = "2026-11-11T23:00:00.000Z", "2026-11-12T22:59:59.999Z"
+    assert _default_window(start, end) == (start, end)
+    assert _default_window("2026-11-12T08:00:00+01:00", "2026-11-12T18:00") == (
+        "2026-11-12T08:00:00+01:00", "2026-11-12T18:00")
+
+
+def test_window_defaults_still_mean_the_whole_life():
+    from oto_mcp.tools.lemlist import STATS_EPOCH, _default_window
+
+    start, end = _default_window(None, None)
+    assert start == STATS_EPOCH
+    assert end.endswith("Z") and "T" in end
+    # Une seule borne donnée : l'autre garde son défaut.
+    start, end = _default_window("2026-11-12", None)
+    assert start == "2026-11-12T00:00:00.000Z" and end.endswith("Z")
+    assert _default_window(None, "2026-11-12")[1] == "2026-11-12T23:59:59.999Z"
+
+
+def test_batch_stats_same_day_window_reaches_lemlist_as_the_whole_day():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_batch_campaign_stats.return_value = {"results": []}
+        tool = _tool("lemlist_campaign")
+
+        tool.fn(op="batch_stats", campaign_ids=["cam_1", "cam_2"],
+                start_date="2026-11-12", end_date="2026-11-12")
+
+        kwargs = inst.get_batch_campaign_stats.call_args.kwargs
+        assert kwargs["start_date"] == "2026-11-12T00:00:00.000Z"
+        assert kwargs["end_date"] == "2026-11-12T23:59:59.999Z"
+
+
+def test_campaign_stats_same_day_window_reaches_lemlist_as_the_whole_day():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_campaign_stats_v2.return_value = {"nbLeads": 12}
+        tool = _tool("lemlist_get_campaign_stats")
+
+        tool.fn(campaign_id="cam_1", start_date="2026-11-12", end_date="2026-11-12")
+
+        kwargs = inst.get_campaign_stats_v2.call_args.kwargs
+        assert kwargs["start_date"] == "2026-11-12T00:00:00.000Z"
+        assert kwargs["end_date"] == "2026-11-12T23:59:59.999Z"
+
+
 def test_campaign_stats_drops_the_per_step_detail_and_names_it():
     key, cls = _with_fake_client()
     with key, cls as client_cls:

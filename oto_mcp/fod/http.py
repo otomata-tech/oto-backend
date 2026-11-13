@@ -204,3 +204,20 @@ def get(path: str, params: Optional[dict] = None, headers: Optional[dict] = None
 def post(path: str, body: Optional[dict] = None, headers: Optional[dict] = None,
          timeout: Optional[float] = None) -> Any:
     return _request("POST", path, json_body=body, headers=headers, timeout=timeout)
+
+
+def etat(method: str, path: str, codes: tuple[int, ...]) -> httpx.Response:
+    """Un appel dont certains codes non-2xx sont des ÉTATS de la ressource, pas des
+    pannes (ex. l'ingestion d'un règlement : 404 « document non publié », 503 « une autre
+    ingestion occupe la box »). Rend la réponse brute pour ces `codes`, lève comme
+    `_raise_for` (sans adresse interne) pour les autres. **Aucune reprise** : un 503
+    qui dit un état se nomme à l'appelant, il ne s'absorbe pas."""
+    try:
+        r = _c().request(method, path)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            f"{_SERVICE} n'a pas répondu en {_TIMEOUT.read:.0f} s ({path}) — "
+            "RÉESSAYABLE plus tard.") from exc
+    if r.status_code not in codes:
+        _raise_for(r)
+    return r

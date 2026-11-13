@@ -961,7 +961,7 @@ urba_iris	-	e5de9e79f2da6956
 urba_lieu	-	3ff47c2e4fa372a0
 urba_qpv	-	258ae38fe9255d5d
 urba_qpv_proximite	-	0b1a0f3b0afbd338
-urba_reglement	-	fdd5049f9916503b
+urba_reglement	-	f04a60d81a77f10b
 urba_risques	-	258ae38fe9255d5d
 urba_socio	-	258ae38fe9255d5d
 urba_zonage	-	53239cafb65230b5

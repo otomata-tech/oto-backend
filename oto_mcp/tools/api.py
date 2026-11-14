@@ -106,7 +106,7 @@ def register(mcp: FastMCP) -> None:
                 message="`path` must start with / (path relative to base_url).",
             ))
         rc = _resolve()
-        refuse_write(rc.fields if rc else {}, "POST")
+        refuse_write(rc.fields, "POST")
         client = _client_of(rc)
         try:
             return client.post(path, json=body, params=params)
@@ -143,13 +143,19 @@ def register(mcp: FastMCP) -> None:
 
 def _resolve():
     """The vault row of the call's `api` credential (`ResolvedCredential`: its fields
-    AND the row that holds them — the session mode keeps its jar there), or None.
-    Resolved once per call, by the cascade (`_account`, project pin, team, org)."""
-    try:
-        return access.resolve_credential("api", want="byo")
-    # noqa: SILENT — same declared debt as _client() (#424, verdict C)
-    except Exception:
-        return None
+    AND the row that holds them — the session mode keeps its jar there). Resolved once
+    per call, by the cascade (`_account`, project pin, team, org).
+
+    The resolution's refusals go up AS THEY ARE: several keys at one tier without a
+    default (`CompteAmbigu`, which names the accounts), a named account found nowhere,
+    no key at all. Swallowed into "not configured", they sent an agent holding two
+    personal keys to fill in a card that was already filled in."""
+    if current_user_sub_from_token() is None:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message="`api` connector unavailable in local stdio (org credential required).",
+        ))
+    return access.resolve_credential("api", want="byo")
 
 
 def _require_doc_path(fields: dict) -> str:
@@ -160,7 +166,7 @@ def _require_doc_path(fields: dict) -> str:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
-                "http connector: no doc route configured for your org — "
+                "`api` connector: no doc route configured for this Custom API — "
                 "set `doc_path` on the dashboard's Custom API card (e.g. /openapi.json)."
             ),
         ))
@@ -168,10 +174,11 @@ def _require_doc_path(fields: dict) -> str:
 
 
 def _client() -> HttpConnectorClient:
-    """Resolve the org's `api` credential and instantiate the oto-core client.
+    """Resolve the call's `api` credential and instantiate the oto-core client.
 
-    Raises an actionable McpError if the org has not configured its connector or if
-    the config is invalid (non-http(s) scheme, unknown mode, missing mode field).
+    Raises an actionable McpError if no credential resolves, if several do (name one
+    with `_account`), or if the config is invalid (non-http(s) scheme, unknown mode,
+    missing mode field).
 
     ⚠️ This docstring once announced a "non-public host anti-SSRF" guard that did not
     exist (fixed on 2026-08-27, oto-backend#449), then claimed the absence of a
@@ -186,14 +193,6 @@ def _client() -> HttpConnectorClient:
 def _client_of(rc) -> HttpConnectorClient:
     """The client of a resolved row (`_resolve()`), refusals translated — `_client()`
     and the tools that need the row's fields too."""
-    sub = current_user_sub_from_token()
-    if sub is None:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message="http connector unavailable in local stdio (org credential required).",
-        ))
-    if rc is None:
-        return client_from_fields({})
     return client_from_fields(rc.fields, row=(rc.entity_type, str(rc.entity_id),
                                               rc.account or ""))
 
@@ -234,7 +233,7 @@ def client_for(fields: dict, headers: dict | None = None, *,
     base_url = (fields.get("base_url") or "").strip()
     mode = (fields.get("auth_mode") or "").strip()
     if not base_url or not mode:
-        raise ValueError("http connector not configured: `base_url` and `auth_mode` "
+        raise ValueError("`api` connector not configured: `base_url` and `auth_mode` "
                          "are required on the Custom API card")
     egress.check_url(base_url, connector="api", field="base_url")
     token_url = (fields.get("token_url") or "").strip()
@@ -262,8 +261,9 @@ def client_from_fields(f: dict, headers: dict | None = None, *,
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
-                "http connector not configured for your org: set `base_url` + "
-                "`auth_mode` (+ the mode's secret) on the dashboard's Custom API card."
+                "`api` connector: this Custom API card has no `base_url` or "
+                "`auth_mode` — set them (+ the mode's secret) on the dashboard's "
+                "Custom API card."
             ),
         ))
     try:
@@ -271,7 +271,7 @@ def client_from_fields(f: dict, headers: dict | None = None, *,
     except egress.EgressRefused as e:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
     except ValueError as e:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message=f"http connector: {e}"))
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=f"`api` connector: {e}"))
 
 
 # A non-JSON success body, returned as text up to this size.

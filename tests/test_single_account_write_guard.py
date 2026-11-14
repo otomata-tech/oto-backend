@@ -230,7 +230,9 @@ def test_l_annonce_STATIQUE_de_l_axe_compte_n_est_plus_la_cardinalite():
     statiques = sorted(c.name for c in providers._REGISTRY_LIST if c.account_axis_static)
     # + microsoft et ses services (15/10/2026) : un compte prêté ne sert que nommé par
     # `_account`, que l'annonce dynamique ne montrait jamais à l'emprunteuse.
-    assert statiques == ["bigquery", "browser", "calendar", "chat", "drive", "entra", "folk", "gmail",
+    # + api (13/11/2026) : chaque compte de la carte est une API distincte, choisie par
+    # `_account` à chaque appel, comme le disent ses descriptions.
+    assert statiques == ["api", "bigquery", "browser", "calendar", "chat", "drive", "entra", "folk", "gmail",
                          "google", "google_ads", "microsoft", "onenote", "outlook",
                          "outlook_calendar", "powerbi", "sharepoint", "sheets", "tasks", "teams",
                          "zoho"]

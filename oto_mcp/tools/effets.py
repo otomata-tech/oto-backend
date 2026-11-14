@@ -110,8 +110,15 @@ def _juge_http_act(op: Optional[str], args: dict) -> Optional[str]:
     return None
 
 
+def _juge_urba_reglement(op: Optional[str], args: dict) -> Optional[str]:
+    """`ingest=true` launches the service-side ingestion of a règlement into the shared
+    cache (like `ubersuggest_site_audit` `start`): it writes. Otherwise it reads."""
+    return "ecrire" if args.get("ingest") else None
+
+
 JUGES: dict[str, Juge] = {
     "api_act": _juge_http_act,
+    "urba_reglement": _juge_urba_reglement,
 }
 #: The judges that READ THE DATABASE, by tool and op: `effet()` on such a call is
 #: synchronous I/O — from an `async def`, run it off the event loop

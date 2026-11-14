@@ -28,11 +28,11 @@ vivante appelée à disparaître au retrait des alias.
   `identity_ref`). Ici et non au démarrage : l'id de l'instance neuve se lit en base
   (la copie du coffre l'a fait naître), et déplacer ces désignations tant que la prod
   sert encore l'ancien code lui retirerait ses épingles. Une instance `http` désignée
-  sans copie `api` (code neuf jamais démarré, ligne indéchiffrable) arrête la révision.
+  sans copie `api` (copie jamais jouée, ligne indéchiffrable) arrête la révision.
 
 **Ce qu'elle ne touche pas.** Le coffre (`connector_credentials`) et ses instances : l'AAD
 du chiffrement contient le nom du connecteur, la copie exige la clé applicative — c'est
-une étape de démarrage, `api_operations.copier_depuis_http`, COPIE re-chiffrée qui laisse
+une étape du code, `api_operations.copier_depuis_http`, COPIE re-chiffrée qui laisse
 les lignes `http` en place (base partagée par la prod et la préprod) et recopie la
 définition de chaque instance (opérations, en-têtes, variables). Ni l'histoire (journal des
 appels, travaux terminés, journaux de partage), ni le texte libre des tenants (procédures,
@@ -47,8 +47,11 @@ table et le nombre de clés en conflit — jamais une ligne écrasée.
 **Verrous.** `UPDATE`/`DELETE` ciblés sur les lignes qui nomment l'ancien nom ;
 `lock_timeout` 5 s.
 
-**Ordre avec le code : APRÈS le déploiement** (`migrer upgrade head` après le tag). Prod et
-préprod partagent la base : la jouer au tag de prod.
+**Ordre avec le code : APRÈS la copie du coffre.** Le démarrage du code neuf la joue ; une
+base qui migre AVANT ce démarrage (la porte d'une instance cible) la reçoit de
+`oto-mcp maintenance copies-du-coffre`, que la porte joue avant `migrer upgrade head`
+(`deploy/cible/migrations_a_jour.py`). Notre base, partagée par la prod et la préprod : la
+jouer au tag de prod (`migrer upgrade head` après le tag).
 
 Retour arrière : exact pour ce que la révision a réécrit (`api` → `http`, mêmes règles de
 conflit) ; les copies du coffre sous `api` restent, inertes pour l'ancien code.
@@ -88,6 +91,13 @@ TABLES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 
 class ConflitDeRenommage(RuntimeError):
     """Une ligne existe sous les deux noms, avec un sens différent."""
+
+
+#: Ce que dit une désignation sans copie : le geste qui la fait naître.
+_GESTE = ("jouer `oto-mcp maintenance copies-du-coffre` (sous le lanceur de l'instance) "
+          "puis rejouer la révision ; si la copie compte la ligne `unreadable`, la ligne "
+          "du coffre est indéchiffrable : retirer la désignation à la main. La transaction "
+          "de la révision est annulée : rien n'est écrit.")
 
 
 def _revision_des_messageries():
@@ -184,9 +194,7 @@ def _ref(ref, de: str, vers: str, apparies: dict[int, int], orphelines: set[int]
     if r.level == "inst":
         if r.instance_id in orphelines:
             raise ConflitDeRenommage(
-                f"`{ref}` désigne une instance `{de}` sans copie `{vers}` : démarrer le code "
-                "neuf (copie du coffre au démarrage) avant de jouer la révision, ou "
-                "retirer la désignation à la main.")
+                f"`{ref}` désigne une instance `{de}` sans copie `{vers}` — {_GESTE}")
         return instance_refs.make_instance_ref(apparies.get(r.instance_id, r.instance_id))
     if r.connector != de:
         return ref
@@ -207,7 +215,7 @@ def repointer_les_references(conn, de: str, vers: str) -> None:
         if iid in orphelines:
             raise ConflitDeRenommage(
                 f"connector_account_rules : la règle {rid} vise l'instance `{de}` {iid}, sans "
-                f"copie `{vers}` — démarrer le code neuf avant de jouer la révision.")
+                f"copie `{vers}` — {_GESTE}")
         deja = conn.exec_driver_sql(
             "SELECT level, services FROM connector_account_rules WHERE instance_id = %(n)s "
             "AND subject_user IS NOT DISTINCT FROM %(su)s "

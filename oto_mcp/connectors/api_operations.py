@@ -46,14 +46,17 @@ ANCIEN_NOM = "http"
 
 
 def copier_depuis_http() -> dict:
-    """Boot step: COPIES the vault rows of the old name to `api`, each new instance
+    """Boot step, and `oto-mcp maintenance copies-du-coffre` (a target's gate plays it
+    BEFORE migrating, `maintenance.copies_declarees`): COPIES the vault rows of the old
+    name to `api`, each new instance
     keeping the old row's sharing and taking its instance's definition
     (`credentials_store.copy_connector_rows`, `renamed=True`). Additive — the old rows
     stay: prod and preprod share the base, and the code served before the tag still
     reads `http`; removing them is a later lot (`oto-mcp maintenance orphelins`).
     Idempotent: a copied row is marked. The rest — selections, kits, tool lists, and
     what designates an instance by its id (account rules, `grants`, project links) —
-    moves in the data revision `20261112_1200_connecteur_api`, played after the tag."""
+    moves in the data revision `20261112_1200_connecteur_api`, which raises if this copy
+    has not been played."""
     bilan = credentials_store.copy_connector_rows(ANCIEN_NOM, CONNECTOR, renamed=True)
     if any(bilan.values()):
         logger.info("api: vault copied from %s — %s", ANCIEN_NOM, bilan)

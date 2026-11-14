@@ -146,10 +146,13 @@ class CallsInput(BaseModel):
     min_duration_ms: Optional[int] = None
     error_contains: Optional[str] = None
 
+    # Le plafond du STORE (`db.CALLS_LIMITE_MAX`), pas un second, plus bas : la
+    # lentille d'org passe par ce modèle, et un 200 posé ici écrêtait en silence le
+    # `limit` qu'elle annonçait (usage signal 1553).
     @field_validator("limit")
     @classmethod
     def _cap_limit(cls, v):
-        return cap_limit(v, 200)
+        return cap_limit(v, db.CALLS_LIMITE_MAX)
 
 
 class CallInput(BaseModel):
@@ -281,7 +284,7 @@ def _horizon(calls: list, inp: CallsInput) -> tuple[datetime, str]:
     return now - timedelta(days=FLOOR_WINDOW_DAYS), f"sur {FLOOR_WINDOW_DAYS} j"
 
 
-def calls_with_scope(inp: CallsInput) -> dict:
+def calls_with_scope(inp: CallsInput, *, before: Optional[tuple[str, int]] = None) -> dict:
     """La page du journal et — quand elle est scopée à une org — ce que ce scope
     laisse dehors (#630).
 
@@ -292,13 +295,19 @@ def calls_with_scope(inp: CallsInput) -> dict:
     à zéro sur un refus que le déroulé montrait. La vue reste exacte dans son
     périmètre ; elle DIT désormais le périmètre, et compte ce qu'il exclut sous les
     mêmes filtres — même quand c'est 0, pour que le zéro se lise comme « regardé ».
-    Sans scope d'org, rien n'est dehors : pas de champ."""
+    Sans scope d'org, rien n'est dehors : pas de champ.
+
+    `before` = la position où reprendre (keyset, cf. `db.list_tool_calls_page`) ; la
+    position de la suite revient sous `_next` — `None` quand la page est la dernière —
+    que chaque lentille emballe dans SON curseur ou retire."""
     filtres = dict(sub=_resolve_sub(inp.sub), tool_name=inp.tool, errors_only=inp.errors,
                    since_days=inp.days, run_id=inp.run_id, session_id=inp.session_id,
                    min_duration_ms=inp.min_duration_ms, error_contains=inp.error_contains)
-    calls = db.list_tool_calls(limit=inp.limit, org_id=inp.org_id, **filtres)
+    page = db.list_tool_calls_page(limit=inp.limit, org_id=inp.org_id, before=before,
+                                   **filtres)
+    calls = page["calls"]
     if inp.org_id is None:
-        return {"calls": calls}
+        return {"calls": calls, "_next": page["next"]}
     since, fenetre = _horizon(calls, inp)
     hors = db.count_calls_of_org_runs_elsewhere(inp.org_id, since=since, **filtres)
     out = {
@@ -307,6 +316,7 @@ def calls_with_scope(inp: CallsInput) -> dict:
                   "d'un run de cette org résolu sous une autre org (axe `_org` absent ⇒ "
                   "org maison de l'appelant) n'y figure pas ; `op=run` le montre"),
         "hors_scope": hors,
+        "_next": page["next"],
     }
     if hors:
         out["hors_scope_hint"] = (
@@ -317,7 +327,9 @@ def calls_with_scope(inp: CallsInput) -> dict:
 
 
 def _calls(ctx: ResolvedCtx, inp: CallsInput) -> dict:
-    return calls_with_scope(inp)
+    out = calls_with_scope(inp)
+    out.pop("_next", None)       # la console plateforme ne pagine pas (pas de curseur)
+    return out
 
 
 def _rest_calls(ctx: ResolvedCtx, inp: RestCallsInput) -> dict:

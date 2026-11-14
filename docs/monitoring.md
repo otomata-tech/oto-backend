@@ -509,6 +509,34 @@ plateforme avec `org_id` posé, **plus une** qui n'existe qu'à cet étage, et *
 | `export` | rebranche `org.audit_log.export` (#67), même autz, même scope. **Dit sa complétude** (`total`/`truncated`/`next_cursor`, #770) — voir plus bas |
 | ~~`rest`~~ · ~~`funnel`~~ | ne descendent pas : télémétrie de surface `/api/*` et comptes de toute la base = santé d'infra, pas usage d'org. `adoption` répond à la question du funnel à l'échelle d'une équipe |
 
+**`calls` et `runs` se paginent** (usage signal 1553, 13/11/2026). Un agent de
+supervision ne voyait que les ~2 dernières heures d'une org : `op=runs` rendait 100 runs
+quelle que soit la `limit` (l'Input écrêtait à 100, le store à 500), `sub`, `errors` et
+`days` n'étaient pas transmis — écartés sans un mot, la console d'org n'ayant pas la garde
+« champ muet » de la console plateforme — et aucune des deux listes n'avait de curseur.
+Désormais, sur les deux faces (`op=` et `GET …/monitoring/{calls,runs}`, même Input) :
+
+| liste | `limit` (défaut / plafond, écrêté) | filtres | suite |
+|---|---|---|---|
+| `calls` | 200 / 1000 (`db.CALLS_LIMITE_MAX`) | `sub`, `tool`, `errors`, `days`, `run_id`, `session_id`, `min_duration_ms`, `error_contains` | `next_cursor` |
+| `runs` | 100 / 500 (`db.RUNS_LIMITE_MAX`) | `sub`, `days` (sur l'OUVERTURE), `errors` (clos `failed`/`blocked`/`partial`) | `next_cursor`, `scanned` |
+
+`next_cursor` est opaque : la position `(horodatage µs, id)` de la dernière ligne
+examinée — keyset sur `(created_at, id)`, l'ordre même de la page et des index —, la
+lentille et l'org, **jamais un filtre** (il traverse des URL). On le repasse en `cursor`
+avec les MÊMES filtres jusqu'à `null`. Lentille et org sont vérifiées : un curseur pris
+à l'autre liste ou à une autre org rend `400 invalid_cursor`, comme un curseur abîmé.
+⚠️ **`errors=true` sur `runs` filtre la page, pas la portée** : l'issue vit dans la
+clôture, que seule la reconstruction lit ; la pousser dans le choix des ouvertures
+ferait sonder chaque clôture de la portée — le parcours qu'infra#9 a retiré. La page
+examine `limit` ouvertures (`scanned`) et n'en rend que les échecs : elle peut être vide
+avec un `next_cursor` non nul, et « aucun échec » ne se lit qu'au `next_cursor` nul.
+Un run jamais clos n'est pas un échec ici (`outcome` nul). La console plateforme garde
+ses listes sans curseur ; le modèle partagé `monitoring.CallsInput` écrête désormais au
+plafond du store (1000, il écrêtait à 200 — c'est lui qui bridait la lentille d'org),
+ce que `GET /api/admin/monitoring/calls` hérite ; `oto_admin_monitoring`, lui, reste
+écrêté à 200 par sa propre console. Testé contre PostgreSQL par `tests/test_org_monitoring_pagination.py`.
+
 **Gardes cross-org à ne pas perdre** : `call_id` est un BIGSERIAL donc devinable →
 `op=call` compare `row.org_id` et rend le **même 404** qu'un id inexistant ; `op=run`
 filtre en SQL puis 404 sur timeline vide. Testé par `tests/test_org_monitoring.py` — un
@@ -679,7 +707,10 @@ Le choix de page lui-même est servi par trois index partiels des ouvertures
 l'ordre de la page : sans eux, il parcourait le journal à rebours (5 s pour la page
 plateforme, plus de 15 s pour la plus grosse org, mesurés le 09/10). D'où des égalités
 dans la portée (`org_id = %s` ou `IS NULL`), jamais `IS NOT DISTINCT FROM`, que l'index
-ne sait pas servir dans l'ordre.
+ne sait pas servir dans l'ordre. Les filtres de la lentille d'org (`sub`, `days`, la
+position du curseur) s'y posent de même, sur l'ouverture `d` : égalité sur `sub`, bornes
+sur `created_at` et `(created_at, id)`, que l'index d'org ou de compte × org sert dans
+son ordre.
 
 **L'entonnoir lit une seule fenêtre** : « REST seul » (`rest_only`) compte les comptes
 venus en REST SANS appel d'outil sur la fenêtre `days`, comme `active` et `blocked` —

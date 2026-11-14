@@ -547,3 +547,207 @@ def test_ops_refuse_foreign_arguments(client):
         _call("mailpool_spam_checks", {"op": "get", "spam_check_id": 1, "mailbox_id": 2})
     with pytest.raises(Exception, match="`mailbox_id` is required"):
         _call("mailpool_mailboxes", {"op": "get"})
+
+
+# --- mailbox creation ---------------------------------------------------------
+
+NEW = {"email": "anna@example-outreach.test", "firstName": "Anna", "lastName": "Lee",
+       "type": "google", "forwardTo": "anna@example.com"}
+PLAN = {"mailboxes": [NEW], "slots": {"google": {"free": 3, "used_by_this": 1, "left_after": 2}},
+        "domains": {"example-outreach.test": {"id": 1201, "type": "unassigned",
+                                              "becomes": "google"}}}
+
+
+def test_create_is_a_dry_run_by_default(client):
+    client.plan_mailboxes.return_value = PLAN
+    out = _call("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW]})
+    assert out["dry_run"] is True and out["slots"] == PLAN["slots"]
+    client.plan_mailboxes.assert_called_once_with([NEW])
+    client.create_mailboxes.assert_not_called()
+
+
+def test_create_applies_and_serves_no_credential(client):
+    client.create_mailboxes.return_value = {"created": [MAILBOX], "plan": PLAN}
+    out = _call("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW], "dry_run": False})
+    client.create_mailboxes.assert_called_once_with([NEW])
+    assert out["created"][0]["email"] == MAILBOX["email"]
+    assert not [k for k in _keys(out) if SECRET.search(k)]
+    assert "domainOwner" not in out["created"][0]["domain"]
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_create_refusal_is_named(client, dry_run):
+    from oto.tools.mailpool import MailpoolCreateRefused
+    err = MailpoolCreateRefused(["2 google mailbox(es) asked, 1 google slot(s) free"])
+    client.plan_mailboxes.side_effect = err
+    client.create_mailboxes.side_effect = err
+    e = _err("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW], "dry_run": dry_run})
+    assert _reason(e) == "create_refused" and "slot" in e.message
+
+
+@pytest.mark.parametrize("exc", ["timeout", "5xx"])
+def test_create_without_answer_is_an_unknown_outcome(client, exc):
+    import requests
+    from oto.tools.common.errors import UpstreamHTTPError
+    client.create_mailboxes.side_effect = (
+        requests.Timeout() if exc == "timeout"
+        else UpstreamHTTPError(503, "down", service="mailpool"))
+    e = _err("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW], "dry_run": False})
+    assert _reason(e) == "mailbox_outcome_unknown"
+
+
+def test_create_accepted_without_mailboxes_is_not_masked():
+    """The library (mailpool 1.1.0) refuses to read an accepted create whose answer lists
+    no mailbox as "none created": the real client raises, and the tool says the mailboxes
+    may exist — never a success with an empty `created`."""
+    from oto.tools.mailpool.client import MailpoolClient
+
+    real = MailpoolClient(api_key="mp_k")
+    real.get_subscription_slots = lambda: {"slots": {"google": 4}, "mailboxes": {}}
+    real.list_domains = lambda **kw: {"data": [dict(DOMAIN, type="unassigned")], "total": 1}
+    real.list_mailboxes = lambda **kw: {"data": [], "total": 0}
+    sent = []
+
+    def request(method, path, **kw):
+        sent.append((method, path))
+        return {"emails": None}
+    real._request = request
+    with patch("oto.tools.mailpool.client.MailpoolClient", return_value=real):
+        e = _err("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW], "dry_run": False})
+    assert sent == [("POST", "/mailboxes")]
+    assert _reason(e) == "mailbox_outcome_unknown"
+    assert "lists none" in e.message and "example-outreach.test" in e.message
+    assert "created" not in (e.data or {})
+
+
+def test_second_domain_accepted_without_mailboxes_is_partial_by_the_real_client():
+    """mailpool 1.1.1: an accepted create whose answer lists no mailbox, AFTER a first
+    domain landed, is `MailpoolCreatePartial` in the library. The tool serves it as the
+    named `partially_applied`: the mailboxes created are returned, the accepted domain
+    comes first in `not_done` and is named `uncertain` — never a success, nothing lost."""
+    from oto.tools.mailpool.client import MailpoolClient
+
+    other = dict(DOMAIN, id=1202, domain="other-outreach.test", type="unassigned")
+    second = dict(NEW, email="ben@other-outreach.test", firstName="Ben")
+    landed = dict(MAILBOX, type="google", domain=dict(MAILBOX["domain"], type="google"))
+    real = MailpoolClient(api_key="mp_k")
+    real.get_subscription_slots = lambda: {"slots": {"google": 4}, "mailboxes": {}}
+    real.list_domains = lambda **kw: {"data": [dict(DOMAIN, type="unassigned"), other],
+                                      "total": 2}
+    real.list_mailboxes = lambda **kw: {"data": [], "total": 0}
+    answers = [{"emails": [landed]}, {"emails": None}]
+    sent = []
+
+    def request(method, path, **kw):
+        sent.append((method, path, kw["json"][0]["email"]))
+        return answers.pop(0)
+    real._request = request
+    with patch("oto.tools.mailpool.client.MailpoolClient", return_value=real):
+        e = _err("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW, second],
+                                        "dry_run": False})
+    assert [m[2] for m in sent] == [NEW["email"], second["email"]]
+    assert _reason(e) == "partially_applied"
+    assert e.data["done"] == ["example-outreach.test"]
+    assert e.data["not_done"][0] == e.data["uncertain"] == "other-outreach.test"
+    assert [m["email"] for m in e.data["created"]] == [MAILBOX["email"]]
+    assert "other-outreach.test" in e.message and "may exist" in e.message
+    assert not [k for k in _keys(e.data) if SECRET.search(k)]
+
+
+@pytest.mark.parametrize("args", [
+    {"op": "create"},
+    {"op": "create", "mailboxes": [NEW], "mailbox_id": 1},
+    {"op": "list", "mailboxes": [NEW]},
+    {"op": "create", "mailboxes": [dict(NEW, type="private")]},
+    {"op": "create", "mailboxes": [dict(NEW, password="x")]},
+])
+def test_create_arguments_are_checked(client, args):
+    with pytest.raises(Exception):
+        _call("mailpool_mailboxes", args)
+    client.create_mailboxes.assert_not_called()
+
+
+def test_create_preview_errors_are_tool_errors(client):
+    import requests
+    client.plan_mailboxes.side_effect = requests.Timeout()
+    assert _reason(_err("mailpool_mailboxes",
+                        {"op": "create", "mailboxes": [NEW]})) == "timeout"
+    client.plan_mailboxes.side_effect = ValueError("`mailboxes` is empty.")
+    assert _reason(_err("mailpool_mailboxes",
+                        {"op": "create", "mailboxes": []})) == "invalid_argument"
+
+
+def test_create_partial_lists_what_exists(client):
+    from oto.tools.mailpool import MailpoolCreatePartial
+    client.create_mailboxes.side_effect = MailpoolCreatePartial(
+        [MAILBOX], ["example-outreach.test"], ["other-outreach.test"], RuntimeError("down"))
+    e = _err("mailpool_mailboxes", {"op": "create", "mailboxes": [NEW], "dry_run": False})
+    assert _reason(e) == "partially_applied"
+    assert e.data["done"] == ["example-outreach.test"]
+    assert e.data["uncertain"] == "other-outreach.test"
+    assert e.data["created"][0]["email"] == MAILBOX["email"]
+    assert not [k for k in _keys(e.data) if SECRET.search(k)]
+
+
+# --- exports --------------------------------------------------------------------
+
+EXPORT_PLAN = {"platform": "lemlist", "mailboxes": [{"id": 5301, "email": MAILBOX["email"],
+                                                     "type": "shared"}]}
+BATCH = {"id": 42, "status": "in_progress", "platform": "lemlist",
+         "exports": [{"id": 1, "mailboxId": 5301, "status": "in_progress"}], "errors": []}
+
+
+def test_export_is_a_dry_run_by_default(client):
+    client.plan_export.return_value = EXPORT_PLAN
+    out = _call("mailpool_mailboxes", {"op": "export", "platform": "lemlist",
+                                       "mailbox_ids": [5301]})
+    assert out["dry_run"] is True and out["mailboxes"] == EXPORT_PLAN["mailboxes"]
+    client.export_mailboxes.assert_not_called()
+
+
+def test_export_applies_and_returns_the_batch(client):
+    client.plan_export.return_value = EXPORT_PLAN
+    client.export_mailboxes.return_value = BATCH
+    out = _call("mailpool_mailboxes", {"op": "export", "platform": "lemlist",
+                                       "mailbox_ids": [5301], "dry_run": False})
+    client.export_mailboxes.assert_called_once_with("lemlist", [5301])
+    assert out["batch"]["id"] == 42
+
+
+def test_export_refusal_and_unknown_outcome(client):
+    import requests
+    from oto.tools.mailpool import MailpoolExportRefused
+    client.plan_export.side_effect = MailpoolExportRefused(["no lemlist login is saved"])
+    e = _err("mailpool_mailboxes", {"op": "export", "platform": "lemlist", "mailbox_ids": [1]})
+    assert _reason(e) == "export_refused"
+    client.plan_export.side_effect = None
+    client.plan_export.return_value = EXPORT_PLAN
+    client.export_mailboxes.side_effect = requests.Timeout()
+    e = _err("mailpool_mailboxes", {"op": "export", "platform": "lemlist",
+                                    "mailbox_ids": [5301], "dry_run": False})
+    assert _reason(e) == "export_outcome_unknown"
+
+
+def test_export_reads(client):
+    client.export_credentials_status.return_value = {"platform": "lemlist", "saved": False,
+                                                     "saved_at": None}
+    client.list_export_batches.return_value = {"data": [BATCH], "total": 1}
+    client.get_export_batch.return_value = BATCH
+    assert _call("mailpool_mailboxes", {"op": "export_login",
+                                        "platform": "lemlist"})["saved"] is False
+    assert _call("mailpool_mailboxes", {"op": "export_batches"})["total"] == 1
+    assert _call("mailpool_mailboxes", {"op": "export_batch", "batch_id": 42})["id"] == 42
+
+
+@pytest.mark.parametrize("args", [
+    {"op": "export", "platform": "lemlist"},
+    {"op": "export", "mailbox_ids": [1]},
+    {"op": "export", "platform": "gmail", "mailbox_ids": [1]},
+    {"op": "export_batch"},
+    {"op": "list", "platform": "lemlist"},
+    {"op": "create", "mailboxes": [NEW], "mailbox_ids": [1]},
+])
+def test_export_arguments_are_checked(client, args):
+    with pytest.raises(Exception):
+        _call("mailpool_mailboxes", args)
+    client.export_mailboxes.assert_not_called()

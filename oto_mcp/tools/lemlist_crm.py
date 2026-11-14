@@ -35,9 +35,10 @@ import html
 import re
 from typing import Literal, Optional
 
+import requests
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
-from mcp.types import ErrorData, INVALID_PARAMS
+from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
 from .. import access
 from .lecture import ACTE, LECTURE
@@ -45,6 +46,31 @@ from .lecture import ACTE, LECTURE
 
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
+
+
+#: The module of oto-core that shapes a page of the shared base (`fields`, `compact`).
+_DATABASE_VIEWS = "oto.tools.lemlist.database_views"
+
+
+def _raised_by_database_view(e: BaseException) -> bool:
+    """True when `e` was raised inside the view module itself, not by the request or
+    anything it calls: the view refuses a page that has no `results` list with a bare
+    `RuntimeError`, and only that one is renamed."""
+    tb = e.__traceback__
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    return tb is not None and tb.tb_frame.f_globals.get("__name__") == _DATABASE_VIEWS
+
+
+def _page_without_results(kind: str) -> McpError:
+    """lemlist answered a search with a page that has no `results` list. The view
+    cannot apply, and returning the page whole would hand the agent the megabytes
+    `fields`/`compact` were asked to avoid."""
+    return McpError(ErrorData(code=INTERNAL_ERROR, message=(
+        f"lemlist returned a {kind} page without a `results` list, so `fields` and "
+        "`compact` cannot shape it. Call again without `fields` and `compact` to "
+        "read the page as lemlist sends it."),
+        data={"code": "lemlist_page_without_results", "retryable": False}))
 
 
 def _need(**kwargs) -> None:
@@ -751,6 +777,8 @@ def register(mcp: FastMCP) -> None:
         page: Optional[int] = None,
         size: Optional[int] = None,
         mode: Optional[str] = None,
+        fields: Optional[list[str]] = None,
+        compact: bool = False,
     ) -> dict:
         """Search lemlist's SHARED prospecting database. Reads only.
 
@@ -760,20 +788,54 @@ def register(mcp: FastMCP) -> None:
         call spends the quota of your lemlist key. Saving or deleting a persona
         is `lemlist_act`.
 
+        Records are large (3 people ≈ 228k characters): pass `compact=True`
+        unless you need a field it drops.
+
         Args by op:
-        - `people`: `filters`, `search`, `excludes`, `page`, `size`.
-        - `companies`: `filters`, `page`, `size`.
+        - `people`: `filters`, `search`, `excludes`, `page`, `size`, `fields`,
+          `compact`.
+        - `companies`: `filters`, `page`, `size`, `fields`, `compact`.
         - `filters`: no argument — the available filters.
         - `personas`: optional `mode` — the saved personas.
+
+        Shaping each record of `results` (`total`, `page`, `size` kept):
+        - `compact=True`: the short view — identity, title, LinkedIn, current
+          positions only, headcount, industry, country, latest job posts. The
+          page names what it left out in `omitted_fields`.
+        - `fields`: keep only these keys, a nested one by a dotted path
+          (`experiences.title`). With `compact=True`, each one named replaces
+          the short view's key of the same first level.
+        - Neither: the page as lemlist sends it.
         """
         client, is_platform = _client()
-        if op == "people":
-            result = client.search_people_database(
-                filters=filters, page=page, size=size, excludes=excludes,
-                search=search)
-        elif op == "companies":
-            result = client.search_companies_database(
-                filters=filters, page=page, size=size)
+        # Passed only when asked for: a call without a view stays the call lemlist
+        # has always received, whatever the installed client.
+        view = {}
+        if fields is not None:
+            view["fields"] = fields
+        if compact:
+            view["compact"] = compact
+        if op in ("people", "companies"):
+            try:
+                if op == "people":
+                    result = client.search_people_database(
+                        filters=filters, page=page, size=size, excludes=excludes,
+                        search=search, **view)
+                else:
+                    result = client.search_companies_database(
+                        filters=filters, page=page, size=size, **view)
+            except ValueError as e:
+                # A malformed `fields` or `compact`: the client refuses it before any
+                # request. Raised bare, it would reach the agent as an internal error.
+                # Only then: `requests` has ValueErrors of its own (a bad URL, a body
+                # that is not JSON), which say nothing about the caller's arguments.
+                if not view or isinstance(e, requests.RequestException):
+                    raise
+                raise _bad(str(e)) from e
+            except RuntimeError as e:
+                if not view or not _raised_by_database_view(e):
+                    raise
+                raise _page_without_results(op) from e
         elif op == "filters":
             result = {"filters": client.get_database_filters()}
         elif op == "personas":

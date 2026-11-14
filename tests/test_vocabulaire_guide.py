@@ -143,7 +143,7 @@ PLAFONDS: dict[str, int] = {
     "oto_mcp/ownership.py": 1,
     # — Colonne `runs.doctrine`, clé `doctrine_version` des args journalisés, alias
     #   SQL `AS doctrine`/`AS doctrines` (donc clés de réponse).
-    "oto_mcp/db/usage.py": 27,
+    "oto_mcp/db/usage.py": 25,
     "oto_mcp/project_audit.py": 2,
     # — L'inventaire des colonnes porteuses d'un `sub`, vérifié CONTRE LE DDL : une
     #   vue n'y apparaît pas, donc cette entrée reste sur la TABLE (sinon le

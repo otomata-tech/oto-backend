@@ -257,6 +257,10 @@ def _runs_from_journal(extra: str = "", *, ouvertures: Optional[str] = None) -> 
     dérivation elle-même vit dans `run_status`, et toutes les lentilles en héritent.
     L'index `idx_tool_calls_run` sert le LATERAL.
 
+    `start_id` = l'id de la ligne d'ouverture, en DERNIÈRE colonne : avec `started_at`
+    il forme la position d'un keyset (`list_runs_page`), dans l'ordre même des index
+    d'ouvertures. Dernière parce que `activation` renomme les colonnes par position.
+
     `extra` = prédicats supplémentaires sur l'alias `s` (la ligne d'ouverture),
     TOUJOURS des littéraux de ce module — jamais une entrée d'appelant.
 
@@ -276,7 +280,8 @@ def _runs_from_journal(extra: str = "", *, ouvertures: Optional[str] = None) -> 
                    f.args->>'outcome'           AS outcome,
                    f.args->>'note'              AS note,
                    GREATEST(s.created_at,
-                            COALESCE(v.last_call_at, s.created_at)) AS last_seen_at
+                            COALESCE(v.last_call_at, s.created_at)) AS last_seen_at,
+                   s.id                         AS start_id
               FROM {source}{_run_closure("s")}
               LEFT JOIN LATERAL (
                   SELECT max(c.created_at) AS last_call_at
@@ -1123,26 +1128,79 @@ def count_usage_signals_by_status() -> dict:
     return par_etat
 
 
+#: La plus grande page d'une liste de runs. Au-delà, on suit `next_cursor`.
+RUNS_LIMITE_MAX = 500
+
+#: Les issues de clôture qui ne sont PAS un succès (`run_status.OUTCOMES` moins
+#: `done`) — ce que `errors=true` des lentilles de runs retient.
+ISSUES_EN_ECHEC = ("failed", "blocked", "partial")
+
+
 def list_runs(limit: int = 100, *, org_id: Optional[int] = None) -> list[dict]:
-    """Runs récents (un par run_id ouvert via run_start) avec label/doctrine, version de
-    procédure exécutée, acteur, bornes, outcome (si fermé) et nb d'appels du déroulé.
-    `slug` (alias = doctrine sinon label) conservé pour compat dashboard.
+    """Runs récents (un par run_id ouvert via run_start) avec label, procédure, version
+    de procédure exécutée, acteur, bornes, outcome (si fermé) et nb d'appels du déroulé.
+    `slug` (alias = procédure sinon label) conservé pour compat dashboard.
 
     `org_id` (si fourni) borne aux déroulés OUVERTS sous cette org (`tool_calls.org_id`
     de la ligne `run_start`, seam `current_org`) — scope de la lentille org (org_admin),
     même règle exacte que le journal d'audit. Sans lui : plateforme-wide (défaut admin).
+
+    La page seule, sans sa suite : `list_runs_page` porte les filtres et le curseur."""
+    return list_runs_page(limit, org_id=org_id)["runs"]
+
+
+def list_runs_page(
+    limit: int = 100, *, org_id: Optional[int] = None, sub: Optional[str] = None,
+    since_days: Optional[int] = None, before: Optional[tuple[str, int]] = None,
+    issues: Optional[tuple[str, ...]] = None,
+) -> dict:
+    """Une page de runs, plus récent d'abord, et où prendre la suite.
+    Rend `{runs, next, scanned}`.
+
+    - `sub` — les seuls runs OUVERTS par ce compte (égalité sur la ligne d'ouverture).
+    - `since_days` — les seuls runs OUVERTS depuis N jours.
+    - `before` — `(horodatage ISO µs, id)` de la dernière ouverture de la page
+      précédente : keyset sur `(created_at, id)` de la ligne `run_start`, dans l'ordre
+      même des index d'ouvertures. Intercaler un run pendant qu'on pagine ne fait ni
+      sauter ni répéter de ligne.
+    - `issues` — ne GARDER que les runs dont la clôture porte une de ces issues
+      (`ISSUES_EN_ECHEC` pour `errors=true`).
+    - `next` — la position de la dernière ouverture EXAMINÉE quand il en reste
+      après elle, sinon `None`.
+    - `scanned` — le nombre d'ouvertures examinées pour cette page.
+
+    ⚠️ **`issues` filtre APRÈS la page, pas avant.** L'issue vit dans la clôture
+    (`run_finish`), que seule la reconstruction lit : la pousser dans le choix des
+    ouvertures ferait sonder la clôture de chaque ouverture de la portée jusqu'à en
+    trouver `limit` en échec — le parcours non borné qu'infra#9 a retiré. La page
+    examine donc `limit` ouvertures et n'en rend que les échecs : elle peut être
+    COURTE, voire vide, avec un `next` non nul. Une page vide ne veut dire « aucun
+    échec » que quand `next` est nul.
 
     **Légère par construction** (infra#9) : les `limit` dernières ouvertures d'abord
     (`_derniers_runs`), puis, pour elles seules, la reconstruction et le compte des
     appels (un LATERAL par run, servi par `idx_tool_calls_run`). L'ancienne forme
     groupait TOUT le journal par run (`GROUP BY run_id` sur chaque ligne qui en porte
     un, toutes orgs confondues) et reconstruisait tous les runs de la portée, à chaque
-    affichage de la liste. Lecture bornée (`_agregat`, 10 s) en filet."""
-    limit = max(1, min(int(limit), 500))
-    portee = " AND d.org_id = %s" if org_id is not None else ""
-    params: list[Any] = ([int(org_id)] if org_id is not None else []) + [limit, limit]
+    affichage de la liste. `limit + 1` ouvertures sont lues : la dernière n'est pas
+    servie, elle DIT qu'il en reste. Lecture bornée (`_agregat`, 10 s) en filet."""
+    limit = max(1, min(int(limit), RUNS_LIMITE_MAX))
+    portee, params = "", []
+    if org_id is not None:
+        portee += " AND d.org_id = %s"
+        params.append(int(org_id))
+    if sub:
+        portee += " AND d.sub = %s"
+        params.append(sub)
+    if since_days is not None:
+        portee += " AND d.created_at >= NOW() - make_interval(days => %s)"
+        params.append(int(since_days))
+    if before is not None:
+        portee += " AND (d.created_at, d.id) < (%s::timestamptz, %s)"
+        params += [before[0], int(before[1])]
+    params += [limit + 1, limit + 1]
     with _agregat("liste des déroulés") as conn:
-        return [dict(r) for r in conn.execute(
+        rows = [dict(r) for r in conn.execute(
             f"""
             WITH j AS ({_runs_from_journal(_derniers_runs(portee))})
             SELECT j.run_id,
@@ -1150,16 +1208,24 @@ def list_runs(limit: int = 100, *, org_id: Optional[int] = None) -> list[dict]:
                    j.label, j.doctrine, j.doctrine_version,
                    j.sub, u.email, u.name,
                    j.started_at, j.finished_at, j.outcome, j.note, j.last_seen_at,
-                   c.n_calls
+                   c.n_calls, j.start_id,
+                   to_char(j.started_at AT TIME ZONE 'UTC', {_ISO_US}) AS _keyset_at
               FROM j
               LEFT JOIN users u ON u.sub = j.sub
               LEFT JOIN LATERAL (
                   SELECT count(*) AS n_calls FROM tool_calls t WHERE t.run_id = j.run_id
               ) c ON TRUE
-             ORDER BY j.started_at DESC LIMIT %s
+             ORDER BY j.started_at DESC, j.start_id DESC LIMIT %s
             """,
             tuple(params),
         ).fetchall()]
+    encore = len(rows) > limit
+    rows = rows[:limit]
+    cles = [(r.pop("_keyset_at"), r.pop("start_id")) for r in rows]
+    if issues is not None:
+        rows = [r for r in rows if r.get("outcome") in issues]
+    return {"runs": rows, "next": cles[-1] if encore and cles else None,
+            "scanned": len(cles)}
 
 
 def get_run(run_id: str, *, org_id: Optional[int] = None) -> list[dict]:
@@ -1346,6 +1412,10 @@ def agents_en_echec(days: int = 1, *, org_id: Optional[int] = None,
 _MOTIF_TETE = 80
 
 
+#: La plus grande page du journal d'appels. Au-delà, on suit `next_cursor`.
+CALLS_LIMITE_MAX = 1000
+
+
 def list_tool_calls(
     limit: int = 200,
     sub: Optional[str] = None,
@@ -1358,7 +1428,29 @@ def list_tool_calls(
     min_duration_ms: Optional[int] = None,
     error_contains: Optional[str] = None,
 ) -> list[dict]:
+    """Derniers appels MCP (récent d'abord) — la page seule, sans sa suite : cf.
+    `list_tool_calls_page`, qui porte la description complète et le curseur."""
+    return list_tool_calls_page(
+        limit, sub=sub, tool_name=tool_name, errors_only=errors_only,
+        since_days=since_days, org_id=org_id, run_id=run_id, session_id=session_id,
+        min_duration_ms=min_duration_ms, error_contains=error_contains)["calls"]
+
+
+def list_tool_calls_page(
+    limit: int = 200,
+    sub: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    errors_only: bool = False,
+    since_days: Optional[int] = None,
+    org_id: Optional[int] = None,
+    run_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    min_duration_ms: Optional[int] = None,
+    error_contains: Optional[str] = None,
+    before: Optional[tuple[str, int]] = None,
+) -> dict:
     """Derniers appels MCP (récent d'abord), joints à l'email user pour l'UI.
+    Rend `{calls, next}`.
 
     `org_id` (si fourni) scope les appels émis SOUS cette org (colonne `tool_calls.org_id`
     stampée par le seam `current_org` au moment de l'appel, ADR 0023) — l'activité « la
@@ -1368,6 +1460,13 @@ def list_tool_calls(
     d'une conversation ; `min_duration_ms` = appels lents (chasse aux gels mono-loop) ;
     `error_contains` = recherche substring insensible à la casse dans le message.
 
+    Pagination : `before` = `(horodatage ISO µs, id)` de la dernière ligne de la page
+    précédente — keyset sur `(created_at, id)`, l'ordre même de la page ; `next` = la
+    position de la dernière ligne rendue quand il en reste après elle (`limit + 1`
+    lignes lues, la dernière ne sert qu'à le savoir), sinon `None`. ⚠️ Pas sur le
+    `called_at` servi : le row factory le tronque à la seconde, un keyset bâti dessus
+    sauterait en silence les lignes de la même seconde que la dernière de la page.
+
     La ligne ne porte PAS `args` (le contenu est la fiche, `get_tool_call`) mais
     `arg_keys` : les clés des arguments journalisés, triées, `[]` sans argument
     (`journal_calls.ARG_KEYS_SQL`, #634) — de quoi savoir QUELS arguments un appel
@@ -1375,7 +1474,7 @@ def list_tool_calls(
     `result_shape` (#644) : la FORME de ce que l'outil a rendu, jamais son contenu.
     L'ÉMETTEUR déclaré (`client_name`, `client_version`, `token_kind` —
     `journal_calls.EMITTER_SQL`, oto#187) : quel logiciel client, par quel jeton."""
-    limit = max(1, min(int(limit), 1000))
+    limit = max(1, min(int(limit), CALLS_LIMITE_MAX))
     # Les filtres de la PAGE et ceux de son plancher (#630) sortent de la même
     # construction — c'est ce qui rend les deux comptes comparables.
     clauses, params = journal_calls.call_filter_clauses(
@@ -1386,8 +1485,11 @@ def list_tool_calls(
     if org_id is not None:
         clauses.append("l.org_id = %s")
         params.append(int(org_id))
+    if before is not None:
+        clauses.append("(l.created_at, l.id) < (%s::timestamptz, %s)")
+        params += [before[0], int(before[1])]
     where = " WHERE " + " AND ".join(clauses)
-    params.append(limit)
+    params.append(limit + 1)
     # Bornée (`_agregat`, infra#9) : un filtre sélectif (`error_contains`, `sub`…) sans
     # `days` parcourt la portée entière à rebours en quête de `limit` lignes.
     with _agregat("journal des appels") as conn:
@@ -1398,7 +1500,8 @@ def list_tool_calls(
                    l.duration_ms, l.ok, l.error, l.session_id, l.run_id, l.org_id,
                    l.sentry_event_id, {journal_calls.ARG_KEYS_SQL} AS arg_keys,
                    l.result_shape, l.quantity, l.provider_credits, l.key_mode,
-                   {journal_calls.EMITTER_SQL}
+                   {journal_calls.EMITTER_SQL},
+                   {_AUDIT_KEYSET_AT} AS _keyset_at
             FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
             {where}
@@ -1407,7 +1510,11 @@ def list_tool_calls(
             """,
             tuple(params),
         ).fetchall()
-        return list(rows)
+    encore = len(rows) > limit
+    rows = [dict(r) for r in rows[:limit]]
+    cles = [r.pop("_keyset_at") for r in rows]
+    return {"calls": rows,
+            "next": (cles[-1], rows[-1]["id"]) if encore and rows else None}
 
 
 def get_tool_call(call_id: int) -> Optional[dict]:

@@ -5,8 +5,8 @@ Ce que ce fichier verrouille :
   vérifiés AVANT tout appel ;
 - `with_practitioner` nomme, sur chaque ligne de la facture payée, le praticien de son
   acte — UNE lecture par traitement dans l'appel, aucune entre deux appels ;
-- un paiement qui couvre deux praticiens n'est PAS ventilé : ses montants restent ceux
-  du paiement, chaque ligne garde son prix ;
+- les montants du paiement restent les siens, chaque ligne garde son prix ; la
+  ventilation entre praticiens est dans `split` (règles : test_nextmotion_ventilation) ;
 - une lecture qui échoue est DITE sur la ligne (`unavailable` + raison) et comptée,
   jamais rendue comme un praticien vide ;
 - sans `with_practitioner`, rien ne change (aucune lecture de traitement).
@@ -56,11 +56,22 @@ def _provider(treatment_id):
     return {"data": {"id": treatment_id, "invoice": C, "provider": praticiens[treatment_id]}}
 
 
-def _paiement(pid, *lignes, card="300.00"):
-    return {"id": pid, "card": card, "invoice": {
-        "id": C, "total_price": card,
-        "invoiced_treatments": [{"id": f"l{i}", "name": n, "price": prix, "treatment": t}
-                                for i, (n, prix, t) in enumerate(lignes)]}}
+def _paiement(pid, *lignes, card="300.00", facture=None):
+    return {"id": pid, "card": card, "payment_time": "2026-10-01T10:00:00+02:00",
+            "invoice": {
+                "id": facture or pid.replace("a", "f"), "total_price": card,
+                "invoiced_treatments": [{"id": f"l{i}", "name": n, "price": prix,
+                                         "treatment": t}
+                                        for i, (n, prix, t) in enumerate(lignes)]}}
+
+
+def _liste(*paiements):
+    """`list_payments` : la page demandée, ou les paiements d'UNE facture."""
+    def lire(clinic_id, invoice_id=None, **kw):
+        rows = [p for p in paiements
+                if invoice_id is None or p["invoice"]["id"] == invoice_id]
+        return {"count": len(rows), "next": None, "data": rows}
+    return lire
 
 
 def test_la_fenetre_de_dates_va_au_client(client):
@@ -87,9 +98,9 @@ def test_get_et_update_refusent_la_fenetre(client):
 
 
 def test_chaque_ligne_porte_son_praticien_sans_ventiler_le_paiement(client):
-    client.list_payments.return_value = {"count": 2, "next": None, "data": [
+    client.list_payments.side_effect = _liste(
         _paiement(P1, ("Acte-1", "200.00", T1), ("Acte-2", "100.00", T2)),
-        _paiement(P2, ("Acte-1", "150.00", T1), card="150.00")]}
+        _paiement(P2, ("Acte-1", "150.00", T1), card="150.00"))
     client.get_treatment_provider.side_effect = _provider
     out = _tool("nextmotion_payment")(clinic_id=C, with_practitioner=True)
 
@@ -103,12 +114,11 @@ def test_chaque_ligne_porte_son_praticien_sans_ventiler_le_paiement(client):
     assert "treatment" not in lignes[0]  # l'id clinique reste retenu
     # T1 paraît deux fois dans l'appel : une seule lecture.
     assert sorted(a.args[0] for a in client.get_treatment_provider.call_args_list) == [T1, T2]
-    assert out["practitioners_unavailable"] == 0 and "NOT split" in out["practitioner_note"]
+    assert out["practitioners_unavailable"] == 0 and "split" in out["practitioner_note"]
 
 
 def test_pas_de_cache_entre_deux_appels(client):
-    client.list_payments.return_value = {"count": 1, "next": None, "data": [
-        _paiement(P1, ("Acte-1", "300.00", T1))]}
+    client.list_payments.side_effect = _liste(_paiement(P1, ("Acte-1", "300.00", T1)))
     client.get_treatment_provider.side_effect = _provider
     tool = _tool("nextmotion_payment")
     tool(clinic_id=C, with_practitioner=True)
@@ -117,8 +127,8 @@ def test_pas_de_cache_entre_deux_appels(client):
 
 
 def test_une_lecture_en_echec_est_dite_sur_la_ligne(client):
-    client.list_payments.return_value = {"count": 1, "next": None, "data": [
-        _paiement(P1, ("Acte-1", "200.00", T1), ("Acte-2", "100.00", T2))]}
+    client.list_payments.side_effect = _liste(
+        _paiement(P1, ("Acte-1", "200.00", T1), ("Acte-2", "100.00", T2)))
 
     def lecture(t):
         if t == T2:
@@ -134,11 +144,13 @@ def test_une_lecture_en_echec_est_dite_sur_la_ligne(client):
 
 
 def test_sans_praticien_nomme_ou_sans_traitement_la_raison_est_dite(client):
-    client.get_payment.return_value = {"data": _paiement(
-        P1, ("Acte-1", "200.00", T1), ("Produit", "100.00", None))}
+    paiement = _paiement(P1, ("Acte-1", "200.00", T1), ("Produit", "100.00", None))
+    client.get_payment.return_value = {"data": paiement}
+    client.list_payments.side_effect = _liste(paiement)
     client.get_treatment_provider.return_value = {
         "data": {"id": T1, "invoice": C, "provider": None}}
-    out = _tool("nextmotion_payment")(op="get", payment_id=P1, with_practitioner=True)
+    out = _tool("nextmotion_payment")(op="get", payment_id=P1, clinic_id=C,
+                                      with_practitioner=True)
     lignes = out["payment"]["invoice"]["invoiced_treatments"]
     assert lignes[0]["practitioner"]["status"] == "none" and lignes[0]["practitioner"]["reason"]
     assert lignes[1]["practitioner"]["status"] == "no_treatment"

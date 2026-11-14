@@ -159,7 +159,7 @@ def _set_definition(sub: str, given: dict) -> dict:
     except custom_ops.OperationsInvalid as e:
         raise _bad("definition refused: " + " | ".join(e.errors[:20]))
     except store.InstanceMissing as e:
-        raise _bad(f"http connector: {e}.")
+        raise _bad(f"`api` connector: {e}.")
     return {"account": rc.account, "saved": sorted(given),
             "label": d["label"], "actions": [o["name"] for o in d["operations"]]}
 

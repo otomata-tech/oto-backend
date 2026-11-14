@@ -238,8 +238,12 @@ class TriggerInput(BaseModel):
         "(op=unshare). `can_edit` says which."))
     # ── le WEBHOOK ────────────────────────────────────────────────────────────
     #: `schedule` (défaut) ou `webhook`. Posé à la CRÉATION et jamais après : un
-    #: agent ne change pas de coup d'envoi en cours de route.
-    kind: Optional[Literal["schedule", "webhook"]] = None
+    #: agent ne change pas de coup d'envoi en cours de route. À `update`, le même
+    #: genre est sans effet, un autre est REFUSÉ (`kind_immutable`) — jamais ignoré.
+    kind: Optional[Literal["schedule", "webhook"]] = Field(default=None, description=(
+        "`schedule` (default) or `webhook`, set at `create` only. On `update` the same "
+        "kind is a no-op and another kind is refused (`kind_immutable`): create a new "
+        "agent of that kind, then delete this one."))
     #: Ce que l'agent fait du corps reçu. `ignore` (défaut) ne le transmet même
     #: pas ; `fields` n'en extrait que ce qui est nommé ; `inline` joint le tout.
     payload_mode: Optional[Literal["ignore", "fields", "inline"]] = Field(
@@ -2157,6 +2161,21 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             lu["prete"] = _acces_agent.prete(ctx.sub, actuel)
         return actuel["sub"] if lu["prete"] else ctx.sub
 
+    if inp.kind is not None:
+        # Le GENRE ne se change pas (voir `db.update_trigger`) : un autre genre était
+        # accepté par le schéma puis IGNORÉ — la réponse disait l'ancien, sans erreur.
+        # Jugé AVANT le cadencement : `kind=schedule cron=…` sur un webhook doit dire
+        # le vrai motif, pas « un webhook n'a pas de cadencement ».
+        if not _actuel():
+            raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+        genre = _actuel().get("kind") or "schedule"
+        if inp.kind != genre:
+            raise AuthzDenied(
+                400, "kind_immutable",
+                f"cette automatisation est `{genre}` : son genre se pose à la création "
+                f"et ne se change pas. Pour un agent `{inp.kind}`, crée-en un nouveau "
+                f"(`op=create kind={inp.kind}`), puis supprime celui-ci (`op=delete`).")
+
     if any(getattr(inp, c) is not None for c in _REGLAGES_WEBHOOK):
         if not _actuel():
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
@@ -3074,6 +3093,10 @@ CAPABILITIES += [
                           "`platform_tools` nomme un outil absent des `tools` de l'agent"),
             DeclaredError(400, "folder_too_long",
                           f"`folder` de plus de {FOLDER_MAX} caractères — un libellé, pas une phrase"),
+            DeclaredError(400, "kind_immutable",
+                          "`update` avec un `kind` différent de celui de l'agent : le "
+                          "genre se pose à `create` et ne se change pas (le même genre "
+                          "est sans effet) — créer un nouvel agent de l'autre genre"),
             DeclaredError(400, "invalid_schedule",
                           "cron malformé, fuseau inconnu, ou deux occurrences "
                           "espacées de moins de 5 minutes"),

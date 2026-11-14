@@ -1,17 +1,19 @@
 """Nextmotion — la ventilation d'un paiement entre les praticiens de sa facture.
 
 Ce que ce fichier verrouille :
-- un paiement qui SOLDE sa facture est réparti au prorata du prix des lignes, par
-  praticien ; « solde » se lit dans les paiements de la facture (cumul dans l'ordre de
-  `payment_time` égal à `total_price` avec lui), jamais dans un code de statut ;
-- un acompte ou un paiement partiel n'est PAS réparti (`not_split`, montant entier,
-  raison) ;
+- le paiement qui SOLDE sa facture porte la répartition de TOUTE la facture (acomptes
+  compris) au prorata du prix des lignes, par praticien ; « solde » se lit dans les
+  paiements de la facture (cumul dans l'ordre de `payment_time` égal à `total_price`
+  avec lui), jamais dans un code de statut ;
+- un acompte ou un paiement partiel n'est PAS réparti (`not_split`, montant entier) :
+  il l'est au solde, que `settled_by` nomme quand il existe ;
 - la part d'une ligne sans praticien nommé (`none`, `no_treatment`, `unavailable`) va
   dans une entrée qui porte ce statut, aucun praticien inventé ;
-- arrondi au centime, reste au dernier praticien, somme EXACTEMENT égale au paiement ;
+- arrondi au centime, reste au dernier praticien, somme EXACTEMENT égale à la facture ;
 - ce qui empêche de savoir (montant illisible, cumul au-delà du total, ordre inconnu,
   lecture en échec) donne `undetermined` et sa raison, rien n'est réparti ;
-- la liste totalise sa page : par praticien, non attribué, non réparti, indéterminé.
+- la liste totalise sa page sans double compte : un acompte soldé sur la page est dans
+  `by_practitioner`, pas dans `not_split` ; un acompte hors page est `brought_forward`.
 
 Toutes les valeurs sont factices.
 """
@@ -50,20 +52,40 @@ def test_un_paiement_qui_solde_est_reparti_au_prorata():
     assert _parts(out) == [(D1, "200.00"), (D2, "100.00")]
 
 
-def test_un_acompte_n_est_pas_reparti_puis_le_solde_l_est():
-    acompte = _versement(P1, "100.00", "2026-10-01T10:00:00+02:00")
-    solde = _versement(P2, "200.00", "2026-10-15T10:00:00+02:00")
-    out = v.ventilate(acompte, [OK1, OK2], [solde, acompte], False)
-    assert out["status"] == "not_split" and out["amount"] == "100.00"
-    assert "does not settle" in out["reason"] and "100.00 of 300.00" in out["reason"]
+def test_au_solde_toute_la_facture_est_repartie_l_acompte_attend():
+    # Facture 300 (200 praticien 1, 100 praticien 2) : acompte 200 le 1/6, solde 100
+    # le 15/6.
+    acompte = _versement(P1, "200.00", "2026-06-01T10:00:00+02:00")
+    solde = _versement(P2, "100.00", "2026-06-15T10:00:00+02:00")
     out = v.ventilate(solde, [OK1, OK2], [solde, acompte], False)
-    assert out["status"] == "split" and _parts(out) == [(D1, "133.33"), (D2, "66.67")]
+    assert out["status"] == "split" and out["amount"] == "100.00"
+    assert out["split_amount"] == "300.00"
+    assert _parts(out) == [(D1, "200.00"), (D2, "100.00")]
+    assert out["deposits"] == [{"id": P1, "payment_time": "2026-06-01T10:00:00+02:00",
+                                "amount": "200.00"}]
+    out = v.ventilate(acompte, [OK1, OK2], [solde, acompte], False)
+    assert out["status"] == "not_split" and out["amount"] == "200.00"
+    assert "200.00 of 300.00" in out["reason"] and "settles" in out["reason"]
+    assert out["settled_by"] == {"id": P2, "payment_time": "2026-06-15T10:00:00+02:00"}
+    assert "shares" not in out
 
 
-def test_un_paiement_partiel_seul_n_est_pas_reparti():
+def test_un_paiement_partiel_seul_attend_le_solde():
     p = _versement(P1, "120.00", "2026-10-01T10:00:00+02:00")
     out = v.ventilate(p, [OK1, OK2], [p], False)
     assert out["status"] == "not_split" and "shares" not in out
+    assert "settled_by" not in out and "not settled yet" in out["reason"]
+
+
+def test_arrondi_au_solde_sur_la_facture_entiere():
+    acompte = _versement(P1, "40.00", "2026-06-01T10:00:00+02:00", total="100.00",
+                         lignes=(("10.00", T1), ("10.00", T2), ("10.00", T3)))
+    solde = {**acompte, "id": P2, "card": "60.00",
+             "payment_time": "2026-06-15T10:00:00+02:00"}
+    ok3 = {"status": "ok", "id": "d3", "first_name": "C", "last_name": "C"}
+    out = v.ventilate(solde, [OK1, OK2, ok3], [acompte, solde], False)
+    assert _parts(out) == [(D1, "33.33"), (D2, "33.33"), ("d3", "33.34")]
+    assert sum(Decimal(x["amount"]) for x in out["shares"]) == Decimal("100.00")
 
 
 def test_la_part_d_un_praticien_indisponible_va_dans_une_entree_explicite():
@@ -146,6 +168,54 @@ def test_l_outil_ventile_et_totalise_la_page(client):
     factures = [c.kwargs.get("invoice_id") for c in client.list_payments.call_args_list]
     assert sorted(f for f in factures if f) == sorted(
         [solde["invoice"]["id"], acompte["invoice"]["id"]])
+
+
+def _facture_en_deux_fois():
+    acompte = _paiement(P1, ("Acte-1", "200.00", T1), ("Acte-2", "100.00", T2),
+                        card="200.00", facture=F)
+    solde = _paiement(P2, ("Acte-1", "200.00", T1), ("Acte-2", "100.00", T2),
+                      card="100.00", facture=F)
+    for p in (acompte, solde):
+        p["invoice"]["total_price"] = "300.00"
+    acompte["payment_time"] = "2026-06-01T10:00:00+02:00"
+    solde["payment_time"] = "2026-06-15T10:00:00+02:00"
+    return acompte, solde
+
+
+def _somme_page(t):
+    return (sum(Decimal(x["amount"]) for x in t["by_practitioner"] + t["unattributed"])
+            - Decimal(t["brought_forward"]) + Decimal(t["not_split"])
+            + Decimal(t["undetermined"]))
+
+
+def test_acompte_et_solde_sur_la_page_sans_double_compte(client):
+    acompte, solde = _facture_en_deux_fois()
+    client.list_payments.side_effect = _liste(acompte, solde)
+    client.get_treatment_provider.side_effect = _provider
+    out = _tool("nextmotion_payment")(clinic_id=C, with_practitioner=True)
+    a, s = (p["split"] for p in out["payments"])
+    assert a["status"] == "not_split" and a["settled_by"]["id"] == P2
+    assert s["status"] == "split" and _parts(s) == [(D1, "200.00"), (D2, "100.00")]
+    t = out["totals"]
+    assert [x["amount"] for x in t["by_practitioner"]] == ["200.00", "100.00"]
+    assert t["not_split"] == "0.00" and t["brought_forward"] == "0.00"
+    assert _somme_page(t) == Decimal("300.00")  # = les paiements de la page
+
+
+def test_solde_seul_sur_la_page_l_acompte_est_reporte(client):
+    acompte, solde = _facture_en_deux_fois()
+    pages = _liste(acompte, solde)
+
+    def lire(clinic_id, invoice_id=None, **kw):
+        if invoice_id is None:  # la page : le solde seul (paid_from = 15/6)
+            return {"count": 1, "next": None, "data": [solde]}
+        return pages(clinic_id, invoice_id=invoice_id)
+    client.list_payments.side_effect = lire
+    client.get_treatment_provider.side_effect = _provider
+    t = _tool("nextmotion_payment")(clinic_id=C, with_practitioner=True)["totals"]
+    assert [x["amount"] for x in t["by_practitioner"]] == ["200.00", "100.00"]
+    assert t["brought_forward"] == "200.00" and t["not_split"] == "0.00"
+    assert _somme_page(t) == Decimal("100.00")
 
 
 def test_les_totaux_survivent_a_fields(client):

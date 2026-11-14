@@ -204,7 +204,7 @@ def _payment_with_practitioners(c, clinic_id: str):
             for who, served in zip(practitioners, shaped.get("invoiced_treatments") or []):
                 served["practitioner"] = who
         out["split"] = _split(c, clinic_id, raw, practitioners, paid)
-        shape.splits.append(out["split"])
+        shape.splits.append((raw.get("id"), out["split"]))
         return out
     shape.keys = _payment.keys + ("split",)
     shape.splits = []
@@ -448,14 +448,20 @@ def register(mcp: FastMCP) -> None:
         "ok" comes with a `reason`; "unavailable" = the read failed, the practitioner
         is unknown (count in `practitioners_unavailable`). Each payment gets `split`:
         - "split": the payment SETTLES its invoice (with it, the invoice's payments in
-          payment_time order reach total_price exactly) → `shares` [{practitioner,
-          amount}] pro rata of the lines' price, to the cent, remainder on the last
-          practitioner, sum = the payment; a line without a named practitioner gives
-          a share with its status, no practitioner made up;
-        - "not_split": deposit or partial payment, `amount` whole, with `reason`;
+          payment_time order reach total_price exactly) → the WHOLE invoice is split
+          at this date: `split_amount` = total_price (deposits included, listed in
+          `deposits`), `shares` [{practitioner, amount}] pro rata of the lines' price,
+          to the cent, remainder on the last practitioner, sum = split_amount; a line
+          without a named practitioner gives a share with its status, no
+          practitioner made up;
+        - "not_split": deposit or partial payment, `amount` whole, split later with
+          the invoice at its settlement (`settled_by` {id, payment_time} if known);
         - "undetermined": settlement not certain (reason), nothing split.
-        The list adds `totals` over the payments OF THE PAGE: by_practitioner,
-        unattributed (by status), not_split, undetermined. One extra read per distinct
+        The list adds `totals` over THE PAGE, no double count: by_practitioner,
+        unattributed (by status), brought_forward (deposits paid outside the page,
+        split by a settlement on it), not_split (only deposits NOT settled on the
+        page), undetermined. Page payments = by_practitioner + unattributed −
+        brought_forward + not_split + undetermined. One extra read per distinct
         treatment and per distinct invoice of the call.
 
         Args:

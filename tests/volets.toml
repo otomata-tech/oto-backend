@@ -682,6 +682,7 @@ tests = ["tests/**/test_project*.py", "tests/**/test_shared_project*.py"]
 nom = "emails et campagnes"
 sources = [
   "oto_mcp/email*.py",
+  "oto_mcp/markdown_assaini.py",
   "oto_mcp/outreach_optout.py",
   "oto_mcp/capabilities/outreach.py",
   "oto_mcp/capabilities/scheduled_emails.py",
@@ -692,7 +693,8 @@ sources = [
   "oto_mcp/tools/email.py",
   "oto_mcp/tools/mail_obfuscation.py",
 ]
-tests = ["tests/**/test_email*.py", "tests/**/test_outreach*.py", "tests/**/test_mail*.py"]
+tests = ["tests/**/test_email*.py", "tests/**/test_outreach*.py", "tests/**/test_mail*.py",
+         "tests/**/test_markdown_assaini.py", "tests/**/test_gmail_signature_178.py"]
 
 [[volet]]
 nom = "fichiers"

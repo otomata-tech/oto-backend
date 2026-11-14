@@ -162,6 +162,7 @@ def test_list_porte_letat_du_runner(monkeypatch):
     monkeypatch.setattr(RT.db, "list_triggers", lambda org: [{"id": 6}])
     # Ce test regarde l'état du RUNNER ; le comptage des pertes est un autre sujet
     # et sa lecture en base n'a pas sa place ici (la liste le lit groupé, #1148).
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptages_perimes", lambda org, ids: {i: {} for i in ids})
     out = _appel(_ctx(), op="list")
     runner = out["runner"]
@@ -175,6 +176,7 @@ def test_list_porte_letat_du_runner(monkeypatch):
 def test_get_porte_letat_du_runner(monkeypatch):
     _arme(monkeypatch)
     monkeypatch.setattr(RT.db, "get_trigger", lambda i, o: {"id": i})
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptage_perime", lambda org, tid: {})
     assert _appel(_ctx(), op="get", trigger_id=6)["runner"]["armed"] is True
 

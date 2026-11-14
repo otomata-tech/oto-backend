@@ -2910,6 +2910,17 @@ une perte connue. `expired_count: 0` est un vrai zéro, servi, pas une absence d
 mesure. **Deux dates et pas une** : une perte ancienne qui a cessé n'appelle pas
 le même geste qu'une perte qui continue ce matin.
 
+**« A-t-il tourné ? » se lit aussi sur le déclencheur** : `list`/`get` portent
+`last_run` (sa dernière occurrence `{status, due_at, finished_at}` sur 35 jours —
+`status` celui de la file : l'occurrence a-t-elle tourné, pas ce que l'agent a conclu,
+le run lié au travail étant celui du worker) et `last_done_at` (la fin de son dernier
+passage réussi), lus en deux requêtes pour toute la liste (`db.derniers_travaux`).
+La seule autre réponse était la liste des runs de l'org (`oto_org_monitoring
+op=runs`), plus récent d'abord : un agent toutes les quinze minutes en remplit la
+première page en une dizaine d'heures, et un agent de veille y cherchant le soir le
+passage du matin d'un autre agent, sans suivre `next_cursor`, concluait « n'a pas
+tourné » à tort. `op=runs` renvoie donc à `last_run` (`hint`).
+
 ⚠️ **Un déclencheur qui ne TIQUE plus ne périme plus** — et les deux gestes qui
 l'arrêtent laissaient donc leurs occurrences éternelles. **Éteindre** (`enabled =
 false`) le sort de la boucle du tick ; **supprimer** est pire encore, puisque le

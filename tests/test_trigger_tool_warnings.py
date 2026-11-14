@@ -63,6 +63,7 @@ def _runner_arme(monkeypatch):
     monkeypatch.setattr(RT.db, "triggers_for_procedure", lambda o, p: [])
     # `get`/`list` passent par `_avec_pertes`, qui lit la vraie base sans cette
     # doublure — ces bancs parlent des outils, pas des occurrences perdues.
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptage_perime", lambda org, tid: {})
 
 

@@ -536,6 +536,10 @@ ses listes sans curseur ; le modèle partagé `monitoring.CallsInput` écrête d
 plafond du store (1000, il écrêtait à 200 — c'est lui qui bridait la lentille d'org),
 ce que `GET /api/admin/monitoring/calls` hérite ; `oto_admin_monitoring`, lui, reste
 écrêté à 200 par sa propre console. Testé contre PostgreSQL par `tests/test_org_monitoring_pagination.py`.
+`op=runs` de la console d'org rend aussi `ignored_params` — les champs passés qu'il ne
+lit pas (`tool`, `since`…), nommés plutôt que refusés — et un `hint` : « cet agent
+a-t-il tourné ? » se lit sur le déclencheur (`oto_trigger` list/get, `last_run`,
+`last_done_at`), pas en cherchant son passage dans la liste.
 
 **Gardes cross-org à ne pas perdre** : `call_id` est un BIGSERIAL donc devinable →
 `op=call` compare `row.org_id` et rend le **même 404** qu'un id inexistant ; `op=run`

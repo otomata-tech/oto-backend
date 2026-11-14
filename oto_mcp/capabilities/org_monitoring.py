@@ -726,6 +726,32 @@ def _need(val, code: str, msg: str):
     return val
 
 
+#: Ce qu'`op=runs` lit (cf. `_runs`) ; tout autre champ de la console y est ignoré.
+_RUNS_LIT = {"op", "org_id", "limit", "sub", "days", "errors", "cursor"}
+
+
+def _avec_portee_des_runs(inp: "OrgMonitoringInput", out: dict) -> dict:
+    """La page de runs de la CONSOLE dit ce qu'elle n'a pas lu, et où se lit « cet
+    agent a-t-il tourné ? ». Jusqu'où elle porte, `scanned` et `next_cursor` le disent
+    déjà ; la route REST, dont l'Input ne porte que des champs lus, n'a rien à ajouter.
+
+    ⚠️ Un agent de veille qui cherchait dans cette liste le passage du matin d'un autre
+    agent, derrière les centaines de runs d'un agent fréquent, concluait « n'a pas
+    tourné » à tort : la réponse est servie avec l'agent (`oto_trigger` list/get,
+    `last_run`, `last_done_at`). Les champs de la console que `runs` ne lit pas
+    (`tool`, `since`…) ne sont pas refusés — les agents qui les passent en trop
+    casseraient — mais nommés. Même discriminant que la console plateforme : la
+    valeur diffère du défaut déclaré (`monitoring._refuser_les_champs_muets`)."""
+    ignores = sorted(
+        nom for nom, champ in OrgMonitoringInput.model_fields.items()
+        if nom not in _RUNS_LIT and getattr(inp, nom) != champ.default)
+    if ignores:
+        out["ignored_params"] = ignores
+    out["hint"] = ("To know whether an agent ran, read `last_run` / `last_done_at` on "
+                   "`oto_trigger op=list` or `op=get` rather than searching this list.")
+    return out
+
+
 def _console(ctx: ResolvedCtx, inp: OrgMonitoringInput) -> dict:
     oid = inp.org_id
     if inp.op == "summary":
@@ -744,9 +770,9 @@ def _console(ctx: ResolvedCtx, inp: OrgMonitoringInput) -> dict:
     if inp.op == "adoption":
         return _adoption(ctx, OrgDaysInput(org_id=oid, days=inp.days or 30))
     if inp.op == "runs":
-        return _runs(ctx, OrgRunsInput(
+        return _avec_portee_des_runs(inp, _runs(ctx, OrgRunsInput(
             org_id=oid, limit=inp.limit or 100, sub=inp.sub, days=inp.days,
-            errors=inp.errors, cursor=inp.cursor))
+            errors=inp.errors, cursor=inp.cursor)))
     if inp.op == "run":
         return _run(ctx, OrgRunInput(org_id=oid, run_id=_need(
             inp.run_id, "missing_run_id", "`run_id` requis pour run.")))
@@ -1257,7 +1283,8 @@ CAPABILITIES += [
             "`min_duration_ms`, `error_contains`; `limit` default 200, max 1000) / call "
             "(`call_id`) / runs (newest first; `sub` and `days` filter on who opened it "
             "and when, `errors=true` keeps runs closed failed|blocked|partial; `limit` "
-            "default 100, max 500) · run (`run_id` → timeline; `content_archived` = its "
+            "default 100, max 500; whether an agent ran is `last_run` on oto_trigger "
+            "list/get) · run (`run_id` → timeline; `content_archived` = its "
             "body went to cold archive, only its bounds remain). calls and runs page "
             "with `cursor`: pass back `next_cursor` with the SAME filters until it is "
             "null — that is how a window wider than one page is covered. With "

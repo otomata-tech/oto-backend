@@ -615,6 +615,80 @@ def comptages_perimes(org_id: int, trigger_ids: list[int]) -> dict[int, dict]:
                 "expired_last": lus.get(i, {}).get("expired_last")} for i in ids}
 
 
+#: Jusqu'où `derniers_travaux` regarde en arrière : un agent mensuel garde son
+#: dernier passage visible, la lecture reste bornée sur `idx_runner_jobs_declencheurs`.
+DERNIERS_TRAVAUX_JOURS = 35
+
+
+def derniers_travaux(org_id: int, trigger_ids: list[int]) -> dict[int, dict]:
+    """« Cet agent a-t-il tourné ? », servi AVEC l'agent : par déclencheur, sa
+    dernière occurrence (`last_run` : `{status, due_at, finished_at}`) et la
+    fin de son dernier passage réussi (`last_done_at`), en DEUX lectures pour toute
+    la liste. Chaque id demandé est présent ; `None` = rien sur
+    `DERNIERS_TRAVAUX_JOURS` jours.
+
+    ⚠️ Pourquoi ici : la seule autre réponse était `oto_org_monitoring op=runs`, les
+    runs de TOUTE l'org, plus récent d'abord. Un agent toutes les 15 min y repousse
+    en dix heures le passage du matin d'un autre agent hors de la première page ; le 13/11, l'agent de veille
+    d'un client en a conclu deux fois « n'a pas tourné aujourd'hui » à propos d'agents
+    qui avaient tourné. `status` est celui du travail dans la file (`done`, `failed`,
+    `expired`, `pending`, `claimed`, `held`) : il dit si l'occurrence a tourné, pas ce
+    que l'agent a conclu — le run lié au travail (`bind_job_run`) est celui qu'ouvre le
+    worker, pas celui qu'ouvre la procédure par `run_start`."""
+    ids = [int(i) for i in trigger_ids]
+    if not ids:
+        return {}
+    cles = [str(i) for i in ids]
+    filtre = PREDICAT_DECLENCHEUR.replace("payload", "j.payload")
+    with _connect() as conn:
+        # Une passe AGRÉGÉE (pas de tri de toute la fenêtre, que `DISTINCT ON` payait),
+        # puis les lignes des seules dernières échéances, retrouvées par égalité sur
+        # `(org_id, due_at)` : deux lectures pour toute la liste, jamais une par agent.
+        derniers = conn.execute(
+            f"""
+            SELECT j.payload->>'trigger_id' AS trigger_id,
+                   MAX(j.due_at)::text AS echeance,
+                   MAX(j.finished_at) FILTER (WHERE j.status = 'done') AS last_done_at
+              FROM runner_jobs j
+             WHERE j.org_id = %s AND j.kind = 'start'
+               AND j.due_at >= NOW() - make_interval(days => %s)
+               AND {filtre} AND j.payload->>'trigger_id' = ANY(%s)
+             GROUP BY 1
+            """,
+            (org_id, DERNIERS_TRAVAUX_JOURS, cles),
+        ).fetchall()
+        lignes = conn.execute(
+            f"""
+            SELECT j.id, j.payload->>'trigger_id' AS trigger_id, j.due_at::text AS echeance,
+                   j.due_at, j.status, j.finished_at
+              FROM runner_jobs j
+             WHERE j.org_id = %s AND j.kind = 'start'
+               AND j.due_at = ANY(%s::timestamptz[])
+               AND {filtre} AND j.payload->>'trigger_id' = ANY(%s)
+            """,
+            (org_id, [r["echeance"] for r in derniers], cles),
+        ).fetchall() if derniers else []
+    # L'échéance voyage en `::text` pleine précision : `_str_dict_row` rend `due_at`
+    # tronqué à la seconde, et deux travaux d'une même seconde ne s'y distingueraient pas.
+    echeance = {r["trigger_id"]: r["echeance"] for r in derniers}
+    fins = {r["trigger_id"]: r["last_done_at"] for r in derniers}
+    occurrence: dict[str, dict] = {}
+    for r in lignes:
+        t = r["trigger_id"]
+        if r["echeance"] == echeance.get(t) and (t not in occurrence or r["id"] > occurrence[t]["id"]):
+            occurrence[t] = r
+    sortie: dict[int, dict] = {}
+    for i in ids:
+        r = occurrence.get(str(i))
+        sortie[i] = {
+            "last_run": None if r is None else {
+                "status": r["status"], "due_at": r["due_at"],
+                "finished_at": r["finished_at"]},
+            "last_done_at": fins.get(str(i)),
+        }
+    return sortie
+
+
 #: Granularité de la marque de présence d'un worker de PLATEFORME — bien en
 #: dessous d'`ARME_FENETRE_S` (15 min) : un lecteur de `runner_arme`/`families`
 #: (fenêtre de 15 min) ne voit jamais la différence entre « vu il y a 3 s » et

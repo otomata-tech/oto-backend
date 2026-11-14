@@ -757,6 +757,7 @@ def test_un_webhook_sert_son_URL_jamais_son_secret(monkeypatch):
     monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja")
     monkeypatch.setattr(RT.db, "get_trigger",
                         lambda i, o: {"id": i, "kind": "webhook", "org_id": o})
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptage_perime", lambda o, t: {})
     out = _appel(op="get", trigger_id=5)["trigger"]
     assert out["hook_url"] == "https://mcp.oto.ninja/api/hooks/5"
@@ -769,6 +770,7 @@ def test_sans_url_publique_l_adresse_est_RELATIVE_jamais_inventee(monkeypatch):
     monkeypatch.delenv("OTO_MCP_PUBLIC_URL", raising=False)
     monkeypatch.setattr(RT.db, "get_trigger",
                         lambda i, o: {"id": i, "kind": "webhook", "org_id": o})
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptage_perime", lambda o, t: {})
     assert _appel(op="get", trigger_id=5)["trigger"]["hook_url"] == "/api/hooks/5"
 
@@ -776,6 +778,7 @@ def test_sans_url_publique_l_adresse_est_RELATIVE_jamais_inventee(monkeypatch):
 def test_un_agent_PROGRAMME_ne_porte_aucun_bloc_webhook(monkeypatch):
     monkeypatch.setattr(RT.db, "get_trigger",
                         lambda i, o: {"id": i, "kind": "schedule"})
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptage_perime", lambda o, t: {})
     assert _appel(op="get", trigger_id=5)["trigger"].get("hook_url") is None
 
@@ -788,6 +791,7 @@ def test_un_webhook_sert_ce_qui_ATTEND_a_part_du_journal(monkeypatch):
     vu = {}
     monkeypatch.setattr(RT.db, "get_trigger",
                         lambda i, o: {"id": i, "kind": "webhook", "org_id": o})
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptage_perime", lambda o, t: {})
     monkeypatch.setattr(RT.db, "file_du_declencheur",
                         lambda t, o: vu.update(t=t, o=o) or {"pending": 3, "held": 1})

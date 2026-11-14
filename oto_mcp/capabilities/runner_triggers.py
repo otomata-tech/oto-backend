@@ -472,6 +472,14 @@ class Trigger(BaseModel):
     #: qu'une perte qui continue ce matin.
     expired_since: Optional[str] = None
     expired_last: Optional[str] = None
+    #: « A-t-il tourné ? », servi là où on le cherche (`db.derniers_travaux`) : sa
+    #: DERNIÈRE occurrence `{status, due_at, finished_at}` — `status` celui de la file :
+    #: a-t-elle tourné, pas ce que l'agent a conclu — et la fin de son dernier passage
+    #: réussi. `null` = aucune occurrence sur 35 jours. ⚠️ La liste des runs de
+    #: l'org (`oto_org_monitoring op=runs`) y répond mal : il faut la paginer derrière
+    #: les passages d'un agent fréquent pour y retrouver celui d'un autre.
+    last_run: Optional[dict] = None
+    last_done_at: Optional[str] = None
     #: `schedule` ou `webhook` — ce qui donne le coup d'envoi.
     kind: Optional[str] = None
     payload_mode: Optional[str] = None
@@ -753,7 +761,8 @@ def _avec_pertes(org_id: int, t: dict) -> dict:
     quarante-et-une occurrences de treize jours ont été découvertes par hasard,
     en préparant autre chose. Servi ici, l'écart se voit là où on le cherche.
     """
-    return {**t, **db.comptage_perime(org_id, t["id"])}
+    return {**t, **db.comptage_perime(org_id, t["id"]),
+            **db.derniers_travaux(org_id, [t["id"]])[int(t["id"])]}
 
 
 def _outils_de_la_procedure(ctx: ResolvedCtx, slug: str) -> list[str]:
@@ -1009,9 +1018,10 @@ def _servis_en_liste(org_id: int, ts: list[dict]) -> list[dict]:
     ids = [int(t["id"]) for t in ts]
     hooks = [int(t["id"]) for t in ts if (t.get("kind") or "schedule") == "webhook"]
     pertes = db.comptages_perimes(org_id, ids)
+    derniers = db.derniers_travaux(org_id, ids)
     comptes = db.comptages_livraisons(org_id, hooks)
     files = db.files_des_declencheurs(org_id, hooks)
-    return [_avec_hook(org_id, {**t, **pertes[int(t["id"])]},
+    return [_avec_hook(org_id, {**t, **pertes[int(t["id"])], **derniers[int(t["id"])]},
                        comptes.get(int(t["id"])), files.get(int(t["id"])))
             for t in ts]
 
@@ -3381,6 +3391,13 @@ CAPABILITIES += [
             "measure) plus `expired_since` and `expired_last` — since when, and "
             "whether it is STILL happening, are two different questions. A rising "
             "count on an enabled trigger means nobody is executing this org. "
+            "Did it RUN: `list`/`get` carry `last_run` — its latest occurrence "
+            "`{status, due_at, finished_at}` (`status` from the queue: whether it "
+            "ran, not what the agent concluded), `null` = none in 35 days — and "
+            "`last_done_at`, when its last successful run ended. Read them before "
+            "saying an agent did not run, instead of searching the org's run list "
+            "(`oto_org_monitoring op=runs`), where a frequent agent pushes the others "
+            "pages back. "
             "⚠️ A delivery also carries what its job actually RAN ON and what it "
             "cost to find out: `job_input` is the received body as the agent read "
             "it (bounded; null for a refusal), and `job_attempt_errors` is the "

@@ -154,13 +154,15 @@ def test_runs_sub_and_days_filter_the_openings(conn):
 
 
 def test_runs_rest_input_carries_the_same_filters(conn):
-    """La route REST (`OrgRunsInput`) et l'op MCP servent la même page."""
+    """La route REST (`OrgRunsInput`) et l'op MCP servent la même page ; la console y
+    ajoute seulement son renvoi vers `last_run` (`hint`)."""
     for i in range(5):
         _run(conn, f"r{i}", at=_T0 - timedelta(minutes=i),
              outcome="failed" if i % 2 else "done")
     rest = om._runs(None, om.OrgRunsInput(org_id=ORG, limit=10, errors=True))
     mcp = om._console(None, om.OrgMonitoringInput(op="runs", org_id=ORG, limit=10,
                                                   errors=True))
+    assert "last_run" in mcp.pop("hint")
     assert rest == mcp
     assert [r["run_id"] for r in rest["runs"]] == ["r1", "r3"]
 

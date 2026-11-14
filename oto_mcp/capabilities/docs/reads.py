@@ -16,7 +16,7 @@ from .common import require
 
 
 def liste(sub: Optional[str], inp) -> dict:
-    require(inp.project_id is not None, "missing_project", "`project_id` is required.")
+    require(inp.project_id is not None, "missing_project", common.PROJET_REQUIS)
     require(common.can(sub, inp.project_id, "read"), "forbidden", "Access refused.", 403)
     # Une liste sert à choisir quoi ouvrir : elle rend l'INDEX de l'arbre, pas les
     # corps (37 pages = 201 K caractères, refusés par le client). `body_length`
@@ -42,7 +42,7 @@ def search(ctx: ResolvedCtx, inp) -> dict:
     # (`oto_search` scope=project kinds=page) — un seul verbe, un seul code.
     # Forme de sortie conservée-approchée (`results`), + le pointeur.
     sub = ctx.sub
-    require(inp.project_id is not None, "missing_project", "`project_id` is required.")
+    require(inp.project_id is not None, "missing_project", common.PROJET_REQUIS)
     require(inp.query and inp.query.strip(), "missing_query", "`query` is required.")
     require(common.can(sub, inp.project_id, "read"), "forbidden", "Access refused.", 403)
     from ... import search as search_mod

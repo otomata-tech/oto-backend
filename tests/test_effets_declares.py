@@ -351,6 +351,25 @@ def test_api_act_call_se_juge_sur_la_methode_enregistree(monkeypatch, methode, c
     assert not effets.lit_la_base("api_act", {"op": "request", "method": "GET"})
 
 
+@pytest.mark.parametrize("methode", ["GET", "POST"])
+def test_api_act_call_class_read_se_juge_lire(monkeypatch, methode):
+    """`class: read`, posée par l'admin de la carte, fait lire CETTE action seule."""
+    _action_enregistree(monkeypatch, [
+        {"name": "chercher", "method": methode, "path": "/x", "class": "read"},
+        {"name": "faire", "method": "POST", "path": "/x"}])
+    assert effet("api_act", {"op": "call", "operation": "chercher"}) == ("lire", None)
+    assert effet("api_act", {"op": "call", "operation": "faire"})[0] == "envoyer"
+    assert effet("oto_call", {"name": "api_act", "arguments": {
+        "op": "call", "operation": "chercher"}}) == ("lire", None)
+
+
+def test_api_act_request_ne_porte_jamais_class_read(monkeypatch):
+    """Un appel brut se juge sur son verbe : un `class` glissé dans ses arguments n'y
+    change rien."""
+    assert effet("api_act", {"op": "request", "method": "POST",
+                             "class": "read"})[0] == "envoyer"
+
+
 def test_api_act_call_sans_action_leve(monkeypatch):
     _action_enregistree(monkeypatch, [{"name": "autre", "method": "GET", "path": "/x"}])
     with pytest.raises(McpError):

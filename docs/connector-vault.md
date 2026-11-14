@@ -672,6 +672,14 @@ fait chez le tiers), `op=request` (appel brut), `op=import` (conversion OpenAPI,
 (`api_get`/`api_post`/`api_doc`) restent servis ; `api` reste dans `A_MIGRER` tant
 qu'ils n'ont pas rejoint la paire.
 
+**`class: read` par action** : une action peut déclarer `class: read` (le mot d'oto-core, `class` d'une
+fonction décrite), seule valeur admise, sur un GET ou un POST seulement — une recherche envoyée en corps
+JSON, un point d'appel RPC. Posée par qui administre la carte (`set_definition`, mêmes droits que ci-dessus),
+elle change deux choses pour **cette action seule** : son effet (`tools/effets` la juge `lire` au lieu de
+`envoyer`) et le mode `session`, qui la laisse passer au lieu de la refuser (`api_session_read_only`). Sans
+elle, une action se juge sur son verbe ; un appel brut (`op=request`) ne la porte jamais. `write` et
+`sensitive` sont refusés : ils ne diraient rien de plus que le verbe, ou moins.
+
 **Le même lien pour tout le catalogue** : `oto_connector(op="setup_link", name=…)`
 (`capabilities/connectors/setup_link.py`) rend la carte d'UN connecteur
 (`links.connector_setup_link`, page connecteurs du produit de l'appelant), avec les
@@ -745,7 +753,10 @@ reste sur l'hôte de la `base_url`, un hôte listé ou le domaine déclaré, et 
 (`connectors/api_session.guard` ; les exceptions nommées ne valent que pour l'hôte de la `base_url`). Un 401
 ou un renvoi vers une page de login déclenche un login complet et un seul rejeu ; refusé encore, la clé passe
 au rouge (`credential_rejected`). Le mode **ne fait que lire** : `api_post` et les verbes d'écriture
-d'`api_act` sont refusés par nom (`api_session_read_only`) avant tout envoi, `dry_run` compris.
+d'`api_act` sont refusés par nom (`api_session_read_only`) avant tout envoi, `dry_run` compris — sauf une
+action déclarée `class: read` (ci-dessus). ⚠️ oto-core garde sa propre garde de lecture seule
+(`READ_ONLY_MODES`) : tant qu'elle ne connaît pas cette exception, un POST `class: read` passe la garde
+de l'hôte et reste refusé par le client.
 
 **Le jar de cookies** est un état du compte qui change à l'usage, pas à la pose. Il ne va donc pas dans
 `secret_enc` (que seule la pose réécrit, sous verrou optimiste) mais dans un **satellite scellé** de la même

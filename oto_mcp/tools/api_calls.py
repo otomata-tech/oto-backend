@@ -16,7 +16,8 @@ refusal, upstream-error translation), with the definition's constant headers; `c
 also fills an omitted argument from the definition's saved variables. Every verb is
 carried: oto-core's `HttpConnectorClient.request` takes GET/POST/PUT/PATCH/DELETE —
 except on a card in session mode (login and password), which only reads: a write verb
-is refused by name before anything is sent, `dry_run` included (`api.refuse_write`).
+is refused by name before anything is sent, `dry_run` included (`api.refuse_write`) —
+unless the saved action declares `class: read` (`custom_ops`), never for `request`.
 """
 from __future__ import annotations
 
@@ -94,15 +95,15 @@ def _action(sub: str, operation: Optional[str]):
     return rc, d, found
 
 
-def methode_de_l_action(operation: Optional[str]) -> str:
-    """The HTTP verb (`GET`, `POST`…) of the saved action `operation`, resolved as
-    `api_act(op="call")` resolves it (the call's `_account`, else the org's connector
-    that carries it). Raises like the call itself — never a default verb.
+def action_jugee(operation: Optional[str]) -> dict:
+    """The saved action `operation` (its `method`, its `class` when it declares one),
+    resolved as `api_act(op="call")` resolves it (the call's `_account`, else the org's
+    connector that carries it). Raises like the call itself — never a default.
 
     SYNCHRONOUS and it reads the database (`connector_instances.config`): from an
     `async def`, call it off the event loop (`await run_in_threadpool(...)`), never
     directly. It is what `tools/effets` judges `api_act(op="call")` on."""
-    return _action(_sub(), operation)[2]["method"]
+    return _action(_sub(), operation)[2]
 
 
 def _call(sub: str, operation: Optional[str], args: Optional[dict],
@@ -112,7 +113,7 @@ def _call(sub: str, operation: Optional[str], args: Optional[dict],
         plan = custom_ops.plan_call(found, args, d["variables"])
     except custom_ops.CallRefused as e:
         raise _bad(str(e))
-    api_tool.refuse_write(rc.fields, plan["method"])
+    api_tool.refuse_write(rc.fields, plan["method"], reads=custom_ops.reads(found))
     if dry_run:
         return {"dry_run": True, "account": rc.account, **plan}
     return _send(rc, d["headers"], plan)
@@ -183,7 +184,8 @@ def register(mcp: FastMCP) -> None:
         - `call`: an action by name (`operation`, `args`). `_account` is optional when
           only one of the org's custom connectors has this action. Arguments are
           checked against its input; an omitted one takes the connector's saved
-          variable of the same name. Any verb.
+          variable of the same name. Any verb; an action marked `class: read`
+          only reads, even as a POST.
         - `request`: a raw call to the custom connector of this call (`_account` when
           there are several), any verb (`method`, `path`, `params`, `body`) — for what
           no saved action describes. Its auth and constant headers are applied.
@@ -196,7 +198,8 @@ def register(mcp: FastMCP) -> None:
           given change. `operations` REPLACES the action list: each `name`
           (snake_case), `description`, `method` GET|POST|PUT|PATCH|DELETE, `path`
           relative with `{param}`, `input` (JSON schema object), optional `in`
-          {arg: path|query|body}. Never a secret here: the key stays on the card.
+          {arg: path|query|body}, optional `class: read` (a GET or POST that only
+          reads). Never a secret here: the key stays on the card.
 
         `dry_run=true` (`call`, `request`) returns {method, path, query, body} without
         sending it.

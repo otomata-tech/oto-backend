@@ -97,12 +97,18 @@ _CLASSE_PAR_METHODE = {"GET": "lire", "HEAD": "lire", "POST": "envoyer", "PATCH"
 def _juge_http_act(op: Optional[str], args: dict) -> Optional[str]:
     """`request` does what its `method` does (none given: the declared doubt). `call` does
     what its SAVED action's method does, read in the database
-    (`api_calls.methode_de_l_action`): an unknown action raises, never a default."""
+    (`api_calls.action_jugee`): an unknown action raises, never a default. An action
+    whose admin declared `class: read` reads, whatever its verb — that action only,
+    never a `request`."""
     if op == "request":
         return _CLASSE_PAR_METHODE.get(str(args.get("method") or "").upper())
     if op == "call":
-        from .api_calls import methode_de_l_action
-        methode = str(methode_de_l_action(args.get("operation"))).upper()
+        from .. import custom_ops
+        from .api_calls import action_jugee
+        action = action_jugee(args.get("operation"))
+        if custom_ops.reads(action):
+            return "lire"
+        methode = str(action.get("method")).upper()
         if methode not in _CLASSE_PAR_METHODE:
             raise EffetNonDeclare(f"`api_act` action `{args.get('operation')}`: "
                                   f"unknown method `{methode}`")

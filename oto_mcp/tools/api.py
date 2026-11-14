@@ -209,18 +209,20 @@ def _client_of(rc) -> HttpConnectorClient:
 SESSION_READ_METHODS = ("GET", "HEAD")
 
 
-def refuse_write(fields: dict, method: str) -> None:
+def refuse_write(fields: dict, method: str, *, reads: bool = False) -> None:
     """A card in `session` mode signs in with a person's login and password: its agent
     only reads. Any other verb is refused HERE, by name, before a client is built —
-    oto-core refuses it too, this one says why in the agent's terms."""
+    oto-core refuses it too, this one says why in the agent's terms. `reads`: the
+    saved action declares `class: read` (`custom_ops.reads`), set by whoever
+    administers the card — it is let through, and only it (never a raw request)."""
     verb = (method or "").strip().upper()
-    if api_session.is_session(fields) and verb not in SESSION_READ_METHODS:
+    if api_session.is_session(fields) and verb not in SESSION_READ_METHODS and not reads:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"Refusal `api_session_read_only`: this Custom API signs in with an "
                      f"account's login and password (session mode), so it only reads "
-                     f"(GET, HEAD). {verb} was not sent. Read with `api_get`, or a GET "
-                     f"action."),
+                     f"(GET, HEAD). {verb} was not sent. Read with `api_get`, a GET "
+                     f"action, or an action its admin declared `class: read`."),
             data={"code": "api_session_read_only", "retryable": False,
                   "method": verb}))
 

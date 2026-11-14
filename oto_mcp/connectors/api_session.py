@@ -1,5 +1,10 @@
-"""The `session` auth mode of the `api` connector, on the host's side: the egress guard
-of each login hop, and the cookie jar kept in the vault.
+"""The `session` and `visitor` auth modes of the `api` connector, on the host's side: the
+egress guard of each login hop, and the cookie jar kept in the vault.
+
+The `visitor` mode reads a public site that has no account: no login nor password, the
+"sign-in" is a GET of the entry page the card's `session` field names, whose answer sets
+the visitor's cookies (oto-core: `VisitorSession`). It needs the same three things as the
+session mode, given by the same functions — one guard, one sealed jar, one fingerprint.
 
 oto-core (`oto.tools.http.session`) signs in with the card's login and password, follows
 the declared steps and reads with the session cookie. It asks the host for three things,
@@ -52,6 +57,8 @@ log = logging.getLogger("oto_mcp.connectors.api_session")
 
 CONNECTOR = "api"
 MODE = "session"
+#: The modes that sign in and keep a cookie jar: an account's session, a visitor's.
+JAR_MODES = (MODE, "visitor")
 SATELLITE = "session_jar"
 #: The card fields that decide who signs in: a jar sealed for other values is not used.
 _IDENTITY = ("base_url", "username", "password", "session")
@@ -60,8 +67,18 @@ _IDENTITY = ("base_url", "username", "password", "session")
 Row = tuple[str, str, str]
 
 
+def _mode(fields: dict) -> str:
+    return (fields.get("auth_mode") or "").strip().lower()
+
+
 def is_session(fields: dict) -> bool:
-    return (fields.get("auth_mode") or "").strip().lower() == MODE
+    """The account's session mode — the one that only reads."""
+    return _mode(fields) == MODE
+
+
+def keeps_jar(fields: dict) -> bool:
+    """A mode that signs in and keeps its cookies in the card's row (`JAR_MODES`)."""
+    return _mode(fields) in JAR_MODES
 
 
 def _fingerprint(fields: dict) -> str:

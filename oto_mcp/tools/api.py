@@ -4,12 +4,18 @@ To be distinguished from the bridge (`tools/remote.py`, ADR 0034): the bridge fo
 remote service that HOLDS the credential (custody outside the platform, M2M token);
 here oto holds the target API's secret (AES-encrypted vault, byo_org) and calls
 the API **directly**. The org configures on the Custom API card: `base_url`, `auth_mode`
-(bearer/header/query/basic/oauth2/session/none) + the mode's secret(s).
+(bearer/header/query/basic/oauth2/session/visitor/none) + the mode's secret(s).
 
 The `session` mode signs in with an account's login and password and reads with the
 session cookie the service sets (`connectors/api_session.py`: the guard of each login
 hop, the jar sealed in the vault). It only reads: a write verb is refused here, by name,
 before the client is even built (`refuse_write`), and again by oto-core.
+
+The `visitor` mode reads a public site with no account: the "sign-in" is a GET of the
+entry page the card names, whose cookies serve the calls (same guard, same sealed jar).
+It is not read-only: no person's password is involved, so a POST is judged like any
+other (`tools/effets`: `api_post` sends). A site that gives the visitor no session is
+refused by name (`api_visitor_refused`), never as a rejected credential.
 
 Thin adapter (ADR 0037): the engine (auth + forward) lives in oto-core
 (`oto.tools.http`); here we resolve the org credential and translate errors
@@ -33,7 +39,8 @@ import requests
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
-from oto.tools.http import HttpConnectorClient, SessionHopRefused, SessionRejected
+from oto.tools.http import (HttpConnectorClient, SessionHopRefused, SessionRejected,
+                            VisitorRefused)
 
 from .. import access, egress
 from ..connectors import api_operations, api_session
@@ -65,9 +72,10 @@ def register(mcp: FastMCP) -> None:
             "Read-only HTTP GET call to the API configured for your org "
             "(`api` connector). `path` = path relative to the base_url (starts "
             "with /). `params` = optional query params. The configured auth (bearer, "
-            "API key, basic, oauth2, session) is injected automatically. In session "
-            "mode oto signs in with the account's login and password and reuses the "
-            "session cookie; it is never returned to you."
+            "API key, basic, oauth2, session, visitor) is injected automatically. In "
+            "session mode oto signs in with the account's login and password and reuses "
+            "the session cookie; in visitor mode it opens the site's entry page and "
+            "reuses the cookies it sets. Cookies are never returned to you."
         ),
     )
     def api_get(path: str, params: dict | None = None) -> dict:
@@ -227,7 +235,7 @@ def client_for(fields: dict, headers: dict | None = None, *,
     `base_url`. Guarding only the first would leave an entire outbound path outside the
     guard. In `session` mode, every hop of the login is guarded as it goes
     (`api_session.guard`), and `row` — the vault row of these fields, required in that
-    mode — keeps the session's cookie jar (`api_session`). `headers` = the saved
+    mode and in `visitor` mode — keeps the cookie jar (`api_session`). `headers` = the saved
     definition's constant headers. Raises `egress.EgressRefused` or `ValueError`
     (incomplete or invalid config): each caller translates them for its face."""
     base_url = (fields.get("base_url") or "").strip()
@@ -240,10 +248,10 @@ def client_for(fields: dict, headers: dict | None = None, *,
     if mode.lower() == "oauth2" and token_url:
         egress.check_url(token_url, connector="api", field="token_url")
     session = {}
-    if api_session.is_session(fields):
+    if api_session.keeps_jar(fields):
         if row is None:
-            raise ValueError("the session mode keeps its cookie in the card's vault row, "
-                             "and none was given for this call")
+            raise ValueError(f"the {mode.lower()} mode keeps its cookies in the card's "
+                             "vault row, and none was given for this call")
         session = {"guard": api_session.guard(base_url),
                    "jar": api_session.read_jar(row, fields),
                    "on_jar": api_session.jar_writer(row, fields)}
@@ -314,7 +322,18 @@ def _value_error(e: ValueError) -> McpError:
     Session mode: `SessionRejected` (the service refused the login, or the session
     right after a fresh one) declares `credential_rejected`, which marks the served
     card red (`error_taxonomy.credential_rejected_in_chain`) — the caller raises the
-    result `from e`; `SessionHopRefused` names the host the login was sent to."""
+    result `from e`; `SessionHopRefused` names the host the login was sent to.
+
+    Visitor mode: `VisitorRefused` (the visit set no cookie, was refused, or the session
+    was refused again right after a fresh visit) is NOT a credential mark — there is no
+    account to set again; it is refused by name, `api_visitor_refused`."""
+    if isinstance(e, VisitorRefused):
+        return McpError(ErrorData(code=INVALID_PARAMS, message=(
+            f"Refusal `api_visitor_refused`: the site gave this Custom API's visitor no "
+            f"session ({e}). Nothing was retried beyond one fresh visit. Check the entry "
+            "page (`login.path`, `login.query`) in the card's session steps, or whether "
+            "the site now requires an account."),
+            data={"code": "api_visitor_refused", "retryable": False}))
     if isinstance(e, SessionRejected):
         err = McpError(ErrorData(code=INVALID_PARAMS, message=(
             "The service refused this Custom API's sign-in (session mode): the login "

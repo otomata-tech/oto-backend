@@ -10,7 +10,7 @@ from ._model import CredentialField, _c
 # Multi-auth HTTP client: unlike the bridge, oto HOLDS the target API's
 # secret (AES vault: the org's key, byo_org, or a member's own, byo_user) and
 # calls the API directly (no remote service). `auth_mode` discriminates the mode (bearer/header/query/basic/oauth2/
-# session/none); the required secret fields depend on the mode (validated at call-time by
+# session/visitor/none); the required secret fields depend on the mode (validated at call-time by
 # oto_http.build_auth).
 # TO BE DISTINGUISHED from the bridge (credential outside the platform): here the key
 # is entrusted to oto — no custody on the client side.
@@ -28,7 +28,7 @@ from ._model import CredentialField, _c
 # dep would remove the connector from the catalog instead of degrading it). The copy is
 # held by the `test_api_auth_modes.py` tripwire, which compares it to oto-core AND checks
 # that the fields declared required per mode are EXACTLY the ones `build_auth` requires.
-AUTH_MODES = ("bearer", "header", "query", "basic", "oauth2", "session", "none")
+AUTH_MODES = ("bearer", "header", "query", "basic", "oauth2", "session", "visitor", "none")
 
 CONNECTOR = _c(
     "api", ["api"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
@@ -60,7 +60,9 @@ CONNECTOR = _c(
          "operations you describe (or import from its OpenAPI) become callable by name. "
          "The session mode is for a service with no API key: oto signs in with an "
          "account's login and password, keeps the session cookie encrypted in the vault, "
-         "and only reads (GET).",
+         "and only reads (GET). The visitor mode is for a public site with no account: oto "
+         "opens the entry page the card names, keeps the cookies it sets (encrypted in the "
+         "vault) and calls with them.",
     # `when=` = the modes that make the field RELEVANT; `required` then applies
     # WITHIN those modes. The three fields without `when` apply whatever the mode.
     credential_fields=(
@@ -104,10 +106,12 @@ CONNECTOR = _c(
                         whitespace_significant=True,
                         help="password of the basic pair, or of the account (session "
                              "mode)"),
-        # The session mode's steps, as ONE JSON object read strictly by oto-core
-        # (`oto.tools.http.session.SessionConfig`: an unknown key raises). Not a secret:
-        # paths, field names, hosts. Its whitespace is kept — a constant may hold one.
-        CredentialField("session", "Session steps", secret=False, when=("session",),
+        # The session and visitor modes' steps, as ONE JSON object read strictly by oto-core
+        # (`oto.tools.http.session.SessionConfig`: an unknown key raises, and the visitor
+        # mode has its own closed set). Not a secret: paths, field names, hosts. Its
+        # whitespace is kept — a constant may hold one.
+        CredentialField("session", "Session steps", secret=False,
+                        when=("session", "visitor"),
                         whitespace_significant=True,
                         help="JSON object describing the sign-in. `login`: {path, "
                              "user_field, password_field, constants} — a POST of a JSON "
@@ -118,7 +122,12 @@ CONNECTOR = _c(
                              "step stays on the base URL's host, a host listed in `hosts`, "
                              "or a host under `domain`. E.g. {\"login\": {\"path\": "
                              "\"/api/login\"}, \"follow\": {\"field\": \"auth_url\"}, "
-                             "\"domain\": \"example.org\"}"),
+                             "\"domain\": \"example.org\"}. Visitor mode (no account): "
+                             "`login` is {path, method: \"GET\", query} — the entry page "
+                             "whose answer sets the visitor's cookies, its redirects "
+                             "followed; no `follow`, no login pages by default. E.g. "
+                             "{\"login\": {\"path\": \"/api/session\", \"method\": "
+                             "\"GET\"}}"),
         CredentialField("token_url", "Token URL", secret=False,
                         when=("oauth2",), help="client-credentials endpoint"),
         CredentialField("client_id", "Client ID", secret=False,
@@ -144,9 +153,11 @@ SANS_LOGO_DE_MARQUE = True
 DESCRIPTION = (
     "Connect any tool that has an API key but no dedicated connector — a payroll, "
     "an ERP, an internal service: fill in the base URL, choose the authentication "
-    "mode (bearer, header, query, basic, OAuth2, session or none) and paste the key in "
+    "mode (bearer, header, query, basic, OAuth2, session, visitor or none) and paste the key in "
     "the form, where the vault encrypts it. The agent calls the API by path, or by name "
     "through the operations you describe or import from its OpenAPI document. A service "
     "with no API key is read in session mode: oto signs in with an account's login and "
-    "password, keeps the session cookie encrypted in the vault, and only reads."
+    "password, keeps the session cookie encrypted in the vault, and only reads. A public "
+    "site with no account is read in visitor mode: oto opens its entry page and calls with "
+    "the cookies it sets."
 )

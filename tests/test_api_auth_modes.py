@@ -17,14 +17,21 @@ from oto_mcp.providers.api import AUTH_MODES, CONNECTOR
 
 BASE = {"base_url": "https://api.acme.test"}
 
-# Ce que la lib attend du mode `session` : une configuration lisible, l'URL de base et
-# la garde de l'hôte. Les autres modes n'en ont pas l'usage.
-VALEURS = {"session": '{"login": {"path": "/api/login"}}'}
-CONTEXTE = {"session": {"base_url": BASE["base_url"], "guard": lambda url: None}}
+# Ce que la lib attend des modes `session` et `visitor` : une configuration lisible (le
+# visiteur a son propre jeu de clés), l'URL de base et la garde de l'hôte. Les autres
+# modes n'en ont pas l'usage.
+VALEURS = {"session": {"session": '{"login": {"path": "/api/login"}}'},
+           "visitor": {"session": '{"login": {"path": "/", "method": "GET"}}'}}
+_SESSION = {"base_url": BASE["base_url"], "guard": lambda url: None}
+CONTEXTE = {"session": _SESSION, "visitor": _SESSION}
 
 
 def _build(mode: str, fields: dict):
     return build_auth(mode, fields, **CONTEXTE.get(mode, {}))
+
+
+def _valeur(mode: str, champ: str) -> str:
+    return VALEURS.get(mode, {}).get(champ, "x")
 
 
 def _required_for(mode: str) -> list:
@@ -42,7 +49,7 @@ def test_le_jeu_de_modes_recopie_celui_doto_core():
 def test_les_champs_declares_suffisent_a_construire_lauth(mode):
     """Ce que le registre demande de saisir CONSTRUIT l'auth : pas de sous-déclaration
     (un formulaire complet qui échoue quand même au premier appel)."""
-    _build(mode, {f.name: VALEURS.get(f.name, "x") for f in _required_for(mode)})
+    _build(mode, {f.name: _valeur(mode, f.name) for f in _required_for(mode)})
 
 
 @pytest.mark.parametrize("mode", AUTH_MODES)
@@ -52,7 +59,7 @@ def test_aucun_champ_declare_nest_superflu(mode):
     pourrait exiger des champs que personne ne lit."""
     required = _required_for(mode)
     for dropped in required:
-        partial = {f.name: VALEURS.get(f.name, "x") for f in required
+        partial = {f.name: _valeur(mode, f.name) for f in required
                    if f.name != dropped.name}
         with pytest.raises(ValueError):
             _build(mode, partial)
@@ -71,6 +78,28 @@ def test_session_demande_identifiant_mot_de_passe_et_etapes():
                              "password", "session"]
     assert by_name["password"].secret is True
     assert by_name["session"].secret is False
+
+
+def test_visitor_ne_demande_que_les_etapes():
+    """Un site sans compte : ni identifiant ni mot de passe, seulement la page d'entrée."""
+    by_name = {f.name: f for f in CONNECTOR.fields_for({"auth_mode": "visitor"})}
+    assert list(by_name) == ["base_url", "auth_mode", "label", "doc_path", "session"]
+    assert by_name["session"].required is True and by_name["session"].secret is False
+
+
+def test_une_carte_visitor_coherente_passe_et_ne_garde_rien_d_autre():
+    etapes = '{"login": {"path": "/entree", "method": "GET"}}'
+    kept = credentials_store.validate_fields("api", {
+        **BASE, "auth_mode": "visitor", "session": etapes,
+        "username": "reste", "password": "ancien"})
+    assert kept == {**BASE, "auth_mode": "visitor", "session": etapes}
+
+
+def test_une_carte_visitor_sans_etapes_est_refusee_a_lecriture():
+    with pytest.raises(credentials_store.CredentialFieldsInvalid) as e:
+        credentials_store.validate_fields("api", {**BASE, "auth_mode": "visitor"})
+    assert e.value.code == "missing_credentials"
+    assert "Session steps" in e.value.message
 
 
 def test_les_etapes_de_session_gardent_leurs_espaces():

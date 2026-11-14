@@ -760,6 +760,19 @@ compte nommé —, copiée vers une autre instance) est un cache perdu : journal
 `crypto.unseal` lève alors `crypto.EnveloppeIndechiffrable`, seule erreur que `read_jar` avale (une master
 key absente monte). Le jar n'est jamais rendu à l'agent ni journalisé.
 
+**Le mode `visitor`** (14/11/2026) : pour un site public sans compte. La carte ne prend que `session`, lu par
+oto-core avec son propre jeu fermé (`login` = `{path, method: "GET", query}`, sans `follow`, sans page de
+login par défaut) : la « connexion » est le GET d'une page d'entrée dont la réponse pose les cookies du
+visiteur, ses redirections suivies. Même garde à chaque saut, même jar scellé, même empreinte
+(`api_session.JAR_MODES`, `keeps_jar`) — identifiant et mot de passe y valent vide. Un 401 relance une
+visite et un seul rejeu. Le site qui ne donne pas de session (aucun cookie posé, visite refusée, refus
+encore après une visite neuve) est refusé par nom, `api_visitor_refused`, **jamais** `credential_rejected` :
+il n'y a pas de clé à reposer, la carte ne passe pas au rouge. Le mode **n'est pas en lecture seule** (aucun
+mot de passe d'une personne n'est en jeu) : un POST y est jugé comme partout (`tools/effets` : `api_post`
+envoie, `api_act` suit le verbe), sans exception par mode. Non traité ici : une réponse 200 qui porte une
+erreur métier dans son corps (un drapeau d'erreur, un code) reste un succès jusqu'au lot qui projette la
+réponse (`output`). Banc : `tests/test_api_mode_visiteur.py`.
+
 ### `inst:{id}` — la forme de fil
 
 `instance_refs.make_instance_ref(id)` rend `inst:{id}`, et `parse_ref` accepte désormais

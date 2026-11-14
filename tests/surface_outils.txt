@@ -48,7 +48,7 @@ amplitude_cohort	list members request	5524bc99528ed61c
 amplitude_query	active_users funnel retention segmentation sessions	9c41b5a331326e08
 amplitude_schema	event_properties events group_properties user_properties volumes	b9a31536079a166d
 amplitude_user	activity search	9495c97fc1194f35
-api	list setup_link	db58304d7b56588b
+api	list setup_link	32817fb7d91f6f29
 api_act	call import request set_definition	80e97b4410d978f0
 api_doc	-	99334726611ccf58
 api_get	-	128463baca5916ac

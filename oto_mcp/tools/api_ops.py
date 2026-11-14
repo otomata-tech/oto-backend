@@ -183,8 +183,10 @@ def register(mcp: FastMCP) -> None:
             base_url: setup_link — API root to pre-fill (e.g. https://api.acme.test/v1),
                 no query.
             auth_mode: setup_link — bearer | header | query | basic | oauth2 | session
-                | none. `session` = an account's login and password, for a service
-                with no API key: read-only, its steps are filled in on the card.
+                | visitor | none. `session` = an account's login and password, for a
+                service with no API key: read-only, its steps are filled in on the card.
+                `visitor` = a public site with no account, read with the cookies its
+                entry page sets (named on the card).
             header_name: setup_link — header NAME carrying the key, header mode
                 (e.g. x-api-key).
             query_param: setup_link — parameter NAME carrying the key, query mode.

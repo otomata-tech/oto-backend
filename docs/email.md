@@ -246,15 +246,19 @@ qui ressert).
 
 Par défaut, le corps d'un `email_send` reste du texte brut, échappé : une balise sort
 littéralisée, une liste ou un lien ne se font pas. `markdown=True` rend `body` avec le
-**même rendu que `gmail`** (`_markdown_to_html_fragment` d'oto-core : tableaux, blocs de
-code, listes), importé, pas recopié (`email.corps_markdown`).
+**même rendu assaini que `gmail`** : une seule fonction, `oto_mcp/markdown_assaini.py`
+(`rendu_markdown_assaini`), sert `email_send`, `gmail(op="draft")` et
+`gmail_act(op="send")`, réponses comprises.
 
-Ce rendu-là laisse passer le HTML brut, les attributs (`attr_list` : `{: onclick=… }`) et
-les liens `javascript:` — acceptable dans la boîte Gmail de la personne qui écrit, pas
-sous la charte d'une marque. Le HTML est donc **assaini par liste blanche** (`nh3`) :
-balises de mise en forme seulement (`_MD_BALISES`), liens `http`, `https`, `mailto`, aucun
-attribut de style ni d'événement, **aucune image** (l'image de tête garde son paramètre,
-son `alt` exigé et son `https`). Les marges de la charte (`PARA`) sont posées après
+Le rendu d'oto-core (`_markdown_to_html_fragment` : tableaux, blocs de code, listes) laisse
+passer le HTML brut, les attributs (`attr_list` : `{: onclick=… }`) et les liens
+`javascript:`/`data:`. Le HTML est donc **assaini par liste blanche** (`nh3`) : balises de
+mise en forme seulement, liens `http`, `https`, `mailto`, aucun attribut d'événement, un
+seul style admis (`text-align` d'une cellule de tableau). `gmail` garde les images
+`http(s)` ; `email_send` n'en garde **aucune** (l'image de tête garde son paramètre, son
+`alt` exigé et son `https`). `gmail` rend lui-même le markdown avant de passer la main à
+`GmailClient`, dont le rendu n'est pas assaini ; un `html` écrit par l'appelant part tel
+quel. Les marges de la charte (`PARA`) sont posées après
 l'assainissement. La ligne d'aperçu est le texte du premier bloc, sans syntaxe. Le mailer
 commun (qui re-rend le corps) et la file différée (qui stocke le HTML rendu) reçoivent
 le même rendu.

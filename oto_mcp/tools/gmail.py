@@ -132,19 +132,29 @@ def _resolve_attachments(attachments):
         raise
 
 
-def _signed_html(body: str, html: Optional[str], markdown: bool, signature: str) -> str:
+def _html_du_corps(body: str, html: Optional[str], markdown: bool) -> Optional[str]:
+    """The HTML part of a composed message: `html` as the caller wrote it, otherwise the
+    markdown body rendered AND sanitized (`markdown_assaini` — raw HTML, `attr_list`
+    attributes, `javascript:`/`data:` links removed), otherwise None (plain text only).
+    Rendered here, never left to GmailClient, whose own rendering is not sanitized."""
+    if html is not None:
+        return html
+    if markdown:
+        from oto_mcp.markdown_assaini import rendu_markdown_assaini
+        return rendu_markdown_assaini(body, images=True)
+    return None
+
+
+def _signed_html(body: str, html: Optional[str], signature: str) -> str:
     """The message's HTML body, with the account's signature appended after `--`.
 
     The Gmail API NEVER appends the signature: it is the web client that adds it at
     composition (oto#178, feedback 794/795). The signature is HTML, so the body
-    must be too: `html` as is, otherwise the rendered markdown — the same rendering
-    GmailClient would do itself —, otherwise the escaped plain text, line breaks kept
-    (`markdown=False` means "no markdown", not "no HTML")."""
+    must be too: `html` (already rendered from markdown by `_html_du_corps`), otherwise
+    the escaped plain text, line breaks kept (`markdown=False` means "no markdown",
+    not "no HTML")."""
     if html is not None:
         corps = html
-    elif markdown:
-        from oto.tools.google.gmail.lib.gmail_client import _markdown_to_html_fragment
-        corps = _markdown_to_html_fragment(body)
     else:
         import html as html_mod
         corps = ('<div dir="ltr">' + html_mod.escape(body).replace("\n", "<br>")
@@ -308,6 +318,7 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, b
     tools: signature, attachments, reply or new message."""
     if not body:
         raise _bad("`body` is required to compose a message. Nothing was written.")
+    html = _html_du_corps(body, html, markdown)
     signature_etat = "disabled"
     if sign:
         try:
@@ -319,7 +330,7 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, b
                        "was written. Retry, or pass `sign=False` to "
                        "compose without a signature.")
         if signature:
-            html = _signed_html(body, html, markdown, signature)
+            html = _signed_html(body, html, signature)
             signature_etat = "appended"
         else:
             signature_etat = "none_configured"

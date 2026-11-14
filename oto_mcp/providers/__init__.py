@@ -254,7 +254,7 @@ _DECLARATIONS: tuple[str, ...] = (
     "make",
     "zapier",
     "fireflies",
-    # --- generic http connector (secret IN the oto vault) ---------------------
+    # --- `api` connector, generic HTTP client (secret IN the oto vault) ---------------------
     "api",
     "webflow",
     # Neighbour of `webflow` by trade (CMS): the two cards read together.

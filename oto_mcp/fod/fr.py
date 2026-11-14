@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .http import get as _get, post as _post
+from .http import FodError, get as _get, post as _post
 
 
 class _Entreprises:
@@ -106,24 +106,18 @@ def search_decp(mot_cle=None, titulaire_siret=None, acheteur_siret=None, lieu=No
 
 def search_aides(insee=None, code_postal=None, effectif=None, nature=None,
                  echeance_avant=None, q=None, limit=50, offset=0) -> dict[str, Any]:
-    import httpx
-
     try:
         return _post("/api/fr/aides/search", {
             "insee": insee, "code_postal": code_postal, "effectif": effectif,
             "nature": nature, "echeance_avant": echeance_avant, "q": q,
             "limit": limit, "offset": offset,
         })
-    except httpx.HTTPStatusError as e:
+    except FodError as e:
         # 400 métier du service (commune/CP inconnu du référentiel) : re-lever le
-        # detail actionnable, pas le message httpx générique.
-        if e.response.status_code == 400:
-            try:
-                detail = e.response.json().get("detail", e.response.text)
-            # noqa: SILENT — corps non-JSON : on re-lève juste après avec le texte brut
-            except Exception:
-                detail = e.response.text
-            raise ValueError(detail) from e
+        # détail actionnable. L'ancien `except httpx.HTTPStatusError` ne prenait
+        # jamais : le client FOD ne lève pas cette classe (#1454).
+        if e.status_code == 400:
+            raise ValueError(e.detail) from e
         raise
 
 

@@ -242,6 +242,23 @@ l'image par section, la pièce jointe, et une entrée `image={kind: drive|url}` 
 côté serveur par `file_source` (un upload par envoi — la mauvaise forme pour un visuel
 qui ressert).
 
+## Un corps en markdown (`email_send(markdown=True)`)
+
+Par défaut, le corps d'un `email_send` reste du texte brut, échappé : une balise sort
+littéralisée, une liste ou un lien ne se font pas. `markdown=True` rend `body` avec le
+**même rendu que `gmail`** (`_markdown_to_html_fragment` d'oto-core : tableaux, blocs de
+code, listes), importé, pas recopié (`email.corps_markdown`).
+
+Ce rendu-là laisse passer le HTML brut, les attributs (`attr_list` : `{: onclick=… }`) et
+les liens `javascript:` — acceptable dans la boîte Gmail de la personne qui écrit, pas
+sous la charte d'une marque. Le HTML est donc **assaini par liste blanche** (`nh3`) :
+balises de mise en forme seulement (`_MD_BALISES`), liens `http`, `https`, `mailto`, aucun
+attribut de style ni d'événement, **aucune image** (l'image de tête garde son paramètre,
+son `alt` exigé et son `https`). Les marges de la charte (`PARA`) sont posées après
+l'assainissement. La ligne d'aperçu est le texte du premier bloc, sans syntaxe. Le mailer
+commun (qui re-rend le corps) et la file différée (qui stocke le HTML rendu) reçoivent
+le même rendu.
+
 ## Locale des 6 gabarits transactionnels (oto-backend#700, 2026-09-01)
 
 `users.locale` existait déjà (dashboard : capacité `me.locale.set`, `GET /api/me`,

@@ -43,6 +43,12 @@ CONNECTOR = _c(
     # `api_act` (calls, OpenAPI import, saving the definition). `tools/api.py` keeps
     # the raw-path tools from before the pair (`api_get`/`api_post`/`api_doc`).
     modules=("api", "api_ops", "api_calls"),
+    # `_account` ANNOUNCED in the schema of its tools, statically: each account of the
+    # card is a different API (or a member's personal key next to the org's), and the
+    # served docs tell the agent to choose it with `_account` on every call. Announced
+    # only from two held accounts, the axis was missing from the list a session froze
+    # before its second key was set — the agent then had nothing but `oto_call`.
+    account_axis_static=True,
     # `auth_mode` SELECTS the other fields (oto-backend#449): a `bearer` form
     # need not show the six oauth2 and basic fields, and the write
     # refuses an inconsistent mode instead of accepting it then failing on the 1st call.

@@ -32,6 +32,9 @@ card in session mode lets it through (`tools/api.refuse_write`). A raw call
 (`api_act(op="request")`) never carries it. Only a GET or a POST may declare it — a
 PUT, PATCH or DELETE that reads is not an API anyone describes.
 
+`output` and `refusals` (optional, oto-core's words too): what the agent receives of the
+answer, and a refusal the service writes in the body of a success — `custom_ops_output`.
+
 ⚠️ A path parameter is the one place where an argument value reaches the URL PATH.
 It is percent-encoded whole (`quote(safe="")`) and a value that is `.`/`..` or carries
 a `/` — raw or once decoded — is refused: without that, `{id}` = `../admin` walks out
@@ -44,6 +47,8 @@ import re
 from typing import Any, Optional
 from urllib.parse import quote, unquote
 
+from . import custom_ops_output as output
+
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MAX_OPERATIONS = 100
 # The whole list, serialized: it rides in a JSONB column read on every `api_act(op="call")`.
@@ -55,7 +60,8 @@ ARG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-\[\]]{0,63}$")
 _PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 JSON_TYPES = ("string", "integer", "number", "boolean", "array", "object", "null")
 LOCATIONS = ("path", "query", "body")
-_OP_KEYS = {"name", "description", "method", "path", "input", "in", "class"}
+_OP_KEYS = {"name", "description", "method", "path", "input", "in", "class", "output",
+            "refusals"}
 #: The `class` an action may declare (oto-core's vocabulary is read|write|sensitive).
 READ = "read"
 _READ_METHODS = ("GET", "POST")
@@ -168,6 +174,8 @@ def _validate_one(i: int, op: Any) -> list[str]:
     errs += _path_errors(where, op.get("path"))
     errs += _input_errors(where, op.get("input"))
     errs += _class_errors(where, op, method)
+    errs += output.output_errors(where, op.get("output"))
+    errs += output.refusals_errors(where, op.get("refusals"))
     if errs:
         return errs
     props = (op.get("input") or {}).get("properties", {})
@@ -226,6 +234,7 @@ def validate_operations(ops: Any) -> list[dict]:
             n["in"] = dict(op["in"])
         if reads(op):
             n["class"] = READ
+        n.update(output.normalized(op))
         out.append(n)
     return out
 
@@ -344,4 +353,5 @@ def summary(op: dict) -> dict:
            "method": op["method"], "path": op["path"], "input": op.get("input")}
     if reads(op):
         out["class"] = READ
+    out.update(output.normalized(op))
     return out

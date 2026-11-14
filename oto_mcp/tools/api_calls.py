@@ -26,7 +26,11 @@ from typing import Literal, Optional
 import requests
 from fastmcp import FastMCP
 
-from .. import custom_ops, session_org
+from mcp.types import INVALID_PARAMS, ErrorData
+
+from .. import custom_ops, custom_ops_output, session_org
+from ..mcp_errors import McpError
+from ..texte_tiers import cloture
 from ..connectors import api_operations as store
 from . import api as api_tool
 from .api_ops import (_auth_header, _bad, _definition, _org_connectors, _require_admin,
@@ -66,17 +70,40 @@ def _row(rc) -> tuple[str, str, str]:
     return rc.entity_type, str(rc.entity_id), rc.account or ""
 
 
-def _send(rc, headers: dict, plan: dict):
+def _send(rc, headers: dict, plan: dict, action: Optional[dict] = None):
+    """The answer of the call; for a saved `action`, read as it declares (`refusals`,
+    `output`: `custom_ops_output.served`) — a JSON answer only, a success that is not
+    JSON keeps its `non_json_body` form."""
     client = api_tool.client_from_fields(rc.fields, headers, row=_row(rc))
     try:
-        return client.request(plan["method"], plan["path"], params=plan["query"] or None,
-                              json=plan["body"])
+        answer = client.request(plan["method"], plan["path"],
+                                params=plan["query"] or None, json=plan["body"])
     except requests.JSONDecodeError as e:
         return api_tool.non_json_success(e)
     except ValueError as e:
         raise api_tool._value_error(e)
     except requests.HTTPError as e:
         raise api_tool._upstream_error(e)
+    if action is None:
+        return answer
+    try:
+        return custom_ops_output.served(action, answer)
+    except custom_ops_output.Refused as e:
+        raise _declared_refusal(e, answer)
+
+
+def _declared_refusal(e: "custom_ops_output.Refused", answer) -> McpError:
+    """A refusal the action's definition names, carried by a success answer: its code
+    and message, then the answer's excerpt, fenced as untrusted data — like the body of
+    an upstream error (`api._upstream_error`)."""
+    message = f"Refusal `{e.code}`: {e.message}"
+    body = api_tool.excerpt_of(answer)
+    if body:
+        message += cloture("upstream-answer", body,
+                           origine="Answer returned by the target API", lecture="a diagnostic")
+    return McpError(ErrorData(code=INVALID_PARAMS, message=message,
+                              data={"code": e.code, "retryable": e.retryable,
+                                    "status": custom_ops_output.WHEN}))
 
 
 def _action(sub: str, operation: Optional[str]):
@@ -116,7 +143,7 @@ def _call(sub: str, operation: Optional[str], args: Optional[dict],
     api_tool.refuse_write(rc.fields, plan["method"], reads=custom_ops.reads(found))
     if dry_run:
         return {"dry_run": True, "account": rc.account, **plan}
-    return _send(rc, d["headers"], plan)
+    return _send(rc, d["headers"], plan, found)
 
 
 def _request(method: Optional[str], path: Optional[str], params: Optional[dict],
@@ -199,7 +226,10 @@ def register(mcp: FastMCP) -> None:
           (snake_case), `description`, `method` GET|POST|PUT|PATCH|DELETE, `path`
           relative with `{param}`, `input` (JSON schema object), optional `in`
           {arg: path|query|body}, optional `class: read` (a GET or POST that only
-          reads). Never a secret here: the key stays on the card.
+          reads), optional `output` {items, strip, projection} (what the answer
+          gives) and `refusals` [{code, when: 200, body: {path, equals|contains},
+          message}] (an error the service writes in a success body, served as that
+          named refusal). Never a secret here: the key stays on the card.
 
         `dry_run=true` (`call`, `request`) returns {method, path, query, body} without
         sending it.

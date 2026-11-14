@@ -680,6 +680,18 @@ elle change deux choses pour **cette action seule** : son effet (`tools/effets` 
 elle, une action se juge sur son verbe ; un appel brut (`op=request`) ne la porte jamais. `write` et
 `sensitive` sont refusés : ils ne diraient rien de plus que le verbe, ou moins.
 
+**La réponse d'une action** (`oto_mcp/custom_ops_output.py`) : deux clés facultatives, les mots et le code d'oto-core
+(`oto.connectors.serve`, jamais recopié). `output` (`items`, `strip`, `projection` ; doc « sortie » de la lib) dit
+ce que l'agent reçoit : la liste à déballer, les clés retirées par chemin à points, les clés de premier niveau
+gardées ; une réponse sans la liste `items` déclarée est refusée (`api_output_items_missing`), jamais lue vide.
+`refusals` (doc « signal de refus » de la lib) dit une erreur que le service écrit dans le **corps d'un succès**
+(`{"hasError": true, "errorCode": …}` sous un 200) : `{code, when: 200, body: {path, equals | contains}, message,
+retryable?}`. Jugée sur le corps brut, avant `output`, la première entrée qui tient est servie en refus nommé
+(`code`, `retryable`), suivie d'un extrait de la réponse, clôturé comme le corps d'une erreur du tiers — jamais
+un succès. `when` vaut 200 seulement (un statut d'erreur arrive déjà à l'agent avec son corps, et le client ne
+rend pas le 2xx exact d'un succès) ; `body` est exigé ; `marks_account` n'est pas pris. Une action qui ne déclare
+ni l'une ni l'autre rend exactement ce qu'elle rendait ; `op=request` ne les porte jamais.
+
 **Le même lien pour tout le catalogue** : `oto_connector(op="setup_link", name=…)`
 (`capabilities/connectors/setup_link.py`) rend la carte d'UN connecteur
 (`links.connector_setup_link`, page connecteurs du produit de l'appelant), avec les

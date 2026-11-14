@@ -32,6 +32,7 @@ the result goes back through field redaction (FieldRedactionMiddleware).
 """
 from __future__ import annotations
 
+import json
 import logging
 from urllib.parse import urlsplit, urlunsplit
 
@@ -296,6 +297,14 @@ def non_json_success(e: "requests.JSONDecodeError") -> dict:
     texte = e.doc or ""
     return {"ok": True, "non_json_body": texte[:NON_JSON_MAX],
             "truncated": len(texte) > NON_JSON_MAX}
+
+
+def excerpt_of(value) -> str:
+    """A parsed JSON answer, as text, cleanly truncated like an error body."""
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) > BODY_EXCERPT:
+        text = text[:BODY_EXCERPT].rstrip() + "…"
+    return text
 
 
 def _excerpt(response) -> str:

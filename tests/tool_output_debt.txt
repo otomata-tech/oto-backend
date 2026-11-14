@@ -127,7 +127,6 @@ leexi_notes
 leexi_teams
 leexi_users
 lemlist_contact
-lemlist_database
 lemlist_get_activities
 lemlist_inbox
 lemlist_lead

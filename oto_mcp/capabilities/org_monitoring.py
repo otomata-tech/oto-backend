@@ -24,6 +24,10 @@ le grain nominatif (qui a appelé quoi) est une donnée de responsable, alignée
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import json
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -180,13 +184,17 @@ class OrgCalls(BaseModel):
     voir (`runs/{run_id}`). Un compte lu ici est « lignes + hors_scope », jamais les
     lignes seules (#630).
 
-    ⚠️ `limit` est **silencieusement plafonné à 1000** côté store : demander 5000 rend
-    1000 lignes sans le dire. Comme il n'y a ni total ni curseur, une liste de la
-    taille du `limit` doit toujours être lue comme « probablement tronquée »."""
+    `limit` vaut 200 par défaut et est **écrêté à 1000** (`db.CALLS_LIMITE_MAX`) :
+    demander 5000 rend 1000 lignes. La suite se lit par `next_cursor`, à repasser en
+    `cursor` avec les MÊMES filtres ; `next_cursor` nul = la page est la dernière. Pas
+    de total : c'est le curseur, pas la taille de la page, qui dit s'il en reste."""
     calls: list[CallRow]
     scope: Optional[str] = None
     hors_scope: Optional[int] = None
     hors_scope_hint: Optional[str] = None
+    next_cursor: Optional[str] = Field(default=None, description=(
+        "Opaque position after the last row of this page — pass it back as `cursor` "
+        "(same filters) for the next, older page. Null = this is the last page."))
 
 
 class CallDetail(BaseModel):
@@ -334,10 +342,24 @@ class RunRow(BaseModel):
 
 
 class OrgRuns(BaseModel):
-    """Déroulés récents. ⚠️ Le scope d'org est appliqué à la ligne `run_start` : un
-    déroulé OUVERT sous une autre org mais poursuivi ici n'apparaît pas, même si ses
-    appels, eux, sont dans le journal de l'org. `limit` est plafonné à 500."""
+    """Déroulés récents, plus récent d'abord. ⚠️ Le scope d'org est appliqué à la ligne
+    `run_start` : un déroulé OUVERT sous une autre org mais poursuivi ici n'apparaît
+    pas, même si ses appels, eux, sont dans le journal de l'org.
+
+    `limit` vaut 100 par défaut et est **écrêté à 500** (`db.RUNS_LIMITE_MAX`) ; la
+    suite se lit par `next_cursor`. `sub`, `days` portent sur l'OUVERTURE du run.
+    ⚠️ **`errors=true` filtre la page, pas la portée** : la page examine `limit`
+    ouvertures (`scanned`) et n'en rend que les runs clos en échec (`failed`,
+    `blocked`, `partial`). Elle peut donc être courte, voire vide, avec un
+    `next_cursor` non nul — « aucun échec » ne se lit qu'au `next_cursor` nul."""
     runs: list[RunRow]
+    scanned: int = Field(default=0, description=(
+        "How many run openings this page examined. Equals len(runs) unless "
+        "`errors=true`, which keeps only the failed/blocked/partial ones."))
+    next_cursor: Optional[str] = Field(default=None, description=(
+        "Opaque position after the last run examined — pass it back as `cursor` "
+        "(same filters) for the next, older page. Null = nothing older matches the "
+        "window. With `errors=true` a page can be empty while this is not null."))
 
 
 class RunCall(BaseModel):
@@ -439,7 +461,7 @@ class OrgDaysInput(BaseModel):
 
 class OrgCallsInput(BaseModel):
     org_id: int
-    limit: int = 200
+    limit: int = 200                     # écrêté à db.CALLS_LIMITE_MAX (1000)
     sub: Optional[str] = None            # email ou sub
     tool: Optional[str] = None
     errors: bool = False
@@ -448,11 +470,12 @@ class OrgCallsInput(BaseModel):
     session_id: Optional[str] = None
     min_duration_ms: Optional[int] = None
     error_contains: Optional[str] = None
+    cursor: Optional[str] = None         # `next_cursor` de la page précédente
 
     @field_validator("limit")
     @classmethod
     def _cap_limit(cls, v):
-        return cap_limit(v, 200)
+        return cap_limit(v, db.CALLS_LIMITE_MAX)
 
 
 class OrgCallInput(BaseModel):
@@ -462,17 +485,70 @@ class OrgCallInput(BaseModel):
 
 class OrgRunsInput(BaseModel):
     org_id: int
-    limit: int = 100
+    limit: int = 100                     # écrêté à db.RUNS_LIMITE_MAX (500)
+    sub: Optional[str] = None            # ouverts par CE membre (email ou sub)
+    days: Optional[int] = None           # ouverts depuis N jours
+    errors: bool = False                 # clos en échec seulement (failed|blocked|partial)
+    cursor: Optional[str] = None         # `next_cursor` de la page précédente
 
     @field_validator("limit")
     @classmethod
     def _cap_limit(cls, v):
-        return cap_limit(v, 100)
+        return cap_limit(v, db.RUNS_LIMITE_MAX)
 
 
 class OrgRunInput(BaseModel):
     org_id: int
     run_id: str
+
+
+# ── le curseur des listes `calls` et `runs` ─────────────────────────────────
+#
+# Opaque (base64url d'un JSON compact), il porte la POSITION — `(horodatage µs, id)`
+# de la dernière ligne examinée —, la LENTILLE et l'ORG, rien d'autre : ni sub, ni
+# outil, ni texte d'erreur. Un curseur traverse des URL et les journaux d'accès des
+# proxys ; y loger un filtre le sortirait du périmètre que ces lentilles protègent.
+# Les filtres se repassent donc avec lui. Lentille et org sont VÉRIFIÉES au retour :
+# rejoué sur une autre org ou sur l'autre liste, il rendrait une page prise à une
+# position qui n'est pas la sienne — des lignes sautées sans erreur (même garde que
+# `audit_log._decode_cursor`).
+
+_CURSEUR_ILLISIBLE = (
+    "`cursor` unreadable — truncated, rewritten, or taken from another list or org. "
+    "Start again without `cursor`.")
+
+_REFUS_CURSEUR = DeclaredError(
+    400, "invalid_cursor",
+    "`cursor` illisible, tronqué, ou pris d'une autre liste ou d'une autre org")
+
+
+def _encode_cursor(lens: str, org_id: int, position: Optional[tuple[str, int]]
+                   ) -> Optional[str]:
+    if position is None:
+        return None
+    brut = json.dumps({"l": lens, "o": int(org_id), "t": position[0],
+                       "i": int(position[1])}, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(brut).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: Optional[str], lens: str, org_id: int
+                   ) -> Optional[tuple[str, int]]:
+    """→ `(horodatage ISO µs, id)`, ou `None` sans curseur. Lève un 400, jamais une
+    panne : l'horodatage part au SQL en `::timestamptz`, il est donc relu ici d'abord."""
+    if cursor is None or not cursor.strip():
+        return None
+    try:
+        clair = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        charge = json.loads(clair)
+        lentille, org, quand, ident = (charge["l"], int(charge["o"]), charge["t"],
+                                       int(charge["i"]))
+        datetime.fromisoformat(str(quand).replace("Z", "+00:00"))
+    except (binascii.Error, ValueError, TypeError, KeyError, AttributeError,
+            UnicodeDecodeError):
+        raise AuthzDenied(400, "invalid_cursor", _CURSEUR_ILLISIBLE)
+    if lentille != lens or org != int(org_id):
+        raise AuthzDenied(400, "invalid_cursor", _CURSEUR_ILLISIBLE)
+    return str(quand), ident
 
 
 # ── handlers ────────────────────────────────────────────────────────────────
@@ -484,11 +560,15 @@ def _summary(ctx: ResolvedCtx, inp: OrgSummaryInput) -> dict:
 
 def _calls(ctx: ResolvedCtx, inp: OrgCallsInput) -> dict:
     # La page ET son plancher (#630) — le même geste que la console plateforme.
-    return monitoring.calls_with_scope(monitoring.CallsInput(
+    before = _decode_cursor(inp.cursor, "calls", inp.org_id)
+    out = monitoring.calls_with_scope(monitoring.CallsInput(
         limit=inp.limit, sub=inp.sub, tool=inp.tool,
         errors=inp.errors, days=inp.days, org_id=inp.org_id,
         run_id=inp.run_id, session_id=inp.session_id,
-        min_duration_ms=inp.min_duration_ms, error_contains=inp.error_contains))
+        min_duration_ms=inp.min_duration_ms, error_contains=inp.error_contains),
+        before=before)
+    out["next_cursor"] = _encode_cursor("calls", inp.org_id, out.pop("_next", None))
+    return out
 
 
 def _call(ctx: ResolvedCtx, inp: OrgCallInput) -> dict:
@@ -519,8 +599,16 @@ def _adoption(ctx: ResolvedCtx, inp: OrgDaysInput) -> dict:
 
 
 def _runs(ctx: ResolvedCtx, inp: OrgRunsInput) -> dict:
-    return {"runs": deprecations.lignes_avec_les_deux_noms(
-        db.list_runs(inp.limit, org_id=inp.org_id))}
+    """Une page de runs de l'org. `sub`, `days` et `cursor` bornent les OUVERTURES
+    examinées ; `errors` ne garde, parmi elles, que les runs clos en échec — cf.
+    `db.list_runs_page` pour pourquoi ce filtre-là vient après la page."""
+    page = db.list_runs_page(
+        inp.limit, org_id=inp.org_id, sub=monitoring._resolve_sub(inp.sub),
+        since_days=inp.days, before=_decode_cursor(inp.cursor, "runs", inp.org_id),
+        issues=db.ISSUES_EN_ECHEC if inp.errors else None)
+    return {"runs": deprecations.lignes_avec_les_deux_noms(page["runs"]),
+            "scanned": page["scanned"],
+            "next_cursor": _encode_cursor("runs", inp.org_id, page["next"])}
 
 
 def _run(ctx: ResolvedCtx, inp: OrgRunInput) -> dict:
@@ -609,10 +697,11 @@ class OrgMonitoringInput(BaseModel):
                 "agents_en_echec"]
     org_id: int
     days: Optional[int] = None            # fenêtre (défaut 7 ; adoption/gaps/tool_quality : 30)
-    limit: Optional[int] = None           # calls (200) / runs (100) / export (1000)
-    sub: Optional[str] = None             # summary/calls : filtre membre (email ou sub)
+    limit: Optional[int] = None           # calls (200, max 1000) / runs (100, max 500) / export (1000)
+    sub: Optional[str] = None             # summary/calls/runs : filtre membre (email ou sub)
     tool: Optional[str] = None            # calls : filtre outil exact
-    errors: bool = False                  # calls : erreurs seulement
+    errors: bool = False                  # calls : erreurs seulement ; runs : clos en échec
+    cursor: Optional[str] = None          # calls/runs : `next_cursor` de la page précédente
     run_id: Optional[str] = None          # run (requis) / calls (filtre)
     session_id: Optional[str] = None      # calls : tous les appels d'une conversation
     min_duration_ms: Optional[int] = None  # calls : appels lents
@@ -646,7 +735,7 @@ def _console(ctx: ResolvedCtx, inp: OrgMonitoringInput) -> dict:
             org_id=oid, limit=inp.limit or 200, sub=inp.sub, tool=inp.tool,
             errors=inp.errors, days=inp.days, run_id=inp.run_id,
             session_id=inp.session_id, min_duration_ms=inp.min_duration_ms,
-            error_contains=inp.error_contains))
+            error_contains=inp.error_contains, cursor=inp.cursor))
     if inp.op == "call":
         return _call(ctx, OrgCallInput(org_id=oid, call_id=_need(
             inp.call_id, "missing_call_id", "`call_id` requis pour call.")))
@@ -655,7 +744,9 @@ def _console(ctx: ResolvedCtx, inp: OrgMonitoringInput) -> dict:
     if inp.op == "adoption":
         return _adoption(ctx, OrgDaysInput(org_id=oid, days=inp.days or 30))
     if inp.op == "runs":
-        return _runs(ctx, OrgRunsInput(org_id=oid, limit=inp.limit or 100))
+        return _runs(ctx, OrgRunsInput(
+            org_id=oid, limit=inp.limit or 100, sub=inp.sub, days=inp.days,
+            errors=inp.errors, cursor=inp.cursor))
     if inp.op == "run":
         return _run(ctx, OrgRunInput(org_id=oid, run_id=_need(
             inp.run_id, "missing_run_id", "`run_id` requis pour run.")))
@@ -1091,7 +1182,7 @@ CAPABILITIES += [
                authz=_ADMIN_OF, mcp=None, Output=OrgMonitoringSummary,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/summary", _ID)),
     Capability(key="org.monitoring.calls", handler=bornee(_calls), Input=OrgCallsInput,
-               authz=_ADMIN_OF, mcp=None, Output=OrgCalls,
+               authz=_ADMIN_OF, mcp=None, Output=OrgCalls, errors=(_REFUS_CURSEUR,),
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/calls", _ID)),
     # Lentille MEMBRE, volontairement distincte de celle du dessus (voir le bloc
     # de commentaire au-dessus de `BillableCallRow`) : le relevé de consommation
@@ -1142,7 +1233,7 @@ CAPABILITIES += [
                authz=_ADMIN_OF, mcp=None, Output=OrgAdoption,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/adoption", _ID)),
     Capability(key="org.monitoring.runs", handler=bornee(_runs), Input=OrgRunsInput,
-               authz=_ADMIN_OF, mcp=None, Output=OrgRuns,
+               authz=_ADMIN_OF, mcp=None, Output=OrgRuns, errors=(_REFUS_CURSEUR,),
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/runs", _ID)),
     Capability(key="org.monitoring.run", handler=_run, Input=OrgRunInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgRun,
@@ -1155,7 +1246,7 @@ CAPABILITIES += [
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/tool-quality", _ID)),
     Capability(
         key="org.monitoring.console", handler=bornee(_console), Input=OrgMonitoringInput,
-        authz=_ADMIN_OF,
+        authz=_ADMIN_OF, errors=(_REFUS_CURSEUR,),
         description=(
             "Observability of YOUR org (org admin) — `org_id` required. op=summary "
             "(aggregates over the org: totals, by tool w/ avg+p95 latency, by member, by "
@@ -1163,9 +1254,15 @@ CAPABILITIES += [
             "actually uses oto, who never did, who is blocked by a connector — the org's "
             "answer to 'is my team on board') / calls (call log of the org, newest first; "
             "filters `sub`, `tool`, `errors`, `days`, `run_id`, `session_id`, "
-            "`min_duration_ms`, `error_contains`) / call (`call_id`) / runs · run "
-            "(`run_id` → timeline; `content_archived` = its body went to cold archive, "
-            "only its bounds remain) / connectors (which connector fails to resolve for "
+            "`min_duration_ms`, `error_contains`; `limit` default 200, max 1000) / call "
+            "(`call_id`) / runs (newest first; `sub` and `days` filter on who opened it "
+            "and when, `errors=true` keeps runs closed failed|blocked|partial; `limit` "
+            "default 100, max 500) · run (`run_id` → timeline; `content_archived` = its "
+            "body went to cold archive, only its bounds remain). calls and runs page "
+            "with `cursor`: pass back `next_cursor` with the SAME filters until it is "
+            "null — that is how a window wider than one page is covered. With "
+            "`errors=true` a runs page only shows the failures among the `scanned` "
+            "openings, so it can be empty while `next_cursor` is not / connectors (which connector fails to resolve for "
             "your members) / gaps · tool_quality (what YOUR members reported missing or "
             "broken, AGGREGATED) / signals (the same reports RAW, with their body — the "
             "counts say how many, only the body says why; filters `signal` "

@@ -155,7 +155,31 @@ def test_un_membre_de_l_org_voit_toujours_son_catalogue(monde, monkeypatch):
 
 
 def test_les_listes_hors_data_ne_portent_pas_l_axe_projet():
-    """Projets, pages, procédures, recherche : l'axe `_project=` ne s'y applique pas
-    (il est retiré sans effet) — aucune pose d'org de projet n'y entre."""
-    for nom in ("oto_project", "oto_doc", "oto_procedure", "oto_search", "oto_node"):
+    """Projets, recherche, nœuds : l'axe `_project=` ne s'y applique pas — aucune pose
+    d'org de projet n'y entre."""
+    for nom in ("oto_project", "oto_search", "oto_node"):
         assert call_axes.PROJECT not in call_axes.axes_for_call(nom), nom
+
+
+@pytest.mark.parametrize("nom", ["oto_doc", "oto_procedure"])
+def test_pages_et_procedures_recoivent_le_projet_SANS_son_org(monde, monkeypatch, nom):
+    """`oto_doc` et `oto_procedure` lisent le projet de l'appel (`_PROJECT_SPINE_TOOLS`),
+    mais leurs listes liraient l'org co-posée comme celle de l'appelant : l'invité hors
+    de l'org y verrait les procédures et les pages de l'org. La vraie pose, sur ces
+    deux outils, donne le projet seul — ni org, ni groupe, ni clés."""
+    from oto_mcp import access
+    sub = monde["invite"]
+    monkeypatch.setattr(call_axes, "require_axis_sub", lambda axis: sub)
+    monkeypatch.setattr(session_org, "current_subdomain_candidate", lambda: None)
+    monkeypatch.setattr(access, "current_user_sub_from_token", lambda: sub)
+    axe = next(a for a in call_axes.axes_for_call(nom) if a.param == "_project")
+
+    async def _appel():
+        undo = await axe.pin_for(monde["pid"], nom)
+        try:
+            return (session_org.current_call_project(), session_org.current_call_org(),
+                    session_org.current_call_group(), session_org.current_call_cles())
+        finally:
+            for reset, tok in reversed(undo):
+                reset(tok)
+    assert asyncio.run(_appel()) == (monde["pid"], None, None, None)

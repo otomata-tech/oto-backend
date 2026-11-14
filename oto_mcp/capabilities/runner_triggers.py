@@ -238,8 +238,12 @@ class TriggerInput(BaseModel):
         "(op=unshare). `can_edit` says which."))
     # ── le WEBHOOK ────────────────────────────────────────────────────────────
     #: `schedule` (défaut) ou `webhook`. Posé à la CRÉATION et jamais après : un
-    #: agent ne change pas de coup d'envoi en cours de route.
-    kind: Optional[Literal["schedule", "webhook"]] = None
+    #: agent ne change pas de coup d'envoi en cours de route. À `update`, le même
+    #: genre est sans effet, un autre est REFUSÉ (`kind_immutable`) — jamais ignoré.
+    kind: Optional[Literal["schedule", "webhook"]] = Field(default=None, description=(
+        "`schedule` (default) or `webhook`, set at `create` only. On `update` the same "
+        "kind is a no-op and another kind is refused (`kind_immutable`): create a new "
+        "agent of that kind, then delete this one."))
     #: Ce que l'agent fait du corps reçu. `ignore` (défaut) ne le transmet même
     #: pas ; `fields` n'en extrait que ce qui est nommé ; `inline` joint le tout.
     payload_mode: Optional[Literal["ignore", "fields", "inline"]] = Field(
@@ -472,6 +476,14 @@ class Trigger(BaseModel):
     #: qu'une perte qui continue ce matin.
     expired_since: Optional[str] = None
     expired_last: Optional[str] = None
+    #: « A-t-il tourné ? », servi là où on le cherche (`db.derniers_travaux`) : sa
+    #: DERNIÈRE occurrence `{status, due_at, finished_at}` — `status` celui de la file :
+    #: a-t-elle tourné, pas ce que l'agent a conclu — et la fin de son dernier passage
+    #: réussi. `null` = aucune occurrence sur 35 jours. ⚠️ La liste des runs de
+    #: l'org (`oto_org_monitoring op=runs`) y répond mal : il faut la paginer derrière
+    #: les passages d'un agent fréquent pour y retrouver celui d'un autre.
+    last_run: Optional[dict] = None
+    last_done_at: Optional[str] = None
     #: `schedule` ou `webhook` — ce qui donne le coup d'envoi.
     kind: Optional[str] = None
     payload_mode: Optional[str] = None
@@ -753,7 +765,8 @@ def _avec_pertes(org_id: int, t: dict) -> dict:
     quarante-et-une occurrences de treize jours ont été découvertes par hasard,
     en préparant autre chose. Servi ici, l'écart se voit là où on le cherche.
     """
-    return {**t, **db.comptage_perime(org_id, t["id"])}
+    return {**t, **db.comptage_perime(org_id, t["id"]),
+            **db.derniers_travaux(org_id, [t["id"]])[int(t["id"])]}
 
 
 def _outils_de_la_procedure(ctx: ResolvedCtx, slug: str) -> list[str]:
@@ -1009,9 +1022,10 @@ def _servis_en_liste(org_id: int, ts: list[dict]) -> list[dict]:
     ids = [int(t["id"]) for t in ts]
     hooks = [int(t["id"]) for t in ts if (t.get("kind") or "schedule") == "webhook"]
     pertes = db.comptages_perimes(org_id, ids)
+    derniers = db.derniers_travaux(org_id, ids)
     comptes = db.comptages_livraisons(org_id, hooks)
     files = db.files_des_declencheurs(org_id, hooks)
-    return [_avec_hook(org_id, {**t, **pertes[int(t["id"])]},
+    return [_avec_hook(org_id, {**t, **pertes[int(t["id"])], **derniers[int(t["id"])]},
                        comptes.get(int(t["id"])), files.get(int(t["id"])))
             for t in ts]
 
@@ -2157,6 +2171,21 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             lu["prete"] = _acces_agent.prete(ctx.sub, actuel)
         return actuel["sub"] if lu["prete"] else ctx.sub
 
+    if inp.kind is not None:
+        # Le GENRE ne se change pas (voir `db.update_trigger`) : un autre genre était
+        # accepté par le schéma puis IGNORÉ — la réponse disait l'ancien, sans erreur.
+        # Jugé AVANT le cadencement : `kind=schedule cron=…` sur un webhook doit dire
+        # le vrai motif, pas « un webhook n'a pas de cadencement ».
+        if not _actuel():
+            raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+        genre = _actuel().get("kind") or "schedule"
+        if inp.kind != genre:
+            raise AuthzDenied(
+                400, "kind_immutable",
+                f"cette automatisation est `{genre}` : son genre se pose à la création "
+                f"et ne se change pas. Pour un agent `{inp.kind}`, crée-en un nouveau "
+                f"(`op=create kind={inp.kind}`), puis supprime celui-ci (`op=delete`).")
+
     if any(getattr(inp, c) is not None for c in _REGLAGES_WEBHOOK):
         if not _actuel():
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
@@ -3074,6 +3103,10 @@ CAPABILITIES += [
                           "`platform_tools` nomme un outil absent des `tools` de l'agent"),
             DeclaredError(400, "folder_too_long",
                           f"`folder` de plus de {FOLDER_MAX} caractères — un libellé, pas une phrase"),
+            DeclaredError(400, "kind_immutable",
+                          "`update` avec un `kind` différent de celui de l'agent : le "
+                          "genre se pose à `create` et ne se change pas (le même genre "
+                          "est sans effet) — créer un nouvel agent de l'autre genre"),
             DeclaredError(400, "invalid_schedule",
                           "cron malformé, fuseau inconnu, ou deux occurrences "
                           "espacées de moins de 5 minutes"),
@@ -3381,6 +3414,13 @@ CAPABILITIES += [
             "measure) plus `expired_since` and `expired_last` — since when, and "
             "whether it is STILL happening, are two different questions. A rising "
             "count on an enabled trigger means nobody is executing this org. "
+            "Did it RUN: `list`/`get` carry `last_run` — its latest occurrence "
+            "`{status, due_at, finished_at}` (`status` from the queue: whether it "
+            "ran, not what the agent concluded), `null` = none in 35 days — and "
+            "`last_done_at`, when its last successful run ended. Read them before "
+            "saying an agent did not run, instead of searching the org's run list "
+            "(`oto_org_monitoring op=runs`), where a frequent agent pushes the others "
+            "pages back. "
             "⚠️ A delivery also carries what its job actually RAN ON and what it "
             "cost to find out: `job_input` is the received body as the agent read "
             "it (bounded; null for a refusal), and `job_attempt_errors` is the "

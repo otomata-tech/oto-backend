@@ -104,9 +104,11 @@ def run(fn: Callable[[], T], label: str, conflict: Optional[str] = None) -> T:
         raise bad(str(e))
 
 
-def markdown_html(text: str) -> str:
-    """A body written in markdown, as HTML — the very renderer of `gmail` (op=draft)
-    (tables, fenced code, lists), so that an agent writes the same way everywhere."""
-    from oto.tools.google.gmail.lib.gmail_client import _markdown_to_html_fragment
+def markdown_html(text: str, *, cid: bool = False) -> str:
+    """A body written in markdown, as HTML — the very rendering of `gmail` (op=draft)
+    and `email_send` (`markdown_assaini.rendu_markdown_assaini`: tables, fenced code,
+    lists, `http(s)` images), so that an agent writes the same way everywhere. `cid=True`
+    also keeps a `cid:` image — a message's inline attachment (`outlook`)."""
+    from ..markdown_assaini import rendu_markdown_assaini
 
-    return _markdown_to_html_fragment(text)
+    return rendu_markdown_assaini(text, images=True, cid=cid)

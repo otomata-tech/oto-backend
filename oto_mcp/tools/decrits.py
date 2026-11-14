@@ -24,6 +24,12 @@ connector. What the description derives (pair, effects, batches, personal argume
 - A refusal the description names (`engine.Refused`) becomes `RefusNomme` (`status_code`, `retryable`,
   `credential_rejected` from `marks_account`), which the error taxonomy reads like any upstream error; an undeclared
   status passes as the engine raised it (`UpstreamHTTPError`, its body masked of the call's secrets).
+- A connector whose description declares access levels (`auth.access_levels`) is governed like any leveled
+  connector (`connectors/access_levels.py`): the org's or team's level, else the description's `default_level`. The
+  guard (`connectors/access_level_gate.py`) refuses what the level does not cover before the tool runs; the engine
+  receives the level of the call (`access_level=`), refuses on its own what it does not serve, and a service account
+  claims that level's scopes. Both refusals, and a level the description no longer declares, say the gesture: an org
+  admin sets the level (`oto_connector_access_level`).
 - The probe (`connector.probe`) is registered with `connectors/verify`, `auth`, or `auth+quota` with a balance.
 - What it does not know how to serve is refused at MOUNT (`descriptions.verifier`), never approximated at call time.
 """
@@ -43,7 +49,7 @@ from pydantic import PrivateAttr
 from oto.connectors import cost, engine, serve
 
 from .. import access, session_org
-from ..connectors import descriptions
+from ..connectors import access_level_gate, descriptions
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from .lecture import ACTE, LECTURE, SIMULATION
@@ -135,6 +141,7 @@ class Servi:
         self.plateforme = "platform" in description["connector"]["modes"]
         self.sonde = (description["connector"].get("probe") or {}).get("function")
         self.fonctions = {f["name"]: f for f in description["functions"]}
+        self.a_niveaux = "access_levels" in description["connector"]["auth"]
         self.validateurs = {n: Draft202012Validator(f["input"]) for n, f in self.fonctions.items()}
 
     def _credential_de_l_appelant(self) -> tuple[dict, bool]:
@@ -182,9 +189,15 @@ class Servi:
             raise _invalide(f"op `{f['name']}` reads the {self.description['connector']['label']} account itself; "
                             "this call runs on the shared platform key, whose account is the platform's. "
                             "Nothing was done.")
+        niveau = access_level_gate.level_of_the_call(self.nom) if self.a_niveaux else None
         try:
-            pages = engine.execute(self.description, f["name"], args, credential=credential)
+            pages = engine.execute(self.description, f["name"], args, credential=credential, access_level=niveau)
+        except engine.UnknownAccessLevel as e:
+            raise RefusNomme(engine.Refused("unknown_access_level", f"{e} {self._geste_du_niveau()}")) from e
         except engine.Refused as refus:
+            if refus.code == "access_level_denied":
+                texte = str(refus).removesuffix(f" ({refus.code})")
+                refus = engine.Refused(refus.code, f"{texte} {self._geste_du_niveau('full')}")
             raise RefusNomme(refus) from refus
         except engine.InvalidArguments as e:
             message = str(e)
@@ -193,6 +206,14 @@ class Servi:
             raise _invalide(f"{message} Nothing was done.") from None
         self._noter_la_quantite(f, args, pages.answers)
         return serve.result(serve.function(self.description, f["name"]), pages.answers, pages.next_cursor)
+
+    def _geste_du_niveau(self, niveau: Optional[str] = None) -> str:
+        """What sets the level right: an org admin, by `oto_connector_access_level`."""
+        niveaux = ", ".join(self.description["connector"]["auth"]["access_levels"])
+        return (f"Nothing was sent. An org admin sets the level of the organization "
+                f"({'`' + niveau + '`' if niveau else 'one of ' + niveaux}): oto_connector_access_level(op='set', "
+                f"scope='org', org_id=<the organization's id, from oto_context>, name='{self.nom}', "
+                f"level='{niveau or '<one of ' + niveaux + '>'}').")
 
     def sonder(self, fields: dict, config: Optional[dict] = None) -> Optional[dict]:  # noqa: ARG002
         """"Test connection": the description's probe function, no argument, by the engine; a refusal that marks the

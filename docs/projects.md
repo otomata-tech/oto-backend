@@ -17,6 +17,14 @@ Capacités co-déclarées : **`oto_project`** (`capabilities/projects.py`, op cr
 update/archive/link/unlink/activity, `POST /api/me/projects`), **`oto_doc`** (`capabilities/
 docs/`, op create/list/get/update/patch/delete/move/revisions/revert…, `POST /api/me/docs` —
 un package depuis le 01/09, dispatcher et descripteur dans `docs/core.py`).
+⚠️ Sur la face MCP, `oto_doc` et `oto_procedure` reçoivent le jeton d'appel `_project=`
+(signal d'usage 1471, `call_axes._PROJECT_SPINE_TOOLS`) : la consigne dit « sur chaque
+appel », et ils le refusaient. Sur `oto_doc`, il tient lieu de `project_id` pour
+create/bulk_create/list/search (les deux différents : 400 `project_conflict`) ; sur
+`oto_procedure`, il fait sortir le bloc `project_instance` de `op=get`. ⚠️ Sur ces deux
+outils, le jeton pose le projet SEUL (`call_axes._pin_project_pour`) : ni l'org du projet,
+ni son groupe, ni ses clés — leurs listes liraient l'org co-posée comme celle de
+l'appelant, et un invité hors de l'org y verrait ses procédures et ses pages.
 Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dispatch `_OPS`).
 
 > **Archiver se défait, et dit ce qu'il range (23/09/2026, oto#38).** `op=archive` pose

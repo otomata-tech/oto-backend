@@ -89,6 +89,7 @@ from __future__ import annotations
 
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
@@ -114,6 +115,57 @@ def _need(value, name: str, op: str):
     if value is None:
         raise _bad(f"op='{op}' requires {name}")
     return value
+
+
+# Folk's date-times (`completedAt` of mark-as-done, `dateTime` of an
+# interaction) are `format: date-time` in its OpenAPI, but the validator behind
+# them only takes the UTC form with a trailing `Z`: an offset such as `+02:00`,
+# a perfectly valid ISO 8601, comes back as a 422 `Invalid datetime` that does
+# not say which form it wanted (usage signal 1476). The interaction field is
+# also capped at 24 characters — exactly `YYYY-MM-DDTHH:MM:SS.mmmZ`.
+_UTC_Z = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z")
+_ISO_DATETIME = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})"
+    r"(?:[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?"
+    r"\s*(?:([Zz])|([+-])(\d{2}):?(\d{2}))?)?")
+_DATETIME_EXAMPLE = "2026-11-13T09:00:00Z"
+
+
+def _folk_datetime(value, field: str) -> str:
+    """`value` in the only date-time form Folk accepts: UTC, trailing `Z`.
+
+    - already `…Z` (uppercase, `T` separator): returned AS IS — what worked
+      keeps going out byte for byte;
+    - with an offset (`+02:00`, `-0500`, `+00:00`) or a lowercase `z`: converted
+      to the SAME instant in UTC, `YYYY-MM-DDTHH:MM:SS.mmmZ` (sub-millisecond
+      digits dropped);
+    - without a timezone (or a bare date): REFUSED, naming the form. Guessing
+      a timezone for the caller would silently move the instant.
+    """
+    if isinstance(value, str) and _UTC_Z.fullmatch(value):
+        return value
+    expected = (f"`{field}` must be an ISO 8601 date-time in UTC with a "
+                f"trailing 'Z', e.g. {_DATETIME_EXAMPLE}")
+    m = _ISO_DATETIME.fullmatch(value.strip()) if isinstance(value, str) else None
+    if m is None:
+        raise _bad(f"{expected} — got {value!r}.")
+    (year, month, day, hour, minute, second, frac,
+     zulu, sign, off_h, off_m) = m.groups()
+    if hour is None or not (zulu or sign):
+        raise _bad(
+            f"{expected} — got {value!r}, which has no timezone: Folk refuses "
+            "it, and guessing one would move the instant. Convert it to UTC, "
+            "or give its offset (e.g. +02:00) and it is converted for you.")
+    try:
+        offset = timedelta(hours=int(off_h), minutes=int(off_m)) if sign else timedelta(0)
+        local = datetime(int(year), int(month), int(day), int(hour),
+                         int(minute), int(second or 0),
+                         tzinfo=timezone(-offset if sign == "-" else offset))
+    except ValueError:
+        raise _bad(f"{expected} — got {value!r}, which is not a valid date-time.")
+    millis = int((frac or "0")[:3].ljust(3, "0"))
+    utc = local.astimezone(timezone.utc)
+    return f"{utc:%Y-%m-%dT%H:%M:%S}.{millis:03d}Z"
 
 
 _CUSTOM_FIELD_RESERVED_KEYS = {"group_id", "entity_type", "custom_field_name"}
@@ -405,6 +457,8 @@ def _valider_creation(entity: str, fields: Optional[dict],
             f"Reminder: op='create' uses Python snake_case keys "
             f"(first_name, company_id...) — NOT the camelCase Folk API field "
             f"names (jobTitle, customFieldValues...) used by op='update'.")
+    if entity == "interaction" and fields.get("date_time"):
+        fields["date_time"] = _folk_datetime(fields["date_time"], "date_time")
     return fields
 
 
@@ -518,6 +572,8 @@ def _preparer_maj(c, entity: str, id: str, fields: Optional[dict] = None,
     `customFieldValues` and `groups` the same way (Folk REPLACES both)."""
     fields = dict(fields or {})
     _reject_forbidden_update_fields(entity, fields)
+    if entity == "interaction" and fields.get("dateTime"):
+        fields["dateTime"] = _folk_datetime(fields["dateTime"], "dateTime")
     current = None
     # `customFieldValues` joins the list of fields that REQUIRE the current state: without
     # it, a partial patch is destructive (cf. `_merge_custom_fields`).
@@ -979,7 +1035,8 @@ def register(mcp: FastMCP) -> None:
             deal: {name*, people_ids, company_ids, custom_fields}
             note: {entity_id*, content*, visibility}
             interaction: {entity_id*, type*, title*, content, date_time}
-                — `date_time` is REQUIRED by Folk even though it reads as
+                — `date_time` is UTC with a trailing `Z` (🕘 below), and
+                REQUIRED by Folk even though it reads as
                 optional here; omitted, it defaults to now rather than failing
                 with an opaque 422 (which is what the connector did until
                 2026-08-27).
@@ -987,6 +1044,17 @@ def register(mcp: FastMCP) -> None:
                 recurrence_frequency, assigned_users, is_public}
             reminder: {entity_id*, name*, recurrence_rule*, visibility}
                 — DEPRECATED by Folk, use task.
+
+        🕘 **Date-times are UTC with a trailing `Z`** — e.g.
+        `2026-11-13T09:00:00Z` (or `…09:00:00.000Z`). This covers
+        `fields.completedAt` (op="mark_done"), interaction `date_time`
+        (op="create") and interaction `dateTime` (op="update"). Folk refuses
+        any other ISO 8601 form with a 422 `Invalid datetime` that does not
+        name the one it wants. A value with an offset (`2026-11-13T10:00:00+01:00`)
+        is converted here to the same instant in UTC (`…09:00:00.000Z`); a value
+        with NO timezone (`2026-11-13T10:00:00`, or a bare date) is refused
+        before the call — convert local time to UTC, or give its offset.
+        Search `filters` are not covered by this: see their own date format.
 
         `task` field notes: `due_at` is a date "YYYY-MM-DD", `due_time` an
         optional "HH:mm"; `description` is markdown; `recurrence_frequency` ∈
@@ -1040,9 +1108,9 @@ def register(mcp: FastMCP) -> None:
                 `item`, one dict per record. op="update" bulk — one
                 `{"id", "fields", "add_to_groups", "remove_from_groups"}` per
                 record, same field vocabulary as below.
-            fields: op="mark_done" — optionally {"completedAt": "<ISO 8601>"};
-                omitted, the task is stamped as completed now. Not accepted by
-                op="mark_todo".
+            fields: op="mark_done" — optionally {"completedAt":
+                "2026-11-13T09:00:00Z"} (see 🕘 below); omitted, the task is
+                stamped as completed now. Not accepted by op="mark_todo".
                 op="update" solo — Folk API field names, camelCase (e.g.
                 {"jobTitle": "CTO"}, {"industry": "SaaS"}, or custom fields of a
                 deal). Optional if only `add_to_groups`/`remove_from_groups`
@@ -1453,6 +1521,12 @@ def register(mcp: FastMCP) -> None:
                     + ("only `fields={'completedAt': …}` is accepted (default: "
                        "now)." if done
                        else "this op takes no fields."))
+            if completed_at:
+                # Checked ONCE, before `_bulk_run` and before the dry_run
+                # preview: a bad value is one named refusal, not N identical
+                # per-item 422s, and a dry run never looks fine where the
+                # real call would fail.
+                completed_at = _folk_datetime(completed_at, "completedAt")
             c = _client()
             if id is not None:
                 result = _mark_one(c, id, done, completed_at=completed_at,

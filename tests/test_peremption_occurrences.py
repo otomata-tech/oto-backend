@@ -126,6 +126,7 @@ def test_le_declencheur_servi_porte_ce_qu_il_a_perdu(monkeypatch):
     monkeypatch.setattr(RT.db, "runner_arme",
                         lambda org: {"armed": False, "workers": 0, "last_seen": None})
     # La liste lit les pertes de tous ses déclencheurs en UNE requête (#1148).
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptages_perimes",
                         lambda org, ids: {i: {"expired_count": 20,
                                               "expired_since": "2026-08-20 18:00:00",
@@ -148,6 +149,7 @@ def test_zero_perdu_est_un_vrai_zero_pas_une_absence(monkeypatch):
     monkeypatch.setattr(RT.db, "runner_arme",
                         lambda org: {"armed": True, "workers": 2,
                                      "last_seen": "2026-09-02 15:00:00"})
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptage_perime",
                         lambda org, tid: {"expired_count": 0, "expired_since": None,
                                           "expired_last": None})
@@ -189,6 +191,7 @@ def _trigger_db(monkeypatch, **etat):
     vu = {}
     monkeypatch.setattr(RT.db, "update_trigger",
                         lambda i, o, champs, **k: vu.update(champs) or {"id": i, **champs})
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptage_perime", lambda org, tid: {})
     return vu
 

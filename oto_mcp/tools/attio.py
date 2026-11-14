@@ -941,7 +941,10 @@ def register(mcp: FastMCP) -> None:
         - **"get"**: get a single meeting by ID.
         - **"recordings"**: list the call recordings of a meeting.
         - **"recording"**: get a single call recording by ID.
-        - **"transcript"**: get the transcript text of a call recording.
+        - **"transcript"**: get the transcript of a call recording, one page of
+          speech segments at a time. A long call spans several pages: pass the
+          response's `pagination.next_cursor` back as `cursor` for the next one;
+          a null one means the end.
 
         Read-only: Attio does not expose writes on meetings or recordings.
 
@@ -950,7 +953,7 @@ def register(mcp: FastMCP) -> None:
             meeting_id: every op but "list" — the meeting ID.
             call_recording_id: op="recording"/"transcript" — the recording ID.
             limit: op="list" — 1-200, Attio's default is 50.
-            cursor: op="list" — previous response's pagination.next_cursor.
+            cursor: op="list"/"transcript" — previous response's pagination.next_cursor.
             sort: op="list" — start_asc (Attio's default) | start_desc.
             ends_from: op="list" — ISO 8601; meetings ending at/after it.
             starts_before: op="list" — ISO 8601; meetings starting before it.
@@ -972,9 +975,19 @@ def register(mcp: FastMCP) -> None:
                 _need(meeting_id, "meeting_id", op),
                 _need(call_recording_id, "call_recording_id", op))
         elif op == "transcript":
-            result = client.call_recordings.transcript(
-                _need(meeting_id, "meeting_id", op),
-                _need(call_recording_id, "call_recording_id", op))
+            meeting = _need(meeting_id, "meeting_id", op)
+            recording = _need(call_recording_id, "call_recording_id", op)
+            if not cursor:
+                result = client.call_recordings.transcript(meeting, recording)
+            else:
+                # The pinned client reads the first page only (its method takes no
+                # cursor): the next pages go through the SAME `_request`, so their
+                # refusals are re-typed like the first one's. Attio pages the
+                # segments by `cursor` and answers `pagination.next_cursor`.
+                result = client._request(
+                    "GET",
+                    f"meetings/{meeting}/call_recordings/{recording}/transcript",
+                    params={"cursor": cursor})
         else:
             raise _bad(_one_of("op", _MEETING_OPS))
 

@@ -411,12 +411,99 @@ def test_search_console_is_inscribed_with_its_service_account_key():
     assert descriptions.refus_de_montage(descriptions.charger("google_search_console")) == []
 
 
-def test_search_console_serves_one_reading_tool(search_console):
+def test_search_console_serves_its_reads_and_an_act_side_that_submits(search_console):
     outils, _ = search_console
-    assert set(outils) == {"google_search_console"}
+    assert set(outils) == {"google_search_console", "google_search_console_act"}
     assert outils["google_search_console"].parameters["properties"]["op"]["enum"] == [
         "list_sites", "query_search_analytics", "inspect_url", "list_sitemaps", "get_sitemap"]
-    assert descriptions.effets(descriptions.charger("google_search_console")) == {}
+    assert outils["google_search_console_act"].parameters["properties"]["op"]["enum"] == ["add_sitemap"]
+    assert outils["google_search_console_act"].annotations == ACTE
+    assert descriptions.effets(descriptions.charger("google_search_console")) == {
+        "google_search_console_act": {"envoyer": "add_sitemap"}}
+
+
+def _scope_de_l_assertion(requete) -> str:
+    """The `scope` claim of the service account's assertion, read in the token request's form."""
+    import base64
+    from urllib.parse import parse_qs
+    jwt = parse_qs(essai.envoyee(requete)["body"])["assertion"][0]
+    claims = jwt.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))["scope"]
+
+
+def test_search_console_reads_at_the_default_level_with_the_read_scope(search_console, vendeur):
+    """No level set: the description's `default_level`, `read` — the key asks for webmasters.readonly, as before the
+    levels existed."""
+    outils, _ = search_console
+    vendeur.answers.extend([(200, {"access_token": "ya29.not-real", "expires_in": 3599}),
+                            (200, {"siteEntry": []})])
+    _appel(outils["google_search_console"], op="list_sites")
+    assert _scope_de_l_assertion(vendeur.requests[0]) == "https://www.googleapis.com/auth/webmasters.readonly"
+
+
+def test_search_console_refuses_a_submit_at_read_before_sending_anything(search_console, vendeur):
+    outils, _ = search_console
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["google_search_console_act"], op="add_sitemap", site_url="sc-domain:example.com",
+               feedpath="https://www.example.com/sitemap.xml")
+    assert (refus.value.code, refus.value.status_code) == ("access_level_denied", None)
+    message = str(refus.value)
+    assert "'read'" in message and "oto_connector_access_level(op='set', scope='org'" in message
+    assert "level='full'" in message and "Nothing was sent." in message
+    assert vendeur.requests == []
+    info = error_taxonomy.classify(refus.value)
+    assert (info.code, info.retryable) == ("access_level_denied", False)
+
+
+@pytest.fixture
+def niveau(monkeypatch):
+    """The level the org set, as the guard resolves it at the call."""
+    def poser(valeur):
+        monkeypatch.setattr(decrits.access_level_gate, "level_of_the_call", lambda nom: valeur)
+    return poser
+
+
+def test_search_console_submits_a_sitemap_at_full(search_console, vendeur, niveau):
+    outils, _ = search_console
+    niveau("full")
+    vendeur.answers.extend([(200, {"access_token": "ya29.not-real-full", "expires_in": 3599}), (200, {})])
+    rendu = _appel(outils["google_search_console_act"], op="add_sitemap", site_url="sc-domain:example.com",
+                   feedpath="https://www.example.com/sitemap.xml")
+    assert rendu == {}
+    jeton, appel = vendeur.requests
+    assert _scope_de_l_assertion(jeton) == "https://www.googleapis.com/auth/webmasters"
+    assert appel.method == "PUT" and appel.url == (
+        "https://searchconsole.googleapis.com/webmasters/v3/sites/sc-domain%3Aexample.com/sitemaps/"
+        "https%3A%2F%2Fwww.example.com%2Fsitemap.xml")
+
+
+def test_search_console_names_a_property_shared_restricted(search_console, vendeur, niveau):
+    """`full` bounds, it does not grant: a property that shares the key as Restricted refuses the submit, under the
+    description's code and message (the gesture: Owner or Full), and the key is not painted red."""
+    outils, _ = search_console
+    niveau("full")
+    vendeur.answers.extend([(200, {"access_token": "ya29.not-real-full", "expires_in": 3599}),
+                            (403, {"error": {"code": 403, "message": "User does not have sufficient permission for "
+                                                                    "site 'sc-domain:example.com'.",
+                                             "errors": [{"reason": "insufficientPermissions"}]}})])
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["google_search_console_act"], op="add_sitemap", site_url="sc-domain:example.com",
+               feedpath="https://www.example.com/sitemap.xml")
+    assert (refus.value.code, refus.value.status_code) == ("owner_or_full_required", 403)
+    info = error_taxonomy.classify(refus.value)
+    assert (info.code, info.hint) == ("owner_or_full_required", None)
+    assert "Owner or Full" in info.message
+    assert not error_taxonomy.credential_rejected_in_chain(refus.value)
+
+
+def test_search_console_refuses_a_level_its_description_does_not_declare(search_console, vendeur, niveau):
+    outils, _ = search_console
+    niveau("admin")
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["google_search_console"], op="list_sites")
+    assert refus.value.code == "unknown_access_level"
+    assert "oto_connector_access_level(op='set'" in str(refus.value) and "Nothing was sent." in str(refus.value)
+    assert vendeur.requests == []
 
 
 def test_search_console_exchanges_the_key_then_calls_with_the_token(search_console, vendeur):

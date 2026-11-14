@@ -21,9 +21,11 @@ from oto_mcp.capabilities._types import cap_limit
 
 # (modèle, kwargs requis, plafond)
 LENTILLES = [
-    (monitoring.CallsInput, {}, 200),
-    (org_monitoring.OrgCallsInput, {"org_id": 1}, 200),
-    (org_monitoring.OrgRunsInput, {"org_id": 1}, 100),
+    # Le plafond du store, partagé (usage signal 1553) : la lentille d'org passe par
+    # `CallsInput`, qui écrêtait à 200 en silence sous l'org qui annonçait plus.
+    (monitoring.CallsInput, {}, 1000),
+    (org_monitoring.OrgCallsInput, {"org_id": 1}, 1000),
+    (org_monitoring.OrgRunsInput, {"org_id": 1}, 500),
     (usage.RunsInput, {}, 100),
     (usage.SignalsInput, {}, 200),
     (audit_log.AuditExportInput, {"org_id": 1}, 1000),
@@ -43,10 +45,17 @@ def test_une_valeur_negative_ne_casse_plus_la_requete(model, base, cap):
     assert model(**base, limit=-5).limit == 1
 
 
+#: Les lentilles dont le défaut est PLUS BAS que le plafond : la liste se pagine par
+#: curseur, le défaut reste la page nominale d'avant (usage signal 1553).
+DEFAUTS = {monitoring.CallsInput: 200, org_monitoring.OrgCallsInput: 200,
+           org_monitoring.OrgRunsInput: 100}
+
+
 @pytest.mark.parametrize("model,base,cap", LENTILLES)
 def test_le_defaut_est_inchange(model, base, cap):
-    """Le plafond EST le défaut : borner ne devait rien changer au nominal."""
-    assert model(**base).limit == cap
+    """Le défaut n'a pas bougé : borner ne devait rien changer au nominal. C'est le
+    plafond, sauf pour les listes à curseur, dont le plafond a été relevé."""
+    assert model(**base).limit == DEFAUTS.get(model, cap)
 
 
 @pytest.mark.parametrize("model,base,cap", LENTILLES)

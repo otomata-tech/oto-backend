@@ -60,7 +60,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def urba_reglement(idurba: str, zone: Optional[str] = None, query: Optional[str] = None,
-                       max_extraits: int = 8, context_lignes: int = 30) -> dict:
+                       max_extraits: int = 8, context_lignes: int = 30,
+                       ingest: bool = False) -> dict:
         """Targeted excerpts of a PLU/PLUi written règlement, via the shared FOD service.
 
         Intercommunal règlements are huge (often >50 MB, >1000 pages, many zones):
@@ -69,19 +70,47 @@ def register(mcp: FastMCP) -> None:
         whole text. READ the excerpts to lift the rules (max height, ground coverage,
         setback, parking) — never invent a figure that is absent.
 
-        `cached=false` means the règlement is not yet ingested in the service (batch
-        ingestion, not on-the-fly): report that rather than guessing.
+        A règlement not yet in the cache answers `cached=false` with its `statut`:
+        - `absent`: call again with `ingest=true` — the service downloads and parses it
+          in the background (20 s to a few minutes);
+        - `en_cours`: ingestion running — call again with the same arguments after
+          `retry_after_seconds` (about 20-30 s); the excerpts come back once ready.
+        Never answer from memory while it is not ready. A scanned règlement (image
+        PDF) comes back `scanne_probable=true`: say it is unreadable here, give the
+        source PDF, do not invent rules.
+
+        Named refusals (`data.code`):
+        - `reglement_service_occupe` (retryable): another ingestion is running on the
+          service (one at a time) — retry after `retry_after_seconds`;
+        - `reglement_trop_volumineux`: a piece exceeds the on-demand size limit
+          (80 MB) — only the service's batch processing can ingest it; say so;
+        - `reglement_ingestion_echec`: the ingestion failed — say so and cite
+          `erreur`; a new attempt is possible after `relance_possible_apres`;
+        - `reglement_introuvable`: the GPU no longer publishes this document or its
+          written règlement — `autres_documents` names the ones it publishes.
 
         Args:
             idurba: document version id — the `zone.idurba` field from `urba_zonage`.
             zone: zone label to search for (e.g. "UCt2", "UM").
             query: alternative keyword (e.g. "hauteur maximale", "emprise au sol").
             max_extraits: max passages returned (1-50). context_lignes: lines kept after each hit.
+            ingest: start the on-demand ingestion when the règlement is not cached
+                (default false: only report its state).
         """
         from oto_mcp.fod import reglement as fod_reglement
 
-        return fod_reglement.extraits(idurba, zone=zone, query=query,
-                                      max_extraits=max_extraits, context_lignes=context_lignes)
+        def _extraits() -> dict:
+            return fod_reglement.extraits(idurba, zone=zone, query=query,
+                                          max_extraits=max_extraits,
+                                          context_lignes=context_lignes)
+
+        res = _extraits()
+        if res.get("cached"):
+            return res
+        etat = _etat_ingestion(fod_reglement, idurba, lancer=ingest)
+        # Prêt ou scanné entre les deux appels : les extraits (ou le constat de scan) du
+        # cache, pas l'état.
+        return _extraits() if etat is None else etat
 
     @mcp.tool()
     def urba_lieu(address: Optional[str] = None, idu: Optional[str] = None,
@@ -312,3 +341,63 @@ def register(mcp: FastMCP) -> None:
             return row or {"code": code, "found": False,
                            "note": "code IRIS (9 chiffres) inconnu"}
         return iris.by_commune(code)
+
+
+# --- règlement à la demande : l'état d'une ingestion et ses refus nommés ----------------
+
+#: La cause qu'écrit le service quand une pièce dépasse sa taille admise à la demande
+#: (`france_opendata.reglement.ReglementTropVolumineux`, préfixe du message d'échec).
+_CAUSE_TROP_VOLUMINEUX = "ReglementTropVolumineux"
+
+
+def _refus_reglement(code: str, message: str, **data: Any) -> McpError:
+    return McpError(ErrorData(code=INVALID_PARAMS, message=f"Refused `{code}`: {message}",
+                              data={"code": code, **data}))
+
+
+def _etat_ingestion(fod_reglement: Any, idurba: str, *, lancer: bool) -> Optional[dict]:
+    """L'état d'un règlement absent du cache, lancé (`lancer`) ou relu. `None` = il est
+    devenu prêt (ou scanné) entre-temps : relire les extraits. Un échec, un service
+    occupé ou un document introuvable LÈVENT, chacun sous son code."""
+    http, e, apres = fod_reglement.ingestion(idurba, lancer=lancer)
+    if http == 503:
+        raise _refus_reglement(
+            "reglement_service_occupe",
+            "the service is already ingesting another règlement (one at a time). Retry "
+            "after the delay; do not answer from memory meanwhile.",
+            retryable=True, retry_after_seconds=apres or 60)
+    if http == 404:
+        raise _refus_reglement(
+            "reglement_introuvable",
+            f"{e.get('detail') or 'the GPU does not publish this document'}. Use one of "
+            "`autres_documents` (from `urba_zonage`), never a guess.",
+            retryable=False, autres_documents=list(e.get("autres_documents") or []))
+    statut = e.get("statut")
+    if statut in ("pret", "scanne"):
+        return None
+    if statut == "echec":
+        erreur = str(e.get("erreur") or "")
+        if erreur.startswith(_CAUSE_TROP_VOLUMINEUX):
+            raise _refus_reglement(
+                "reglement_trop_volumineux",
+                "a piece of this règlement exceeds the on-demand size limit (80 MB): only "
+                "the service's batch processing can ingest it. Say so and give the source "
+                "PDF; never invent a rule.",
+                retryable=False, erreur=erreur)
+        raise _refus_reglement(
+            "reglement_ingestion_echec",
+            f"the ingestion failed ({erreur or 'no cause given'}). Say so, cite the cause, "
+            "never invent a rule.",
+            retryable=False, erreur=erreur,
+            relance_possible_apres=e.get("relance_possible_apres"))
+    if statut == "en_cours":
+        return {"idurba": idurba, "cached": False, "statut": "en_cours",
+                "depuis": e.get("depuis"), "retry_after_seconds": apres or 20,
+                "message": "Ingestion running (20 s to a few minutes): call urba_reglement "
+                           "again with the same arguments after `retry_after_seconds`."}
+    if statut == "absent":
+        return {"idurba": idurba, "cached": False, "statut": "absent",
+                "message": "Not ingested yet: call urba_reglement again with `ingest=true` "
+                           "to start the ingestion (20 s to a few minutes), then again "
+                           "until the excerpts come back."}
+    raise RuntimeError(f"Unknown ingestion state from the data service: {statut!r}")

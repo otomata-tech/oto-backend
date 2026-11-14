@@ -1277,7 +1277,11 @@ Un déclencheur porte désormais un **genre** (`runner_triggers.kind`) :
 **Le genre se pose à la CRÉATION et ne se change jamais** (`kind` est hors de
 l'allowlist d'`update_trigger`). Basculer un agent d'un coup d'envoi à l'autre
 laisserait derrière soit un cron orphelin, soit un secret qui ouvre une porte que
-plus personne ne regarde.
+plus personne ne regarde. ⚠️ `kind` reste dans le schéma d'`update`, et un autre
+genre y est **refusé** (`kind_immutable`, qui dit de créer un nouvel agent de
+l'autre genre) — il était accepté puis ignoré, la réponse disant toujours l'ancien
+genre ; le même genre est sans effet. Jugé avant le cadencement : `kind=schedule
+cron=…` sur un webhook dit le genre, pas `invalid_schedule`.
 
 **Ce qu'une retouche peut toucher dépend du genre.** Sur un webhook, `cron` et
 `tz` sont refusés (`invalid_schedule`) — sans cette garde, un cron posé lui
@@ -2909,6 +2913,17 @@ préparant autre chose : une perte que seule une requête manuelle révèle n'es
 une perte connue. `expired_count: 0` est un vrai zéro, servi, pas une absence de
 mesure. **Deux dates et pas une** : une perte ancienne qui a cessé n'appelle pas
 le même geste qu'une perte qui continue ce matin.
+
+**« A-t-il tourné ? » se lit aussi sur le déclencheur** : `list`/`get` portent
+`last_run` (sa dernière occurrence `{status, due_at, finished_at}` sur 35 jours —
+`status` celui de la file : l'occurrence a-t-elle tourné, pas ce que l'agent a conclu,
+le run lié au travail étant celui du worker) et `last_done_at` (la fin de son dernier
+passage réussi), lus en deux requêtes pour toute la liste (`db.derniers_travaux`).
+La seule autre réponse était la liste des runs de l'org (`oto_org_monitoring
+op=runs`), plus récent d'abord : un agent toutes les quinze minutes en remplit la
+première page en une dizaine d'heures, et un agent de veille y cherchant le soir le
+passage du matin d'un autre agent, sans suivre `next_cursor`, concluait « n'a pas
+tourné » à tort. `op=runs` renvoie donc à `last_run` (`hint`).
 
 ⚠️ **Un déclencheur qui ne TIQUE plus ne périme plus** — et les deux gestes qui
 l'arrêtent laissaient donc leurs occurrences éternelles. **Éteindre** (`enabled =

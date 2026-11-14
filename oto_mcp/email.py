@@ -456,16 +456,6 @@ def _pied_de_l_org(org_footer: dict, en: bool) -> tuple[str, tuple | None]:
     return tete + ecrire + lien, ((url, libelle) if url else None)
 
 
-# Ce qu'un corps rendu depuis le markdown garde : la mise en forme d'un message, rien
-# qui s'exécute, se charge ou se déguise. Pas d'image (l'image de tête a son paramètre,
-# son `alt` exigé et son `https` vérifié), pas d'attribut de style ou d'événement.
-_MD_BALISES = frozenset({
-    "p", "br", "strong", "em", "b", "i", "del", "code", "pre", "blockquote", "hr",
-    "ul", "ol", "li", "h1", "h2", "h3", "h4", "a",
-    "table", "thead", "tbody", "tr", "th", "td",
-})
-_MD_ATTRIBUTS = {"a": {"href", "title"}, "th": {"align"}, "td": {"align"}}
-_MD_SCHEMAS = frozenset({"http", "https", "mailto"})
 # Les marges qu'un paragraphe ou une liste du corps texte porte déjà (`_charte.PARA`) :
 # posées APRÈS l'assainissement, qui retire tout attribut `style`. Lues à l'appel, pas à
 # l'import : `email_brand` importe ce module, et l'import à froid de l'un ou l'autre
@@ -475,18 +465,13 @@ _MD_MARGES_EN_PLUS = {"p": "", "ul": ";padding-left:24px", "ol": ";padding-left:
 
 
 def corps_markdown(body: str) -> str:
-    """Le HTML du corps d'un email écrit en markdown : le MÊME rendu que `gmail`
-    (`_markdown_to_html_fragment` d'oto-core — tableaux, blocs de code, listes), puis
-    ASSAINI par liste blanche (`nh3`) : ce rendu laisse passer le HTML brut et les
-    attributs (`attr_list`), et un lien `javascript:` reste un lien. Ici le mail part
-    sous la charte d'une marque : seuls restent les balises de `_MD_BALISES`, les liens
-    `http(s)`/`mailto`, sans style ni gestionnaire d'événement."""
-    import nh3
-    from oto.tools.google.gmail.lib.gmail_client import _markdown_to_html_fragment
+    """Le HTML du corps d'un email écrit en markdown : le MÊME rendu assaini que `gmail`
+    (`markdown_assaini.rendu_markdown_assaini` — HTML brut, attributs `attr_list` et
+    liens hors `http(s)`/`mailto` retirés), sans image (l'image de tête a son paramètre,
+    son `alt` exigé et son `https` vérifié), puis les marges de la charte."""
+    from .markdown_assaini import rendu_markdown_assaini
 
-    sur = nh3.clean(_markdown_to_html_fragment(body or ""), tags=set(_MD_BALISES),
-                    attributes={k: set(v) for k, v in _MD_ATTRIBUTS.items()},
-                    url_schemes=set(_MD_SCHEMAS), link_rel="noopener noreferrer")
+    sur = rendu_markdown_assaini(body, images=False)
     for balise, en_plus in _MD_MARGES_EN_PLUS.items():
         sur = sur.replace(f"<{balise}>", f'<{balise} style="{_charte.PARA}{en_plus}">')
     return sur

@@ -51,9 +51,9 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
-    # ⚠️ TEMPORAIRE — épinglé sur un COMMIT, pas un tag : le mode `visitor` du client HTTP
-    # (session anonyme par cookies, `VisitorRefused`, `request_raw`) n'est pas encore tagué.
-    # Ce pin passe au tag qui le porte AVANT toute livraison ; ce commit ne part pas en prod.
+    # v1.230.0 = http : mode visiteur (session anonyme par cookies posée par la page d'entrée,
+    # `VisitorRefused`) et corps bruts (`request_raw`) ; sert le mode `visitor` du connecteur
+    # `api`. Aucun extra.
     # v1.229.0 = lemlist 1.3.0 : une vue des recherches de la base partagée (`fields`, `compact`,
     # `database_views`), appliquée par le client, jamais envoyée à lemlist ; nextmotion 1.2.0 :
     # les paiements d'une période et le praticien d'un acte facturé. Aucun extra.
@@ -553,7 +553,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@fbc44ded671a4c5dd96d2a7a301f3b3fb894b5f3",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.230.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

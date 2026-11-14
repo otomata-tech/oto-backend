@@ -127,17 +127,31 @@ def refusal(decl: access_levels.AccessLevels, level: str, source: str, tool: str
     else:
         geste = (f"an org admin widens it (oto_connector_access_level(op='set', "
                  f"scope='org', org_id={org}, name='{decl.connector}', level='full'))")
+    if source == "default":
+        par = f"default for `{decl.connector}` (organization #{org} sets none)"
+    suite = ("a wider level then needs a new consent (a token obtained for a narrower "
+             "level lacks its scopes)" if decl.widening_needs_consent else
+             "the next call then claims the wider scopes, no new consent")
     return ErrorData(
         code=INVALID_PARAMS,
         message=(f"Refusal `{CODE}`: the access level `{level}` set by {par} for "
                  f"`{decl.connector}` does not cover {cible} — {besoin}. The call is "
                  f"served neither directly nor through oto_call. To allow it, {geste}; "
-                 f"a wider level then needs a new consent (a token obtained for a "
-                 f"narrower level lacks its scopes)."),
+                 f"{suite}."),
         data={"code": CODE, "retryable": False, "connector": decl.connector,
               "level": level, "tool": tool, "op": op,
               "required_scopes": list(exige or ()), "scope": source,
               "org_id": org, "group_id": group})
+
+
+def level_of_the_call(connector: str) -> str:
+    """Sync: the level in force for `connector` under the call's own org and active team
+    (the default level without a sub) — what the library's engine receives
+    (`access_level=`), so that a service account claims the scopes of that level. The
+    guard above has already judged every context the key can be served from."""
+    sub = call_axes.current_user_sub_from_token()
+    org, group = _context(sub) if sub else (None, None)
+    return access_levels.effective_level(connector, org, group)
 
 
 def _restricting_contexts(connector: str) -> list[tuple]:

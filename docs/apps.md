@@ -123,7 +123,8 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
 Une app ouverte ne parle qu'à `POST /api/me/apps/{app_id}/call` (face REST seule, pas
 d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :**
 `read_rows`, `read_aggregate` (lire), `write_cell`, `add_row`, `start_agent`,
-`upload_file` (gestes, avec consentement), `list_files`, `agent_runs`, `run_result`.
+`upload_file` (gestes, avec consentement), `list_files`, `agent_runs`, `run_result` —
+et `batch`, un lot de lectures (plus bas).
 
 - **Droits d'une app = droits de son auteur ∩ droits de son lecteur.** L'auteur est
   `updated_by` ; il est jugé par l'ownership SEUL (numéro du tableau), jamais par sa
@@ -146,6 +147,39 @@ d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :**
   (`page_rows(fields=…)`) au lieu d'être faite après coup. Le chemin ne fait que lire —
   condition de la portée, gardée par `tests/test_apps_appel_une_connexion.py`. Les
   gestes restent hors de la portée : ils écrivent.
+- **Un lot de lectures** (`action: "batch"`) : l'écran d'une app s'ouvre sur huit à
+  quinze lectures, et chacune prenait une des 8 places de la route — pour tout le
+  processus, tous lecteurs confondus (503 `route_busy` au-delà) — et rejouait
+  l'authentification, l'appartenance, l'app, son partage et le jugement de son tableau.
+  Corps : `{action: "batch", draft?, reads: [{id, action, table, options}]}`, au plus
+  `MAX_LECTURES_PAR_LOT` (10) lectures, `action` ∈ `read_rows` | `read_aggregate`.
+  Réponse : `{results: [...]}`, une par lecture, dans l'ordre, sous son `id` :
+  `{id, ok: true, rows, total}` ou `{id, ok: true, groups}` — ce qu'un appel seul aurait
+  rendu —, ou `{id, ok: false, status, code, detail}` — le refus qu'un appel seul aurait
+  rendu (`details` quand il en porte). Ce qui se juge UNE fois pour tout le lot : la
+  forme du lot (400 `invalid_batch` : `reads` vide ou absent, une lecture sans `id` de 1 à
+  64 caractères, deux `id` égaux, un champ d'appel à côté de `reads` ; 400
+  `batch_too_large`), l'app, son partage et son brouillon (`_app_pour` : un refus là
+  refuse tout le lot, comme il refuserait chaque appel). Chaque lecture est ensuite
+  jugée par le MÊME code qu'un appel seul (`_lire`) — son tableau, son org, l'auteur, le
+  lecteur, sans rien partager avec les autres lectures : un champ inconnu
+  (`unknown_fields`), une forme invalide (`invalid_input`), un champ non déclaré, un
+  auteur qui a perdu le tableau sont SA réponse, les autres lectures sont servies. Une
+  lecture que la borne `statement_timeout` du pool coupe rend SA réponse
+  `{ok: false, status: 503, code: "read_timeout"}` : l'emprunt est en autocommit, les
+  suivantes restent servies. Un geste, ou toute action qui n'est
+  pas une lecture (`list_files`, `file_url`, `agent_runs`, `run_result`), est refusé
+  dans le lot (400 `batch_reads_only`) : un geste a son jeton et reste seul. Tout le
+  lot tient UN emprunt au pool (`db.reuse_connection`), sur un chemin qui ne fait que
+  lire. **Débit** : le lot prend une place de concurrence, mais chaque lecture coûte
+  au débit par jeton ce que coûte un appel — la garde compte la requête, la capacité
+  débite les lectures suivantes sur la même fenêtre (`routes_lourdes.debiter_en_plus`) ;
+  si ce qui reste ne les couvre pas, le lot est refusé entier (429 `rate_limited`,
+  `Retry-After`). Une erreur imprévue (ni refus nommé ni réponse) d'une lecture rend le
+  lot entier en 500, comme elle rendrait son appel seul. ⚠️ Un lot tient sa place et sa
+  connexion le temps de toutes ses lectures, l'une après l'autre : dix lectures lentes
+  la tiennent dix fois plus longtemps qu'une. Gardé par
+  `tests/test_apps_appel_lot.py`.
 - **Journal** : l'appel est tracé comme toute requête REST (`tool_calls`, `kind=rest`),
   mais la route y est réduite (`/api/me/apps/:id/call`) : le numéro de l'app et le
   tableau lu n'y sont pas. Aucun journal d'audit des lectures n'existe à ce jour.

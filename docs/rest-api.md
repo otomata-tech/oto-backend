@@ -1254,8 +1254,12 @@ Corps `{error, detail, details: {retryable, retry_after_seconds, …}}` et en-t�
 de l'origine. Middleware ASGI `GardeRoutesLourdes`, monté juste sous `RestCallLogger` : le
 refus est journalisé, et cette ligne de journal est tout ce qu'il coûte à la base. ⚠️ Compteurs **par processus** : une protection du pool, pas un
 quota. ⚠️ `POST /api/me/runner/jobs` n'y est pas : elle a été la victime du pool vide,
-pas sa cause, et ses appelants sondent à cadence régulière. Preuves :
-`tests/api/test_routes_lourdes_1141.py`.
+pas sa cause, et ses appelants sondent à cadence régulière. Une requête peut valoir
+PLUSIEURS appels au débit : un lot de lectures d'app (`me.app.call`, `action: "batch"`)
+passe la garde comme une requête, puis sa capacité débite ses lectures suivantes sur la
+même fenêtre (`debiter_en_plus`, posé par la garde le temps de la requête) — refusé
+entier en 429 si elles n'y tiennent pas (`docs/apps.md`). Preuves :
+`tests/api/test_routes_lourdes_1141.py`, `tests/test_apps_appel_lot.py`.
 
 **Les routes déclarées (#1145)**, réglées sur les consommateurs réels recensés le 04/10 :
 

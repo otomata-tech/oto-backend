@@ -6,7 +6,14 @@ la seule porte : le front n'appelle plus les tableaux ni les agents pour une app
 
 **Ce qui est servi** : lire (`read_rows`, `read_aggregate`), écrire une valeur
 déclarée (`write_cell`), ajouter une ligne (`add_row`), lancer un agent
-(`start_agent`), suivre ses runs (`agent_runs`, `run_result`).
+(`start_agent`), suivre ses runs (`agent_runs`, `run_result`). Et un LOT de lectures
+(`batch`, au plus `MAX_LECTURES_PAR_LOT`) : l'écran d'une app s'ouvre sur huit à quinze
+lectures, qui prenaient chacune une place des routes lourdes (8 en cours pour tout le
+processus) et rejouaient chacune l'authentification, l'app, son partage et ses tableaux.
+Le lot juge l'app UNE fois (sa cible, la même pour chaque lecture), puis chaque lecture
+EXACTEMENT comme un appel seul (`_lire`, le même code : son tableau, l'auteur, le
+lecteur) ; le refus de l'une est SA réponse, les autres sont servies. Une lecture d'un lot coûte au débit par jeton ce que coûte un
+appel (`routes_lourdes.debiter_en_plus`) ; le lot ne prend qu'une place de concurrence.
 
 **Un geste qui écrit, ajoute, lance ou dépose exige un jeton, demandé par l'ÉCRAN HÔTE**
 (oto-backend#1386). Le clic dans l'app VAUT accord, jugé par l'hôte (décision d'Alexis du
@@ -66,6 +73,7 @@ import re
 import secrets
 from typing import Any, Literal, Optional
 
+import psycopg
 from pydantic import BaseModel, Field
 
 from .. import client_trace, config, db, geste, ownership
@@ -124,9 +132,16 @@ FILE_URL_TTL = 300
 # à 20 000 caractères (`TriggerInput.handoff`), l'entrée et les en-têtes compris.
 HANDOFF_FILES_BUDGET = 18_000
 
+# Un lot de lectures : au plus dix, celles de l'écran qu'une app ouvre — au-delà, 400.
+MAX_LECTURES_PAR_LOT = 10
+_CLES_D_UNE_LECTURE = frozenset({"id", "action", "table", "options"})
+MAX_ID_DE_LECTURE = 64
+# Le code d'une lecture d'un lot que la borne `statement_timeout` a coupée : SA réponse.
+READ_TIMEOUT = "read_timeout"
+
 Action = Literal["read_rows", "read_aggregate", "write_cell", "add_row",
                  "start_agent", "agent_runs", "run_result", "upload_file", "list_files",
-                 "file_url"]
+                 "file_url", "batch"]
 
 
 class AppCallInput(BaseModel):
@@ -157,6 +172,26 @@ class AppCallInput(BaseModel):
     draft: bool = Field(
         default=False, description="The app's DRAFT is open, not its published version "
         "(its editors only): judged against the draft's manifest and its author.")
+    # Libres à l'entrée : une lecture mal formée est refusée DANS sa réponse, jamais en
+    # refusant tout le lot (`_lecture_du_lot`).
+    reads: Optional[list[dict]] = Field(
+        default=None, description="batch: up to 10 reads `{id, action: read_rows | "
+        "read_aggregate, table, options}`, each judged and answered as its own call, "
+        "in `results` under its `id`.")
+
+
+class AppBatchResult(BaseModel):
+    """La réponse d'UNE lecture d'un lot : ce qu'un appel seul aurait rendu (`rows` et
+    `total`, ou `groups`), ou son refus (`status`, `code`, `detail`)."""
+    id: str
+    ok: bool
+    rows: Optional[list[dict]] = None
+    total: Optional[int] = None
+    groups: Optional[list[dict]] = None
+    status: Optional[int] = None
+    code: Optional[str] = None
+    detail: Optional[str] = None
+    details: Optional[dict] = None
 
 
 class AppRun(BaseModel):
@@ -198,6 +233,8 @@ class AppCallOut(BaseModel):
     name: Optional[str] = None
     media_type: Optional[str] = None
     expires_in: Optional[int] = None
+    # batch : une réponse par lecture, dans l'ordre du lot.
+    results: Optional[list[AppBatchResult]] = None
 
 
 class AppGestureSummary(BaseModel):
@@ -712,6 +749,8 @@ def _consent(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
     _depuis_l_hote(ctx)
     if inp.action not in GESTES:
         raise AuthzDenied(400, "consent_not_needed", f"`{inp.action}` doesn't take a consent.")
+    if inp.reads is not None:
+        raise AuthzDenied(400, "invalid_batch", "A consent is for one gesture: no `reads`.")
     app = _app_pour(ctx, inp.app_id, inp.draft)
     _, resume = _geste(ctx, app, inp)
     jeton = secrets.token_urlsafe(32)
@@ -729,20 +768,114 @@ def _consent(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
 # écran par huit à quinze de ces lectures. Le chemin ne fait que lire (condition de
 # `reuse_connection`, en autocommit), gardé par un banc
 # (`tests/test_apps_appel_une_connexion.py`). Les gestes (écriture, lancement, dépôt)
-# restent hors de la portée : ils écrivent.
+# restent hors de la portée : ils écrivent. Un lot (`batch`) tient TOUTES ses lectures
+# dans un seul emprunt, et n'admet qu'elles.
 _LECTURES_D_UN_EMPRUNT = frozenset({"read_rows", "read_aggregate"})
 
 
 def _call(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
+    if inp.action == "batch":
+        return _lot(ctx, inp)
+    if inp.reads is not None:
+        raise AuthzDenied(400, "invalid_batch", "`reads` goes with `action: \"batch\"` only.")
     if inp.action in _LECTURES_D_UN_EMPRUNT:
         with db.reuse_connection():
             return _appel(ctx, inp)
     return _appel(ctx, inp)
 
 
-def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
-    from .datastore import rows as R
+def _lot(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
+    """Un lot de lectures (`action: "batch"`) : la forme du lot, puis le débit (une
+    lecture = un appel), puis l'app UNE fois — un refus là (app inconnue, auteur
+    inconnu, brouillon) refuse tout le lot, comme il refuserait chaque appel —, puis
+    chaque lecture, jugée par `_lire` comme un appel seul, dans UN emprunt au pool."""
+    reads = inp.reads
+    autres = [k for k in ("table", "agent", "row_id", "field", "value", "expected_revision",
+                          "values", "input", "job_id", "files", "file_id", "file", "consent")
+              if getattr(inp, k) is not None]
+    if inp.options or autres:
+        raise AuthzDenied(400, "invalid_batch",
+                     "A batch carries only `reads` (and `draft`): each read names its own "
+                     f"table and options (not {', '.join(autres or ['options'])}).")
+    if not reads:
+        raise AuthzDenied(400, "invalid_batch", "A batch needs `reads`, a non-empty list.")
+    if len(reads) > MAX_LECTURES_PAR_LOT:
+        raise AuthzDenied(400, "batch_too_large",
+                     f"A batch holds at most {MAX_LECTURES_PAR_LOT} reads.")
+    ids = [r.get("id") if isinstance(r, dict) else None for r in reads]
+    if not all(isinstance(i, str) and 0 < len(i) <= MAX_ID_DE_LECTURE for i in ids):
+        raise AuthzDenied(400, "invalid_batch",
+                     f"Each read is an object with an `id`, a string of 1 to "
+                     f"{MAX_ID_DE_LECTURE} characters.")
+    if len(set(ids)) != len(ids):
+        raise AuthzDenied(400, "invalid_batch", "Two reads of a batch share an `id`.")
+    _debiter(len(reads) - 1)
+    with db.reuse_connection():
+        app = _app_pour(ctx, inp.app_id, inp.draft)
+        results = []
+        for r in reads:
+            try:
+                lu = _lecture_du_lot(inp, r)
+                out = _lire(ctx, app, lu.action, lu.table, lu.options or {})
+                results.append({"id": r["id"], "ok": True, **out})
+            except AuthzDenied as d:
+                results.append({"id": r["id"], "ok": False, "status": d.status,
+                                "code": d.code, "detail": d.message or None,
+                                **({"details": d.details} if d.details else {})})
+            except psycopg.errors.QueryCanceled:
+                # La borne `statement_timeout` du pool a coupé CETTE lecture : l'emprunt
+                # est en autocommit (`reuse_connection`), donc seule elle échoue, et
+                # les suivantes restent servies sur la même connexion.
+                results.append({"id": r["id"], "ok": False, "status": 503,
+                                "code": READ_TIMEOUT,
+                                "detail": "This read took too long and was stopped: "
+                                          "narrow it (filter, limit) or retry it alone."})
+    return {"results": results}
 
+
+def _lecture_du_lot(inp: AppCallInput, r: dict) -> AppCallInput:
+    """Une lecture d'un lot, validée comme le corps d'un appel seul : un champ inconnu,
+    une forme invalide, refusés comme la face REST les refuse (`unknown_fields`,
+    `invalid_input`) ; un geste, ou toute action qui n'est pas une lecture, refusé
+    nommément — un geste a son jeton, une lecture de fichier ou de run reste seule."""
+    from pydantic import ValidationError
+
+    inconnus = sorted(set(r) - _CLES_D_UNE_LECTURE)
+    if inconnus:
+        raise _refus(400, "unknown_fields",
+                     f"Unknown field(s) in a read: {', '.join(inconnus)}. "
+                     f"Expected: {', '.join(sorted(_CLES_D_UNE_LECTURE))}.")
+    try:
+        lu = AppCallInput(app_id=inp.app_id, draft=inp.draft,
+                          **{k: r[k] for k in ("action", "table", "options") if k in r})
+    except ValidationError:
+        raise _refus(400, "invalid_input", "This read isn't a valid call.") from None
+    if lu.action not in _LECTURES_D_UN_EMPRUNT:
+        raise _refus(400, "batch_reads_only",
+                     f"A batch only reads (read_rows, read_aggregate): `{lu.action}` "
+                     "is its own call.")
+    return lu
+
+
+def _debiter(n: int) -> None:
+    """Les lectures d'un lot au-delà de la première, au débit par jeton de la route
+    (`routes_lourdes`) : le lot ne coûte pas moins que ses appels. Hors d'une route
+    lourde (un appel direct, un banc), rien n'est compté."""
+    from ..api import routes_lourdes
+
+    refus = routes_lourdes.debiter_en_plus(n)
+    if refus is not None:
+        attente, limite = refus
+        raise AuthzDenied(
+            429, "rate_limited",
+            f"Too many reads on this route: at most {limite} a minute per token, a "
+            f"batch counting each of its reads. Try again in {attente} s.",
+            details={"retryable": True, "retry_after_seconds": attente,
+                     "limit_per_minute": limite},
+            retry_after=attente)
+
+
+def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
     app = _app_pour(ctx, inp.app_id, inp.draft)
     o = inp.options or {}
 
@@ -813,9 +946,19 @@ def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         resultats = db.apps.run_results([job.get("run_id")]) if job["status"] in _JOB_DONE else {}
         return {"run": _run(job, ctx.sub, resultats)}
 
-    ns, t = _table(app, inp.table)
+    return _lire(ctx, app, inp.action, inp.table, o)
 
-    if inp.action == "read_rows":
+
+def _lire(ctx: ResolvedCtx, app: dict, action: str, alias: Optional[str], o: dict) -> dict:
+    """UNE lecture de tableau d'une app (`read_rows`, `read_aggregate`), l'app déjà
+    jugée : le même code, donc les mêmes contrôles (le tableau, son org, l'auteur, puis
+    le lecteur par le store), pour un appel seul et pour CHAQUE lecture d'un lot —
+    aucun jugement de tableau n'est partagé entre les lectures d'un lot."""
+    from .datastore import rows as R
+
+    ns, t = _table(app, alias)
+
+    if action == "read_rows":
         order_by = o.get("order_by")
         if order_by is not None and (not isinstance(order_by, str)
                                      or (order_by not in DATES and not lisible(t, order_by))):
@@ -870,7 +1013,8 @@ CAPABILITIES += [
             "What an open app asks, relayed by the front on behalf of its viewer: read "
             "rows or aggregates of a declared table (declared fields only), set a "
             "declared field to a declared value (with the row's `_revision`), add a "
-            "row with declared columns, start a declared agent, follow its runs. "
+            "row with declared columns, start a declared agent, follow its runs — "
+            "or `batch` up to 10 reads, each answered as its own call in `results`. "
             "Allowed only when BOTH the app's author and its viewer may do it, on "
             "tables and agents of the app's organization. Writing and "
             "starting need `consent`, from `POST /api/me/apps/{app_id}/consent`. "
@@ -878,6 +1022,17 @@ CAPABILITIES += [
         ),
         mcp=None,
         rest=RestBinding("POST", "/api/me/apps/{app_id}/call", allow_api_token=False),
+        errors=(
+            DeclaredError(400, "invalid_batch",
+                          "batch : `reads` absent, vide, une lecture sans `id` (chaîne de 1 "
+                          "à 64 caractères) ou deux `id` égaux, un champ d'appel posé à "
+                          "côté de `reads` — ou `reads` sans `action: batch`"),
+            DeclaredError(400, "batch_too_large",
+                          "batch : plus de `MAX_LECTURES_PAR_LOT` (10) lectures"),
+            DeclaredError(429, "rate_limited",
+                          "batch : les lectures du lot dépassent ce qui reste du débit par "
+                          "jeton de la route (240/min), chaque lecture comptant un appel"),
+        ),
     ),
     Capability(
         key="me.app.consent", handler=_consent, Input=AppCallInput, Output=AppConsentOut,

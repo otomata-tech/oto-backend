@@ -46,9 +46,7 @@ import logging
 from typing import Callable, Optional
 from urllib.parse import urlsplit
 
-from cryptography.exceptions import InvalidTag
-
-from .. import credentials_store, egress
+from .. import credentials_store, crypto, egress
 
 log = logging.getLogger("oto_mcp.connectors.api_session")
 
@@ -87,7 +85,10 @@ def read_jar(row: Row, fields: dict) -> Optional[str]:
     fields, or unreadable — the call then signs in)."""
     try:
         text = credentials_store.unseal_satellite(*row[:2], CONNECTOR, row[2], SATELLITE)
-    except (InvalidTag, ValueError):
+    # `crypto.unseal` raises its OWN type, never `InvalidTag` (it translates it): catching
+    # the latter let a jar sealed for an older row (an account renamed by the first named
+    # key, `ensure_named_coexistence`) go up as "Internal server error."
+    except (crypto.EnveloppeIndechiffrable, ValueError):
         log.warning("api session: the stored jar of %s/%s (account=%r) does not decrypt "
                     "any more — signing in again", row[0], row[1], row[2])
         return None

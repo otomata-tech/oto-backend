@@ -26,7 +26,7 @@ the connector mirrors the **141 documented routes**, without exception. by famil
 **inbox** — `lemlist_inbox` (conversations, drafts, labels) and `lemlist_act` (the direct sends, and the personas of the shared base)
 **unsubscribes** — `lemlist_unsubscribe`: ⚠️ **three distinct lists** (v1 emails/domains, v2 variables, a contact's do-not-contact flag); writing to one does not write to the others
 **signals** — `lemlist_watchlist`: companies that are hiring, fundraising, job changes, visiting your website… (website visitors: section below)
-**the rest** — `lemlist_task`, `lemlist_database` (shared base, read-only: people, companies, filters, personas — saving or deleting a persona is `lemlist_act`), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities`
+**the rest** — `lemlist_task`, `lemlist_database` (shared base, read-only: people, companies, filters, personas — pass `compact=True` on people/companies, section below; saving or deleting a persona is `lemlist_act`), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities`
 
 ## usage — website visitors
 
@@ -55,6 +55,15 @@ everything else works on data or on a campaign that has nothing to send yet.
 pause ≠ recall: pausing stops progression, not what is already scheduled.
 
 two surfaces send **indirectly**, and stay visible by saying so: a watch list set to `push_to_campaign` feeds a campaign on its own, and `lemlist_mailbox(op="lemwarm_start")` sends — but within the warm-up network, never to a prospect.
+
+## usage — searching the shared base
+
+`lemlist_database(op="people"|"companies")` returns records as lemlist stores them, and they are large: a person carries a whole career (every past position with its company's firmographics and technologies), a company its technologies and recent job posts. 3 people weigh ≈ 228k characters, 50 companies several million — more than an agent run can read.
+- **agents: pass `compact=True`** — the short view. a person keeps identity, title, headline, seniority, department, country, location, LinkedIn URL, `potential_email`, current company, and only its CURRENT positions (no end date), each reduced to title, start date and the company's name, domain, website, LinkedIn, headcount, industry and country. a company keeps identity, domain, website, LinkedIn, headcount and growth, headquarters, industry, type, founding year, revenue bucket, last funding date, and its 5 most recent job posts (title and dates) with their count (`<key>_total`).
+- a compact page carries **`omitted_fields`**: the record keys the view left out. need one of them? add it with `fields`.
+- `fields=["full_name", "experiences.title"]` keeps only those keys of each record (dotted path for a nested key, lists traversed, never an index); a key a record lacks is skipped. with `compact=True`, each field named is taken from the full record and REPLACES the short view's key of the same first level: `compact=True, fields=["experiences.title"]` gives every position, past ones included, each reduced to its title. a malformed list is refused before any request.
+- neither given: the page as lemlist sends it. `total`, `page`, `size` are always kept. both apply to `people` and `companies` only.
+- a view applies to the `results` list only: a page lemlist sends without one is refused as `lemlist_page_without_results` — call again without `fields` and `compact` to read it whole.
 
 ## note — lemlist API pitfalls
 

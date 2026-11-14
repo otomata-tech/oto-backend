@@ -694,7 +694,8 @@ sources = [
   "oto_mcp/tools/mail_obfuscation.py",
 ]
 tests = ["tests/**/test_email*.py", "tests/**/test_outreach*.py", "tests/**/test_mail*.py",
-         "tests/**/test_markdown_assaini.py", "tests/**/test_gmail_signature_178.py"]
+         "tests/**/test_markdown_assaini.py", "tests/**/test_markdown_microsoft.py",
+         "tests/**/test_gmail_signature_178.py"]
 
 [[volet]]
 nom = "fichiers"

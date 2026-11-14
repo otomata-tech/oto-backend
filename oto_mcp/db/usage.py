@@ -2126,8 +2126,8 @@ def rest_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
     que prend un plantage, pas un 500 explicite) ou client parti. Toujours un défaut à
     lire, jamais un zéro.
 
-    Index : les trois requêtes partagent la même clause, servie par
-    `idx_tool_calls_kind (kind, created_at DESC)` sur une fenêtre bornée (≤ 365 j)."""
+    Index : une seule lecture de la fenêtre, bornée (≤ 365 j), par
+    `idx_tool_calls_created_at` ou `idx_tool_calls_kind` selon le plan."""
     since_days = max(1, min(int(since_days), 365))
 
     def _where() -> tuple[str, list]:
@@ -2143,43 +2143,46 @@ def rest_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
         return " AND ".join(clauses), params
 
     w, wp = _where()
+    # UN passage sur les lignes de la fenêtre, pas trois (#1455) : les lignes de la
+    # fenêtre sont lues une fois (`f`, projection étroite), puis totaux, routes et
+    # statuts s'agrègent sur elle. Trois requêtes relisaient trois fois les mêmes
+    # pages du tas — sans filtre, sept jours de REST dépassaient la borne de 10 s des
+    # lectures d'agrégat. Les comptes distincts passent par un regroupement (haché)
+    # plutôt que par `COUNT(DISTINCT)`, qui triait toute la fenêtre.
     with _agregat("agrégats des appels REST") as conn:
-        totals = conn.execute(
+        groupes = conn.execute(
             f"""
-            SELECT COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE NOT ok) AS errors,
-                   COUNT(DISTINCT sub) AS users,
-                   MAX(created_at) AS last_call_at
-            FROM tool_calls WHERE {w}
-            """,
-            tuple(wp),
-        ).fetchone() or {}
-        by_route = conn.execute(
-            f"""
-            SELECT tool AS route,
-                   COUNT(*) AS calls,
-                   COUNT(*) FILTER (WHERE NOT ok) AS errors,
-                   ROUND(AVG(duration_ms))::int AS avg_ms,
-                   ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int AS p95_ms
-            FROM tool_calls WHERE {w}
-            GROUP BY tool
-            ORDER BY calls DESC
-            LIMIT 100
-            """,
-            tuple(wp),
-        ).fetchall()
-        by_error = conn.execute(
-            f"""
-            SELECT error, COUNT(*) AS calls
-            FROM tool_calls WHERE {w} AND NOT ok
-            GROUP BY error
-            ORDER BY calls DESC
+            WITH f AS MATERIALIZED (
+                SELECT tool, error, ok, sub, duration_ms, created_at
+                FROM tool_calls WHERE {w})
+            SELECT 'total' AS groupe, NULL AS route, NULL AS error,
+                   COUNT(*) AS calls, COUNT(*) FILTER (WHERE NOT ok) AS errors,
+                   (SELECT COUNT(*) FROM (SELECT sub FROM f WHERE sub IS NOT NULL
+                                          GROUP BY sub) u) AS users,
+                   MAX(created_at) AS last_call_at, NULL::int AS avg_ms, NULL::int AS p95_ms
+            FROM f
+            UNION ALL
+            SELECT 'route', tool, NULL, COUNT(*), COUNT(*) FILTER (WHERE NOT ok), NULL, NULL,
+                   ROUND(AVG(duration_ms))::int,
+                   ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int
+            FROM f GROUP BY tool
+            UNION ALL
+            SELECT 'statut', NULL, error, COUNT(*), COUNT(*), NULL, NULL, NULL, NULL
+            FROM f WHERE NOT ok GROUP BY error
             """,
             tuple(wp),
         ).fetchall()
+    totals = next((g for g in groupes if g["groupe"] == "total"), {})
+    by_route = sorted(
+        ({k: g[k] for k in ("route", "calls", "errors", "avg_ms", "p95_ms")}
+         for g in groupes if g["groupe"] == "route"),
+        key=lambda r: (-r["calls"], r["route"]))[:100]
+    by_error = sorted(({"error": g["error"], "calls": g["calls"]}
+                       for g in groupes if g["groupe"] == "statut"),
+                      key=lambda r: -r["calls"])
     out = {
         "since_days": since_days,
-        "total_calls": int((totals or {}).get("total") or 0),
+        "total_calls": int((totals or {}).get("calls") or 0),
         "error_count": int((totals or {}).get("errors") or 0),
         "active_users": int((totals or {}).get("users") or 0),
         "last_call_at": (totals or {}).get("last_call_at"),
@@ -2417,39 +2420,37 @@ def activation_funnel(active_window_days: int = 30) -> dict:
     invisible au monitoring d'outils, détecté ici. `active_window_days` borne « actif »,
     « REST seul » et « bloqué » : les trois comptes portent sur la même fenêtre."""
     active_window_days = max(1, min(int(active_window_days), 365))
-    with _agregat("entonnoir d'activation") as conn:
+    objet = "entonnoir d'activation"
+    with _agregat(objet) as conn:
         total = int((conn.execute("SELECT COUNT(*) AS n FROM users").fetchone() or {}).get("n") or 0)
-        # Comptes ayant déclenché ≥1 outil MCP dans la fenêtre = vraiment actifs.
-        active = int((conn.execute(
-            "SELECT COUNT(DISTINCT sub) AS n FROM tool_calls "
-            "WHERE kind = 'mcp' AND sub IS NOT NULL "
-            "AND created_at >= NOW() - make_interval(days => %s)",
-            (active_window_days,),
-        ).fetchone() or {}).get("n") or 0)
-        # Comptes ayant touché la plateforme (REST) mais SANS aucun appel d'outil, sur
-        # la MÊME fenêtre que `active` : connectés-mais-idle (ont ouvert le dashboard,
-        # jamais invoqué Claude). ⚠️ Sans fenêtre (jusqu'au 08/10/2026, infra#9), les
-        # deux branches lisaient le journal ENTIER par `kind` — la lecture la plus
-        # lourde de l'entonnoir, coupée à 10 s en production.
-        rest_only = int((conn.execute(
-            """
-            SELECT COUNT(*) AS n FROM (
-                SELECT sub FROM tool_calls WHERE kind = 'rest' AND sub IS NOT NULL
-                   AND created_at >= NOW() - make_interval(days => %s)
-                EXCEPT
-                SELECT sub FROM tool_calls WHERE kind = 'mcp' AND sub IS NOT NULL
-                   AND created_at >= NOW() - make_interval(days => %s)
-            ) q
+        # Actifs (≥ 1 outil MCP) et bloqués (≥ 1 échec de connecteur) : lus sur les
+        # totaux par jour (oto-backend#1147), où `sub` est une dimension — le compte
+        # distinct est exact, sans relire le journal des jours clos (#1455 : quatre
+        # passages sur 30 jours de journal dépassaient la borne de 10 s).
+        src, params = journal_jour.source(
+            conn, objet, prefixe="f", kinds=("mcp", "connector"), mesures=("appels",),
+            filtres={"sub_non_nul": True}, jours=active_window_days)
+        # « REST seul » : comptes ayant touché la plateforme (REST) SANS aucun appel
+        # d'outil sur la MÊME fenêtre — connectés-mais-idle. Le REST n'est pas agrégé
+        # par jour (`journal_jour.KINDS`) : UN passage sur sa fenêtre, par
+        # `idx_tool_calls_kind`, à la même borne `now() - jours` que la source.
+        row = conn.execute(
+            f"""
+            WITH j AS MATERIALIZED (SELECT DISTINCT kind, sub FROM ({src}) s),
+                 r AS (SELECT DISTINCT sub FROM tool_calls
+                        WHERE kind = 'rest' AND sub IS NOT NULL
+                          AND created_at >= now() - make_interval(days => %(f_jours)s))
+            SELECT (SELECT COUNT(*) FROM j WHERE kind = 'mcp') AS active,
+                   (SELECT COUNT(*) FROM j WHERE kind = 'connector') AS blocked,
+                   (SELECT COUNT(*) FROM r
+                     WHERE NOT EXISTS (SELECT 1 FROM j
+                                        WHERE j.kind = 'mcp' AND j.sub = r.sub)) AS rest_only
             """,
-            (active_window_days, active_window_days),
-        ).fetchone() or {}).get("n") or 0)
-        # Comptes ayant subi ≥1 échec de connecteur dans la fenêtre = bloqués/à débloquer.
-        blocked = int((conn.execute(
-            "SELECT COUNT(DISTINCT sub) AS n FROM tool_calls "
-            "WHERE kind = 'connector' AND sub IS NOT NULL "
-            "AND created_at >= NOW() - make_interval(days => %s)",
-            (active_window_days,),
-        ).fetchone() or {}).get("n") or 0)
+            params,
+        ).fetchone() or {}
+    active = int(row.get("active") or 0)
+    rest_only = int(row.get("rest_only") or 0)
+    blocked = int(row.get("blocked") or 0)
     return {
         "window_days": active_window_days,
         "total_accounts": total,

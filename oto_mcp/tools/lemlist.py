@@ -60,6 +60,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import datetime as _dt
+import re
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
@@ -192,8 +193,24 @@ def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
 
+#: A bound given as a bare day (`YYYY-MM-DD`), with no time part.
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def _default_window(start_date: Optional[str], end_date: Optional[str]) -> tuple[str, str]:
-    """Fill in the stats window — ISO 8601 bounds, both required upstream."""
+    """Fill in the stats window — ISO 8601 instants, both required upstream.
+
+    A date-only bound is a whole UTC day, both ends included: the start opens
+    at `T00:00:00.000Z`, the end closes at `T23:59:59.999Z` (the shape of
+    lemlist's own examples). Sent bare, lemlist reads `2026-11-12` as that
+    midnight: a same-day window was zero-wide and every counter read 0, and a
+    longer one silently dropped its last day. A bound with a time part is an
+    instant and passes through untouched.
+    """
+    if start_date and _DATE_ONLY.fullmatch(start_date):
+        start_date = f"{start_date}T00:00:00.000Z"
+    if end_date and _DATE_ONLY.fullmatch(end_date):
+        end_date = f"{end_date}T23:59:59.999Z"
     # Aliased `_dt`: `timezone` is an ARGUMENT of `lemlist_campaign`/
     # `lemlist_schedule` (lemlist's IANA zone), importing it bare would shadow it.
     now = _dt.datetime.now(_dt.timezone.utc)
@@ -412,9 +429,18 @@ def register(mcp: FastMCP) -> None:
         field names changed with the fix (`nbLeads`, `messagesSent`, `opened`,
         `replied`… instead of `emails_sent` & co).
 
+        `start_date`/`end_date`: both ends included; a date-only bound
+        (`YYYY-MM-DD`) is a whole UTC day, so `start_date=end_date` reads that
+        one day; instants with a time part are sent as is.
+
         Args:
-            start_date / end_date: ISO 8601 window. Defaults to "since 2015" →
-                now, i.e. the campaign's whole life.
+            start_date / end_date: ISO 8601 window, both ends included.
+                Defaults to "since 2015" → now, i.e. the campaign's whole
+                life. A date-only bound (`YYYY-MM-DD`) is a whole UTC day:
+                `start_date=end_date="2026-11-12"` reads that one day. For a
+                day in another timezone pass UTC instants (a Paris day in
+                winter: `2026-11-11T23:00:00.000Z` →
+                `2026-11-12T22:59:59.999Z`), sent as is.
             channels: Any of `email`, `linkedin`, `others`.
             ab_selected: `A` or `B`, to read one side of a running A/B test.
             send_user: `usr_…|sender@email` — both halves required.
@@ -976,7 +1002,10 @@ def register(mcp: FastMCP) -> None:
           (`emailsSent`, `emailsOpened`, `emailsReplied`, `senderNames`, `state`)
           — the shape for comparing campaigns.
         - `batch_stats`: `campaign_ids` (≤ 100) + optional `start_date`/`end_date`
-          (defaults to the whole life), `channels` (`email`/`linkedin`/`others`),
+          (defaults to the whole life; both ends included, a date-only
+          `YYYY-MM-DD` bound is a whole UTC day, so `start_date=end_date` reads
+          that one day; instants with a time part are sent as is),
+          `channels` (`email`/`linkedin`/`others`),
           `send_user` (`usr_…|sender@email`), `ab_selected` (`A`/`B`).
           Same counters as `lemlist_get_campaign_stats`, in one call.
 

@@ -1277,7 +1277,11 @@ Un déclencheur porte désormais un **genre** (`runner_triggers.kind`) :
 **Le genre se pose à la CRÉATION et ne se change jamais** (`kind` est hors de
 l'allowlist d'`update_trigger`). Basculer un agent d'un coup d'envoi à l'autre
 laisserait derrière soit un cron orphelin, soit un secret qui ouvre une porte que
-plus personne ne regarde.
+plus personne ne regarde. ⚠️ `kind` reste dans le schéma d'`update`, et un autre
+genre y est **refusé** (`kind_immutable`, qui dit de créer un nouvel agent de
+l'autre genre) — il était accepté puis ignoré, la réponse disant toujours l'ancien
+genre ; le même genre est sans effet. Jugé avant le cadencement : `kind=schedule
+cron=…` sur un webhook dit le genre, pas `invalid_schedule`.
 
 **Ce qu'une retouche peut toucher dépend du genre.** Sur un webhook, `cron` et
 `tz` sont refusés (`invalid_schedule`) — sans cette garde, un cron posé lui

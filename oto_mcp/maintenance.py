@@ -59,6 +59,13 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             défaut ; jamais les credentials sans
                                             `--credentials --preavis-echu AAAA-MM-JJ`
                                             échu — PAS un travail : voir plus bas
+    oto-mcp maintenance copies-du-coffre
+                                            copie le coffre d'un connecteur renommé
+                                            sous son nouveau nom — l'étape que le
+                                            démarrage joue aussi ; la porte d'une cible
+                                            la joue AVANT `migrer upgrade head`
+                                            (une révision de renommage lit ces
+                                            copies) — PAS un travail : voir plus bas
     oto-mcp maintenance key-index-rebuild   (#421 — voir plus bas, PAS dans `all`)
     oto-mcp maintenance journal-tokens      purge rétroactive des jetons écrits en
                                             clair dans le journal (#558) — À BLANC
@@ -857,12 +864,68 @@ def orphelins(argv: list[str]) -> int:
     return ORPHELINS_RESTE if on.reste(rapport) else ORPHELINS_FAIT
 
 
+
+# ── Les copies du coffre des connecteurs renommés ─────────────────────────────────────
+# Un connecteur renommé garde son coffre par une COPIE re-chiffrée (l'AAD porte le nom du
+# connecteur : la clé maîtresse est requise, une révision Alembic ne peut pas la faire).
+# Le démarrage la joue ; une révision de renommage repointe ensuite ce qui désigne
+# l'ancienne instance vers sa copie, et lève si la copie manque. L'ordre du code et de la
+# base varie selon l'instance : la nôtre démarre puis migre, une cible migre AVANT de
+# démarrer (`deploy/cible/migrations_a_jour.py`). D'où cette commande, que la porte d'une
+# cible joue avant la migration, et que le démarrage parcourt aussi : UNE liste.
+# Pas un travail : un travail est fail-open, alors que la porte doit savoir si elle peut
+# migrer ensuite.
+COPIES_FAITES = 0
+COPIES_ERREUR = 2      # clé maîtresse absente, base injoignable, copie en échec
+
+
+def copies_declarees() -> tuple[tuple[str, Callable[[], dict]], ...]:
+    """Les copies du coffre des connecteurs renommés, dans l'ordre : `(nom, copie)`.
+    Chacune est additive (les lignes de l'ancien nom restent) et idempotente (une ligne
+    copiée est marquée) : la rejouer ne refait rien."""
+    from .auth import microsoft
+    from .connectors import api_operations
+    return (("microsoft_copy_from_sharepoint", microsoft.copier_depuis_sharepoint),
+            ("api_copy_from_http", api_operations.copier_depuis_http))
+
+
+def copies_du_coffre(argv: list[str]) -> int:
+    """`oto-mcp maintenance copies-du-coffre` : joue les copies du coffre des connecteurs
+    renommés (`copies_declarees`), et dit leur bilan. Une ligne indéchiffrable n'est pas
+    copiée (comptée `unreadable`) : la révision qui la trouverait désignée lève en le
+    nommant."""
+    argparse.ArgumentParser(
+        prog="oto-mcp maintenance copies-du-coffre",
+        description=("Copie le coffre des connecteurs renommés sous leur nouveau nom "
+                     "(additif, idempotent). À jouer avant `migrer upgrade head` quand "
+                     "la base migre avant que le code neuf ait démarré.")).parse_args(argv)
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from . import crypto
+    if not crypto.encryption_enabled():
+        print("REFUS : OTO_MCP_MASTER_KEY absente — rien ne peut être copié (lancer la "
+              "commande sous le lanceur de l'instance)", file=sys.stderr)
+        return COPIES_ERREUR
+    for nom, copier in copies_declarees():
+        try:
+            bilan = copier()
+        except Exception:
+            logger.error("copies-du-coffre %s : ERREUR — les copies déjà faites restent "
+                         "(idempotentes) ; relancer une fois la cause levée", nom,
+                         exc_info=True)
+            return COPIES_ERREUR
+        print(f"copies-du-coffre {nom} : {bilan}")
+    return COPIES_FAITES
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "index-concurrents":
         return index_concurrents(argv[1:])
     if argv and argv[0] == "orphelins":
         return orphelins(argv[1:])
+    if argv and argv[0] == "copies-du-coffre":
+        return copies_du_coffre(argv[1:])
     p = argparse.ArgumentParser(
         prog="oto-mcp maintenance",
         description="Les travaux de maintenance du backend (ADR 0065, lot 0).")

@@ -635,7 +635,9 @@ connecteur, lui, n'a pas d'alias : `http` refuse en nommant `api` (`providers.CO
 refus « connecteur inconnu » ; source de fichier `kind="http"` → `kind="api"`). Les données suivent en deux temps : le **coffre** par une étape de démarrage
 (`api_operations.copier_depuis_http`, COPIE re-chiffrée — l'AAD porte le nom du connecteur — qui laisse les
 lignes `http` en place, garde le partage de la ligne (`share_*`) et recopie la définition de chaque instance) ;
-le reste par la révision `20261112_1200_connecteur_api`, à jouer après le tag : sélections, activations,
+le reste par la révision `20261112_1200_connecteur_api`, à jouer APRÈS la copie — après le tag chez nous ; sur
+une cible, qui migre avant de démarrer, la porte joue la copie d'abord (`oto-mcp maintenance copies-du-coffre`,
+`instance-cible.md` § Les migrations) : sélections, activations,
 réglages, kits, listes d'outils, et ce qui DÉSIGNE une instance `http` — règles d'accès des comptes
 (`connector_account_rules`), arêtes `grants`, liens de projet (`target_ref`, `instance_ref`, `identity_ref`) —
 repointé vers la copie `api` du même propriétaire et du même compte. Pourquoi la révision et pas le démarrage :
@@ -719,6 +721,13 @@ La ligne membre se déduit de l'identité de l'appelant, jamais d'un argument : 
 la clé d'un autre membre ; l'autorisation se branche sur `scope` (`BY_OP`). Le jar du mode `session`
 vit dans la ligne résolue, donc un par personne. Banc : `tests/test_api_cle_membre_live.py`.
 
+**Plusieurs clés perso** (13/11/2026) : chaque compte de la carte est une API distincte, donc l'axe
+`_account` est annoncé **statiquement** sur les outils `api*` (`account_axis_static`) — une session qui a
+figé sa liste avant la seconde clé le voit déjà. Deux clés au même palier sans défaut et sans `_account` :
+`api_get`/`api_post`/`api_doc` refusent par l'ambiguïté de la cascade (`CompteAmbigu`, qui nomme les
+comptes), jamais par « carte non configurée » — `tools/api._resolve` ne ravale plus les refus de la
+résolution. Banc : `tests/test_api_cles_perso_multiples_live.py`.
+
 Les listes de l'agent la montrent (`connectors/api_operations.org_connectors`) : `api(op="list")` sans
 `_account`, la ligne « Custom connector » du contexte et `oto_connector(name=…)` listent les clés de
 l'APPELANT (`scope: "member"`, mention « your personal key, used before the org's ») avant celles de
@@ -746,8 +755,10 @@ des surfaces de statut comme un bearer). Écrit par fusion JSONB : ni `version` 
 scellé porte l'empreinte des champs qui décident qui se connecte (base, identifiant, mot de passe, étapes) :
 un jar scellé pour d'autres champs n'est pas resservi. Une repose remplace `meta`, donc efface le jar. Entre
 processus, **le dernier écrivain gagne** — au pire un login de plus, jamais un autre compte. Un scellé qui ne
-se déchiffre plus (ligne déplacée, renommée, copiée vers une autre instance) est un cache perdu : journalisé,
-et l'appel se reconnecte. Le jar n'est jamais rendu à l'agent ni journalisé.
+se déchiffre plus (ligne déplacée, renommée — la ligne `''` devenue `principal` à la pose d'un premier
+compte nommé —, copiée vers une autre instance) est un cache perdu : journalisé, et l'appel se reconnecte.
+`crypto.unseal` lève alors `crypto.EnveloppeIndechiffrable`, seule erreur que `read_jar` avale (une master
+key absente monte). Le jar n'est jamais rendu à l'agent ni journalisé.
 
 ### `inst:{id}` — la forme de fil
 

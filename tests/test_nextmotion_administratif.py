@@ -89,7 +89,7 @@ def client(monkeypatch):
     ("nextmotion_catalog", {"kind": "treatment_package", "op": "distributions",
                             "item_id": X}, "list_treatment_package_distributions", (X,), {}),
     ("nextmotion_payment", {"clinic_id": C, "invoice_id": X}, "list_payments", (C,),
-     {"invoice_id": X, "limit": 50, "offset": 0}),
+     {"invoice_id": X, "paid_from": None, "paid_to": None, "limit": 50, "offset": 0}),
     ("nextmotion_payment", {"op": "get", "payment_id": X}, "get_payment", (X,), {}),
     ("nextmotion_statistics", {"kind": "appointment_income", "clinic_id": C,
                                "period_type": "week"},

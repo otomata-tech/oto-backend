@@ -26,8 +26,8 @@ def test_summary_defaults_and_sub_resolution(monkeypatch):
 
 def test_calls_passes_investigation_filters(monkeypatch):
     seen = {}
-    monkeypatch.setattr(monitoring.db, "list_tool_calls",
-                        lambda **kw: seen.update(kw) or [])
+    monkeypatch.setattr(monitoring.db, "list_tool_calls_page",
+                        lambda **kw: seen.update(kw) or {"calls": [], "next": None})
     monitoring._monitoring(CTX, monitoring.MonitoringInput(
         op="calls", run_id="r1", session_id="s1", min_duration_ms=5000,
         error_contains="timeout", errors=True, tool="folk_record"))

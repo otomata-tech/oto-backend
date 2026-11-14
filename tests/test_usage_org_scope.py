@@ -76,7 +76,8 @@ def test_without_org_id_no_scope_clause(monkeypatch):
     # rétro-compat : admin monitoring non scopé — pas de FILTRE org (la colonne
     # projetée `l.org_id` dans le SELECT est un axe de corrélation, pas un scope).
     assert "l.org_id = %s" not in sink["sql"]
-    assert tuple(sink["params"]) == ("u1", 50)
+    # `limit + 1` : la ligne en trop n'est pas servie, elle dit qu'il en reste (curseur).
+    assert tuple(sink["params"]) == ("u1", 51)
 
 
 # ── lentilles descendues au niveau org (oto_org_monitoring) ─────────────────
@@ -99,12 +100,13 @@ def test_list_runs_scope(monkeypatch):
     sink = _wire(monkeypatch)
     usage.list_runs(100)
     assert "d.org_id = %s" not in sink["sql"]
-    assert tuple(sink["params"]) == (100, 100)
+    # `limit + 1` aux deux places : l'ouverture en trop dit qu'il en reste (curseur).
+    assert tuple(sink["params"]) == (101, 101)
     usage.list_runs(100, org_id=35)
     assert "d.org_id = %s" in sink["sql"]
     # org_id AVANT les deux limit (le choix de la page, puis le SELECT) — une
     # inversion ferait un LIMIT 35.
-    assert tuple(sink["params"]) == (35, 100, 100)
+    assert tuple(sink["params"]) == (35, 101, 101)
 
 
 def test_list_runs_ne_groupe_plus_tout_le_journal(monkeypatch):

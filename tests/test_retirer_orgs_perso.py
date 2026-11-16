@@ -5,9 +5,15 @@ Base réelle : le geste est du SQL sur des tables vivantes.
 """
 from __future__ import annotations
 
+import pathlib
+import sys
 import uuid
 
 import pytest
+
+# La racine du dépôt n'est pas dans `sys.path` en CI (pas de `__init__.py`) : `scripts`
+# ne s'importait que parce qu'un module collecté avant l'y avait mise, selon la part.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 
 def _perso_heritee(db, org_store, sub: str) -> int:

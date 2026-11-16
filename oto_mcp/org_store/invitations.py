@@ -352,6 +352,14 @@ def accept_invitation(token: str, sub: str) -> Optional[dict]:
     return _idempotent_accept("token_hash = %s", _hash_token(token), sub)
 
 
+def invitation_hors_droit(inv: dict) -> bool:
+    """Invitation plateforme portant une org, émise par un non-super admin : la règle
+    de l'émission (`_authz.PLATFORM_INVITE`), rejugée sur tout chemin d'acceptation."""
+    from .. import access  # paresseux : `access` importe org_store (cycle)
+    return (inv.get("source") == "platform_admin" and inv.get("org_id") is not None
+            and not (inv.get("invited_by") and access.is_super_admin(inv["invited_by"])))
+
+
 def _accept_invitation_row(inv: dict, sub: str, *,
                            actor: Optional[str]) -> Optional[dict]:
     """Cœur de l'acceptation d'une invitation à partir d'une ligne déjà résolue (par
@@ -396,6 +404,8 @@ def _accept_invitation_row(inv: dict, sub: str, *,
     # Import paresseux : `roles` importe org_store (et group_store) au niveau module
     # → cycle si on l'importait en tête. À l'appel, tout est chargé.
     from .. import roles
+    if invitation_hors_droit(inv):
+        return None
     org_id = inv.get("org_id")
     org_role = inv.get("org_role")
     if org_id is not None:
@@ -477,7 +487,7 @@ def _pending_for_email(email: str, *, org_id: Optional[int] = None) -> Optional[
     with _connect() as conn:
         row = conn.execute(
             f"""
-            SELECT id, org_id, org_role, group_id, group_role, invited_by
+            SELECT id, org_id, org_role, group_id, group_role, invited_by, source
               FROM org_invitations
              WHERE {_PENDING} AND lower(email) = %s AND resource_kind IS NULL
                AND (%s::bigint IS NULL OR org_id = %s)

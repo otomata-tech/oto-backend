@@ -92,6 +92,10 @@ def test_la_liste_ne_coute_pas_une_requete_par_projet(live, requetes):
 def test_lire_un_projet_ne_coute_pas_une_requete_par_lien(live, requetes):
     peu = _moi_dans_une_org(1, liens=1)
     beaucoup = _moi_dans_une_org(1, liens=8)
+    # Chaud d'abord : la présence de l'index des ouvertures par run se relit au plus une
+    # fois par minute et par processus (`usage._ouverture_par_run_prete`) — une requête
+    # au premier appel, aucune ensuite. Ce banc compte ce qui suit les LIENS.
+    _appel(requetes, *peu[:2], op="get", project_id=peu[2][0])
     _, n_peu = _appel(requetes, *peu[:2], op="get", project_id=peu[2][0])
     out, n_beaucoup = _appel(requetes, *beaucoup[:2], op="get", project_id=beaucoup[2][0])
     assert len(out["links"]) == 8 * 3 + 1

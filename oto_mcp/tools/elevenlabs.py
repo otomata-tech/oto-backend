@@ -389,9 +389,13 @@ def _deposit(audio: dict, stem: str, sub: str) -> dict:
     return out
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
+def _verify(fields: dict, config: dict | None = None) -> Optional[dict]:  # noqa: ARG001
     """Probe for "test the connection": the subscription, the cheapest authenticated
-    call, which also says whether credits are left this period."""
+    call, which also says whether credits are left this period.
+
+    Returns the balance it read (`{"quota": …}`, credits left of the period's limit):
+    it used to be read then THROWN AWAY, so `oto_admin_platform_balances` showed the
+    platform key as `auth+quota` with `balance: null` — "not measured" — every day."""
     from oto.tools.elevenlabs import ElevenLabsClient
     from oto.tools.common.errors import UpstreamHTTPError
 
@@ -409,6 +413,9 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
     if isinstance(used, int) and isinstance(limit, int) and limit > 0 and used >= limit:
         raise connector_verify.QuotaEpuise(
             f"ElevenLabs: {used} of {limit} credits used this period.")
+    if isinstance(used, int) and isinstance(limit, int) and limit > 0:
+        return {"quota": {"restant": limit - used, "unite": "credits", "limite": limit}}
+    return None
 
 
 def register(mcp: FastMCP) -> None:

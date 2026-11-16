@@ -238,8 +238,12 @@ class TriggerInput(BaseModel):
         "(op=unshare). `can_edit` says which."))
     # ── le WEBHOOK ────────────────────────────────────────────────────────────
     #: `schedule` (défaut) ou `webhook`. Posé à la CRÉATION et jamais après : un
-    #: agent ne change pas de coup d'envoi en cours de route.
-    kind: Optional[Literal["schedule", "webhook"]] = None
+    #: agent ne change pas de coup d'envoi en cours de route. À `update`, le même
+    #: genre est sans effet, un autre est REFUSÉ (`kind_immutable`) — jamais ignoré.
+    kind: Optional[Literal["schedule", "webhook"]] = Field(default=None, description=(
+        "`schedule` (default) or `webhook`, set at `create` only. On `update` the same "
+        "kind is a no-op and another kind is refused (`kind_immutable`): create a new "
+        "agent of that kind, then delete this one."))
     #: Ce que l'agent fait du corps reçu. `ignore` (défaut) ne le transmet même
     #: pas ; `fields` n'en extrait que ce qui est nommé ; `inline` joint le tout.
     payload_mode: Optional[Literal["ignore", "fields", "inline"]] = Field(
@@ -472,6 +476,14 @@ class Trigger(BaseModel):
     #: qu'une perte qui continue ce matin.
     expired_since: Optional[str] = None
     expired_last: Optional[str] = None
+    #: « A-t-il tourné ? », servi là où on le cherche (`db.derniers_travaux`) : sa
+    #: DERNIÈRE occurrence `{status, due_at, finished_at}` — `status` celui de la file :
+    #: a-t-elle tourné, pas ce que l'agent a conclu — et la fin de son dernier passage
+    #: réussi. `null` = aucune occurrence sur 35 jours. ⚠️ La liste des runs de
+    #: l'org (`oto_org_monitoring op=runs`) y répond mal : il faut la paginer derrière
+    #: les passages d'un agent fréquent pour y retrouver celui d'un autre.
+    last_run: Optional[dict] = None
+    last_done_at: Optional[str] = None
     #: `schedule` ou `webhook` — ce qui donne le coup d'envoi.
     kind: Optional[str] = None
     payload_mode: Optional[str] = None
@@ -567,6 +579,42 @@ class RunnerModel(BaseModel):
     #: déclare de famille (`families: []`) : il faut alors omettre `model`.
     default: bool = False
     served: bool = False
+    #: Où tourne le modèle (`runner_models.hebergement`) : ce que l'écran affiche pour
+    #: que le client sache dans quel pays partent les données de son agent.
+    hosting: Optional["RunnerModelHosting"] = None
+    #: False quand l'org a écarté la région où il tourne (`orgs.allow_cn_models`) ou
+    #: éteint le modèle (`orgs.disabled_models`) : l'écran ne le propose pas, et la pose
+    #: le refuse (`model_region_blocked`, `model_disabled`).
+    allowed: bool = True
+    #: True quand un admin de l'org a éteint CE modèle (`orgs.disabled_models`) — ce qui
+    #: le distingue d'une région écartée : l'écran l'affiche éteint, interrupteur à côté.
+    disabled: bool = False
+
+
+class RunnerModelHost(BaseModel):
+    """Un serveur qui reçoit les tours d'un modèle, dans l'ordre où il est essayé."""
+    name: str
+    region: Literal["us", "eu", "cn"]
+    role: Literal["only", "first", "backup", "last_backup"]
+
+
+class RunnerModelMaker(BaseModel):
+    name: str
+    country: str
+
+
+class RunnerModelRouter(BaseModel):
+    name: str
+    region: Literal["us", "eu", "cn"]
+
+
+class RunnerModelHosting(BaseModel):
+    """Où tourne un modèle : `region` est la PIRE de ses hôtes et de son routeur — `cn`
+    dès qu'un seul, même de secours, est en Chine."""
+    region: Literal["us", "eu", "cn"]
+    hosts: list[RunnerModelHost]
+    maker: RunnerModelMaker
+    router: Optional[RunnerModelRouter] = None
 
 
 RunnerArme.model_rebuild()
@@ -580,7 +628,8 @@ class Delivery(BaseModel):
     #: `refused_too_large` | `refused_stale` (signature valide, horodatage hors
     #: fenêtre — un rejeu ou une horloge dérivée) | `refused_no_model` (l'agent ne
     #: déclare aucun modèle : rien n'est enfilé) | `refused_requires` (un agent qu'il
-    #: exige n'a pas réussi aujourd'hui : l'échéance est sautée). Un refus garde son MOTIF : c'est lui qui rend une
+    #: exige n'a pas réussi aujourd'hui : l'échéance est sautée) | `refused_model_disabled`
+    #: (un admin de l'org a éteint le modèle de l'agent : rien n'est enfilé). Un refus garde son MOTIF : c'est lui qui rend une
     #: source mal branchée réparable plutôt que mystérieuse.
     #: ⚠️ Figé à la RÉCEPTION : `queued` = « acceptée, travail enfilé », jamais
     #: « encore en attente ». Ce que le travail est devenu depuis, c'est `job_status`.
@@ -721,7 +770,8 @@ def _avec_pertes(org_id: int, t: dict) -> dict:
     quarante-et-une occurrences de treize jours ont été découvertes par hasard,
     en préparant autre chose. Servi ici, l'écart se voit là où on le cherche.
     """
-    return {**t, **db.comptage_perime(org_id, t["id"])}
+    return {**t, **db.comptage_perime(org_id, t["id"]),
+            **db.derniers_travaux(org_id, [t["id"]])[int(t["id"])]}
 
 
 def _outils_de_la_procedure(ctx: ResolvedCtx, slug: str) -> list[str]:
@@ -977,9 +1027,10 @@ def _servis_en_liste(org_id: int, ts: list[dict]) -> list[dict]:
     ids = [int(t["id"]) for t in ts]
     hooks = [int(t["id"]) for t in ts if (t.get("kind") or "schedule") == "webhook"]
     pertes = db.comptages_perimes(org_id, ids)
+    derniers = db.derniers_travaux(org_id, ids)
     comptes = db.comptages_livraisons(org_id, hooks)
     files = db.files_des_declencheurs(org_id, hooks)
-    return [_avec_hook(org_id, {**t, **pertes[int(t["id"])]},
+    return [_avec_hook(org_id, {**t, **pertes[int(t["id"])], **derniers[int(t["id"])]},
                        comptes.get(int(t["id"])), files.get(int(t["id"])))
             for t in ts]
 
@@ -1484,6 +1535,10 @@ def _exiger_lancable(ctx: ResolvedCtx, t: dict, procedure: Optional[str],
         raise AuthzDenied(409, "trigger_no_model",
                           f"{sans_famille}. Déclare un modèle du catalogue "
                           "(`op=update model=…`, liste : `runner.models`).")
+    # Un modèle ÉTEINT par un admin de l'org : le run ne part pas, et rien ne le
+    # remplace (même refus qu'à la pose, `model_disabled`).
+    if _modele.modele_eteint(ctx.org_id, model):
+        raise AuthzDenied(403, "model_disabled", _modele.RAISON_MODELE_ETEINT)
     famille = runner_models.famille(model)
     _modele.exige_servi(_modele.exige_un_runner(ctx.org_id), famille)
     _cle_exigee.exiger_a_la_pose(ctx.org_id, famille)
@@ -1665,6 +1720,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Un modèle inconnu se corrige dans l'appel, comme un cron : il se juge
         # avec lui, avant la présence du runner.
         famille = _modele.famille_declaree(inp.model)
+        _modele.exige_modele_permis(ctx.org_id, inp.model)
         # Le modèle est OBLIGATOIRE (24/09/2026) : il se corrige dans l'appel, comme
         # un modèle inconnu, donc il se juge avec lui.
         _modele.exige_un_modele(famille)
@@ -2080,6 +2136,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     famille = None
     if inp.model is not None:
         famille = _modele.famille_declaree(inp.model)
+        _modele.exige_modele_permis(ctx.org_id, inp.model)
         # `model=""` RETIRAIT le modèle pour revenir à celui du worker : un agent
         # hébergé déclare désormais le sien (24/09/2026), la retouche ne peut que
         # le changer.
@@ -2122,6 +2179,21 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         if "prete" not in lu:
             lu["prete"] = _acces_agent.prete(ctx.sub, actuel)
         return actuel["sub"] if lu["prete"] else ctx.sub
+
+    if inp.kind is not None:
+        # Le GENRE ne se change pas (voir `db.update_trigger`) : un autre genre était
+        # accepté par le schéma puis IGNORÉ — la réponse disait l'ancien, sans erreur.
+        # Jugé AVANT le cadencement : `kind=schedule cron=…` sur un webhook doit dire
+        # le vrai motif, pas « un webhook n'a pas de cadencement ».
+        if not _actuel():
+            raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+        genre = _actuel().get("kind") or "schedule"
+        if inp.kind != genre:
+            raise AuthzDenied(
+                400, "kind_immutable",
+                f"cette automatisation est `{genre}` : son genre se pose à la création "
+                f"et ne se change pas. Pour un agent `{inp.kind}`, crée-en un nouveau "
+                f"(`op=create kind={inp.kind}`), puis supprime celui-ci (`op=delete`).")
 
     if any(getattr(inp, c) is not None for c in _REGLAGES_WEBHOOK):
         if not _actuel():
@@ -3040,6 +3112,10 @@ CAPABILITIES += [
                           "`platform_tools` nomme un outil absent des `tools` de l'agent"),
             DeclaredError(400, "folder_too_long",
                           f"`folder` de plus de {FOLDER_MAX} caractères — un libellé, pas une phrase"),
+            DeclaredError(400, "kind_immutable",
+                          "`update` avec un `kind` différent de celui de l'agent : le "
+                          "genre se pose à `create` et ne se change pas (le même genre "
+                          "est sans effet) — créer un nouvel agent de l'autre genre"),
             DeclaredError(400, "invalid_schedule",
                           "cron malformé, fuseau inconnu, ou deux occurrences "
                           "espacées de moins de 5 minutes"),
@@ -3083,6 +3159,9 @@ CAPABILITIES += [
                           "automatisation inconnue dans l'org du porteur"),
             DeclaredError(400, "procedure_archived",
                           "`run_now` d'un agent dont la procédure est archivée"),
+            DeclaredError(403, "model_disabled",
+                          "pose, changement de modèle, `run_now` ou `rerun` sur un modèle "
+                          "qu'un admin de l'org a éteint (`oto_org_settings domain=models`)"),
             _procedure_du_travail.REFUS_INCONNUE,
             DeclaredError(400, "handoff_run_now_only", "`handoff` hors d'`op=run_now`"),
             DeclaredError(400, "chain_self",
@@ -3347,6 +3426,13 @@ CAPABILITIES += [
             "measure) plus `expired_since` and `expired_last` — since when, and "
             "whether it is STILL happening, are two different questions. A rising "
             "count on an enabled trigger means nobody is executing this org. "
+            "Did it RUN: `list`/`get` carry `last_run` — its latest occurrence "
+            "`{status, due_at, finished_at}` (`status` from the queue: whether it "
+            "ran, not what the agent concluded), `null` = none in 35 days — and "
+            "`last_done_at`, when its last successful run ended. Read them before "
+            "saying an agent did not run, instead of searching the org's run list "
+            "(`oto_org_monitoring op=runs`), where a frequent agent pushes the others "
+            "pages back. "
             "⚠️ A delivery also carries what its job actually RAN ON and what it "
             "cost to find out: `job_input` is the received body as the agent read "
             "it (bounded; null for a refusal), and `job_attempt_errors` is the "

@@ -20,7 +20,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .. import outils_du_travail, redaction
+from .. import geste, outils_du_travail, redaction
+from ..datastore import via as ds_via
 from ..mcp_errors import McpError
 from ..tools import lecture as lecture_declaree
 from . import ecritures as ec
@@ -115,6 +116,7 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
     est refusée. `compteur` reçoit les comptes."""
     lecture = appeleur_en_lecture(fastmcp, sub)
     etat = compteur if compteur is not None else compteur_neuf()
+    trouveurs: set[str] = set()
 
     async def appeler(outil: str, arguments: dict) -> dict:
         if outil == "data_rows":
@@ -123,6 +125,28 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
                 return refus
             return await _outil_de_tableau(fastmcp, sub, outil, arguments)
         if outil == "data_write":
+            # `via` (qui a trouvé la valeur) : prouvé par les appels RÉUSSIS de CETTE
+            # recette, que le pont voit passer — pas par le run, qu'une recette n'a pas
+            # toujours. Jamais bloquant : non prouvé, l'écriture se fait sans attribution.
+            via = arguments.get("via")
+            arguments = {k: v for k, v in arguments.items() if k != "via"}
+            if via is not None:
+                nom = str(via).strip()
+                if nom and nom in trouveurs:
+                    # Le geste de l'appel qui a lancé la recette porte l'écriture ; sans
+                    # lui (recette lancée hors requête), on en ouvre un : sinon `via`
+                    # ne poserait rien, en silence.
+                    portee = (geste.via(nom) if geste.courant() is not None
+                              else geste.portee(geste.AGENT, sub, outil=nom))
+                    with portee:
+                        out = await appeler("data_write", arguments)
+                    return out
+                out = await appeler("data_write", arguments)
+                if isinstance(out, dict):
+                    out = {**out, "via_dropped": (
+                        f"`via={nom}` ignored: this recipe has no successful `{nom}` "
+                        f"call before this write. Written, unattributed.")}
+                return out
             if not ecrire:
                 return {"ok": False, "code": "write_in_test",
                         "message": "A test writes nothing: `data_write` only runs in "
@@ -136,7 +160,13 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
                 return refus
             return await _outil_de_tableau(fastmcp, sub, outil,
                                            {**arguments, "datastore": datastore})
-        return await _chez_un_tiers(outil, arguments)
+        out = await _chez_un_tiers(outil, arguments)
+        # Ce que la recette a TROUVÉ chez un tiers : ce qu'un `data_write(via=…)`
+        # pourra nommer (outils de la plateforme exclus, comme partout).
+        if isinstance(out, dict) and out.get("ok") is not False \
+                and not ds_via._PLATEFORME.search(outil):
+            trouveurs.add(outil)
+        return out
 
     async def _chez_un_tiers(outil: str, arguments: dict) -> dict:
         from ..tools import meta

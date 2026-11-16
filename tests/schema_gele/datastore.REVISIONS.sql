@@ -9,5 +9,7 @@ run_id TEXT,
 source TEXT,
 geste_id TEXT,
 at TIMESTAMPTZ NOT NULL DEFAULT now(),
-suppression BOOLEAN NOT NULL DEFAULT false
+suppression BOOLEAN NOT NULL DEFAULT false,
+outil TEXT,
+fournisseur TEXT
 );

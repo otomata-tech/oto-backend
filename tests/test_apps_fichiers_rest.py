@@ -170,3 +170,35 @@ def test_un_corps_annonce_trop_gros_est_refuse_sans_etre_lu(monkeypatch):
     rep = asyncio.run(apps_files.app_files_upload(req, verifier=None))
     assert rep.status_code == 413
     assert b"content_too_large" in bytes(rep.body)
+
+
+def test_l_apercu_du_brouillon_depose_avec_draft_et_son_propre_jeton(client, app_id):
+    """L'aperçu du brouillon passe `draft` au consentement ET au dépôt (champ du
+    multipart) : un jeton de l'aperçu ne vaut pas pour l'app publiée, ni l'inverse."""
+    db.app_versions.set_enabled(app_id, True)
+    db.app_versions.write_draft(app_id, by=MOI, html="<p>draft</p>")
+    annonce = {"name": "d.pdf", "size": len(PDF), "media_type": "application/pdf"}
+    r = client.post(f"/api/me/apps/{app_id}/consent",
+                    json={"action": "upload_file", "file": annonce, "draft": True})
+    assert r.status_code == 200, r.text
+    jeton = r.json()["consent"]
+    # Sans `draft` au dépôt : l'empreinte n'est pas la même, refusé.
+    r = client.post(f"/api/me/apps/{app_id}/files", data={"consent": jeton},
+                    files={"file": ("d.pdf", PDF, "application/pdf")})
+    assert (r.status_code, r.json()["error"]) == (403, "consent_invalid")
+    jeton = client.post(f"/api/me/apps/{app_id}/consent",
+                        json={"action": "upload_file", "file": annonce, "draft": True}).json()["consent"]
+    r = client.post(f"/api/me/apps/{app_id}/files", data={"consent": jeton, "draft": "true"},
+                    files={"file": ("d.pdf", PDF, "application/pdf")})
+    assert r.status_code == 200, r.text
+
+
+def test_un_lecteur_ne_depose_pas_dans_le_brouillon(client, app_id):
+    db.app_versions.set_enabled(app_id, True)
+    db.app_versions.write_draft(app_id, by=MOI, html="<p>draft</p>")
+    from oto_mcp import ownership
+    ownership.grant("app", str(app_id), "user", AUTRE, role="viewer", granted_by=MOI)
+    client.verifier.sub = AUTRE
+    r = client.post(f"/api/me/apps/{app_id}/files", data={"consent": "x", "draft": "true"},
+                    files={"file": ("d.pdf", PDF, "application/pdf")})
+    assert (r.status_code, r.json()["error"]) == (403, "draft_editors_only")

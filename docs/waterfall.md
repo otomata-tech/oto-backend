@@ -98,7 +98,12 @@ comprise : du point de vue de l'org, c'est une clé payée par l'opérateur de l
 refacturée sur le tenant primaire, pas la sienne,
 chaque groupe dans l'ordre de la table (tri stable). Un ordre ÉCRIT — celui de l'appel ou
 du réglage — est gardé tel quel : quelqu'un l'a choisi. Un fournisseur sans clé utilisable
-(`forbidden`, `over_quota`) est sauté sans être appelé. ⚠️ Ce mode est une lecture
+(`forbidden`, `over_quota`) est sauté sans être appelé — sauf une étape **sans clé**
+(`Step.keyless` : le registre français, `fr_get` / `fr_search`, de l'open data) : son
+connecteur (`sirene`) porte une clé pour d'AUTRES outils (l'INSEE, `fr_siret`), dont le mode
+ne dit rien d'elle ; elle est lue `open`, jamais sautée `no_key` (registre
+sauté dans une org où il répondait en direct, la cascade finissait sur un homonyme d'un
+autre pays). ⚠️ Ce mode est une lecture
 proche de la résolution réelle, pas exacte (il ignore un `_instance` épinglé, un compte
 nommé, l'option payante) : il ORDONNE, il ne garde rien — la garde reste l'appel de
 l'étape.
@@ -325,6 +330,21 @@ poste ACTUEL est ailleurs, et des faux profils : gardés seulement si
 `currentPosition[0].companyUniversalName` est la page demandée) → google (`serper_search`
 sur `linkedin.com/in`, un titre « Nom – Poste – Société | LinkedIn », gardé seulement s'il
 nomme la société).
+
+⚠️ **Google : UNE recherche par rôle, jamais un OU entre parenthèses**.
+Serper rend une liste VIDE pour `"Acme" (a OR "b c" OR d)` là où `"Acme" "a"` trouve
+(mesuré) : l'étape ratait en silence la plupart des recherches. Elle envoie donc
+`"Acme" "<rôle>"` par rôle (`Step.fan_out`, rôles dédoublonnés, au plus
+`GOOGLE_MAX_QUERIES` — les suivants nommés `not_sent`), fusionne les résultats et
+dédoublonne les profils par leur slug `/in/<slug>` (un même profil revient sous
+`fr.linkedin.com` et `www.linkedin.com/…/`). Sans rôle : une seule recherche sur la société.
+Chaque recherche envoyée est facturée par `serper_search` et compte dans
+`max_paid_steps` ; elles partent l'une après l'autre et s'arrêtent dès que la trouvaille
+tient `limit` personnes (`stopped: limit_reached`), à `max_paid_steps` ou au budget de
+temps — un échec ainsi coupé porte le `code` de la limite (le mode tableau laisse la
+ligne à reprendre). Une recherche qui échoue après d'autres garde ce qu'elles ont trouvé
+(`stopped` = son code). Le reçu dit `calls` ; un `dry_run` liste chaque recherche
+(`fan_out`). Sous `qualify_min`, la page suivante se lit pour CHAQUE recherche.
 
 ### La base de personnes de lemlist (21/10/2026)
 

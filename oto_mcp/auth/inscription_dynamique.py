@@ -32,6 +32,9 @@ et demande un client_id / client_secret. On les obtient en postant ce rappel ici
 (`POST /oauth/register {"client_name": "Gemini", "redirect_uris": [<rappel>]}`) ; le
 rappel ne mène qu'à Google, l'admettre n'ouvre aucune redirection vers un tiers.
 
+**Grok (grok.com, connecteur « Custom »)** s'inscrit lui-même ici, avec un rappel FIXE
+(`https://grok.com/connectors-oauth-exchange-code/`) : égalité exacte, pas de plafond.
+
 La logique (`lire_demande`, `inscrire`) ne dépend que d'une `Gestion` injectée ;
 `GestionLogto` la branche sur l'API de gestion de NOTRE annuaire (`auth/annuaire.py`).
 """
@@ -60,6 +63,9 @@ RETOURS_ADMIS: tuple[str, ...] = (
     "https://callback.mistral.ai/v1/integrations_auth/oauth2_callback",
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
+    # Grok (grok.com, Connectors › New Connector › Custom) : rappel fixe, slash final
+    # compris — la seule forme observée à l'inscription.
+    "https://grok.com/connectors-oauth-exchange-code/",
 )
 
 METHODES = ("client_secret_basic", "client_secret_post", "none")

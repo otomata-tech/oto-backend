@@ -32,7 +32,7 @@ Around the connectors, oto-mcp provides the platform plumbing:
 
 MCP federation (mounting a third-party MCP server into our surface) was **removed on
 2026-09-09** — three connectors were declared, none was ever used. A remote service is
-now reached through the generic `http` connector, or written as a native connector.
+now reached through the generic `api` connector (Custom API), or written as a native connector.
 
 ## Architecture
 

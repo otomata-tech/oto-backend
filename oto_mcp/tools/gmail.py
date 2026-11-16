@@ -14,7 +14,8 @@ TOOLS, not arguments, so what reads never sends nor deletes:
 - `gmail` reads or simulates: accounts, search, get, attachment, drafts, and `op="draft"`
   (writes a draft: nothing leaves, nothing is destroyed) — `lecture.SIMULATION`;
 - `gmail_act` acts: `op="send"` (an existing draft by `draft_id`, or a full message),
-  `op="archive"`, `op="trash"` — `lecture.ACTE`, the tool the client asks to confirm.
+  `op="archive"`, `op="trash"`, `op="delete_draft"` (destroys a draft by its `draft_id`) —
+  `lecture.ACTE`, the tool the client asks to confirm.
 The old names (`gmail_message`, `gmail_compose`, `gmail_list_accounts`) refuse by naming
 the call to make (`outils_retires.RENOMMAGES_ACT`).
 """
@@ -39,11 +40,16 @@ from ..auth import google as google_oauth
 # The ops of each tool. Single source: input validation AND the refusal message derive
 # from it, so an added op cannot be accepted without being announced (nor the reverse).
 _OPS = ("search", "get", "attachment", "drafts", "draft", "accounts")
-_ACT_OPS = ("send", "archive", "trash")
+_ACT_OPS = ("send", "archive", "trash", "delete_draft")
 
 
 def _ops_error(ops: tuple) -> str:
     return "op must be " + ", ".join(f"'{o}'" for o in ops[:-1]) + f" or '{ops[-1]}'"
+
+
+def _is_not_found(e: Exception) -> bool:
+    """A Google API 404 (googleapiclient `HttpError`: `resp.status`)."""
+    return getattr(getattr(e, "resp", None), "status", None) == 404
 
 
 def _bad(msg: str) -> McpError:
@@ -126,19 +132,29 @@ def _resolve_attachments(attachments):
         raise
 
 
-def _signed_html(body: str, html: Optional[str], markdown: bool, signature: str) -> str:
+def _html_du_corps(body: str, html: Optional[str], markdown: bool) -> Optional[str]:
+    """The HTML part of a composed message: `html` as the caller wrote it, otherwise the
+    markdown body rendered AND sanitized (`markdown_assaini` — raw HTML, `attr_list`
+    attributes, `javascript:`/`data:` links removed), otherwise None (plain text only).
+    Rendered here, never left to GmailClient, whose own rendering is not sanitized."""
+    if html is not None:
+        return html
+    if markdown:
+        from oto_mcp.markdown_assaini import rendu_markdown_assaini
+        return rendu_markdown_assaini(body, images=True)
+    return None
+
+
+def _signed_html(body: str, html: Optional[str], signature: str) -> str:
     """The message's HTML body, with the account's signature appended after `--`.
 
     The Gmail API NEVER appends the signature: it is the web client that adds it at
     composition (oto#178, feedback 794/795). The signature is HTML, so the body
-    must be too: `html` as is, otherwise the rendered markdown — the same rendering
-    GmailClient would do itself —, otherwise the escaped plain text, line breaks kept
-    (`markdown=False` means "no markdown", not "no HTML")."""
+    must be too: `html` (already rendered from markdown by `_html_du_corps`), otherwise
+    the escaped plain text, line breaks kept (`markdown=False` means "no markdown",
+    not "no HTML")."""
     if html is not None:
         corps = html
-    elif markdown:
-        from oto.tools.google.gmail.lib.gmail_client import _markdown_to_html_fragment
-        corps = _markdown_to_html_fragment(body)
     else:
         import html as html_mod
         corps = ('<div dir="ltr">' + html_mod.escape(body).replace("\n", "<br>")
@@ -228,8 +244,8 @@ archives or deletes: that is `gmail_act`, the tool your client asks you to confi
 - **"drafts"**: the drafts. Returns {{drafts: [{{id, message_id, to, subject, date,
   snippet}}], count}} — a draft `id` is what `gmail_act(op="send", draft_id=…)` sends.
 - **"draft"**: WRITE A DRAFT — a new message (`to`, `subject`, `body`) or a threaded reply
-  (`reply_to`). It does NOT leave the mailbox. Returns `kind: "draft"`, its `id` and
-  `web_link` (the draft opened in Gmail web, to note where it waits): send it with
+  (`reply_to`). It does NOT leave the mailbox. Returns `kind: "draft"`, its `id` (the `draft_id`, distinct from
+  `message_id`) and `web_link` (the draft opened in Gmail web, to note where it waits): send it with
   `gmail_act(op="send", draft_id=<id>)` once the person agrees.
   ⚠️ A fresh draft can be MISSING from an already-open Gmail tab for a while (the API has
   it, the client view lags): tell the person to reload or search `in:drafts`.
@@ -265,14 +281,19 @@ LEAVES, a message moves. Reading and drafting are `gmail`.
 - **"archive"**: removes the INBOX label from `message_ids`.
 - **"trash"**: moves `message_ids` to the trash (Gmail deletes them after 30 days). One
   call per message: a PARTIAL trash is possible and is named — replay only what was not
-  attempted.
+  attempted. A DRAFT is not trashed this way (Google answers 404): use "delete_draft".
+- **"delete_draft"**: permanently deletes a draft (it does not go to the trash — it is
+  gone), by `draft_id`. That is the draft `id` returned by `gmail(op="draft")` or
+  `gmail(op="drafts")`, NOT its `message_id`. Returns `{{kind: "draft_deleted",
+  draft_id}}`.
 
 {_SIGNATURE_DOC} (A draft is sent as it stands: its signature was added when it was
 written.)
 
 Args:
-    op: send | archive | trash.
-    draft_id: op="send" — the draft to send, as it stands (no other argument).
+    op: send | archive | trash | delete_draft.
+    draft_id: op="send" — the draft to send, as it stands (no other argument);
+        op="delete_draft" — the draft to delete.
     message_ids: op="archive"/"trash" — the message ids to act on.
     For op="send" without `draft_id`:
 {_COMPOSITION_ARGS}
@@ -297,6 +318,7 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, b
     tools: signature, attachments, reply or new message."""
     if not body:
         raise _bad("`body` is required to compose a message. Nothing was written.")
+    html = _html_du_corps(body, html, markdown)
     signature_etat = "disabled"
     if sign:
         try:
@@ -308,7 +330,7 @@ async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, b
                        "was written. Retry, or pass `sign=False` to "
                        "compose without a signature.")
         if signature:
-            html = _signed_html(body, html, markdown, signature)
+            html = _signed_html(body, html, signature)
             signature_etat = "appended"
         else:
             signature_etat = "none_configured"
@@ -465,7 +487,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool(name="gmail_act", annotations=ACTE)
     @documente(_GMAIL_ACT_DOC)
     async def gmail_act(
-        op: Literal["send", "archive", "trash"],
+        op: Literal["send", "archive", "trash", "delete_draft"],
         draft_id: Optional[str] = None,
         message_ids: Optional[list[str]] = None,
         body: Optional[str] = None,
@@ -483,10 +505,19 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         if op not in _ACT_OPS:
             raise _bad(_ops_error(_ACT_OPS))
-        if op != "send":
-            if draft_id is not None:
-                raise _bad(f"`draft_id` only applies to op='send', not op='{op}'. "
+        if op == "delete_draft":
+            _need(draft_id, "draft_id", op)
+            if message_ids is not None:
+                raise _bad("`message_ids` does not apply to op='delete_draft': pass the "
+                           "draft's `draft_id` (its `id` in gmail op='draft'/'drafts'). "
                            "Nothing was done.")
+            _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
+                                cc=cc, bcc=bcc, html=html, from_name=from_name,
+                                attachments=attachments)
+        elif op != "send":
+            if draft_id is not None:
+                raise _bad(f"`draft_id` only applies to op='send'/'delete_draft', not "
+                           f"op='{op}'. Nothing was done.")
             _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
                                 cc=cc, bcc=bcc, html=html, from_name=from_name,
                                 attachments=attachments)
@@ -511,6 +542,10 @@ def register(mcp: FastMCP) -> None:
                 reply_to=reply_to, cc=cc, bcc=bcc, html=html, from_name=from_name,
                 markdown=markdown, attachments=attachments, sign=sign)
 
+        if op == "delete_draft":
+            await asyncio.to_thread(client.delete_draft, draft_id)
+            return {"kind": "draft_deleted", "draft_id": draft_id}
+
         ids = list(_need(message_ids, "message_ids", op))
         if op == "archive":
             return {"archived": await asyncio.to_thread(client.archive_messages, ids)}
@@ -526,6 +561,15 @@ def register(mcp: FastMCP) -> None:
                 res = await asyncio.to_thread(client.trash_message, mid)
             except Exception as e:  # noqa: BLE001 — re-raised named, with the real state
                 restants = ids[i + 1:]
+                if _is_not_found(e):
+                    raise _bad(
+                        f"Google does not know `{mid}` as a message (404). If it is a "
+                        "DRAFT, it is not trashed this way: call "
+                        "gmail_act(op='delete_draft', draft_id=<the draft `id` from "
+                        "gmail op='draft'/'drafts', not its `message_id`>). "
+                        f"ALREADY in the trash ({len(trashed)}): {trashed}. "
+                        f"NOT ATTEMPTED ({len(restants)}): {restants}."
+                    ) from e
                 raise _bad(
                     "PARTIAL trash — the write stops at the first "
                     "failure, but what precedes did happen. "

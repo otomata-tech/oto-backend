@@ -31,13 +31,13 @@ _HORS_PORTEE = ("hors de la portée du projet — rien ne le sert ; retire ce li
 
 
 def _resolved_procedures(links: list[dict]) -> dict[int, dict]:
-    """Les instructions des liens `procedure`, par `procedure_id`, en une requête. Un
-    lien sans `procedure_id` (réf non numérique legacy, guide disparu) n'y est pas.
-    Import paresseux (pas de cycle au boot)."""
+    """Le slug et les slots des liens `procedure`, par `procedure_id`, en une requête —
+    sans leur corps, que l'audit ne lit pas. Un lien sans `procedure_id` (réf non
+    numérique legacy, guide disparu) n'y est pas. Import paresseux (pas de cycle au boot)."""
     from . import org_store
     # `procedure_id` = résolue DANS LA PORTÉE du projet (`db.list_project_links`) ;
     # sans elle, le lien est mort pour l'audit — et son slug ne se lit pas.
-    return org_store.get_instructions_by_ids(
+    return org_store.get_instruction_slots_by_ids(
         [int(l["procedure_id"]) for l in links
          if l.get("target_type") == "procedure" and l.get("procedure_id") is not None])
 
@@ -54,7 +54,10 @@ def _unresolvable_connector_why(name: str, org_id: int, link: dict,
     exacte de #218 = secret présent au niveau d'un groupe, absent au niveau org.
     Un `instance_ref` épinglé (intention déclarée, RBAC gère) lève le signal.
     `groups` = les équipes de l'org, déjà lues par l'appelant (une lecture par audit,
-    pas par lien)."""
+    pas par lien). Les équipes qui détiennent la clé se lisent EN LOT
+    (`group_store.groups_holding`, deux requêtes quel que soit leur nombre) : une
+    lecture par équipe et par connecteur faisait de cette vérification l'essentiel des
+    requêtes d'`op=get` (banc local : 5 connecteurs × 4 équipes = 40 requêtes sur 71)."""
     from . import access, group_store
     if (link.get("config") or {}).get("instance_ref"):
         return None
@@ -62,7 +65,7 @@ def _unresolvable_connector_why(name: str, org_id: int, link: dict,
         return None
     if groups is None:
         groups = group_store.list_groups(org_id)
-    if not any(group_store.has_group_secret(int(g["id"]), name) for g in groups):
+    if not group_store.groups_holding([int(g["id"]) for g in groups], org_id, name):
         return None
     return (f"le credential `{name}` n'existe qu'au niveau d'une équipe de l'org — un "
             "projet d'org ne le résout pas en contexte projet. Transfère le projet à "
@@ -79,14 +82,32 @@ def unbound_slots_for(instr: dict, links: list[dict]) -> list[str]:
     return sorted(declared - bound)
 
 
+#: Ce que rend chaque profondeur d'audit — la réponse le dit (`checked`) quand elle n'est
+#: pas complète : une liste ABSENTE n'a pas été vérifiée, elle ne vaut pas « rien à signaler ».
+CHECKS_COMPLETS = ("dead_links", "unbound_slots", "unresolvable_connectors",
+                   "inert_procedures")
+CHECKS_LIENS = ("dead_links",)
+
+
 def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
-                  light: bool = False) -> dict:
+                  light: bool = False, links_only: bool = False,
+                  project: Optional[dict] = None) -> dict:
     """Audit des liens d'un projet. `links` = liens déjà chargés
-    (`db.list_project_links`, qui résout namespace/title), sinon rechargés.
-    Best-effort : toute erreur ⇒ audit partiel, jamais d'exception.
+    (`db.list_project_links`, qui résout namespace/title), sinon rechargés ; `project` =
+    la ligne du projet déjà lue par l'appelant (sinon relue). Best-effort : toute erreur
+    ⇒ audit partiel, jamais d'exception.
 
     L'audit COMPLET lit en lot (incident du 13/10/2026) : les procédures liées en une
-    requête, les équipes de l'org une fois — pas une lecture par lien.
+    requête (slug et slots, sans corps), les équipes de l'org une fois, celles qui
+    détiennent une clé en deux requêtes par connecteur distinct — pas une lecture par
+    lien ni par équipe.
+
+    `links_only=True` (lecture d'UN projet par l'écran qui l'ouvre) : les LIENS MORTS
+    seuls, et tous — procédures comprises —, sans une requête de plus que `links`. Une
+    procédure est morte quand `list_project_links` ne lui a pas posé de `procedure_id`
+    (absente, ou hors de la portée du projet) : c'est exactement ce que l'audit complet
+    juge, l'existence ayant déjà été lue par la requête des titres. Les trois autres
+    listes ne sont PAS servies (ni vides ni calculées) et `checked` nomme ce qui l'a été.
 
     `light=True` (oto/#6 A7 — perf du LISTING) : ne fait que les checks EN MÉMOIRE
     (tableau dont le namespace ne résout plus, connecteur hors registre) → ZÉRO
@@ -98,16 +119,20 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
     from . import db, providers
     if links is None:
         links = db.list_project_links(int(project_id))
+    complet = not light and not links_only
     # Org propriétaire (le signal `unresolvable_connector` ne vaut que pour un projet
-    # ORG-owned). Résolu seulement en audit COMPLET (une requête par projet).
+    # ORG-owned). Résolu seulement en audit COMPLET (une requête par projet, aucune
+    # quand l'appelant passe la ligne).
     project_org: Optional[int] = None
     # None : la lecture des procédures a échoué (journalisée) — leurs liens ne sont
     # alors pas jugés, plutôt que déclarés morts à tort.
     instrs: Optional[dict[int, dict]] = {}
     groups: Optional[list[dict]] = None
-    if not light:
+    # Un connecteur lié sous plusieurs identités ne se juge qu'une fois.
+    pourquoi_connecteur: dict[str, Optional[str]] = {}
+    if complet:
         try:
-            proj = db.get_project_by_id(int(project_id))
+            proj = project if project is not None else db.get_project_by_id(int(project_id))
             if proj and proj.get("owner_type") == "org" and str(proj.get("owner_id", "")).isdigit():
                 project_org = int(proj["owner_id"])
         except Exception as e:  # noqa: BLE001
@@ -146,13 +171,15 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
             elif t == "procedure":
                 if light or instrs is None:
                     continue   # la résolution de procédure est une requête → COMPLET seul
-                instr = (instrs.get(int(l["procedure_id"]))
-                         if l.get("procedure_id") is not None else None)
-                if instr is None:
+                pid = l.get("procedure_id")
+                instr = instrs.get(int(pid)) if pid is not None else None
+                if pid is None or (instr is None and not links_only):
                     dead.append({"target_type": t, "target_ref": l.get("target_ref"),
                                  "why": (_HORS_PORTEE if l.get("hors_portee")
                                          else "la procédure pointée ne résout plus")})
                     continue
+                if links_only:
+                    continue   # vivante ; ses slots ne sont pas lus à cette profondeur
                 procedures.append(instr)
                 missing = unbound_slots_for(instr, links)
                 if missing:
@@ -164,17 +191,25 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
                 if ref not in providers.REGISTRY:
                     dead.append({"target_type": t, "target_ref": ref,
                                  "why": "connecteur inconnu du registre"})
-                elif not light and project_org is not None:
-                    if groups is None and not (l.get("config") or {}).get("instance_ref"):
-                        from . import group_store
-                        groups = group_store.list_groups(project_org)
-                    why = _unresolvable_connector_why(str(ref), project_org, l, groups)
+                elif complet and project_org is not None:
+                    epingle = bool((l.get("config") or {}).get("instance_ref"))
+                    if epingle:
+                        continue   # instance épinglée : intention déclarée, rien à lire
+                    if str(ref) not in pourquoi_connecteur:
+                        if groups is None:
+                            from . import group_store
+                            groups = group_store.list_groups(project_org)
+                        pourquoi_connecteur[str(ref)] = _unresolvable_connector_why(
+                            str(ref), project_org, l, groups)
+                    why = pourquoi_connecteur[str(ref)]
                     if why:
                         unresolvable.append({"target_ref": ref, "why": why})
         except Exception as e:  # noqa: BLE001 — un lien pourri n'avale pas l'audit
             logger.warning("audit_project(%s) lien %s: %s", project_id, l.get("target_ref"), e)
+    if links_only:
+        return {"dead_links": dead, "checked": list(CHECKS_LIENS)}
     inert: list[str] = []
-    if not light:
+    if complet:
         try:
             stats = db.project_run_stats(int(project_id))
             # Un projet SANS run ne rend rien d'inerte (jeune projet = bruit, pas signal).

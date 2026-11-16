@@ -62,6 +62,34 @@ def test_cle_inconnue_refusee():
     assert any("unknown key `headers`" in e for e in _errors([_op(headers={"a": "b"})]))
 
 
+# ── `class: read` : une action qui ne fait que lire, même en POST ──────────────────
+
+@pytest.mark.parametrize("methode", ["GET", "post"])
+def test_class_read_est_garde_et_resume(methode):
+    [op] = co.validate_operations([_op(method=methode, path="/search", input=None,
+                                       **{"class": "read"})])
+    assert op["class"] == "read" and co.reads(op)
+    assert co.summary(op)["class"] == "read"
+
+
+def test_sans_class_rien_n_est_ajoute():
+    [op] = co.validate_operations([_op()])
+    assert "class" not in op and not co.reads(op)
+    assert "class" not in co.summary(op)
+
+
+@pytest.mark.parametrize("classe", ["write", "sensitive", "READ", "", None, True])
+def test_class_n_admet_que_read(classe):
+    [err] = _errors([_op(**{"class": classe})])
+    assert "`class` accepts `read` only" in err
+
+
+@pytest.mark.parametrize("methode", ["PUT", "PATCH", "DELETE"])
+def test_class_read_sur_un_verbe_d_ecriture_refuse(methode):
+    [err] = _errors([_op(method=methode, path="/x", input=None, **{"class": "read"})])
+    assert f"GET or a POST only, not {methode}" in err
+
+
 def test_parametre_de_chemin_doit_etre_un_argument_requis():
     op = _op()
     op["input"]["required"] = []

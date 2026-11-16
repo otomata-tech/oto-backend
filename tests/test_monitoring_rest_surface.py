@@ -66,7 +66,7 @@ def _mount(monkeypatch, *, admin=True):
 
 def test_non_admin_is_refused(monkeypatch):
     """Le palier ne s'est pas perdu dans la migration : sans opérateur → 403."""
-    monkeypatch.setattr(db, "list_tool_calls", lambda **kw: [])
+    monkeypatch.setattr(db, "list_tool_calls_page", lambda **kw: {"calls": [], "next": None})
     idx = _mount(monkeypatch, admin=False)
     out = asyncio.run(idx[("/api/admin/monitoring/calls", "GET")](FakeReq()))
     assert out["_status"] == 403
@@ -74,7 +74,8 @@ def test_non_admin_is_refused(monkeypatch):
 
 def test_query_string_filters_are_coerced(monkeypatch):
     seen = {}
-    monkeypatch.setattr(db, "list_tool_calls", lambda **kw: seen.update(kw) or [])
+    monkeypatch.setattr(db, "list_tool_calls_page",
+                        lambda **kw: seen.update(kw) or {"calls": [], "next": None})
     idx = _mount(monkeypatch)
     handler = idx[("/api/admin/monitoring/calls", "GET")]
 

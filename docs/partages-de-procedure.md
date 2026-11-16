@@ -11,7 +11,7 @@ description: >-
 
 # Partager une procédure par lien
 
-Côté produit (Tulina) : « See who's reading ». Un org_admin publie UNE procédure de son
+Côté produit (demande d'un tenant) : « See who's reading ». Un org_admin publie UNE procédure de son
 org par un lien. Le lien sert trois publics :
 
 | Qui | Face | Ce qu'il obtient |

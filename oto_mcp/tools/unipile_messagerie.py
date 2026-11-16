@@ -192,7 +192,7 @@ def references_des_pieces(page: Any, canal: str) -> Any:
     if designees:
         page["attachments_note"] = (
             "an attachment's `url` points to the Unipile API and requires its key (not "
-            "readable with http_get): pass its `source` instead — to `oto_import("
+            "readable with api_get): pass its `source` instead — to `oto_import("
             "source=…, target=\"project_file\", project_id=…)` to file it in a project, "
             "or to any tool that takes a `source`. The server fetches the bytes.")
     if sans_url:

@@ -108,7 +108,7 @@ class AuthDescriptor(BaseModel):
     account_noun: str
     field_discriminator: str = Field(default="", description=(
         "The field whose value selects the others, when there is one "
-        "(`auth_mode` on `http`). **EMPTY string**, never `null`, when there is none. "
+        "(`auth_mode` on `api`). **EMPTY string**, never `null`, when there is none. "
         "⚠️ As long as no value is chosen, ALL fields are "
         "relevant: the server hides nothing before the input has decided, "
         "because hiding would be guessing. A form that filtered as soon as it "

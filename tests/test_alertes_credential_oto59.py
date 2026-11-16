@@ -37,6 +37,10 @@ def bureau(monkeypatch):
     # refusées ou à sec ont les leurs plus bas.
     monkeypatch.setattr(A, "clore_episodes_gueris", lambda: 0)
     monkeypatch.setattr(A, "cles_ko_a_annoncer", lambda: [])
+    # Les agents qui dépendent encore d'un connecteur retiré : aucun connu par défaut,
+    # l'alerte dit alors leur NOMBRE (`agents_max`).
+    from oto_mcp.db import runner_triggers as T
+    monkeypatch.setattr(T, "triggers_actifs_utilisant", lambda org, c: [])
     monkeypatch.setattr(O, "list_org_members",
                         lambda org: [{"sub": "u-admin", "org_role": "org_admin"},
                                      {"sub": "u-membre", "org_role": "org_member"}])
@@ -159,8 +163,12 @@ def test_une_cle_REFUSEE_sous_un_agent_programme_est_annoncee(cles_rouges, monke
     monkeypatch.setenv(M._ENV_ALERTE, "1")
     out = M.alertes_credential()
     assert out["envoyes"] == 1 and out["cles_en_panne"] == 1
-    assert "snitcher" in envois[0]["html"] and "refusée" in envois[0]["html"]
-    assert "1 agent(s)" in envois[0]["html"]
+    assert "Clé Snitcher refusée" in envois[0]["html"], (
+        "le connecteur par son NOM de produit, jamais le slug en minuscules")
+    assert "veille quotidienne" in envois[0]["html"], "l'agent qui en dépend est NOMMÉ"
+    assert "403 Forbidden" in envois[0]["html"], "ce que le fournisseur a répondu"
+    assert "Créez une nouvelle clé chez Snitcher et collez-la dans Connecteurs." in (
+        envois[0]["html"]), "refusée : le geste est de recréer la clé"
     assert [l["connector"] for l in annoncees] == ["snitcher"], (
         "la clé est marquée annoncée APRÈS l'envoi : c'est ce qui fait UNE alerte par "
         "épisode, pas une par passage")
@@ -172,7 +180,30 @@ def test_une_cle_A_SEC_dit_recharger_pas_reposer(cles_rouges, monkeypatch):
     lignes[0].update(verdict=NO_QUOTA_VERDICT, raison="Not enough credits")
     monkeypatch.setenv(M._ENV_ALERTE, "1")
     M.alertes_credential()
-    assert "n'a plus de crédits" in envois[0]["html"]
+    html = envois[0]["html"]
+    assert "Compte Snitcher sans crédit" in html
+    assert ("Rechargez votre compte Snitcher chez Snitcher, ou branchez une autre clé "
+            "dans Connecteurs.") in html, "à sec : le geste est CHEZ le fournisseur"
+    assert "Créez une nouvelle clé" not in html, "jamais « recréer » une clé qui marche"
+
+
+def test_en_anglais_chaque_etat_dit_son_geste(cles_rouges, monkeypatch):
+    envois, lignes, _, _ = cles_rouges
+    from oto_mcp.credentials_store import NO_QUOTA_VERDICT
+    from oto_mcp.db import users as U
+    monkeypatch.setattr(U, "get_user", lambda s: {"locale": "en"})
+    monkeypatch.setenv(M._ENV_ALERTE, "1")
+    M.alertes_credential()
+    assert "Create a new key with Snitcher and paste it in Connectors." in envois[0]["html"]
+    envois.clear()
+    lignes[0].update(verdict=NO_QUOTA_VERDICT)
+    from oto_mcp.db import alertes_credential as A
+    monkeypatch.setattr(A, "cles_ko_a_annoncer", lambda: list(lignes))
+    M.alertes_credential()
+    html = envois[0]["html"]
+    assert ("Top up your Snitcher account with Snitcher, or connect another key in "
+            "Connectors.") in html
+    assert "These agents fail on every run until then." in html
 
 
 def test_une_cle_rouge_que_RIEN_ne_fait_tourner_ne_part_pas(cles_rouges, monkeypatch):
@@ -196,7 +227,9 @@ def test_retrait_et_cle_rouge_dans_la_meme_org_font_UN_courriel(cles_rouges, mon
     monkeypatch.setenv(M._ENV_ALERTE, "1")
     out = M.alertes_credential()
     assert len(envois) == 1 and out["orgs_a_prevenir"] == 1
-    assert "retirée" in envois[0]["html"] and "snitcher" in envois[0]["html"]
+    assert "Clé Slack retirée" in envois[0]["html"] and "Snitcher" in envois[0]["html"]
+    assert "Reposez une clé dans Connecteurs." in envois[0]["html"], (
+        "retirée : le geste est de reposer une clé")
     assert marques == [4] and len(annoncees) == 1
 
 
@@ -218,7 +251,7 @@ def test_une_instance_anglophone_ecrit_l_alerte_en_anglais(cles_rouges, bureau, 
     monkeypatch.setenv("OTO_BRAND_LANGUE", "en")
     M.alertes_credential()
     assert envois[0]["subject"] == "A key is failing under your scheduled agents"
-    assert "is refused by the provider" in envois[0]["html"]
+    assert "Snitcher key refused by the provider" in envois[0]["html"]
     assert "refusée" not in envois[0]["html"]
 
 
@@ -269,3 +302,56 @@ def test_la_preference_de_l_admin_prime_sur_la_langue_de_l_instance(bureau, monk
     monkeypatch.setenv("OTO_BRAND_LANGUE", "")
     M.alertes_credential()
     assert envois[0]["subject"] == "A key was removed under your scheduled agents"
+
+
+# --- Ce que dit l'alerte, clé par clé (15/11/2026) -------------------------------------
+
+
+def test_l_alerte_nomme_chaque_agent_et_le_relie_a_sa_page(cles_rouges, monkeypatch):
+    """« Une clé est refusée » sans dire quels agents en dépendent laisse le
+    destinataire les chercher : chacun est nommé, et lien vers SA page quand
+    l'instance déclare ce patron."""
+    envois, _, _, agents = cles_rouges
+    agents[("7", "snitcher")] = [{"id": 41, "label": "veille <quotidienne>"},
+                                 {"id": 42, "label": "relance"}]
+    from oto_mcp import links
+    monkeypatch.setattr(links, "link_for", lambda kind, sub=None, org=None, id=None, **kw:
+                        f"https://app.exemple.test/{kind}/{org}/{id}")
+    monkeypatch.setenv(M._ENV_ALERTE, "1")
+    M.alertes_credential()
+    html = envois[0]["html"]
+    assert 'href="https://app.exemple.test/agent/7/41"' in html
+    assert 'href="https://app.exemple.test/agent/7/42"' in html
+    assert "veille &lt;quotidienne&gt;" in html, "un libellé d'agent est échappé"
+
+
+def test_un_seul_bouton_vers_connecteurs_et_aucun_sans_patron(cles_rouges, monkeypatch):
+    envois, _, _, _ = cles_rouges
+    from oto_mcp import links
+    monkeypatch.setenv(M._ENV_ALERTE, "1")
+    monkeypatch.setattr(links, "link_for", lambda kind, sub=None, org=None, id=None, **kw:
+                        f"https://app.exemple.test/{kind}/{org}" if kind == "connectors"
+                        else None)
+    M.alertes_credential()
+    html = envois[0]["html"]
+    assert html.count('href="https://app.exemple.test/connectors/7"') == 1
+    assert "Ouvrir Connecteurs" in html
+    envois.clear()
+    monkeypatch.setattr(links, "link_for", lambda *a, **kw: None)
+    from oto_mcp.db import alertes_credential as A
+    monkeypatch.setattr(A, "cles_ko_a_annoncer", lambda: [_rouge()])
+    M.alertes_credential()
+    assert "Ouvrir Connecteurs" not in envois[0]["html"], (
+        "sans patron déclaré, pas de bouton : on n'envoie pas quelque part au hasard")
+
+
+def test_un_retrait_nomme_les_agents_qui_en_dependent_encore(bureau, monkeypatch):
+    envois, _ = bureau
+    from oto_mcp.db import runner_triggers as T
+    monkeypatch.setattr(T, "triggers_actifs_utilisant", lambda org, c:
+                        [{"id": 9, "label": "digest hebdo"}] if c == "slack" else [])
+    monkeypatch.setenv(M._ENV_ALERTE, "1")
+    M.alertes_credential()
+    html = envois[0]["html"]
+    assert "Clé Slack retirée" in html and "digest hebdo" in html
+    assert "3 agent(s)" not in html, "des agents nommés remplacent leur nombre"

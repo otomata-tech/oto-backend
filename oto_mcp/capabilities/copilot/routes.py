@@ -10,6 +10,8 @@ identity is refused (403 `api_token_forbidden`), twice: by the authentication
 (`RestBinding.allow_api_token=False`) and here, on the request's source (`geste`). A
 token would turn the panel into a model endpoint paid by the instance, driven by a script.
 And never past the account's daily spend ceiling (429 `copilot_daily_cap`, `depense.py`).
+Nor past a daily spend limit an org admin set, on a key the operator re-bills (429
+`daily_spend_limit`, `access/limite_du_jour`).
 
 Every refusal that happens once the stream is open comes as an `error` event followed
 by `done`, inside a 200: the panel shows it in the conversation. Only the refusals that
@@ -30,6 +32,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from ... import geste, session_org
+from ...access import limite_du_jour
 from ...db import copilot as store
 from .._authz import ORG_MEMBER
 from .._types import (AuthzDenied, Capability, DeclaredError, EventStream, ResolvedCtx,
@@ -156,7 +159,9 @@ class CopilotEvent(BaseModel):
     client_tool_call, suggestions, audio, done, error; the other fields per type, as the
     front's `CopilotEvent` declares them. `thread` comes first on a turn; `done` comes
     last. `audio` (only when the request asked `speak`): the final answer read aloud —
-    `url` (signed, temporary), `content_type`, `chars` (characters read)."""
+    `url` (signed, temporary), `content_type`, `chars` (characters read). `error` carries
+    `code` when the step was refused for a named reason (`daily_spend_limit`,
+    `insufficient_credits`, `no_model_key`…), so a client tells a refusal from a failure."""
     type: str
     thread_id: Optional[str] = None
     text: Optional[str] = None
@@ -179,6 +184,7 @@ class CopilotEvent(BaseModel):
     url: Optional[str] = None
     content_type: Optional[str] = None
     chars: Optional[int] = None
+    code: Optional[str] = None
 
 
 class AttachmentTypes(BaseModel):
@@ -203,7 +209,7 @@ async def _sse(travail):
         async for e in travail:
             yield f"data: {json.dumps(e, ensure_ascii=False, default=str)}\n\n".encode()
     except cles.SansCle as e:
-        yield f"data: {json.dumps(ev('error', message=e.message))}\n\n".encode()
+        yield f"data: {json.dumps(ev('error', message=e.message, code=e.code))}\n\n".encode()
         yield f"data: {json.dumps(ev('done'))}\n\n".encode()
     except Exception:
         logger.exception("copilot : étape en échec")
@@ -377,9 +383,30 @@ async def _plafond(ctx: ResolvedCtx) -> None:
         raise AuthzDenied(429, "copilot_daily_cap", depense.message_de_refus())
 
 
+def _limite_du_jour(ctx: ResolvedCtx) -> None:
+    """Refused before the stream opens when a daily spend limit an org admin set blocks
+    the caller (or the whole org) and the key that would pay is one the operator
+    re-bills (`access/limite_du_jour`). The org's own key is never refused. The loop
+    checks again before each model call (`cle.reserver`), for a limit reached mid-turn.
+
+    The key is resolved only when a block concerns the caller: with no block set, this
+    reads nothing but the in-memory list. A key that cannot be resolved is not this
+    refusal: the stream resolves it again and says why, as it always has."""
+    bloc = limite_du_jour.blocage(ctx.sub, ctx.org_id)
+    if bloc is None:
+        return
+    try:
+        cle = cles.resoudre(ctx.org_id, ctx.sub)
+    except cles.SansCle:
+        return
+    if cle.payeur is not None:
+        raise AuthzDenied(429, "daily_spend_limit", limite_du_jour.message(bloc))
+
+
 async def _turn(ctx: ResolvedCtx, inp: TurnInput) -> EventStream:
     _garde(ctx)
     await _plafond(ctx)
+    await run_in_threadpool(_limite_du_jour, ctx)
     marques: list[dict] = []
     if inp.attachments:
         marques = await run_in_threadpool(pieces.marques, inp.attachments, ctx.sub,
@@ -402,6 +429,7 @@ class _Rien(BaseModel):
 async def _client_result(ctx: ResolvedCtx, inp: ClientResultInput) -> EventStream:
     _garde(ctx)
     await _plafond(ctx)
+    await run_in_threadpool(_limite_du_jour, ctx)
     outils_client = ([t.model_dump() for t in inp.client_tools]
                      if inp.client_tools is not None else None)
     return EventStream(_sse(_reprise(ctx, inp.thread_id, lambda f: _parler(
@@ -412,6 +440,7 @@ async def _client_result(ctx: ResolvedCtx, inp: ClientResultInput) -> EventStrea
 async def _approval(ctx: ResolvedCtx, inp: ApprovalInput) -> EventStream:
     _garde(ctx)
     await _plafond(ctx)
+    await run_in_threadpool(_limite_du_jour, ctx)
     return EventStream(_sse(_reprise(ctx, inp.thread_id, lambda f: _parler(
         f, inp.speak, boucle.repondre_carte(f, inp.approval_id, inp.decision == "approve",
                                             inp.edits, bool(inp.remember))))))
@@ -470,12 +499,16 @@ _PORTE = (DeclaredError(403, "api_token_forbidden",
 _PLAFOND = DeclaredError(429, "copilot_daily_cap",
                          "the account has reached today's spend ceiling "
                          "(`OTO_COPILOT_DAILY_CAP_USD`)")
+_LIMITE_DU_JOUR = DeclaredError(429, "daily_spend_limit",
+                               "on a key the operator re-bills, the person, one of their "
+                               "teams or the org reached a daily spend limit an org admin "
+                               "set (`access/limite_du_jour`)")
 
 CAPABILITIES += [
     Capability(
         key="copilot.turn", handler=_turn, Input=TurnInput, Output=CopilotEvent,
         authz=ORG_MEMBER, mcp=None,
-        errors=(*_PORTE, _PLAFOND,
+        errors=(*_PORTE, _PLAFOND, _LIMITE_DU_JOUR,
                 DeclaredError(400, "unknown_attachment",
                               "an id of `attachments` is not the caller's in this org, or "
                               "does not exist")),
@@ -487,7 +520,8 @@ CAPABILITIES += [
                     "approval card or a page action; the matching route resumes it."),
     Capability(
         key="copilot.client_result", handler=_client_result, Input=ClientResultInput,
-        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=(*_PORTE, _PLAFOND),
+        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None,
+        errors=(*_PORTE, _PLAFOND, _LIMITE_DU_JOUR),
         rest=RestBinding("POST", "/api/copilot/threads/{thread_id}/client-results",
                          media=_SSE, provisoire=True,
                          allow_api_token=False),
@@ -495,7 +529,8 @@ CAPABILITIES += [
                     "and the page's actions now (`client_tools`); resumes the stream."),
     Capability(
         key="copilot.approval", handler=_approval, Input=ApprovalInput,
-        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None, errors=(*_PORTE, _PLAFOND),
+        Output=CopilotEvent, authz=ORG_MEMBER, mcp=None,
+        errors=(*_PORTE, _PLAFOND, _LIMITE_DU_JOUR),
         rest=RestBinding("POST", "/api/copilot/threads/{thread_id}/approvals/{approval_id}",
                          media=_SSE, provisoire=True,
                          allow_api_token=False),

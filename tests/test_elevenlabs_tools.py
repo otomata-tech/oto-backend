@@ -259,6 +259,17 @@ def test_probe_ok(monkeypatch):
     verify({"key": "k"})
 
 
+def test_probe_returns_the_balance_it_read(monkeypatch):
+    """`auth+quota` with `balance: null` read as "not measured" every morning: the
+    probe now hands back what it read."""
+    verify = _probe_with(monkeypatch, {"tier": "creator", "character_count": 30,
+                                       "character_limit": 100})
+    assert verify({"key": "k"}) == {"quota": {"restant": 70, "unite": "credits",
+                                              "limite": 100}}
+    verify = _probe_with(monkeypatch, {"tier": "creator"})
+    assert verify({"key": "k"}) is None
+
+
 def test_probe_refused_key(monkeypatch):
     verify = _probe_with(monkeypatch, _upstream(401, {"detail": {"status": "invalid_api_key"}}))
     with pytest.raises(cv.NonAutorise):

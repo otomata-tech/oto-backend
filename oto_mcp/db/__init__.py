@@ -90,6 +90,8 @@ from . import (
     runner_links,
     # NON aplati : `create`/`get`/`update` sont trop communs — `db.apps.<fn>`.
     apps,
+    # NON aplati : `draft`/`publish` sont trop communs — `db.app_versions.<fn>`.
+    app_versions,
     # NON aplati : `lister`/`ajouter`/`retirer` sont trop communs —
     # `db.datastore_commentaires.<fn>`.
     datastore_commentaires,
@@ -101,6 +103,10 @@ from . import (
     slack_agent_posts,
     # NON aplati : le réglage Slack d'une org (`mention_seule`) — `db.slack_reglage.<fn>`.
     slack_reglage,
+    # NON aplati : où une org laisse tourner ses modèles — `db.regions_de_modeles.<fn>`.
+    regions_de_modeles,
+    # NON aplati : les modèles qu'une org a éteints — `db.modeles_eteints.<fn>`.
+    modeles_eteints,
     # NON aplati : `noter`/`lire`/`marquer` sont trop communs — `db.apify_runs.<fn>`.
     apify_runs,
     # NON aplati, même raison — `db.higgsfield_jobs.<fn>`.

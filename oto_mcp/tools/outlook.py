@@ -142,7 +142,7 @@ def _body_html(body: Optional[str], html: Optional[str],
     """The HTML that goes to Graph: `body` rendered from markdown, `html` untouched,
     or the UTF-8 text of `html_source`, untouched."""
     if body is not None:
-        return markdown_html(body)
+        return markdown_html(body, cid=True)
     if html is not None:
         return html
     try:

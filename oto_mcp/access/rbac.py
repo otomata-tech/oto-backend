@@ -282,9 +282,10 @@ def reachable_instances_map(sub: str, org: Optional[int]) -> dict[str, list[dict
 
     `reachable_instances` queries the DB **per provider** (has_group_secret /
     has_org_secret): calling it in a loop over the catalog would make N×M
-    round trips on a single-loop server. Here we list each entity's secrets
-    ONCE (`list_group_secrets` / `list_org_secrets`) and invert in
-    memory → cost bounded by the number of teams + orgs, not providers.
+    round trips on a single-loop server. Here the keys of ALL the teams, then of ALL
+    the other orgs, are read in one query each (`credentials_store.list_credentials_many`)
+    and inverted in memory, plus one loan read per team → cost bounded by the number
+    of teams, never by the number of orgs or providers.
 
     Accepted limit: does not cover "my MEMBER key in another org" (no grouped
     listing on the `db.has_member_api_key` side, which is per-provider). The error
@@ -311,21 +312,33 @@ def reachable_instances_map(sub: str, org: Optional[int]) -> dict[str, list[dict
             # noqa: SILENT — visibility fail-open, hard backstop at call time
             except Exception:
                 pass
+            uniques = []
             for g in groups:
+                if g["group_id"] not in seen_gids:
+                    seen_gids.add(g["group_id"])
+                    uniques.append(g)
+            # The teams' OWN keys in one query for all of them; the loans stay per team
+            # (`lent_instances` judges each loan's liveness). Same rows, same order as
+            # `group_store.list_group_secrets`, one round trip fewer per team.
+            par_equipe = credentials_store.list_credentials_many(
+                "group", [str(g["group_id"]) for g in uniques])
+            for g in uniques:
                 gid = g["group_id"]
-                if gid in seen_gids:
-                    continue
-                seen_gids.add(gid)
-                for s in group_store.list_group_secrets(gid):
-                    p = s.get("provider")
+                fournisseurs = [c["connector"] for c in par_equipe.get(str(gid), [])]
+                fournisseurs += [i["connector"] for i in group_store.lent_instances(gid)]
+                for p in fournisseurs:
                     if p and p in cascade.ORG_SHAREABLE_PROVIDERS:
                         _add(p, {"kind": "group", "id": gid, "name": g["name"]})
-        for o in org_store.list_orgs_for_user(sub):
+        # Every OTHER org of the caller in ONE query, not one per org: a member of ~40
+        # orgs paid ~40 round trips here on each catalog read. Same rows as
+        # `org_store.list_org_secrets`, read in the same order.
+        autres = [o for o in org_store.list_orgs_for_user(sub) if o["org_id"] != org]
+        par_org = credentials_store.list_credentials_many(
+            "org", [str(o["org_id"]) for o in autres])
+        for o in autres:
             oid = o["org_id"]
-            if oid == org:
-                continue
-            for s in org_store.list_org_secrets(oid):
-                p = s.get("provider")
+            for c in par_org.get(str(oid), []):
+                p = c["connector"]
                 if p and p in cascade.ORG_SHAREABLE_PROVIDERS:
                     _add(p, {"kind": "org", "id": oid,
                              "name": o.get("name") or f"org {oid}"})

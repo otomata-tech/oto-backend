@@ -310,6 +310,24 @@ ACCOUNT = CallAxis(
 # de sens, c'est lui qui en ouvre un.
 _RUN_VERBS = frozenset({"run_start", "run_finish"})
 
+# Capacités `oto_*` qui LISENT le projet de l'appel (signal d'usage 1471, 13/11/2026).
+# Le bloc A et la notice disent « `_project=<id>` sur chaque appel » ; ces deux-là le
+# refusaient comme « Unexpected keyword argument », et un agent qui suivait la consigne
+# perdait son appel, encore et encore. Ce ne sont pas des tools de travail, mais :
+# - `oto_doc` range ses pages dans un projet : `_project=` y tient lieu de `project_id`
+#   pour les ops qui le prennent (create, bulk_create, list, search), et un désaccord
+#   entre les deux se refuse nommément (`capabilities/docs/core.py`) ;
+# - `oto_procedure` (op=get) rend le bloc `project_instance` — les entités du
+#   projet contre lesquelles se résolvent les slots — en lisant `access.current_project`,
+#   que SEUL cet axe remplit : sans lui, ce bloc ne pouvait jamais sortir sur la face MCP.
+# Nominatif, comme `_RUN_SPINE_TOOLS` : l'axe ne s'ouvre pas à tout le spine.
+# ⚠️ Sur ces deux-là, le jeton pose le PROJET seul, jamais l'org, le groupe ni les clés
+# qui en dérivent (`_pin_project_seul`) : `_pin_project` co-pose l'org du projet SANS
+# appartenance, et leurs listes (procédures de l'org, pages partagées) la liraient comme
+# celle de l'appelant — un invité hors de l'org y verrait ce qui ne lui est pas partagé
+# (`tests/test_projet_partage_hors_org_listes.py`). La garde du jeton reste la même.
+_PROJECT_SPINE_TOOLS = frozenset({"oto_doc", "oto_procedure"})
+
 
 def _is_project_scopable_tool(name: str) -> bool:
     """Tool de TRAVAIL (connecteurs + `data_*`) : `_project=` est le jeton PRIMAIRE
@@ -320,10 +338,12 @@ def _is_project_scopable_tool(name: str) -> bool:
 
     Les **verbes de run** s'y ajoutent (#290) : `run_start` GÈLE le projet dans
     `runs.project_id` en lisant ce même seam, et un run se déroule dans un projet
-    aussi souvent que les appels qu'il encadre."""
+    aussi souvent que les appels qu'il encadre.
+
+    Et les deux capacités qui lisent le projet de l'appel (`_PROJECT_SPINE_TOOLS`)."""
     ns = namespace_of(name)
     return (ns == "data" or providers.connector_for_namespace(ns) is not None
-            or name in _RUN_VERBS)
+            or name in _RUN_VERBS or name in _PROJECT_SPINE_TOOLS)
 
 
 def _resolve_project_context_guarded(
@@ -369,11 +389,11 @@ def _resolve_project_context_guarded(
     return org, group, heritage.evaluer(sub, pid, org, owner_group, group)
 
 
-async def _pin_project(value: object) -> list[UndoEntry]:
+async def _pin_project(value: object, *, co_poser: bool = True) -> list[UndoEntry]:
     """Épingle le projet de l'appel + co-pose l'org dérivée (+ le groupe propriétaire
     pour un projet d'équipe, + le verdict des clés pour un bénéficiaire). Rejette
     l'anonyme AVANT toute pose. Garde `can_access` en threadpool (DB sur le chemin
-    inbound chaud)."""
+    inbound chaud). `co_poser=False` : la même garde, le projet seul."""
     if value is None:
         return []
     pid = require_axis_int(value, "_project")
@@ -382,6 +402,8 @@ async def _pin_project(value: object) -> list[UndoEntry]:
     org, group, cles = await run_in_threadpool(_resolve_project_context_guarded, sub, pid,
                                                cand)
     undo: list[UndoEntry] = []
+    if not co_poser:
+        org = group = cles = None
     if org is not None:
         undo.append((session_org.reset_call_org, session_org.set_call_org(org)))
     if group is not None:
@@ -390,6 +412,12 @@ async def _pin_project(value: object) -> list[UndoEntry]:
         undo.append((session_org.reset_call_cles, session_org.set_call_cles(cles)))
     undo.append((session_org.reset_call_project, session_org.set_call_project(pid)))
     return undo
+
+
+async def _pin_project_pour(value: object, tool_name: str) -> list[UndoEntry]:
+    """La pose selon l'outil : le projet seul sur `_PROJECT_SPINE_TOOLS` (voir leur
+    commentaire), le projet et son contexte partout ailleurs."""
+    return await _pin_project(value, co_poser=tool_name not in _PROJECT_SPINE_TOOLS)
 
 
 PROJECT = CallAxis(
@@ -403,6 +431,7 @@ PROJECT = CallAxis(
     },
     applies=_is_project_scopable_tool,
     pin=_pin_project,
+    pin_named=_pin_project_pour,
 )
 
 

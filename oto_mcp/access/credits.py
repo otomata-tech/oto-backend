@@ -355,7 +355,7 @@ def reserver(sub: str, org: Optional[int], key_mode: str) -> None:
         r = db_credits.reserver(
             call_uid=uid, payer=qui, connector=c.connector, function=c.function,
             unit=unite, scale_version=lu["version"], quantity=quantite,
-            reserved=reserve, deadline_s=delai, forcer=(m == "report"))
+            reserved=reserve, deadline_s=delai, forcer=(m == "report"), acting_sub=sub)
         if r.deja:
             raise RuntimeError(f"{c.outil}: the call {uid} already holds a reservation — "
                                "two calls under one `call_uid`")

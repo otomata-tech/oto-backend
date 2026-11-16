@@ -8,6 +8,7 @@ Whichever the path, the two tokens:
 - **bot token** (`xoxb-`): read channels, post under the app's identity. This is the default token.
 - **user token** (`xoxp-`): post **in your name**, and search (`search:read` only exists as a user token). Optional.
 - either one is enough. With **both**, oto reads with the bot and makes you **choose who writes** on each send: `author="me"` (in your name) or `author="app"` (under the app's name) — with no choice, the send is refused rather than going out under the wrong name. The response says who wrote and in which channel, and whether that channel is shared externally.
+- ⚠️ **connected for the organisation or a team → always the app.** On such a connection the user token belongs to whoever installed it, so oto never uses it: every send, reaction and deletion goes out under the app's name (no `author` needed), `author="me"` is refused, and DMs are opened by the app. To write in your own name, connect your own Slack on the card (for you, not the organisation).
 - otherwise, an admin can grant you your org's platform key
 
 ⚠️ **switching app restarts channel memberships.** Memberships belong to the app, not to the key: moving a workspace from your own app to the published one (or back) means re-inviting the new app in private channels (`/invite @<app>`).
@@ -83,10 +84,10 @@ send and read slack messages from claude — in your name or under the app's, de
 - "send a message in #general" → `slack_post_message`
 - "dm jean by email" → `slack_find_user_by_email` then `slack_open_dm` then `slack_post_message`
 - "read the latest messages of this channel" → `slack_read_history` (top-level messages; `oldest`/`latest` to read only a window)
-- "what was said in this thread?" → `slack_read_thread` — a thread's **replies**, which `slack_read_history` does not return (it only shows the count)
+- "what was said in this thread?" → `slack_read_thread` — a thread's **replies**, which `slack_read_history` does not return (it only shows the count); given a reply's own ts (a `latest_reply`), it reads that reply's thread and names the parent's ts to keep
 - "get oto into #channel" → `slack_join_channel` (public channels only)
 - "react 👍 to this message" → `slack_add_reaction`
 - "who is in @sales?" → `slack(op="usergroups")` (all groups), `slack(op="usergroup_members", usergroup=…)` (one group's members)
 - "create @support / add jean to @sales / rename a group" → `slack_act` (`op="create_usergroup"`, `"add_usergroup_members"`, `"update_usergroup"`…; `dry_run=true` shows the member diff first)
 
-⚠️ **user groups**: they require a paid Slack plan. An app installed before these scopes were added must be **reinstalled** (OAuth & Permissions → add `usergroups:read` / `usergroups:write` → Reinstall), then its new tokens set here. Writing with the **bot** token only works when the workspace lets **everyone** manage user groups; otherwise write with `author="me"` and the user token of a member allowed to (an admin, by default). Slack replaces a group's member list as a whole and refuses an empty one — a group is emptied by disabling it.
+⚠️ **user groups**: they require a paid Slack plan. An app installed before these scopes were added must be **reinstalled** (OAuth & Permissions → add `usergroups:read` / `usergroups:write` → Reinstall), then its new tokens set here. Writing with the **bot** token only works when the workspace lets **everyone** manage user groups; otherwise write with `author="me"` from the personal Slack connection of a member allowed to (an admin, by default) — an organisation connection only acts as the app. Slack replaces a group's member list as a whole and refuses an empty one — a group is emptied by disabling it.

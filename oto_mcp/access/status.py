@@ -163,10 +163,11 @@ def _status_for_projection(sub: str, *, org: "int | None | object" = scope._UNSE
         org_has = any(r.mode == "org" for r in hits)
         grant = next((r.payload for r in hits if r.mode == "platform"), None)
         # The refusal's count (`quotas.platform_used_today`) when the platform rung
-        # ANSWERS: a `user` edge reads its edge counter, anything else the preloaded
-        # per-person map. Not shown otherwise, so not read.
-        used = (quotas.platform_used_today(sub, provider, grant.get("edge_counter"),
-                                           lambda: _used(provider))
+        # ANSWERS: a key counted per org reads the org's counter, a `user` edge its
+        # edge counter, anything else the preloaded per-person map. Not shown
+        # otherwise, so not read.
+        used = (quotas.platform_used_today(sub, provider, usage=lambda: _used(provider),
+                                           **quotas.compteurs(grant))
                 if grant and hits[0].mode == "platform" else _used(provider))
         # The refusal cap (`quotas.plafond_du_jour`), entitlement lift included: a
         # cap copied here announced `over_quota` to a person nothing limits.

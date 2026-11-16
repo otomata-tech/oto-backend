@@ -137,3 +137,28 @@ FICHIERS_ORIGINE = """
 -- `FICHIERS` a déjà été joué là où elle manque.
 ALTER TABLE app_files ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'upload';
 """
+
+VERSIONS = """
+-- Brouillon et versions publiées d'une app (`docs/apps.md` § Brouillon et publication).
+-- `drafts_enabled` : les modifications du manifeste et du HTML vont au BROUILLON, que
+-- seuls ses éditeurs ouvrent ; `oto_apps op=publish` le rend vivant pour tous. Faux par
+-- défaut : une app d'avant reste publiée à chaque écriture, comme avant.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS drafts_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+-- L'état vivant est-il une version PUBLIÉE (`op=publish`, `op=restore`), et sa note.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS version_note TEXT;
+-- Le brouillon, sur la ligne de l'app : publier verrouille une seule ligne. NULL = aucun.
+-- Le titre et la vignette n'en ont pas : ce sont la carte, écrite en direct.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS draft_manifest JSONB;
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS draft_html TEXT;
+-- L'auteur du brouillon : celui dont les droits bornent son aperçu (auteur ∩ lecteur).
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS draft_by TEXT;
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS draft_at TIMESTAMPTZ;
+-- Une révision garde si l'état remplacé était une version publiée, et sa note : les
+-- versions publiées échappent à la purge des `MAX_REVISIONS` (bornées à part).
+ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS note TEXT;
+-- Quand l'état gardé a été ÉCRIT (son `updated_at`) — `created_at` dit quand il a été
+-- remplacé. NULL pour les révisions d'avant cette colonne.
+ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS saved_at TIMESTAMPTZ;
+"""

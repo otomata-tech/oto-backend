@@ -1,11 +1,11 @@
-"""Operations of the `http` connector described in DATA — validation and call plan.
+"""Operations of the `api` connector described in DATA — validation and call plan.
 
 An org connects a tool we do not ship (a payroll or ERP SaaS with an API key) through
-the generic `http` connector. `http_get`/`http_post` reach it, but the agent has to
+the generic `api` connector. `api_get`/`api_post` reach it, but the agent has to
 guess paths and parameters each time. An org can instead DESCRIBE the operations it
 uses — name, description, method, path template, input schema — and the agent calls
-them by name (`http_act(op="call")`). The list lives in `connector_instances.config["operations"]`
-of the credential's instance (`connectors/http_operations.py`); this module is PURE:
+them by name (`api_act(op="call")`). The list lives in `connector_instances.config["operations"]`
+of the credential's instance (`connectors/api_operations.py`); this module is PURE:
 no I/O, no DB, testable on its own.
 
 The format is a subset of oto-core's `connectors/connector.schema.json` (`function`:
@@ -23,6 +23,18 @@ one list, not a connector file:
 `in` routes an argument: `path` when the template cites it, otherwise `query` for
 GET/DELETE and `body` for the other methods.
 
+`class: read` (optional, oto-core's word: `class` of a described function) says the
+action only READS although its verb is a POST — a search sent as a JSON body, an RPC
+endpoint. It is the only value accepted here: without it an action is judged by its
+verb (`tools/effets`: POST sends), and `write`/`sensitive` would only restate or
+weaken that. It changes two things, for THIS action only: its effect (`lire`), and a
+card in session mode lets it through (`tools/api.refuse_write`). A raw call
+(`api_act(op="request")`) never carries it. Only a GET or a POST may declare it — a
+PUT, PATCH or DELETE that reads is not an API anyone describes.
+
+`output` and `refusals` (optional, oto-core's words too): what the agent receives of the
+answer, and a refusal the service writes in the body of a success — `custom_ops_output`.
+
 ⚠️ A path parameter is the one place where an argument value reaches the URL PATH.
 It is percent-encoded whole (`quote(safe="")`) and a value that is `.`/`..` or carries
 a `/` — raw or once decoded — is refused: without that, `{id}` = `../admin` walks out
@@ -35,9 +47,11 @@ import re
 from typing import Any, Optional
 from urllib.parse import quote, unquote
 
+from . import custom_ops_output as output
+
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MAX_OPERATIONS = 100
-# The whole list, serialized: it rides in a JSONB column read on every `http_act(op="call")`.
+# The whole list, serialized: it rides in a JSONB column read on every `api_act(op="call")`.
 MAX_BYTES = 256 * 1024
 MAX_DESCRIPTION = 1000
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
@@ -46,7 +60,11 @@ ARG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-\[\]]{0,63}$")
 _PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 JSON_TYPES = ("string", "integer", "number", "boolean", "array", "object", "null")
 LOCATIONS = ("path", "query", "body")
-_OP_KEYS = {"name", "description", "method", "path", "input", "in"}
+_OP_KEYS = {"name", "description", "method", "path", "input", "in", "class", "output",
+            "refusals"}
+#: The `class` an action may declare (oto-core's vocabulary is read|write|sensitive).
+READ = "read"
+_READ_METHODS = ("GET", "POST")
 
 
 class OperationsInvalid(ValueError):
@@ -58,7 +76,7 @@ class OperationsInvalid(ValueError):
 
 
 class CallRefused(ValueError):
-    """The arguments of an `http_act(op="call")` do not fit the operation."""
+    """The arguments of an `api_act(op="call")` do not fit the operation."""
 
 
 def placeholders(path: str) -> list[str]:
@@ -81,7 +99,7 @@ def _path_errors(where: str, path: Any) -> list[str]:
     return errs
 
 
-path_errors = _path_errors     # the raw call (`http_act(op="request")`) checks a path the same way
+path_errors = _path_errors     # the raw call (`api_act(op="request")`) checks a path the same way
 
 
 def _type_errors(where: str, schema: Any) -> list[str]:
@@ -117,6 +135,23 @@ def _input_errors(where: str, inp: Any) -> list[str]:
     return errs
 
 
+def _class_errors(where: str, op: dict, method: Any) -> list[str]:
+    if "class" not in op:
+        return []
+    if op["class"] != READ:
+        return [f"{where}: `class` accepts `{READ}` only — an action that writes is "
+                "judged by its method, declare nothing"]
+    if isinstance(method, str) and method.upper() not in _READ_METHODS:
+        return [f"{where}: `class: {READ}` is declared on a GET or a POST only, "
+                f"not {method.upper()}"]
+    return []
+
+
+def reads(op: dict) -> bool:
+    """The action declares `class: read`: it only reads, whatever its verb."""
+    return op.get("class") == READ
+
+
 def _validate_one(i: int, op: Any) -> list[str]:
     if not isinstance(op, dict):
         return [f"operation #{i}: must be an object"]
@@ -138,6 +173,9 @@ def _validate_one(i: int, op: Any) -> list[str]:
         errs.append(f"{where}: `method` must be one of {', '.join(METHODS)}")
     errs += _path_errors(where, op.get("path"))
     errs += _input_errors(where, op.get("input"))
+    errs += _class_errors(where, op, method)
+    errs += output.output_errors(where, op.get("output"))
+    errs += output.refusals_errors(where, op.get("refusals"))
     if errs:
         return errs
     props = (op.get("input") or {}).get("properties", {})
@@ -194,6 +232,9 @@ def validate_operations(ops: Any) -> list[dict]:
              "input": op.get("input") or {"type": "object", "properties": {}}}
         if op.get("in"):
             n["in"] = dict(op["in"])
+        if reads(op):
+            n["class"] = READ
+        n.update(output.normalized(op))
         out.append(n)
     return out
 
@@ -307,6 +348,10 @@ def plan_call(op: dict, args: Optional[dict],
 
 
 def summary(op: dict) -> dict:
-    """What `http(op="list")` lists for one operation."""
-    return {"name": op["name"], "description": op["description"],
-            "method": op["method"], "path": op["path"], "input": op.get("input")}
+    """What `api(op="list")` lists for one operation."""
+    out = {"name": op["name"], "description": op["description"],
+           "method": op["method"], "path": op["path"], "input": op.get("input")}
+    if reads(op):
+        out["class"] = READ
+    out.update(output.normalized(op))
+    return out

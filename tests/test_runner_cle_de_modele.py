@@ -241,13 +241,12 @@ def test_le_journal_des_appels_ne_garde_aucune_reponse():
     `TEXT` ou un `JSONB` le porterait, et le banc tombe alors comme avant. Fermer sur
     le mot laissait passer le vrai danger sous un nom neutre (`payload`, `body`) tout
     en refusant une mesure inoffensive."""
-    import inspect
-
     from oto_mcp.db import usage
     from oto_mcp.db.schema.usage import USAGE
 
-    fautives = _colonnes_de_resultat_non_numeriques(
-        inspect.getsource(usage.insert_tool_call), USAGE)
+    # L'INSERT unique du journal, que `insert_tool_call` et `inserer_tour_au_cout`
+    # partagent : une colonne posée là l'est pour les deux écrivains.
+    fautives = _colonnes_de_resultat_non_numeriques(usage._INSERT_TOOL_CALL, USAGE)
     assert fautives == [], (
         f"`tool_calls` garde maintenant une réponse : {fautives}. Un travail réservé "
         "journalisé avec sa clé de modèle serait une fuite. Si la colonne ne fait que "

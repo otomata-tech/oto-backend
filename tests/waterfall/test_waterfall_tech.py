@@ -14,10 +14,13 @@ from _waterfall_faux import _made, _run, calls  # noqa: F401 — la fixture des 
 # Réponses réelles du 20/10/2026, anonymisées : le même domaine vu par l'index DataForSEO
 # (6 noms), un crawl Apify (7) et les offres d'emploi TheirStack (~100 slugs).
 
-_DATAFORSEO_TECH = {"cost_usd": 0.012, "domain": "www.acme.com", "technologies": {
-    "web_development": {"javascript_frameworks": ["Next.js", "React"],
-                        "web_frameworks": ["Next.js"]},
-    "servers": {"paas": ["Vercel"]}, "content": {"cms": ["Storyblok"]}}}
+# DataForSEO answers its envelope (`dataforseo(op="domain_technologies")`, served from its
+# description): the site's record is `tasks[0].result[0]`.
+_DATAFORSEO_TECH = {"cost": 0.012, "tasks": [{"status_code": 20000, "result": [{
+    "domain": "www.acme.com", "technologies": {
+        "web_development": {"javascript_frameworks": ["Next.js", "React"],
+                            "web_frameworks": ["Next.js"]},
+        "servers": {"paas": ["Vercel"]}, "content": {"cms": ["Storyblok"]}}}]}]}
 _APIFY_TECH = [{"url": "https://acme.com/", "statusCode": 200, "technologyCount": 2,
                 "technologies": [{"name": "Storyblok", "version": None, "categories": ["CMS"]},
                                  {"name": "Vercel", "version": None, "categories": ["PaaS"]}],
@@ -28,12 +31,12 @@ _THEIRSTACK_TECH = {"metadata": {}, "data": [{
 
 
 def test_tech_l_index_du_site_d_abord_et_par_categorie(calls):
-    calls["answers"]["dataforseo_technologies"] = IssueCible(ok=True, result=_DATAFORSEO_TECH)
+    calls["answers"]["dataforseo"] = IssueCible(ok=True, result=_DATAFORSEO_TECH)
     out = _run("waterfall_tech", domain="https://www.acme.com/")
     # lemlist d'abord (aucun crédit) : rien en base ici, l'index du site prend le relais.
     assert out["provider"] == "dataforseo"
-    assert _made(calls) == ["lemlist_database", "dataforseo_technologies"]
-    assert calls["made"][1][1] == {"op": "domain", "target": "acme.com"}
+    assert _made(calls) == ["lemlist_database", "dataforseo"]
+    assert calls["made"][1][1] == {"op": "domain_technologies", "target": "acme.com"}
     t = out["tech"]
     assert t["source"] == "website" and t["technologies"] == ["Next.js", "React", "Vercel",
                                                                "Storyblok"]
@@ -41,7 +44,8 @@ def test_tech_l_index_du_site_d_abord_et_par_categorie(calls):
 
 
 def test_tech_un_site_absent_de_l_index_passe_au_crawl(calls):
-    calls["answers"]["dataforseo_technologies"] = IssueCible(ok=True, result={"cost_usd": 0.01})
+    calls["answers"]["dataforseo"] = IssueCible(ok=True, result={
+        "cost": 0.01, "tasks": [{"result": None}]})
     calls["answers"]["apify_run_sync"] = IssueCible(ok=True, result=_APIFY_TECH)
     out = _run("waterfall_tech", domain="acme.com")
     assert out["provider"] == "apify" and out["tech"]["technologies"] == ["Storyblok", "Vercel"]
@@ -61,7 +65,7 @@ def test_tech_un_site_injoignable_n_est_pas_un_trouve(calls):
 def test_tech_cherchee_ne_stoppe_que_si_detectee(calls):
     """« Utilise-t-elle HubSpot ? » : le site ne le voit pas, la cascade continue ;
     les offres d'emploi le nomment en slug, comparé sans ponctuation."""
-    calls["answers"]["dataforseo_technologies"] = IssueCible(ok=True, result=_DATAFORSEO_TECH)
+    calls["answers"]["dataforseo"] = IssueCible(ok=True, result=_DATAFORSEO_TECH)
     calls["answers"]["apify_run_sync"] = IssueCible(ok=True, result=_APIFY_TECH)
     calls["answers"]["theirstack_companies_search"] = IssueCible(ok=True, result=_THEIRSTACK_TECH)
     out = _run("waterfall_tech", domain="acme.com", technologies="HubSpot, Spendesk")
@@ -76,7 +80,7 @@ def test_tech_cherchee_ne_stoppe_que_si_detectee(calls):
 
 
 def test_tech_jamais_detectee_rend_un_non_trouve(calls):
-    calls["answers"]["dataforseo_technologies"] = IssueCible(ok=True, result=_DATAFORSEO_TECH)
+    calls["answers"]["dataforseo"] = IssueCible(ok=True, result=_DATAFORSEO_TECH)
     calls["answers"]["apify_run_sync"] = IssueCible(ok=True, result=_APIFY_TECH)
     calls["answers"]["theirstack_companies_search"] = IssueCible(ok=True, result=_THEIRSTACK_TECH)
     out = _run("waterfall_tech", domain="acme.com", technologies=["Shopify"])

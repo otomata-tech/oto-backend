@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import secrets
+import time
 from datetime import date, datetime, timezone
 from typing import Any, Iterator, NamedTuple, Optional
 
@@ -22,7 +23,8 @@ from .. import deprecations
 from ..journal_secrets import masquer_urls, masquer_urls_des_valeurs
 from . import journal_calls, journal_jour
 from ._conn import _connect
-from .index_releve import PREDICAT_OUVERTURE
+from .index_releve import (OUTILS_AU_COUT, OUVERTURE_PAR_RUN, PREDICAT_OUVERTURE,
+                           PREDICAT_TOUR_AU_COUT)
 from .lecture_bornee import lecture_d_agregat
 
 
@@ -61,6 +63,63 @@ def increment_usage(sub: str, tool: str, amount: int = 1) -> int:
         return int(row["count"]) if row else 0
 
 
+_INSERT_TOOL_CALL = """
+INSERT INTO tool_calls
+    (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id,
+     run_id, org_id, client_id, sentry_event_id,
+     request_id, call_uid, effective_sub, error_kind,
+     token_id, token_kind, result_size, result_shape, quantity, key_mode,
+     view_as_sub, provider_credits)
+VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+
+def _valeurs_tool_call(row: dict) -> tuple:
+    """Les valeurs d'une ligne de `tool_calls`, dans l'ordre de `_INSERT_TOOL_CALL` — les
+    masques d'URL appliqués ici, au seul point d'écriture commun (cf. `insert_tool_call`)."""
+    error = row.get("error")
+    if error:
+        error = masquer_urls(str(error))
+    args = masquer_urls_des_valeurs(row.get("args"))
+    return (
+        row.get("server") or "oto", row.get("kind") or "mcp",
+        row.get("sub"), row.get("email"),
+        row["tool"], json.dumps(args) if args is not None else None,
+        bool(row.get("ok")), error, row.get("duration_ms"),
+        row.get("session_id"), row.get("run_id"), row.get("org_id"),
+        row.get("client_id"), row.get("sentry_event_id"),
+        # #117 — discriminant par appel. `request_id` et `effective_sub` sont
+        # absents des gestes REST ; `call_uid` y porte le geste de la requête
+        # (oto#273), NULL hors capacité. La ligne les porte à NULL, sans branche.
+        row.get("request_id"), row.get("call_uid"), row.get("effective_sub"),
+        # oto#25 lot (b1) — résultat de la taxonomie sur échec, NULL sur
+        # succès et sur les gestes REST (calllog._error_kind ne les touche pas).
+        row.get("error_kind"),
+        row.get("token_id"), row.get("token_kind"),
+        # oto-backend#340 — taille du texte servi. NULL partout où elle n'a
+        # pas été mesurée : les échecs (le middleware ne la calcule que sur le
+        # chemin heureux) et les gestes REST, qui ne passent pas par lui.
+        row.get("result_size"),
+        # oto-backend#644 — forme du résultat servi, même point d'écriture et
+        # même règle de NULL que la taille.
+        row.get("result_shape"),
+        # Métrage par unité (facturation du partenaire) — NULL = non tracé pour ce
+        # tool, un consommateur doit le traiter comme 1, pas 0.
+        row.get("quantity"),
+        # Mode du credential (facturation du partenaire) — NULL = non attribuable,
+        # donc non facturable ; l'inverse de la règle de `quantity`.
+        row.get("key_mode"),
+        # #572 point 4 — cible du « voir en tant que » (REST uniquement,
+        # `RestCallLogger` seul la pose). NULL = pas de consultation en
+        # cours, ou ligne antérieure à cette colonne (non reconstructible).
+        row.get("view_as_sub"),
+        # Crédits déduits par le fournisseur, dans son unité — NULL = non tracé,
+        # ni 1 ni 0 ; à côté de `quantity`, qui garde son sens.
+        row.get("provider_credits"),
+    )
+
+
 def insert_tool_call(row: dict) -> None:
     """Sink calllog (middleware inliné oto_mcp/calllog.py) : insère un row canonique (server, sub, email, tool,
     args, ok, error, duration_ms) + corrélation OTO-LOCALE (session_id, run_id ;
@@ -76,59 +135,31 @@ def insert_tool_call(row: dict) -> None:
     admins d'org. `args`, pareil, chaîne par chaîne (`masquer_urls_des_valeurs`) : une
     adresse pré-signée passée à un outil y écrivait sa signature en clair, et l'adresse
     d'une source de fichier (`{kind: "url", url}`) tombe entière, quel que soit l'outil."""
-    error = row.get("error")
-    if error:
-        error = masquer_urls(str(error))
-    args = masquer_urls_des_valeurs(row.get("args"))
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO tool_calls
-                (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id,
-                 run_id, org_id, client_id, sentry_event_id,
-                 request_id, call_uid, effective_sub, error_kind,
-                 token_id, token_kind, result_size, result_shape, quantity, key_mode,
-                 view_as_sub, provider_credits)
-            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                row.get("server") or "oto", row.get("kind") or "mcp",
-                row.get("sub"), row.get("email"),
-                row["tool"], json.dumps(args) if args is not None else None,
-                bool(row.get("ok")), error, row.get("duration_ms"),
-                row.get("session_id"), row.get("run_id"), row.get("org_id"),
-                row.get("client_id"), row.get("sentry_event_id"),
-                # #117 — discriminant par appel. `request_id` et `effective_sub` sont
-                # absents des gestes REST ; `call_uid` y porte le geste de la requête
-                # (oto#273), NULL hors capacité. La ligne les porte à NULL, sans branche.
-                row.get("request_id"), row.get("call_uid"), row.get("effective_sub"),
-                # oto#25 lot (b1) — résultat de la taxonomie sur échec, NULL sur
-                # succès et sur les gestes REST (calllog._error_kind ne les touche pas).
-                row.get("error_kind"),
-                row.get("token_id"), row.get("token_kind"),
-                # oto-backend#340 — taille du texte servi. NULL partout où elle n'a
-                # pas été mesurée : les échecs (le middleware ne la calcule que sur le
-                # chemin heureux) et les gestes REST, qui ne passent pas par lui.
-                row.get("result_size"),
-                # oto-backend#644 — forme du résultat servi, même point d'écriture et
-                # même règle de NULL que la taille.
-                row.get("result_shape"),
-                # Métrage par unité (facturation du partenaire) — NULL = non tracé pour ce
-                # tool, un consommateur doit le traiter comme 1, pas 0.
-                row.get("quantity"),
-                # Mode du credential (facturation du partenaire) — NULL = non attribuable,
-                # donc non facturable ; l'inverse de la règle de `quantity`.
-                row.get("key_mode"),
-                # #572 point 4 — cible du « voir en tant que » (REST uniquement,
-                # `RestCallLogger` seul la pose). NULL = pas de consultation en
-                # cours, ou ligne antérieure à cette colonne (non reconstructible).
-                row.get("view_as_sub"),
-                # Crédits déduits par le fournisseur, dans son unité — NULL = non tracé,
-                # ni 1 ni 0 ; à côté de `quantity`, qui garde son sens.
-                row.get("provider_credits"),
-            ),
-        )
+        conn.execute(_INSERT_TOOL_CALL, _valeurs_tool_call(row))
+
+
+def inserer_tour_au_cout(row: dict) -> bool:
+    """Écrit la ligne de relevé d'UN tour de modèle journalisé à son coût
+    (`tours_au_cout`), une seule fois par `(kind, tool, call_uid)` : `True` si elle est
+    écrite, `False` si ce tour l'était déjà. ATOMIQUE — deux rapports simultanés du même
+    tour n'en écrivent qu'un, l'autre attend puis n'écrit rien —, par la clé
+    `index_releve.TOUR_AU_COUT` que l'`ON CONFLICT` infère de son prédicat, mot pour mot.
+
+    Lève `ValueError` sur une ligne hors de cette clé (autre nature, autre outil, sans
+    `call_uid`) : elle ne serait pas dédoublonnée. Lève aussi, sans la clé en base
+    (aucune contrainte ne répond à l'`ON CONFLICT`) : rien ne s'écrit sans elle."""
+    if (row.get("kind") != journal_jour.KIND_RELEVE or row.get("tool") not in OUTILS_AU_COUT
+            or not row.get("call_uid")):
+        raise ValueError(f"not a cost-journaled turn: kind={row.get('kind')!r}, "
+                         f"tool={row.get('tool')!r}, call_uid={row.get('call_uid')!r}")
+    with _connect() as conn:
+        ecrit = conn.execute(
+            _INSERT_TOOL_CALL
+            + " ON CONFLICT (kind, tool, call_uid) WHERE "
+            + PREDICAT_TOUR_AU_COUT + " DO NOTHING RETURNING 1",
+            _valeurs_tool_call(row)).fetchone()
+    return ecrit is not None
 
 
 # ── Le run : UNE source, et c'est le JOURNAL ─────────────────────────────────
@@ -213,7 +244,7 @@ _ARGS_PROCEDURE_OK = ("slug", _ARG_PROCEDURE)
 _VERBES_USAGE = {"oto_procedure": "slug", "run_start": _ARG_PROCEDURE}
 
 
-def _runs_from_journal(extra: str = "") -> str:
+def _runs_from_journal(extra: str = "", *, ouvertures: Optional[str] = None) -> str:
     """Le run RECONSTRUIT depuis ses faits : l'ouverture (`run_start`) porte label,
     guide, acteur, org et date de début ; la clôture porte l'issue, sa note et la date
     de fin.
@@ -226,8 +257,19 @@ def _runs_from_journal(extra: str = "") -> str:
     dérivation elle-même vit dans `run_status`, et toutes les lentilles en héritent.
     L'index `idx_tool_calls_run` sert le LATERAL.
 
+    `start_id` = l'id de la ligne d'ouverture, en DERNIÈRE colonne : avec `started_at`
+    il forme la position d'un keyset (`list_runs_page`), dans l'ordre même des index
+    d'ouvertures. Dernière parce que `activation` renomme les colonnes par position.
+
     `extra` = prédicats supplémentaires sur l'alias `s` (la ligne d'ouverture),
-    TOUJOURS des littéraux de ce module — jamais une entrée d'appelant."""
+    TOUJOURS des littéraux de ce module — jamais une entrée d'appelant.
+
+    `ouvertures` = d'où viennent les lignes d'ouverture `s` : omis, du journal entier
+    filtré par `extra` ; sinon la sous-requête littérale (alias `r`, colonne `run_id`)
+    des runs dont on veut les ouvertures, et chaque run est SONDÉ à part
+    (`_sonde_des_ouvertures`). Mêmes colonnes, mêmes LATERAL ensuite."""
+    source = ("tool_calls s" if ouvertures is None
+              else _sonde_des_ouvertures(ouvertures))
     return f"""
             SELECT s.run_id, s.sub, s.org_id,
                    s.args->>'label'             AS label,
@@ -238,13 +280,34 @@ def _runs_from_journal(extra: str = "") -> str:
                    f.args->>'outcome'           AS outcome,
                    f.args->>'note'              AS note,
                    GREATEST(s.created_at,
-                            COALESCE(v.last_call_at, s.created_at)) AS last_seen_at
-              FROM tool_calls s{_run_closure("s")}
+                            COALESCE(v.last_call_at, s.created_at)) AS last_seen_at,
+                   s.id                         AS start_id
+              FROM {source}{_run_closure("s")}
               LEFT JOIN LATERAL (
                   SELECT max(c.created_at) AS last_call_at
                     FROM tool_calls c WHERE c.run_id = s.run_id
               ) v ON TRUE
              WHERE s.tool = 'run_start' AND s.run_id IS NOT NULL{extra}"""
+
+
+def _sonde_des_ouvertures(runs_sql: str) -> str:
+    """Les lignes d'ouverture `s` des runs de `runs_sql`, une SONDE par run.
+
+    `runs_sql` (littéral de ce module, alias `r`) nomme les runs ; chaque run cherche
+    ses ouvertures `run_start` par son `run_id`, derrière une barrière d'optimisation
+    (`OFFSET 0`) que le planificateur ne peut pas aplatir en jointure. Le prédicat est
+    celui de l'index `idx_tool_calls_run_start_run` (`index_releve.OUVERTURE_PAR_RUN`),
+    qui sert la sonde : une entrée d'index et une page de tas par ouverture. À n'employer
+    que quand cet index est valide (`_ouverture_par_run_prete`) : sans lui, la sonde
+    croise `idx_tool_calls_run` et l'index d'outil, et fait pire que la semi-jointure
+    (mesuré en production : 4 s). Toutes les ouvertures d'un run sont rendues, comme
+    par la semi-jointure : un run ouvert deux fois a deux lignes."""
+    return (f"({runs_sql}) r\n"
+            "              CROSS JOIN LATERAL (\n"
+            "                  SELECT t.* FROM tool_calls t\n"
+            "                   WHERE t.run_id = r.run_id AND t.tool = 'run_start'\n"
+            "                     AND t.run_id IS NOT NULL\n"
+            "                  OFFSET 0) s")
 
 
 def _derniers_runs(portee: str = "") -> str:
@@ -539,6 +602,11 @@ reconstruisait encore TOUS les runs du projet — 86 000 pour le plus gros.
 
 Littéral de ce module, comme tout `extra` (les `%s` sont liés, jamais interpolés)."""
 
+#: Les runs récents d'UN projet, d'où partent les sondes par run (`_sonde_des_ouvertures`)
+#: — les mêmes que `_PROJECT_SCOPE`, mêmes paramètres (`project_id`, borne).
+_RUNS_RECENTS_DU_PROJET = ("SELECT run_id FROM runs WHERE project_id = %s"
+                           " ORDER BY started_at DESC LIMIT %s")
+
 
 def project_run_tools(project_id: int, limit: int = 200) -> list[str]:
     """Outils réellement APPELÉS par les runs RÉCENTS d'un projet — la part « usage
@@ -578,10 +646,14 @@ def project_runs(project_id: int, guide: Optional[str] = None,
     guide_clause = " AND j.doctrine = %s" if guide is not None else ""
     params: list = ([project_id, PROJET_RUNS_RECENTS, project_id]
                     + ([guide] if guide is not None else []) + [limit])
+    # Index des ouvertures par run valide : une sonde par run, depuis les runs récents
+    # du projet (mêmes paramètres, même place) ; sinon la semi-jointure d'avant.
+    j_sql = (_runs_from_journal(ouvertures=_RUNS_RECENTS_DU_PROJET)
+             if _ouverture_par_run_prete() else _runs_from_journal(_PROJECT_SCOPE))
     with _connect() as conn:
         return [dict(r) for r in conn.execute(
             f"""
-            WITH j AS ({_runs_from_journal(_PROJECT_SCOPE)})
+            WITH j AS ({j_sql})
             SELECT j.run_id, j.label, j.doctrine, j.outcome, j.note, j.started_at,
                    j.finished_at, j.last_seen_at
               FROM runs x JOIN j ON j.run_id = x.run_id
@@ -590,6 +662,58 @@ def project_runs(project_id: int, guide: Optional[str] = None,
             """,
             tuple(params),
         ).fetchall()]
+
+
+#: Le prédicat d'ouverture sur l'alias `s` — celui de l'index partiel, que la sonde
+#: par run doit impliquer pour s'en servir.
+_PREDICAT_OUVERTURE_S = "s.tool = 'run_start' AND s.run_id IS NOT NULL"
+
+#: Relu au plus toutes les 60 s par processus (patron de `valeurs_servies.pretes`) : le
+#: geste manuel qui pose l'index se voit dans la minute, sans une requête au catalogue
+#: par lecture.
+DUREE_CACHE_INDEX_S = 60.0
+_cache_ouverture_par_run: dict = {"pret": None, "lu_a": 0.0}
+
+
+def _ouverture_par_run_prete() -> bool:
+    """`True` quand `idx_tool_calls_run_start_run` est posé ET valide."""
+    maintenant = time.monotonic()
+    c = _cache_ouverture_par_run
+    if c["pret"] is not None and maintenant - c["lu_a"] < DUREE_CACHE_INDEX_S:
+        return c["pret"]
+    with _connect() as conn:
+        ligne = conn.execute(OUVERTURE_PAR_RUN.sql_validite).fetchone()
+    c.update(pret=bool(ligne and ligne["indisvalid"]), lu_a=maintenant)
+    return c["pret"]
+
+
+def oublier_ouverture_par_run() -> None:
+    """Relit le catalogue au prochain appel (bancs, et après le geste manuel)."""
+    _cache_ouverture_par_run.update(pret=None, lu_a=0.0)
+
+
+def sql_project_run_stats(*, par_run: bool) -> str:
+    """Le SQL de `project_run_stats` (paramètres : `project_id`, borne de runs). `par_run`
+    = la sonde par run, servie par `idx_tool_calls_run_start_run` ; sinon la semi-jointure."""
+    if par_run:
+        return f"""
+            SELECT count(*) AS n,
+                   array_agg(DISTINCT o.proc) FILTER (WHERE o.proc IS NOT NULL) AS procs
+              FROM (SELECT run_id FROM runs WHERE project_id = %s
+                     ORDER BY started_at DESC LIMIT %s) r
+              CROSS JOIN LATERAL (
+                    SELECT s.args->>'{_ARG_PROCEDURE}' AS proc
+                      FROM tool_calls s
+                     WHERE s.run_id = r.run_id AND {_PREDICAT_OUVERTURE_S}
+                    OFFSET 0) o
+            """
+    return f"""
+            SELECT count(*) AS n,
+                   array_agg(DISTINCT s.args->>'{_ARG_PROCEDURE}')
+                       FILTER (WHERE s.args->>'{_ARG_PROCEDURE}' IS NOT NULL) AS procs
+              FROM tool_calls s
+             WHERE {_PREDICAT_OUVERTURE_S}{_PROJECT_SCOPE}
+            """
 
 
 def project_run_stats(project_id: int) -> dict:
@@ -601,19 +725,24 @@ def project_run_stats(project_id: int) -> dict:
     posée étant « cette procédure a-t-elle SERVI » ; `runs` vaut donc au plus cette
     borne, et une procédure déroulée seulement avant elle se lit inerte. Ni la clôture
     ni le dernier signe de vie ne servent ici : la lecture ne reconstruit pas le run
-    (`_runs_from_journal`), elle lit son ouverture — deux LATERAL de moins par run."""
+    (`_runs_from_journal`), elle lit son ouverture — deux LATERAL de moins par run.
+
+    ⚠️ **Deux formes, la même réponse** — choisies par la présence d'`idx_tool_calls_run_start_run`
+    (`index_releve.OUVERTURE_PAR_RUN`, révision `20261111_1400_ouvertures_par_run`, geste
+    manuel sur la base servie). Index valide : une sonde par run (`LATERAL … OFFSET 0`,
+    que le planificateur ne peut pas aplatir). Sans lui, la semi-jointure d'avant. Mesuré
+    en production le 11/11/2026, projet de 2 218 runs : la semi-jointure lit TOUTES les
+    ouvertures de la plateforme (~21 000 : 60 ms juste après un échauffement, 3,3 s dix minutes plus tard, 33 s à froid), le planificateur
+    les estimant à quelques centaines ; et la sonde par run SANS l'index fait pire (4 s :
+    `idx_tool_calls_run` croisé avec l'index d'outil). L'index seul ne suffit pas non plus :
+    sur la semi-jointure, le planificateur, sur la même estimation, parcourt ce nouvel index
+    en entier au lieu de l'autre (banc local, estimation périmée). D'où la forme liée à
+    l'index, relue au plus toutes les `DUREE_CACHE_INDEX_S` secondes par processus :
+    l'ordre entre le code et le geste reste indifférent."""
+    sql = sql_project_run_stats(par_run=_ouverture_par_run_prete())
     with _connect() as conn:
-        row = conn.execute(
-            f"""
-            SELECT count(*) AS n,
-                   array_agg(DISTINCT s.args->>'{_ARG_PROCEDURE}')
-                       FILTER (WHERE s.args->>'{_ARG_PROCEDURE}' IS NOT NULL) AS doctrines
-              FROM tool_calls s
-             WHERE s.tool = 'run_start' AND s.run_id IS NOT NULL{_PROJECT_SCOPE}
-            """,
-            (project_id, PROJET_RUNS_RECENTS),
-        ).fetchone()
-    return {"runs": int(row["n"] or 0), "doctrines": list(row["doctrines"] or [])}
+        row = conn.execute(sql, (project_id, PROJET_RUNS_RECENTS)).fetchone()
+    return {"runs": int(row["n"] or 0), "doctrines": list(row["procs"] or [])}
 
 
 #: Fenêtre pendant laquelle un signalement STRICTEMENT identique du même auteur
@@ -999,26 +1128,79 @@ def count_usage_signals_by_status() -> dict:
     return par_etat
 
 
+#: La plus grande page d'une liste de runs. Au-delà, on suit `next_cursor`.
+RUNS_LIMITE_MAX = 500
+
+#: Les issues de clôture qui ne sont PAS un succès (`run_status.OUTCOMES` moins
+#: `done`) — ce que `errors=true` des lentilles de runs retient.
+ISSUES_EN_ECHEC = ("failed", "blocked", "partial")
+
+
 def list_runs(limit: int = 100, *, org_id: Optional[int] = None) -> list[dict]:
-    """Runs récents (un par run_id ouvert via run_start) avec label/doctrine, version de
-    procédure exécutée, acteur, bornes, outcome (si fermé) et nb d'appels du déroulé.
-    `slug` (alias = doctrine sinon label) conservé pour compat dashboard.
+    """Runs récents (un par run_id ouvert via run_start) avec label, procédure, version
+    de procédure exécutée, acteur, bornes, outcome (si fermé) et nb d'appels du déroulé.
+    `slug` (alias = procédure sinon label) conservé pour compat dashboard.
 
     `org_id` (si fourni) borne aux déroulés OUVERTS sous cette org (`tool_calls.org_id`
     de la ligne `run_start`, seam `current_org`) — scope de la lentille org (org_admin),
     même règle exacte que le journal d'audit. Sans lui : plateforme-wide (défaut admin).
+
+    La page seule, sans sa suite : `list_runs_page` porte les filtres et le curseur."""
+    return list_runs_page(limit, org_id=org_id)["runs"]
+
+
+def list_runs_page(
+    limit: int = 100, *, org_id: Optional[int] = None, sub: Optional[str] = None,
+    since_days: Optional[int] = None, before: Optional[tuple[str, int]] = None,
+    issues: Optional[tuple[str, ...]] = None,
+) -> dict:
+    """Une page de runs, plus récent d'abord, et où prendre la suite.
+    Rend `{runs, next, scanned}`.
+
+    - `sub` — les seuls runs OUVERTS par ce compte (égalité sur la ligne d'ouverture).
+    - `since_days` — les seuls runs OUVERTS depuis N jours.
+    - `before` — `(horodatage ISO µs, id)` de la dernière ouverture de la page
+      précédente : keyset sur `(created_at, id)` de la ligne `run_start`, dans l'ordre
+      même des index d'ouvertures. Intercaler un run pendant qu'on pagine ne fait ni
+      sauter ni répéter de ligne.
+    - `issues` — ne GARDER que les runs dont la clôture porte une de ces issues
+      (`ISSUES_EN_ECHEC` pour `errors=true`).
+    - `next` — la position de la dernière ouverture EXAMINÉE quand il en reste
+      après elle, sinon `None`.
+    - `scanned` — le nombre d'ouvertures examinées pour cette page.
+
+    ⚠️ **`issues` filtre APRÈS la page, pas avant.** L'issue vit dans la clôture
+    (`run_finish`), que seule la reconstruction lit : la pousser dans le choix des
+    ouvertures ferait sonder la clôture de chaque ouverture de la portée jusqu'à en
+    trouver `limit` en échec — le parcours non borné qu'infra#9 a retiré. La page
+    examine donc `limit` ouvertures et n'en rend que les échecs : elle peut être
+    COURTE, voire vide, avec un `next` non nul. Une page vide ne veut dire « aucun
+    échec » que quand `next` est nul.
 
     **Légère par construction** (infra#9) : les `limit` dernières ouvertures d'abord
     (`_derniers_runs`), puis, pour elles seules, la reconstruction et le compte des
     appels (un LATERAL par run, servi par `idx_tool_calls_run`). L'ancienne forme
     groupait TOUT le journal par run (`GROUP BY run_id` sur chaque ligne qui en porte
     un, toutes orgs confondues) et reconstruisait tous les runs de la portée, à chaque
-    affichage de la liste. Lecture bornée (`_agregat`, 10 s) en filet."""
-    limit = max(1, min(int(limit), 500))
-    portee = " AND d.org_id = %s" if org_id is not None else ""
-    params: list[Any] = ([int(org_id)] if org_id is not None else []) + [limit, limit]
+    affichage de la liste. `limit + 1` ouvertures sont lues : la dernière n'est pas
+    servie, elle DIT qu'il en reste. Lecture bornée (`_agregat`, 10 s) en filet."""
+    limit = max(1, min(int(limit), RUNS_LIMITE_MAX))
+    portee, params = "", []
+    if org_id is not None:
+        portee += " AND d.org_id = %s"
+        params.append(int(org_id))
+    if sub:
+        portee += " AND d.sub = %s"
+        params.append(sub)
+    if since_days is not None:
+        portee += " AND d.created_at >= NOW() - make_interval(days => %s)"
+        params.append(int(since_days))
+    if before is not None:
+        portee += " AND (d.created_at, d.id) < (%s::timestamptz, %s)"
+        params += [before[0], int(before[1])]
+    params += [limit + 1, limit + 1]
     with _agregat("liste des déroulés") as conn:
-        return [dict(r) for r in conn.execute(
+        rows = [dict(r) for r in conn.execute(
             f"""
             WITH j AS ({_runs_from_journal(_derniers_runs(portee))})
             SELECT j.run_id,
@@ -1026,16 +1208,24 @@ def list_runs(limit: int = 100, *, org_id: Optional[int] = None) -> list[dict]:
                    j.label, j.doctrine, j.doctrine_version,
                    j.sub, u.email, u.name,
                    j.started_at, j.finished_at, j.outcome, j.note, j.last_seen_at,
-                   c.n_calls
+                   c.n_calls, j.start_id,
+                   to_char(j.started_at AT TIME ZONE 'UTC', {_ISO_US}) AS _keyset_at
               FROM j
               LEFT JOIN users u ON u.sub = j.sub
               LEFT JOIN LATERAL (
                   SELECT count(*) AS n_calls FROM tool_calls t WHERE t.run_id = j.run_id
               ) c ON TRUE
-             ORDER BY j.started_at DESC LIMIT %s
+             ORDER BY j.started_at DESC, j.start_id DESC LIMIT %s
             """,
             tuple(params),
         ).fetchall()]
+    encore = len(rows) > limit
+    rows = rows[:limit]
+    cles = [(r.pop("_keyset_at"), r.pop("start_id")) for r in rows]
+    if issues is not None:
+        rows = [r for r in rows if r.get("outcome") in issues]
+    return {"runs": rows, "next": cles[-1] if encore and cles else None,
+            "scanned": len(cles)}
 
 
 def get_run(run_id: str, *, org_id: Optional[int] = None) -> list[dict]:
@@ -1222,6 +1412,10 @@ def agents_en_echec(days: int = 1, *, org_id: Optional[int] = None,
 _MOTIF_TETE = 80
 
 
+#: La plus grande page du journal d'appels. Au-delà, on suit `next_cursor`.
+CALLS_LIMITE_MAX = 1000
+
+
 def list_tool_calls(
     limit: int = 200,
     sub: Optional[str] = None,
@@ -1234,7 +1428,29 @@ def list_tool_calls(
     min_duration_ms: Optional[int] = None,
     error_contains: Optional[str] = None,
 ) -> list[dict]:
+    """Derniers appels MCP (récent d'abord) — la page seule, sans sa suite : cf.
+    `list_tool_calls_page`, qui porte la description complète et le curseur."""
+    return list_tool_calls_page(
+        limit, sub=sub, tool_name=tool_name, errors_only=errors_only,
+        since_days=since_days, org_id=org_id, run_id=run_id, session_id=session_id,
+        min_duration_ms=min_duration_ms, error_contains=error_contains)["calls"]
+
+
+def list_tool_calls_page(
+    limit: int = 200,
+    sub: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    errors_only: bool = False,
+    since_days: Optional[int] = None,
+    org_id: Optional[int] = None,
+    run_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    min_duration_ms: Optional[int] = None,
+    error_contains: Optional[str] = None,
+    before: Optional[tuple[str, int]] = None,
+) -> dict:
     """Derniers appels MCP (récent d'abord), joints à l'email user pour l'UI.
+    Rend `{calls, next}`.
 
     `org_id` (si fourni) scope les appels émis SOUS cette org (colonne `tool_calls.org_id`
     stampée par le seam `current_org` au moment de l'appel, ADR 0023) — l'activité « la
@@ -1244,6 +1460,13 @@ def list_tool_calls(
     d'une conversation ; `min_duration_ms` = appels lents (chasse aux gels mono-loop) ;
     `error_contains` = recherche substring insensible à la casse dans le message.
 
+    Pagination : `before` = `(horodatage ISO µs, id)` de la dernière ligne de la page
+    précédente — keyset sur `(created_at, id)`, l'ordre même de la page ; `next` = la
+    position de la dernière ligne rendue quand il en reste après elle (`limit + 1`
+    lignes lues, la dernière ne sert qu'à le savoir), sinon `None`. ⚠️ Pas sur le
+    `called_at` servi : le row factory le tronque à la seconde, un keyset bâti dessus
+    sauterait en silence les lignes de la même seconde que la dernière de la page.
+
     La ligne ne porte PAS `args` (le contenu est la fiche, `get_tool_call`) mais
     `arg_keys` : les clés des arguments journalisés, triées, `[]` sans argument
     (`journal_calls.ARG_KEYS_SQL`, #634) — de quoi savoir QUELS arguments un appel
@@ -1251,7 +1474,7 @@ def list_tool_calls(
     `result_shape` (#644) : la FORME de ce que l'outil a rendu, jamais son contenu.
     L'ÉMETTEUR déclaré (`client_name`, `client_version`, `token_kind` —
     `journal_calls.EMITTER_SQL`, oto#187) : quel logiciel client, par quel jeton."""
-    limit = max(1, min(int(limit), 1000))
+    limit = max(1, min(int(limit), CALLS_LIMITE_MAX))
     # Les filtres de la PAGE et ceux de son plancher (#630) sortent de la même
     # construction — c'est ce qui rend les deux comptes comparables.
     clauses, params = journal_calls.call_filter_clauses(
@@ -1262,8 +1485,11 @@ def list_tool_calls(
     if org_id is not None:
         clauses.append("l.org_id = %s")
         params.append(int(org_id))
+    if before is not None:
+        clauses.append("(l.created_at, l.id) < (%s::timestamptz, %s)")
+        params += [before[0], int(before[1])]
     where = " WHERE " + " AND ".join(clauses)
-    params.append(limit)
+    params.append(limit + 1)
     # Bornée (`_agregat`, infra#9) : un filtre sélectif (`error_contains`, `sub`…) sans
     # `days` parcourt la portée entière à rebours en quête de `limit` lignes.
     with _agregat("journal des appels") as conn:
@@ -1274,7 +1500,8 @@ def list_tool_calls(
                    l.duration_ms, l.ok, l.error, l.session_id, l.run_id, l.org_id,
                    l.sentry_event_id, {journal_calls.ARG_KEYS_SQL} AS arg_keys,
                    l.result_shape, l.quantity, l.provider_credits, l.key_mode,
-                   {journal_calls.EMITTER_SQL}
+                   {journal_calls.EMITTER_SQL},
+                   {_AUDIT_KEYSET_AT} AS _keyset_at
             FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
             {where}
@@ -1283,7 +1510,11 @@ def list_tool_calls(
             """,
             tuple(params),
         ).fetchall()
-        return list(rows)
+    encore = len(rows) > limit
+    rows = [dict(r) for r in rows[:limit]]
+    cles = [r.pop("_keyset_at") for r in rows]
+    return {"calls": rows,
+            "next": (cles[-1], rows[-1]["id"]) if encore and rows else None}
 
 
 def get_tool_call(call_id: int) -> Optional[dict]:
@@ -1523,7 +1754,7 @@ def list_billable_calls_for_org(
     org_id: int, tool: Optional[str] = None, *, run_ids: Optional[list[str]] = None,
     since: Optional[str] = None,
     until: Optional[str] = None, limit: int = 1000,
-    before: Optional[tuple[str, int]] = None,
+    before: Optional[tuple[str, int]] = None, avec_personne: bool = False,
 ) -> dict:
     """Les appels FACTURABLES d'un outil et/ou d'un run sous une org — la lentille membre du
     relevé de consommation (`org.usage.calls`). Rend
@@ -1552,6 +1783,10 @@ def list_billable_calls_for_org(
     ni `error`, ni aucun autre argument — la lentille est lisible par tout
     membre, et ce qu'il lit est ce que son org consomme, pas qui a fait quoi.
     Seuls les appels `ok` : un échec n'a rien consommé chez le fournisseur.
+
+    `avec_personne=True` ajoute `sub` — pour la SEULE face de service du commerce
+    (`service.org.usage.calls`), qui tient les limites de dépense par personne et par
+    équipe (`docs/limites-de-depense.md`). La lentille membre ne le passe jamais.
 
     `run_ids` (et la colonne rendue `run_id`) : ce qu'un ou plusieurs runs ont
     consommé, tous outils confondus — `idx_tool_calls_run` sert le filtre. Il reste
@@ -1591,7 +1826,7 @@ def list_billable_calls_for_org(
         rows = conn.execute(
             f"""
             SELECT l.id, l.call_uid, l.tool, l.quantity, l.provider_credits, l.key_mode,
-                   l.run_id,
+                   l.run_id{", l.sub" if avec_personne else ""},
                    {_BILLABLE_JOB_ID_SQL} AS job_id,
                    {_BILLABLE_FOUND_SQL},
                    {_AUDIT_KEYSET_AT} AS created_at
@@ -2002,8 +2237,8 @@ def rest_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
     que prend un plantage, pas un 500 explicite) ou client parti. Toujours un défaut à
     lire, jamais un zéro.
 
-    Index : les trois requêtes partagent la même clause, servie par
-    `idx_tool_calls_kind (kind, created_at DESC)` sur une fenêtre bornée (≤ 365 j)."""
+    Index : une seule lecture de la fenêtre, bornée (≤ 365 j), par
+    `idx_tool_calls_created_at` ou `idx_tool_calls_kind` selon le plan."""
     since_days = max(1, min(int(since_days), 365))
 
     def _where() -> tuple[str, list]:
@@ -2019,43 +2254,46 @@ def rest_call_stats(since_days: int = 7, *, org_id: Optional[int] = None,
         return " AND ".join(clauses), params
 
     w, wp = _where()
+    # UN passage sur les lignes de la fenêtre, pas trois (#1455) : les lignes de la
+    # fenêtre sont lues une fois (`f`, projection étroite), puis totaux, routes et
+    # statuts s'agrègent sur elle. Trois requêtes relisaient trois fois les mêmes
+    # pages du tas — sans filtre, sept jours de REST dépassaient la borne de 10 s des
+    # lectures d'agrégat. Les comptes distincts passent par un regroupement (haché)
+    # plutôt que par `COUNT(DISTINCT)`, qui triait toute la fenêtre.
     with _agregat("agrégats des appels REST") as conn:
-        totals = conn.execute(
+        groupes = conn.execute(
             f"""
-            SELECT COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE NOT ok) AS errors,
-                   COUNT(DISTINCT sub) AS users,
-                   MAX(created_at) AS last_call_at
-            FROM tool_calls WHERE {w}
-            """,
-            tuple(wp),
-        ).fetchone() or {}
-        by_route = conn.execute(
-            f"""
-            SELECT tool AS route,
-                   COUNT(*) AS calls,
-                   COUNT(*) FILTER (WHERE NOT ok) AS errors,
-                   ROUND(AVG(duration_ms))::int AS avg_ms,
-                   ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int AS p95_ms
-            FROM tool_calls WHERE {w}
-            GROUP BY tool
-            ORDER BY calls DESC
-            LIMIT 100
-            """,
-            tuple(wp),
-        ).fetchall()
-        by_error = conn.execute(
-            f"""
-            SELECT error, COUNT(*) AS calls
-            FROM tool_calls WHERE {w} AND NOT ok
-            GROUP BY error
-            ORDER BY calls DESC
+            WITH f AS MATERIALIZED (
+                SELECT tool, error, ok, sub, duration_ms, created_at
+                FROM tool_calls WHERE {w})
+            SELECT 'total' AS groupe, NULL AS route, NULL AS error,
+                   COUNT(*) AS calls, COUNT(*) FILTER (WHERE NOT ok) AS errors,
+                   (SELECT COUNT(*) FROM (SELECT sub FROM f WHERE sub IS NOT NULL
+                                          GROUP BY sub) u) AS users,
+                   MAX(created_at) AS last_call_at, NULL::int AS avg_ms, NULL::int AS p95_ms
+            FROM f
+            UNION ALL
+            SELECT 'route', tool, NULL, COUNT(*), COUNT(*) FILTER (WHERE NOT ok), NULL, NULL,
+                   ROUND(AVG(duration_ms))::int,
+                   ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int
+            FROM f GROUP BY tool
+            UNION ALL
+            SELECT 'statut', NULL, error, COUNT(*), COUNT(*), NULL, NULL, NULL, NULL
+            FROM f WHERE NOT ok GROUP BY error
             """,
             tuple(wp),
         ).fetchall()
+    totals = next((g for g in groupes if g["groupe"] == "total"), {})
+    by_route = sorted(
+        ({k: g[k] for k in ("route", "calls", "errors", "avg_ms", "p95_ms")}
+         for g in groupes if g["groupe"] == "route"),
+        key=lambda r: (-r["calls"], r["route"]))[:100]
+    by_error = sorted(({"error": g["error"], "calls": g["calls"]}
+                       for g in groupes if g["groupe"] == "statut"),
+                      key=lambda r: -r["calls"])
     out = {
         "since_days": since_days,
-        "total_calls": int((totals or {}).get("total") or 0),
+        "total_calls": int((totals or {}).get("calls") or 0),
         "error_count": int((totals or {}).get("errors") or 0),
         "active_users": int((totals or {}).get("users") or 0),
         "last_call_at": (totals or {}).get("last_call_at"),
@@ -2293,39 +2531,37 @@ def activation_funnel(active_window_days: int = 30) -> dict:
     invisible au monitoring d'outils, détecté ici. `active_window_days` borne « actif »,
     « REST seul » et « bloqué » : les trois comptes portent sur la même fenêtre."""
     active_window_days = max(1, min(int(active_window_days), 365))
-    with _agregat("entonnoir d'activation") as conn:
+    objet = "entonnoir d'activation"
+    with _agregat(objet) as conn:
         total = int((conn.execute("SELECT COUNT(*) AS n FROM users").fetchone() or {}).get("n") or 0)
-        # Comptes ayant déclenché ≥1 outil MCP dans la fenêtre = vraiment actifs.
-        active = int((conn.execute(
-            "SELECT COUNT(DISTINCT sub) AS n FROM tool_calls "
-            "WHERE kind = 'mcp' AND sub IS NOT NULL "
-            "AND created_at >= NOW() - make_interval(days => %s)",
-            (active_window_days,),
-        ).fetchone() or {}).get("n") or 0)
-        # Comptes ayant touché la plateforme (REST) mais SANS aucun appel d'outil, sur
-        # la MÊME fenêtre que `active` : connectés-mais-idle (ont ouvert le dashboard,
-        # jamais invoqué Claude). ⚠️ Sans fenêtre (jusqu'au 08/10/2026, infra#9), les
-        # deux branches lisaient le journal ENTIER par `kind` — la lecture la plus
-        # lourde de l'entonnoir, coupée à 10 s en production.
-        rest_only = int((conn.execute(
-            """
-            SELECT COUNT(*) AS n FROM (
-                SELECT sub FROM tool_calls WHERE kind = 'rest' AND sub IS NOT NULL
-                   AND created_at >= NOW() - make_interval(days => %s)
-                EXCEPT
-                SELECT sub FROM tool_calls WHERE kind = 'mcp' AND sub IS NOT NULL
-                   AND created_at >= NOW() - make_interval(days => %s)
-            ) q
+        # Actifs (≥ 1 outil MCP) et bloqués (≥ 1 échec de connecteur) : lus sur les
+        # totaux par jour (oto-backend#1147), où `sub` est une dimension — le compte
+        # distinct est exact, sans relire le journal des jours clos (#1455 : quatre
+        # passages sur 30 jours de journal dépassaient la borne de 10 s).
+        src, params = journal_jour.source(
+            conn, objet, prefixe="f", kinds=("mcp", "connector"), mesures=("appels",),
+            filtres={"sub_non_nul": True}, jours=active_window_days)
+        # « REST seul » : comptes ayant touché la plateforme (REST) SANS aucun appel
+        # d'outil sur la MÊME fenêtre — connectés-mais-idle. Le REST n'est pas agrégé
+        # par jour (`journal_jour.KINDS`) : UN passage sur sa fenêtre, par
+        # `idx_tool_calls_kind`, à la même borne `now() - jours` que la source.
+        row = conn.execute(
+            f"""
+            WITH j AS MATERIALIZED (SELECT DISTINCT kind, sub FROM ({src}) s),
+                 r AS (SELECT DISTINCT sub FROM tool_calls
+                        WHERE kind = 'rest' AND sub IS NOT NULL
+                          AND created_at >= now() - make_interval(days => %(f_jours)s))
+            SELECT (SELECT COUNT(*) FROM j WHERE kind = 'mcp') AS active,
+                   (SELECT COUNT(*) FROM j WHERE kind = 'connector') AS blocked,
+                   (SELECT COUNT(*) FROM r
+                     WHERE NOT EXISTS (SELECT 1 FROM j
+                                        WHERE j.kind = 'mcp' AND j.sub = r.sub)) AS rest_only
             """,
-            (active_window_days, active_window_days),
-        ).fetchone() or {}).get("n") or 0)
-        # Comptes ayant subi ≥1 échec de connecteur dans la fenêtre = bloqués/à débloquer.
-        blocked = int((conn.execute(
-            "SELECT COUNT(DISTINCT sub) AS n FROM tool_calls "
-            "WHERE kind = 'connector' AND sub IS NOT NULL "
-            "AND created_at >= NOW() - make_interval(days => %s)",
-            (active_window_days,),
-        ).fetchone() or {}).get("n") or 0)
+            params,
+        ).fetchone() or {}
+    active = int(row.get("active") or 0)
+    rest_only = int(row.get("rest_only") or 0)
+    blocked = int(row.get("blocked") or 0)
     return {
         "window_days": active_window_days,
         "total_accounts": total,
@@ -2341,30 +2577,62 @@ def activation_funnel(active_window_days: int = 30) -> dict:
 _ADOPTION_LIST_CAP = 500
 
 
-def org_members_by_seniority(org_id: int) -> list[dict]:
-    """Les membres de l'org PAR ANCIENNETÉ (`joined_at`, puis `sub`), avec leur email et
+def org_members_by_seniority(org_id: int, *, activity: bool) -> list[dict]:
+    """Les membres de l'org PAR ANCIENNETÉ (`joined_at`, puis `sub`), avec leur email,
+    leur langue choisie (`users.locale`, `None` si jamais choisie : rien n'est deviné) et
     leur dernier appel d'outil émis sous CETTE org (`None` s'il n'y en a jamais eu) —
     la lecture du service commerce (`service.org.members`) : il désigne les membres
-    payants dans cet ordre et écrit ses relances à partir de la dernière activité.
+    payants dans cet ordre, écrit ses relances à partir de la dernière activité, et
+    chaque message dans la langue de son destinataire.
 
     Toute la population, sans plafond : une liste tronquée ferait retomber au gratuit
-    des membres qui paient."""
-    with _connect() as conn:
+    des membres qui paient.
+
+    Le dernier appel se lit sur les totaux par jour plus le journal direct (#1147),
+    comme le dernier appel d'`org_adoption` — tout l'historique consolidé, donc au-delà
+    des 30 jours que le journal garde en ligne. Il se lisait au journal, une sonde
+    `MAX(created_at)` par membre : aucun index ne part de `(org_id, sub)`, chaque sonde
+    relisait au tas TOUS les appels du membre (`idx_tool_calls_sub`) recoupés avec ceux
+    de l'org (`idx_tool_calls_org`). Le coût croissait comme le nombre de membres actifs
+    × le volume de l'org : sur une grosse org, plus que le délai du commerce (30 s).
+    Sur les totaux, le journal direct ne porte plus que la veille et le jour courant.
+
+    `activity=False` (le défaut de la route) : la liste seule, `last_activity_at` à
+    `None` partout, sans lire ni journal ni totaux — pour qui n'a besoin que des membres
+    (le commerce qui applique une limite de dépense par membre). `activity` sans défaut
+    ici : l'appelant dit ce qu'il lit. Lève `AgregatIncomplet` / `LectureTropLongue`
+    (activité seulement) : la face en fait un refus nommé (`bornee`)."""
+    if not activity:
+        with _connect() as conn:
+            return [dict(r) for r in conn.execute(
+                """
+                SELECT m.sub, u.email, u.locale, m.org_role, m.is_active, m.joined_at,
+                       NULL::timestamptz AS last_activity_at
+                FROM org_members m
+                LEFT JOIN users u ON u.sub = m.sub
+                WHERE m.org_id = %s
+                ORDER BY m.joined_at, m.sub
+                """,
+                (int(org_id),),
+            ).fetchall()]
+    objet = "membres d'une org"
+    with _agregat(objet) as conn:
+        tout, pt = journal_jour.source(
+            conn, objet, prefixe="tout", kinds=("mcp",), mesures=("dernier_at",),
+            filtres={"org_id": int(org_id), "sub_non_nul": True})
         return [dict(r) for r in conn.execute(
-            """
-            SELECT m.sub, u.email, m.org_role, m.is_active, m.joined_at,
-                   a.last_activity_at
+            f"""
+            WITH d AS (SELECT sub, MAX(dernier_at) AS last_activity_at
+                         FROM ({tout}) t GROUP BY sub)
+            SELECT m.sub, u.email, u.locale, m.org_role, m.is_active, m.joined_at,
+                   d.last_activity_at
             FROM org_members m
             LEFT JOIN users u ON u.sub = m.sub
-            LEFT JOIN LATERAL (
-                SELECT MAX(c.created_at) AS last_activity_at
-                FROM tool_calls c
-                WHERE c.kind = 'mcp' AND c.sub = m.sub AND c.org_id = m.org_id
-            ) a ON TRUE
-            WHERE m.org_id = %s
+            LEFT JOIN d ON d.sub = m.sub
+            WHERE m.org_id = %(org_id)s
             ORDER BY m.joined_at, m.sub
             """,
-            (int(org_id),),
+            {**pt, "org_id": int(org_id)},
         ).fetchall()]
 
 

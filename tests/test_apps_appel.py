@@ -207,3 +207,74 @@ def test_un_jeton_api_ou_delegue_est_refuse_sur_la_route_servie(monkeypatch, cle
     assert rep.status_code == 403
     assert b"api_token_forbidden" in bytes(rep.body)
     assert lu == []  # refusé avant même de chercher le jeton
+
+
+# ── L'aperçu du brouillon (`draft: true`) ───────────────────────────────────
+
+@pytest.fixture
+def apercu(seams, monkeypatch):
+    """Le lecteur est ÉDITEUR de l'app ; le brouillon déclare le tableau 13 seul, et
+    son auteur n'est pas celui de l'app publiée."""
+    droits = seams["droits"]
+    droits[(LECTEUR, "app", "write")] = True
+
+    def can_access(sub, rtype, rid, want="read"):
+        if rtype == "app":
+            return droits.get((sub, "app", want), False) if want == "write" \
+                else droits.get((sub, "app"), False)
+        return droits.get((sub, rid, want), False)
+
+    monkeypatch.setattr(ownership, "can_access", can_access)
+    etat = {"draft": {"manifest": {"tables": {"seul": {"table": "13", "fields": None,
+                                                         "set": {}, "add": []}}},
+                      "html": "<p>d</p>", "by": "brouillonneur", "at": "t", "rev": "d1"}}
+    monkeypatch.setattr(db.app_versions, "draft", lambda i: etat["draft"])
+    droits[("brouillonneur", "13", "read")] = True
+    return etat
+
+
+def test_un_lecteur_n_ouvre_pas_le_brouillon(seams, apercu):
+    seams["droits"][(LECTEUR, "app", "write")] = False
+    for existe in (True, False):
+        apercu["draft"] = apercu["draft"] if existe else None
+        e = refus(action="read_rows", table="seul", draft=True)
+        assert (e.status, e.code) == (403, "draft_editors_only")
+
+
+def test_sans_brouillon_l_apercu_refuse(seams, apercu):
+    apercu["draft"] = None
+    e = refus(action="read_rows", table="seul", draft=True)
+    assert (e.status, e.code) == (404, "no_draft")
+
+
+def test_l_apercu_se_juge_sur_le_manifeste_du_brouillon(seams, apercu):
+    call(action="read_rows", table="seul", draft=True)
+    (sub, inp), = seams["list"]
+    assert sub == LECTEUR and inp.datastore == "13"
+    # Le tableau de l'app publiée n'est pas déclaré par le brouillon.
+    e = refus(action="read_rows", table="leads", draft=True)
+    assert e.status == 400 and len(seams["list"]) == 1
+
+
+def test_l_apercu_est_borne_par_l_auteur_du_brouillon(seams, apercu):
+    """Le brouillon a son auteur : celui de l'app publiée lit le tableau 13, celui du
+    brouillon non — l'aperçu est refusé."""
+    seams["droits"][("brouillonneur", "13", "read")] = False
+    e = refus(action="read_rows", table="seul", draft=True)
+    assert e.status == 403
+    assert seams["list"] == []
+
+
+def test_un_jeton_de_l_apercu_ne_vaut_pas_pour_l_app_publiee():
+    base = dict(app_id=5, action="add_row", table="leads", values={"name": "A"})
+    assert C._empreinte(C.AppCallInput(**base)) != C._empreinte(C.AppCallInput(**base, draft=True))
+    # Sans `draft`, l'empreinte d'un geste sur l'app publiée n'a pas changé : un jeton
+    # émis avant le déploiement se brûle encore après.
+    import hashlib
+    import json
+    corps = {k: None for k in ("row_id", "field", "value", "expected_revision", "input",
+                               "files", "file")}
+    corps.update(action="add_row", table="leads", agent=None, values={"name": "A"})
+    avant = hashlib.sha256(json.dumps(corps, sort_keys=True, separators=(",", ":"),
+                                      ensure_ascii=False).encode()).hexdigest()
+    assert C._empreinte(C.AppCallInput(**base)) == avant

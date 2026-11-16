@@ -157,6 +157,7 @@ def _statut(reponse, run_id=RUN, **kwargs):
     key, cls = _with_fake_client()
     with key, cls as client_cls, \
             patch("oto_mcp.tools.apify.session_org.note_call_trace") as trace:
+        client_cls.return_value.api_key = "fake-key"   # `ApifyClient(api_key=…)`
         client_cls.return_value.run_status.return_value = reponse
         out = _tool("apify_run_status").fn(run_id=run_id, **kwargs)
     return out, [c.kwargs for c in trace.call_args_list]
@@ -309,6 +310,7 @@ def _sync(run_reponse, statuts=(), items=None, horloge=None, **kwargs):
     with ExitStack() as pile:
         pile.enter_context(key)
         inst = pile.enter_context(cls).return_value
+        inst.api_key = "fake-key"   # `ApifyClient(api_key=…)`
         trace = pile.enter_context(
             patch("oto_mcp.tools.apify.session_org.note_call_trace"))
         if horloge is not None:
@@ -413,30 +415,198 @@ def test_a_run_without_event_counts_bills_its_usage_total():
     assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
 
 
-def test_without_booked_counts_the_gap_is_not_guessed_and_it_is_said(caplog):
-    """Sans `accountedChargedEventCounts`, rien ne dit ce que `usageTotalUsd` contient
-    déjà : ajouter tous les événements comptés pourrait les facturer deux fois. Le
-    chiffre est `usageTotalUsd` seul, et le journal dit que l'écart n'est pas chiffré."""
+@pytest.mark.parametrize("absent", [True, False])
+def test_without_booked_counts_the_cost_is_not_final_and_it_is_said(absent, caplog):
+    """Sans `accountedChargedEventCounts` (absent, ou `null` — le type que l'API
+    déclare), rien ne dit ce que `usageTotalUsd` contient déjà : ajouter tous les
+    événements comptés pourrait les facturer deux fois (0,0244), `usageTotalUsd` seul
+    pourrait être la sous-facturation signalée le 12/11/2026. Le chiffre n'est pas final :
+    0 SANS le job, le relevé de nuit facture le run une fois tout réservé, et le
+    journal le dit."""
     run = _ppe(0.0122, {"place-scraped": 3, "filter-applied": 3}, None)
-    del run["data"]["accountedChargedEventCounts"]
+    if absent:
+        del run["data"]["accountedChargedEventCounts"]
     with caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
         _, traces, _ = _sync(run)
-    assert traces == [{"quantity": 12200, "apify_run_id": RUN}], "pas 0.0244 : aucun doublon"
+    assert traces == [{"quantity": 0}]
     assert len(caplog.records) == 1
     assert RUN in caplog.records[0].getMessage()
     assert "apify_run_sync" in caplog.records[0].getMessage()
 
 
-def test_an_event_without_a_readable_price_is_left_out_and_it_is_said(caplog):
+def test_an_event_not_booked_without_a_readable_price_defers_the_bill_and_says_so(caplog):
+    """Un événement compté, pas encore réservé et sans prix lisible : le chiffre n'est
+    pas FINAL. Le facturer à ce qui est réservé (0,0002 + 3 × 0,003) en ferait le
+    premier chiffre du job — la sous-facturation pour de bon (12/11/2026). 0 SANS le job :
+    la lecture suivante ou le relevé de nuit facture le vrai chiffre, et le journal
+    le dit."""
     run = _ppe(0.0002, {"place-scraped": 3, "mystery-event": 5},
                {"place-scraped": 0, "mystery-event": 0})
     with caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
         _, traces, _ = _sync(run)
-    # 0.0002 + 3 × 0.003 ; « mystery-event » n'a pas de prix : laissé hors du chiffre, DIT.
-    assert traces == [{"quantity": 9200, "apify_run_id": RUN}]
+    assert traces == [{"quantity": 0}]
     assert len(caplog.records) == 1
     assert "mystery-event" in caplog.records[0].getMessage()
     assert RUN in caplog.records[0].getMessage()
+
+
+def test_an_event_already_booked_needs_no_price():
+    """Tout est réservé : `usageTotalUsd` est le chiffre final, prix lisible ou non."""
+    run = _ppe(0.0122, {"place-scraped": 3, "mystery-event": 5},
+               {"place-scraped": 3, "mystery-event": 5})
+    _, traces, _ = _sync(run)
+    assert traces == [{"quantity": 12200, "apify_run_id": RUN}]
+
+
+# --- prix PAR PALIER : la plupart du Store (signalé le 12/11/2026) ---------------
+#
+# harvestapi/linkedin-company-employees (et la plupart des acteurs du Store) ne porte
+# plus `eventPriceUsd` : ses événements sont tarifés par palier d'abonnement
+# (`eventTieredPricingUsd`, FREE … DIAMOND), la forme lue sur sa carte publique le
+# 15/11/2026. L'écart non réservé n'était donc jamais chiffré, et un run lu à
+# SUCCEEDED se facturait 0 (rien de réservé) ou le seul démarrage (0,02 $).
+
+def _palier_ppe(usd, comptes, reserves):
+    run = _r("SUCCEEDED", usd=usd)
+    run["data"].update({
+        "chargedEventCounts": comptes,
+        "accountedChargedEventCounts": reserves,
+        "pricingInfo": {"pricingModel": "PAY_PER_EVENT", "pricingPerEvent": {
+            "actorChargeEvents": {
+                "short-profile": {"eventTieredPricingUsd": {
+                    "FREE": {"tieredEventPriceUsd": 0.003},
+                    "BRONZE": {"tieredEventPriceUsd": 0.003},
+                    "GOLD": {"tieredEventPriceUsd": 0.0015}}},
+                "actor-start": {"eventTieredPricingUsd": {
+                    "FREE": {"tieredEventPriceUsd": 0.02},
+                    "BRONZE": {"tieredEventPriceUsd": 0.02},
+                    "GOLD": {"tieredEventPriceUsd": 0.015}}}}}}})
+    return run
+
+
+def _sync_au_palier(run, palier):
+    """`_sync`, l'abonnement du compte étant `palier` (None = illisible) ; rend aussi
+    les lectures du palier."""
+    with patch("oto_mcp.tools.apify._palier", return_value=palier) as lu:
+        out, traces, inst = _sync(run)
+    for appel in lu.call_args_list:
+        assert appel.args == ("fake-key",), "the tier of the key that ran the run"
+    return out, traces, lu
+
+
+@pytest.mark.parametrize("reserves,usd", [
+    ({}, 0.0),                                         # rien de réservé : était 0
+    ({"actor-start": 1, "short-profile": 0}, 0.02),    # le démarrage seul : était 20000
+    ({"actor-start": 1, "short-profile": 25}, 0.095),  # tout réservé : déjà juste
+])
+def test_a_tiered_run_bills_its_real_cost_whatever_apify_booked_so_far(reserves, usd):
+    """25 profils `short` sur un compte BRONZE : 0,02 + 25 × 0,003 = 0,095 $, que la
+    lecture arrive avant, pendant ou après la réservation d'Apify."""
+    comptes = {"actor-start": 1, "short-profile": 25}
+    _, traces, _ = _sync_au_palier(_palier_ppe(usd, comptes, reserves), "BRONZE")
+    assert traces == [{"quantity": 95000, "apify_run_id": RUN}]
+
+
+def test_a_tiered_run_is_priced_at_the_account_tier_not_the_highest():
+    """Le plafond prend le palier le plus cher ; une facture prend celui du compte."""
+    comptes = {"actor-start": 1, "short-profile": 8}
+    _, traces, _ = _sync_au_palier(_palier_ppe(0.0, comptes, {}), "GOLD")
+    assert traces == [{"quantity": 27000, "apify_run_id": RUN}]   # 0,015 + 8 × 0,0015
+
+
+def test_the_tier_is_read_only_when_a_tiered_gap_must_be_priced():
+    comptes = {"actor-start": 1, "short-profile": 8}
+    _, traces, lu = _sync_au_palier(_palier_ppe(0.044, comptes, comptes), "BRONZE")
+    assert traces == [{"quantity": 44000, "apify_run_id": RUN}]
+    lu.assert_not_called()
+    _, _, lu = _sync_au_palier(_palier_ppe(0.0, comptes, {}), "BRONZE")
+    assert lu.call_count == 1, "deux événements à palier, une seule lecture"
+
+
+@pytest.mark.parametrize("palier", [None, "PLATINUM"])
+def test_a_tiered_gap_without_the_account_tier_price_defers_the_bill(palier, caplog):
+    """Palier illisible, ou absent de la carte : rien de deviné, rien de partiel —
+    0 SANS le job, et la fiche de lancement reste ouverte pour le relevé."""
+    comptes = {"actor-start": 1, "short-profile": 25}
+    with patch("oto_mcp.tools.apify._hors_du_lanceur") as hors, \
+            caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        _, traces, _ = _sync_au_palier(_palier_ppe(0.02, comptes, {"actor-start": 1}),
+                                       palier)
+    assert traces == [{"quantity": 0}]
+    hors.assert_not_called()
+    assert len(caplog.records) == 1
+    assert "short-profile" in caplog.records[0].getMessage()
+
+
+def test_a_priced_gap_above_the_run_ceiling_defers_the_bill(caplog):
+    """Apify ne facture jamais un run au-delà de son plafond : un écart chiffré qui le
+    dépasse est un prix faux (palier mal lu), pas un coût. Rien de facturé, la fiche
+    reste ouverte, le relevé prendra le chiffre d'Apify."""
+    comptes = {"actor-start": 1, "short-profile": 25}
+    run = _palier_ppe(0.02, comptes, {"actor-start": 1})
+    run["data"]["options"] = {"maxTotalChargeUsd": 0.05}
+    with patch("oto_mcp.tools.apify._hors_du_lanceur") as hors, \
+            caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        _, traces, _ = _sync_au_palier(run, "BRONZE")
+    assert traces == [{"quantity": 0}]
+    hors.assert_not_called()
+    assert any("ceiling" in r.getMessage() for r in caplog.records)
+
+
+def test_run_status_prices_a_tiered_gap_too():
+    comptes = {"actor-start": 1, "short-profile": 25}
+    with patch("oto_mcp.tools.apify._palier", return_value="BRONZE"):
+        _, traces = _statut(_palier_ppe(0.0, comptes, {}))
+    assert traces == [{"quantity": 95000, "apify_run_id": RUN}]
+
+
+class _Reponse:
+    def __init__(self, corps, statut=200):
+        self.corps, self.status_code = corps, statut
+
+    def raise_for_status(self):
+        import requests
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self.corps
+
+
+def test_the_tier_is_the_plan_of_the_account_read_once_per_key(monkeypatch):
+    import requests
+    from oto_mcp.tools import apify
+
+    monkeypatch.setattr(apify, "_paliers_lus", {})
+    with patch.object(requests, "get",
+                      return_value=_Reponse({"data": {"plan": {"tier": "BRONZE"}}})) as get:
+        assert apify._palier("k1") == "BRONZE"
+        assert apify._palier("k1") == "BRONZE"
+        assert get.call_count == 1, "gardé pour la clé"
+        assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer k1"}
+        apify._palier("k2")
+        assert get.call_count == 2, "une autre clé, un autre compte"
+    assert all("k1" not in empreinte for empreinte in apify._paliers_lus), \
+        "la clé elle-même n'est jamais gardée"
+
+
+@pytest.mark.parametrize("reponse", [
+    _Reponse({}, 403), _Reponse({"data": {"plan": {}}}), _Reponse({"data": None}),
+    _Reponse([]), None,                  # None : le réseau tombe
+])
+def test_an_unreadable_tier_is_none_said_and_not_kept(reponse, monkeypatch, caplog):
+    import requests
+    from oto_mcp.tools import apify
+
+    monkeypatch.setattr(apify, "_paliers_lus", {})
+    effet = {"side_effect": requests.ConnectionError("down")} if reponse is None \
+        else {"return_value": reponse}
+    with patch.object(requests, "get", **effet) as get, \
+            caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        assert apify._palier("k") is None
+        apify._palier("k")
+    assert get.call_count == 2, "un échec n'est pas gardé"
+    assert caplog.records
 
 
 def test_run_sync_bills_a_finished_run_even_when_its_output_cannot_be_read():

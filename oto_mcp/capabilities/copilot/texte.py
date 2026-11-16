@@ -16,8 +16,11 @@ PLAFOND_RESULTAT = 20_000
 #: Tools whose result is PROSE read in one piece and that offer no way to read a part of it
 #: (`oto_procedure op=get` has no section, field or outline; `oto_guide op=read` neither):
 #: cut at 20 000 the model would hold half a procedure or half a guide with no way to ask
-#: for the rest. They keep the old limit.
-PLAFONDS_PAR_OUTIL = {"oto_procedure": 80_000, "oto_guide": 80_000}
+#: for the rest. They keep the old limit. `oto_apps` too: `op=get` returns the app's HTML in
+#: one piece, with no way to read a part of it, and `op=patch` needs each `find` copied
+#: exactly from that read — cut at 20 000 the model can't patch past the cut, and
+#: re-sends a no-op edit or rewrites the whole app.
+PLAFONDS_PAR_OUTIL = {"oto_procedure": 80_000, "oto_guide": 80_000, "oto_apps": 80_000}
 
 
 def plafond_de(outil: str) -> int:

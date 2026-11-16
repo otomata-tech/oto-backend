@@ -83,6 +83,10 @@ def test_liste_cartes_sans_html_et_archives(projet):
     assert db.apps.project_owners([projet, 999999]) == {str(projet): ("user", MOI)}
 
 
+#: La plus haute révision d'où l'on peut descendre jusqu'aux apps.
+_SOUS_LA_DERNIERE_IRREVERSIBLE = "20261109_2120_alertes_slack"
+
+
 def test_migration_aller_retour(live, pg_module_dsn):
     import psycopg
     from alembic import command
@@ -96,7 +100,10 @@ def test_migration_aller_retour(live, pg_module_dsn):
     # Depuis la TÊTE : des tables nées après (`app_consents`…) pointent `apps`, et le
     # démarrage les a posées — descendre la seule révision des apps ne pourrait pas
     # retirer une table dont d'autres dépendent.
-    command.stamp(_alembic(), "head")
+    # Pas tout à fait la tête : `20261111_0920_jetons_echeance` (données seules, aucune
+    # table) est irréversible et le dit (`RetourImpossible`) ; on part juste sous elle,
+    # au-dessus de toutes les tables qui pointent `apps`.
+    command.stamp(_alembic(), _SOUS_LA_DERNIERE_IRREVERSIBLE)
     command.downgrade(_alembic(), _PRECEDENTE)
     assert tables() == set()
     command.upgrade(_alembic(), "head")

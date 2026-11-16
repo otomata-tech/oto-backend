@@ -248,7 +248,8 @@ def _active_org(ctx: ResolvedCtx, what: str) -> int:
 
 def _get_loan_state(ctx: ResolvedCtx, inp: LoanStateInput) -> dict:
     if providers.connector_for_provider(inp.connector) is None:
-        raise AuthzDenied(400, "unknown_connector", f"Unknown connector `{inp.connector}`.")
+        raise AuthzDenied(400, "unknown_connector", f"Unknown connector `{inp.connector}`."
+                          + providers.refus_renomme(inp.connector))
     connector = providers.credential_provider(inp.connector)
     org = _active_org(ctx, "read a loan")
     eid = credentials_store.member_id(org, ctx.sub)
@@ -263,7 +264,8 @@ def _get_loan_state(ctx: ResolvedCtx, inp: LoanStateInput) -> dict:
 
 def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
     if providers.connector_for_provider(inp.connector) is None:
-        raise AuthzDenied(400, "unknown_connector", f"Unknown connector `{inp.connector}`.")
+        raise AuthzDenied(400, "unknown_connector", f"Unknown connector `{inp.connector}`."
+                          + providers.refus_renomme(inp.connector))
     if (inp.to is not None) + (inp.to_group is not None) + bool(inp.to_org) != 1:
         raise AuthzDenied(400, "one_borrower",
                           "Name exactly one borrower: `to` (a member's email or sub), "

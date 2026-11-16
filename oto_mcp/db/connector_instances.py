@@ -16,7 +16,7 @@ aller : le coffre n'a pas de clé de substitution, sa PK EST
 `(entity_type, entity_id, connector, account)`, et l'AAD du chiffrement en dérive
 (`credentials_store._aad`). Les quatre colonnes portées ici sont donc le pointeur
 lui-même, à l'octet près ; c'est aussi ce qui fait qu'une instance SANS ligne de
-coffre reste représentable (instance `http` qui ne fige qu'une `base_url`,
+coffre reste représentable (instance `api` qui ne fige qu'une `base_url`,
 sous-instance qui ne pose qu'une détermination).
 
 ⚠️ **Aucune fonction d'ici n'est sur un chemin de résolution.** `walk_cascade` et
@@ -457,7 +457,7 @@ def name_vault_rows_as_instances(conn, batch: int = BACKFILL_BATCH) -> int:
 
 
 # ── La config possédée, une CLÉ à la fois (jamais le document entier). Premier écrivain :
-# le connecteur `http` (`connectors/http_operations.py`). Aucune résolution n'en dépend.
+# le connecteur `api` (`connectors/api_operations.py`). Aucune résolution n'en dépend.
 
 
 def live_instance_configs(owner_type: str, owner_id: str, connector: str,
@@ -491,6 +491,25 @@ def merge_instance_config(instance_id: int, patch: dict) -> bool:
             "UPDATE connector_instances SET config = config || %s::jsonb "
             "WHERE id = %s AND revoked_at IS NULL RETURNING id",
             (Jsonb(patch), instance_id)).fetchone()
+    return row is not None
+
+
+def copy_instance_definition(conn, owner_type: str, owner_id: str, old: str, new: str,
+                             account: str = "") -> bool:
+    """Recopie `config`, `label` et `visibility` de l'instance VIVANTE de la ligne de
+    coffre `old` sur celle de `new` (même propriétaire, même compte) — quand un connecteur
+    RENOMMÉ reprend le coffre de l'ancien nom (`credentials_store.copy_connector_rows`).
+    Dans la transaction `conn` de la copie, juste après la naissance de l'instance neuve.
+    False si l'une des deux manque."""
+    row = conn.execute(
+        "UPDATE connector_instances n SET config = o.config, label = o.label, "
+        "visibility = o.visibility FROM connector_instances o "
+        "WHERE o.owner_type = %s AND o.owner_id = %s AND o.connector = %s "
+        "AND o.account = %s AND o.revoked_at IS NULL "
+        "AND n.owner_type = o.owner_type AND n.owner_id = o.owner_id "
+        "AND n.connector = %s AND n.account = o.account AND n.revoked_at IS NULL "
+        "RETURNING n.id",
+        (owner_type, str(owner_id), old, account or "", new)).fetchone()
     return row is not None
 
 

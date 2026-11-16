@@ -12,8 +12,9 @@ def _stub_group_secret(monkeypatch, *, org_secret: bool, group_has: bool):
     monkeypatch.setattr(access, "connector_resolvable_for_org",
                         lambda name, org_id: org_secret)
     monkeypatch.setattr(group_store, "list_groups", lambda org_id: [{"id": 7}])
-    monkeypatch.setattr(group_store, "has_group_secret",
-                        lambda gid, name: group_has)
+    # Les équipes qui détiennent la clé se lisent en lot (`groups_holding`).
+    monkeypatch.setattr(group_store, "groups_holding",
+                        lambda gids, org_id, name: set(gids) if group_has else set())
 
 
 def test_why_flags_group_only_credential(monkeypatch):

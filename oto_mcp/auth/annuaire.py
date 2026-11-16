@@ -233,3 +233,86 @@ def ensure_api_resource(indicator: str, *, name: str | None = None) -> None:
     )
     r.raise_for_status()
     _log.info("Logto API resource créée : %s", indicator)
+
+
+# ── Fermer tout ce qu'un compte a d'ouvert chez Logto ─────────────────────────
+# Un mot de passe changé ne ferme RIEN chez Logto : ni les sessions de son annuaire, ni
+# les autorisations (grants) qui portent les jetons de rafraîchissement des clients
+# OAuth — un client MCP autorisé depuis une session volée se rafraîchit donc
+# indéfiniment. Appelé par la réception du webhook Logto (`auth/revocation_mot_de_passe`).
+
+#: Ce qu'une requête de management attend au plus, et ce que la fermeture entière
+#: attend au plus : une borne posée à SON niveau, pas seulement au plus profond — une
+#: vingtaine de sessions à 15 s chacune ferait sinon attendre l'envoyeur plusieurs
+#: minutes.
+_DELAI_REQUETE_S = 10
+_DELAI_FERMETURE_S = 30
+
+
+class FermetureInachevee(RuntimeError):
+    """Logto n'a pas tout fermé : une session ou une autorisation peut rester ouverte.
+    Levée telle quelle, jamais avalée — c'est à l'appelant de dire « à refaire »."""
+
+
+def fermer_sessions(sub: str) -> dict:
+    """Ferme TOUTES les sessions Logto de `sub` (annuaire primaire), autorisations
+    comprises, puis révoque les autorisations qui survivent à leur session. Rend
+    `{"sessions": n, "grants": m}` (ce qui a été fermé). Lève `FermetureInachevee` si
+    Logto refuse ou ne répond pas dans `_DELAI_FERMETURE_S`.
+
+    Deux temps, parce qu'aucun ne suffit seul (Management API Logto 1.44) :
+    1. `DELETE /api/users/{id}/sessions/{uid}?revokeGrantsTarget=all` ferme la session
+       ET les autorisations qu'elle porte, premières et tierces parties comprises ;
+    2. `GET /api/users/{id}/grants` puis `DELETE …/grants/{grantId}` : une autorisation
+       hors session (`offline_access`, dont la session a expiré) garde son jeton de
+       rafraîchissement — c'est elle que le premier temps ne voit pas.
+
+    Un 404 sur un `DELETE` dit que la cible a disparu entre la liste et la suppression
+    (session échue, autorisation déjà révoquée) : l'état voulu est atteint, il n'est
+    pas compté. Tout autre refus lève."""
+    import requests
+    from urllib.parse import quote
+
+    from ..tenancy import require_primary_tenant
+    require_primary_tenant(sub, "fermeture des sessions Logto")
+    fin = time.monotonic() + _DELAI_FERMETURE_S
+    try:
+        tok = _mgmt_token()
+    except (RuntimeError, requests.RequestException) as e:
+        # Credential de management absent, ou refusé : rien n'a été fermé.
+        raise FermetureInachevee(
+            f"fermeture des sessions de {sub} : pas de jeton de management ({e})") from e
+    base = _logto_base()
+    h = {"Authorization": f"Bearer {tok}", "User-Agent": _UA}
+    compte = f"{base}/api/users/{quote(sub, safe='')}"
+
+    def _appel(methode: str, url: str, **kw):
+        reste = fin - time.monotonic()
+        if reste <= 0:
+            raise FermetureInachevee(
+                f"fermeture des sessions de {sub} : délai de {_DELAI_FERMETURE_S} s "
+                "dépassé, la suite n'est pas fermée")
+        try:
+            r = requests.request(methode, url, headers=h,
+                                 timeout=min(_DELAI_REQUETE_S, reste), **kw)
+        except requests.RequestException as e:
+            raise FermetureInachevee(
+                f"fermeture des sessions de {sub} : Logto injoignable ({e})") from e
+        if methode == "DELETE" and r.status_code == 404:
+            return None
+        if r.status_code >= 400:
+            raise FermetureInachevee(
+                f"fermeture des sessions de {sub} : {methode} {url.removeprefix(base)} "
+                f"→ {r.status_code}")
+        return r
+
+    sessions = [s["payload"]["uid"]
+                for s in _appel("GET", f"{compte}/sessions").json().get("sessions", [])]
+    fermees = sum(1 for uid in sessions
+                  if _appel("DELETE", f"{compte}/sessions/{quote(uid, safe='')}",
+                            params={"revokeGrantsTarget": "all"}) is not None)
+    grants = [g["id"] for g in _appel("GET", f"{compte}/grants").json().get("grants", [])]
+    revoques = sum(1 for gid in grants
+                   if _appel("DELETE", f"{compte}/grants/{quote(gid, safe='')}")
+                   is not None)
+    return {"sessions": fermees, "grants": revoques}

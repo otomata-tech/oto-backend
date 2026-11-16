@@ -70,6 +70,21 @@ def _resultat(bloc_id: str, contenu: str, erreur: bool) -> dict:
             "is_error": bool(erreur)}
 
 
+def edit_sans_effet(target: str, targs: dict) -> Optional[str]:
+    """An app patch with an edit whose `replace` equals its `find` changes nothing: the
+    tool would refuse it anyway (`remplacements.appliquer`). Said to the model BEFORE a
+    card — the person never approves a change that is not one."""
+    if target != "oto_apps" or (targs or {}).get("op") != "patch":
+        return None
+    for i, e in enumerate(targs.get("edits") or []):
+        if isinstance(e, dict) and isinstance(e.get("find"), str) and e.get("find") \
+                and e.get("replace") == e.get("find"):
+            return (f"edits[{i}].replace is the same as its find: it changes nothing. "
+                    "Read the app again (oto_apps op=get) and put the change in `replace`. "
+                    "Nothing was written.")
+    return None
+
+
 def noms_client(fil: dict) -> set:
     return {t.get("name") for t in fil.get("client_tools") or []}
 
@@ -166,6 +181,8 @@ async def drainer(fil: dict, b: Boite, etat: dict) -> AsyncIterator[dict]:
                      "from their own screens.")
         elif target not in b.visibles:
             refus = f"Unknown tool `{target}`: it is not in your toolbox here."
+        else:
+            refus = edit_sans_effet(target, targs)
         if refus:
             fil["queue"].pop(0)
             fil["results"].append(_resultat(bloc["id"], refus, True))
@@ -294,7 +311,7 @@ async def conduire(fil: dict, b: Boite, cle: cles.Cle) -> AsyncIterator[dict]:
                 yield e
         except cles.SansCle as e:
             await sauver(fil)
-            yield ev("error", message=e.message)
+            yield ev("error", message=e.message, code=e.code)
             yield ev("done")
             return
         except modele.ErreurModele as e:

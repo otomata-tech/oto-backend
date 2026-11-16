@@ -7,7 +7,8 @@ from Object Storage over httpfs (`SIRENE_STOCK_PARQUET_PATH=s3://…`, ADR 0002)
 refreshed monthly by `deploy/refresh_sirene_stock_s3.sh`.
 
 Tools (parquet source — no key, exhaustive/bulk, monthly vintage):
-- `fr_stock_enrich(sirens=[...])` — headquarters of a LIST in ONE scan (bulk)
+- `fr_stock_enrich(sirens=[...] | sirets=[...])` — headquarters of a LIST of SIRENs, or a
+  LIST of establishments with their headcount band and employer status, in ONE scan
 - `fr_stock_siege(siren)` — headquarters of a SIREN
 - `fr_stock_etablissements(siren)` — all establishments of a company
 - `fr_stock_siret(siret)` — one establishment by SIRET
@@ -22,10 +23,16 @@ from __future__ import annotations
 from typing import Optional
 
 from fastmcp import FastMCP
+from mcp.types import INVALID_PARAMS, ErrorData
 
+from ..mcp_errors import McpError
 from .lecture import LECTURE
 
 from oto_mcp.fod import client as sirene_duckdb  # ADR 0028: scan offloaded to FOD
+
+#: SIRETs per `fr_stock_enrich(sirets=…)` call: the data service's batch bound
+#: (`sirene_stock.SIRETS_MAX`), refused here before the call with a named code.
+SIRETS_MAX = 1000
 
 
 def _avec_raison_sociale(rows: list[dict]) -> list[dict]:
@@ -79,24 +86,53 @@ def register(mcp: FastMCP) -> None:
         return sirene_duckdb.list_establishments(siren, active_only=active_only)
 
     @mcp.tool(annotations=LECTURE)
-    def fr_stock_enrich(sirens: list[str]) -> dict:
-        """Batch headquarters enrichment: pass a LIST of SIRENs, get each one's
-        head-office address in a SINGLE scan. This is the bulk strength of the
-        stock parquet — far faster than N calls to fr_get/fr_stock_siege
-        (one scan vs one network round-trip per SIREN).
+    def fr_stock_enrich(sirens: Optional[list[str]] = None,
+                        sirets: Optional[list[str]] = None) -> dict:
+        """Batch enrichment from the stock parquet in a SINGLE scan: pass a LIST of
+        SIRENs (their head offices) OR a LIST of SIRETs (those exact establishments) —
+        exactly one of the two. Far faster than N calls to fr_get/fr_stock_siege/
+        fr_stock_siret (one scan vs one network round-trip each).
 
         Use it to enrich a list of prospects (from fr_search, a Folk export,
-        Unipile contacts…) with siège address/NAF before pushing to a CRM.
+        Unipile contacts…) with address/NAF before pushing to a CRM; with `sirets`,
+        to know whether each SITE employs staff and how many.
 
-        Returns {siren: {street, postal_code, city, code_commune, naf,
+        `sirens` returns {siren: {street, postal_code, city, code_commune, naf,
         raison_sociale, categorie_entreprise, denomination, status, ...}} ;
-        SIRENs without a known siège are omitted. `raison_sociale` is the
-        company name (legal-unit stock, null for a sole trader);
-        `denomination` is the establishment's USUAL name, empty for most.
+        SIRENs without a known siège are omitted.
+
+        `sirets` returns {items: {siret: {...same fields, is_headquarters,
+        tranche_effectifs, annee_effectifs, caractere_employeur}}, erreurs:
+        [{siret, code}], count}. `tranche_effectifs` is the ESTABLISHMENT's INSEE
+        headcount band (00=0, 01=1-2, 02=3-5, 03=6-9, 11=10-19, 12=20-49, 21=50-99,
+        22=100-199, 31=200-249, 32=250-499, 41=500-999, 42=1000-1999, 51=2000-4999,
+        52=5000-9999, 53=10000+; null = not filled) for the year `annee_effectifs`;
+        `caractere_employeur` is O (employer) or N. Errors are PER SIRET, never for
+        the batch: `siret_invalide` (not 14 digits), `introuvable` (not in the stock).
+
+        `raison_sociale` is the company name (legal-unit stock, null for a sole
+        trader); `denomination` is the establishment's USUAL name, empty for most.
 
         Args:
             sirens: list of SIREN numbers (9 digits), up to 10000.
+            sirets: list of SIRET numbers (14 digits), up to 1000 distinct.
         """
+        if (sirens is None) == (sirets is None):
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                "Refused `sirens_ou_sirets`: give EXACTLY ONE of `sirens` (head offices) "
+                "or `sirets` (establishments)."),
+                data={"code": "sirens_ou_sirets", "retryable": False}))
+        if sirets is not None:
+            distincts = {str(s).strip() for s in sirets}
+            if len(distincts) > SIRETS_MAX:
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    f"Refused `sirets_lot_trop_grand`: {len(distincts)} distinct SIRETs, "
+                    f"at most {SIRETS_MAX} per call — split the list."),
+                    data={"code": "sirets_lot_trop_grand", "retryable": False,
+                          "limit": SIRETS_MAX, "count": len(distincts)}))
+            res = sirene_duckdb.lookup_sirets([str(s).strip() for s in sirets])
+            _avec_raison_sociale(list(res["items"].values()))
+            return res
         clean = [str(s).strip() for s in sirens]
         sieges = sirene_duckdb.headquarters_addresses(clean)
         _avec_raison_sociale(list(sieges.values()))

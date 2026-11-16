@@ -14,7 +14,7 @@ cette déclaration, jamais sur un verbe deviné. Cette garde la rend mécanique 
 - **connecteurs décrits** : un outil servi par le lecteur générique a, op par op, la classe que
   dérive sa description (classe, `act`, `effect`), et chaque liste d'une op qui écrit est un lot ;
 - **audit** : les cas que le verbe classe mal (un `add` qui lance une séquence, un
-  `http_act` DELETE, un `refund`…) gardent leur classe.
+  `api_act` DELETE, un `refund`…) gardent leur classe.
 
 Un connecteur neuf, ou une op ajoutée, rougit ici : `scripts/amorcer_effets.py` propose ses
 lignes, à relire avant de les coller.
@@ -29,7 +29,7 @@ from _mcp_app import static_mcp
 from oto_mcp.capabilities import registry
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.recipes import ecritures
-from oto_mcp.tools import effets, http_calls
+from oto_mcp.tools import effets, api_calls
 from oto_mcp.tools.effets import (EFFETS, JUGES, LOTS, PAS_UN_LOT, RELAIS, EffetNonDeclare,
                                   Lot, effet)
 from oto_mcp.tools.lecture import en_lecture
@@ -187,14 +187,14 @@ def test_une_ecriture_forcee_des_recettes_n_est_pas_declaree_en_lecture():
     ("amplemarket_act", {"op": "add_sequence_leads"}, "envoyer", "leads"),
     ("routine_fire", {}, "envoyer", None),
     # Un appel brut se juge sur sa méthode.
-    ("http_act", {"op": "request", "method": "DELETE"}, "detruire", None),
-    ("http_act", {"op": "request", "method": "delete"}, "detruire", None),
-    ("http_act", {"op": "request", "method": "PUT"}, "detruire", None),
-    ("http_act", {"op": "request", "method": "GET"}, "lire", None),
+    ("api_act", {"op": "request", "method": "DELETE"}, "detruire", None),
+    ("api_act", {"op": "request", "method": "delete"}, "detruire", None),
+    ("api_act", {"op": "request", "method": "PUT"}, "detruire", None),
+    ("api_act", {"op": "request", "method": "GET"}, "lire", None),
     # Sans méthode : le doute. Remplacer la liste des actions détruit.
-    ("http_act", {"op": "request"}, "detruire", None),
-    ("http_act", {"op": "set_definition"}, "detruire", None),
-    ("http_act", {"op": "import"}, "lire", None),
+    ("api_act", {"op": "request"}, "detruire", None),
+    ("api_act", {"op": "set_definition"}, "detruire", None),
+    ("api_act", {"op": "import"}, "lire", None),
     # Créer une liste chez le fournisseur écrit, même si son verbe est `list`.
     ("lemlist_contact", {"op": "list_create"}, "ecrire", "contact_ids"),
     # Décidé : lancer un run chez le fournisseur écrit, il n'envoie pas.
@@ -257,8 +257,15 @@ def test_rembourser_annuler_desactiver_detruisent():
 
 
 def test_aucune_op_bulk_ni_delete_n_echappe_a_detruire():
+    """Un outil servi par sa description (`tools/decrits.py`) tient la classe de chaque op
+    de la description (`class: read`), que `test_convention_act` garde : chez lui, `bulk_`
+    nomme aussi une LECTURE en lot (DataForSEO `bulk_keyword_difficulty`, `bulk_ranks`)."""
+    from oto_mcp.connectors import descriptions
+    decrits = descriptions.classes_des_outils()
     for nom in EFFETS:
         for op, classe in effets.classes_par_op(nom).items():
+            if op and op.startswith("bulk_") and decrits.get(nom, {}).get(op) == "lire":
+                continue
             if op and (op.startswith("bulk_") or op.split("_")[0] in (
                     "delete", "remove", "merge", "purge", "archive", "revoke", "trash")):
                 assert classe == "detruire", (nom, op)
@@ -303,7 +310,7 @@ def test_tout_webhook_cree_envoie():
 def test_oto_call_prend_l_effet_de_sa_cible():
     assert effet("oto_call", {"name": "apollo_sequence_contacts",
                               "arguments": {"op": "add"}}) == ("envoyer", Lot("contact_ids"))
-    assert effet("oto_call", {"name": "http_act", "arguments": {
+    assert effet("oto_call", {"name": "api_act", "arguments": {
         "op": "request", "method": "GET"}}) == ("lire", None)
     assert effets.cible("oto_call", {"name": "apollo_sequence", "arguments": {
         "op": "activate"}}) == ("apollo_sequence", {"op": "activate"})
@@ -322,34 +329,53 @@ def test_oto_call_sans_cible_leve(args):
         effets.lit_la_base("oto_call", args)
 
 
-# --- http_act call : la méthode de l'action enregistrée, lue en base -----------------------
+# --- api_act call : la méthode de l'action enregistrée, lue en base -----------------------
 
 def _action_enregistree(monkeypatch, operations):
-    monkeypatch.setattr(http_calls, "_sub", lambda: "sub-1")
-    monkeypatch.setattr(http_calls, "_account_for", lambda sub, operation: None)
-    monkeypatch.setattr(http_calls, "_resolved",
+    monkeypatch.setattr(api_calls, "_sub", lambda: "sub-1")
+    monkeypatch.setattr(api_calls, "_account_for", lambda sub, operation: None)
+    monkeypatch.setattr(api_calls, "_resolved",
                         lambda account=None: type("Rc", (), {"account": "acme"})())
-    monkeypatch.setattr(http_calls, "_definition", lambda rc: {"operations": operations})
+    monkeypatch.setattr(api_calls, "_definition", lambda rc: {"operations": operations})
 
 
 @pytest.mark.parametrize("methode, classe", [("GET", "lire"), ("POST", "envoyer"),
                                              ("PATCH", "envoyer"), ("PUT", "detruire"),
                                              ("DELETE", "detruire")])
-def test_http_act_call_se_juge_sur_la_methode_enregistree(monkeypatch, methode, classe):
+def test_api_act_call_se_juge_sur_la_methode_enregistree(monkeypatch, methode, classe):
     _action_enregistree(monkeypatch, [{"name": "faire", "method": methode, "path": "/x"}])
-    assert effet("http_act", {"op": "call", "operation": "faire"}) == (classe, None)
-    assert effets.lit_la_base("http_act", {"op": "call", "operation": "faire"})
-    assert effets.lit_la_base("oto_call", {"name": "http_act",
+    assert effet("api_act", {"op": "call", "operation": "faire"}) == (classe, None)
+    assert effets.lit_la_base("api_act", {"op": "call", "operation": "faire"})
+    assert effets.lit_la_base("oto_call", {"name": "api_act",
                                            "arguments": {"op": "call"}})
-    assert not effets.lit_la_base("http_act", {"op": "request", "method": "GET"})
+    assert not effets.lit_la_base("api_act", {"op": "request", "method": "GET"})
 
 
-def test_http_act_call_sans_action_leve(monkeypatch):
+@pytest.mark.parametrize("methode", ["GET", "POST"])
+def test_api_act_call_class_read_se_juge_lire(monkeypatch, methode):
+    """`class: read`, posée par l'admin de la carte, fait lire CETTE action seule."""
+    _action_enregistree(monkeypatch, [
+        {"name": "chercher", "method": methode, "path": "/x", "class": "read"},
+        {"name": "faire", "method": "POST", "path": "/x"}])
+    assert effet("api_act", {"op": "call", "operation": "chercher"}) == ("lire", None)
+    assert effet("api_act", {"op": "call", "operation": "faire"})[0] == "envoyer"
+    assert effet("oto_call", {"name": "api_act", "arguments": {
+        "op": "call", "operation": "chercher"}}) == ("lire", None)
+
+
+def test_api_act_request_ne_porte_jamais_class_read(monkeypatch):
+    """Un appel brut se juge sur son verbe : un `class` glissé dans ses arguments n'y
+    change rien."""
+    assert effet("api_act", {"op": "request", "method": "POST",
+                             "class": "read"})[0] == "envoyer"
+
+
+def test_api_act_call_sans_action_leve(monkeypatch):
     _action_enregistree(monkeypatch, [{"name": "autre", "method": "GET", "path": "/x"}])
     with pytest.raises(McpError):
-        effet("http_act", {"op": "call", "operation": "faire"})
+        effet("api_act", {"op": "call", "operation": "faire"})
     with pytest.raises(McpError):
-        effet("http_act", {"op": "call"})
+        effet("api_act", {"op": "call"})
 
 
 # --- les connecteurs servis par le lecteur générique ---------------------------------------

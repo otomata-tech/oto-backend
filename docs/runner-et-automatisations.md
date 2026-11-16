@@ -1093,6 +1093,61 @@ plafond faisait lever toute reprise d'un run qui raisonne (relevé en revue).
 `max_output_tokens` et applique sa variable d'hôte ; un worker d'après lève sur un
 travail avec effort produit par un backend d'avant.
 
+
+### Les modèles ouverts via OpenRouter : une famille, des hôtes épinglés (12/11/2026)
+
+La famille `openrouter` (`runner_models`) sert des modèles ouverts — DeepSeek V4.1 Flash,
+DeepSeek V4 Pro, MiniMax M3 — par OpenRouter, en Chat Completions : un worker
+oto-runner `OTO_RUNNER_PROVIDER=openai` sur `OTO_RUNNER_OPENAI_BASE=https://openrouter.ai/api/v1`,
+dont l'hôte NOMME le dépôt `openrouter`. Le dépôt est un porteur de clé
+(`providers/openrouter.py`, `kind="credential"`) : la clé de l'org (`byo_org`), ou la clé
+partagée de l'instance accordée à l'org (`platform`, fermée), sur laquelle chaque tour est
+JOURNALISÉ au coût qu'OpenRouter a rendu, sans tarif côté oto, et débité sur le quota du
+jour de l'accord, en micro-dollars, qui refuse le tour suivant une fois atteint
+(`tours_au_cout`, `docs/credits-au-moment-de-l-appel.md`).
+
+Chaque modèle déclare, en plus de son effort et de son plafond de complétion, les hôtes
+OpenRouter AUTORISÉS (`Modele.providers`, slugs d'endpoint : `deepinfra/fp8`). Le travail
+les emporte (`charge` → `payload.providers`) et le worker les envoie en `provider.order` +
+`provider.only`, avec `data_collection: deny` : un même id est servi par des dizaines
+d'hôtes, à des prix qui vont du simple au décuple et en quantifications différentes —
+l'épingle rend le tour prévisible et borne son prix. Les modèles
+ouverts sont placés APRÈS les familles d'avant : le défaut proposé ne bouge pas tant qu'une
+famille antérieure est servie.
+
+### Où tourne un modèle, et l'org qui écarte la Chine (12/11/2026)
+
+Chaque modèle du catalogue dit OÙ il tourne (`runner_models.hebergement`, servi par
+`runner.models[].hosting`) : ses hôtes dans l'ordre où ils sont essayés, chacun avec sa
+région (`us`, `eu`, `cn`), qui l'a construit, et le routeur entre les deux quand il y en a
+un (OpenRouter). La région du modèle est la PIRE de ses hôtes : `cn` dès qu'un seul, un
+secours compris, est en Chine. Les régions des hôtes viennent de
+`GET https://openrouter.ai/api/v1/providers` (`headquarters`, `datacenters`) et des
+conditions des hôtes, lus le 12/11/2026 (`runner_models.HOTES`) ; un hôte épinglé sans
+région fait échouer un banc. Le worker rapporte l'hôte qui a servi chaque tour
+(`usage_host`), écrit au journal du tour au coût (`args.host`).
+
+Une org peut écarter les modèles qui tournent en Chine (`orgs.allow_cn_models`, TRUE par
+défaut ; `oto_org_settings domain=model_regions`, REST `/api/orgs/{id}/model-regions`,
+admin de l'org). Écartés : `allowed: false` au catalogue (l'écran ne les propose pas),
+refusés à la pose (`model_region_blocked`, 403), et un travail déjà en file sur l'un d'eux
+est arrêté à la réservation, sur la clé de l'org comme sur la nôtre, raison écrite.
+
+Une org peut aussi éteindre un modèle à la fois (`orgs.disabled_models`, vide par défaut ;
+`oto_org_settings domain=models`, REST `GET|PUT /api/orgs/{id}/models` avec
+`{model, enabled}`, admin de l'org ; 15/11/2026). Éteint : `allowed: false, disabled: true`
+au catalogue, jamais par défaut (le défaut se redérive sur le premier modèle proposable
+qui reste), refusé à la pose (`model_disabled`, 403). Un agent déjà posé dessus ne tourne
+plus, **sans repli sur un autre modèle** (16/11/2026) : à l'horloge, l'occurrence est
+sautée (`refused_model_disabled` sur la page de l'agent) ; au webhook, la livraison est
+refusée (409 `model_disabled`, même trace) ; `run_now` et `rerun` sont refusés (403
+`model_disabled`) ; une campagne s'arrête (`stop_reason = model_disabled`). Un travail
+déjà en file sur lui est arrêté à la réservation, raison écrite. La bascule (`set`) rend
+`agents_on_model` : le nombre et les ids des agents de l'org posés sur ce modèle, en
+pause compris (rallumés, ils buteraient sur le même arrêt). Le modèle par défaut ne
+s'éteint pas (`model_is_default`, 409) ; les abonnements personnels (`sub:*`) ne se
+basculent pas (`unknown_model`).
+
 ### Un agent tourne sur la clé de SON org — ou ne tourne pas (12/09/2026)
 
 La remise de clé (#874, ci-dessus) avait un envers que rien ne gardait : **une org
@@ -1237,7 +1292,11 @@ Un déclencheur porte désormais un **genre** (`runner_triggers.kind`) :
 **Le genre se pose à la CRÉATION et ne se change jamais** (`kind` est hors de
 l'allowlist d'`update_trigger`). Basculer un agent d'un coup d'envoi à l'autre
 laisserait derrière soit un cron orphelin, soit un secret qui ouvre une porte que
-plus personne ne regarde.
+plus personne ne regarde. ⚠️ `kind` reste dans le schéma d'`update`, et un autre
+genre y est **refusé** (`kind_immutable`, qui dit de créer un nouvel agent de
+l'autre genre) — il était accepté puis ignoré, la réponse disant toujours l'ancien
+genre ; le même genre est sans effet. Jugé avant le cadencement : `kind=schedule
+cron=…` sur un webhook dit le genre, pas `invalid_schedule`.
 
 **Ce qu'une retouche peut toucher dépend du genre.** Sur un webhook, `cron` et
 `tz` sont refusés (`invalid_schedule`) — sans cette garde, un cron posé lui
@@ -2870,6 +2929,17 @@ une perte connue. `expired_count: 0` est un vrai zéro, servi, pas une absence d
 mesure. **Deux dates et pas une** : une perte ancienne qui a cessé n'appelle pas
 le même geste qu'une perte qui continue ce matin.
 
+**« A-t-il tourné ? » se lit aussi sur le déclencheur** : `list`/`get` portent
+`last_run` (sa dernière occurrence `{status, due_at, finished_at}` sur 35 jours —
+`status` celui de la file : l'occurrence a-t-elle tourné, pas ce que l'agent a conclu,
+le run lié au travail étant celui du worker) et `last_done_at` (la fin de son dernier
+passage réussi), lus en deux requêtes pour toute la liste (`db.derniers_travaux`).
+La seule autre réponse était la liste des runs de l'org (`oto_org_monitoring
+op=runs`), plus récent d'abord : un agent toutes les quinze minutes en remplit la
+première page en une dizaine d'heures, et un agent de veille y cherchant le soir le
+passage du matin d'un autre agent, sans suivre `next_cursor`, concluait « n'a pas
+tourné » à tort. `op=runs` renvoie donc à `last_run` (`hint`).
+
 ⚠️ **Un déclencheur qui ne TIQUE plus ne périme plus** — et les deux gestes qui
 l'arrêtent laissaient donc leurs occurrences éternelles. **Éteindre** (`enabled =
 false`) le sort de la boucle du tick ; **supprimer** est pire encore, puisque le
@@ -3326,11 +3396,19 @@ pas des mesures) : chaque org les surcharge. Servi par `runner.jobs op=summary`
 `time_standards`).
 
 **La matière : le journal.** Les appels des runs conclus `done` (`tool_calls` par
-`run_id`, `db.appels_des_runs`) : l'`op`, la réussite, et l'enregistrement nommé
-(`CLES_D_ENREGISTREMENT` : id, email, url… — rien d'autre des arguments n'est lu). Un
-run sans appel au journal n'est **pas compté** : il est rendu dans
-`time_saved_not_counted` (`reason: no_logged_calls`, `runs`), jamais estimé depuis ses
-`tool_counts`.
+`run_id`) : l'`op`, la réussite, et l'enregistrement nommé (`CLES_D_ENREGISTREMENT` :
+id, email, url… — rien d'autre des arguments n'est lu). Un run sans appel au journal
+n'est **pas compté** : il est rendu dans `time_saved_not_counted` (`reason:
+no_logged_calls`, `runs`), jamais estimé depuis ses `tool_counts`.
+
+⚠️ **Compté par la base, pas par Python** (13/11/2026) : `db.formes_des_runs_conclus`
+fait juger par `time_saved.classe` chaque couple DISTINCT `(outil, op)` du journal de la
+fenêtre, puis la base applique le verdict, garde la première occurrence de chaque
+enregistrement (par agent et par jour) et rend les **formes** des runs (actions,
+écritures, recherches, nombre de runs) ; les règles du run (`for_shapes` : productif,
+rapport, plafond) restent en Python. `time_saved.formes_des_runs` est la référence en
+mémoire, et `tests/test_temps_gagne_borne_live.py` prouve la parité et la borne
+(`docs/event-loop-perf.md`).
 
 **Revu sur des agents réels (17/10/2026)**, qui surcomptaient :
 - un balayage qui ne PRODUIT rien de neuf ne gagne rien — sa recherche ne compte que
@@ -3464,7 +3542,7 @@ chaîne. Sous un jeton de délégation, tout ce qui passe par `_exiger_la_porte`
 porteur en clair) sont refusés, avant tout autre jugement — même pour le propriétaire.
 Et un connecteur n'appelle plus l'instance elle-même (`egress.check_url`, voir
 `connector-vault.md` §Egress) : un porteur obtenu ailleurs ne s'emploie pas par
-`http_post`.
+`api_post`.
 
 **Au run.** Une recette-code est jugée avant son premier appel
 (`outils_du_travail.manquants`) : un seul reçu `code: tool_not_in_job`, `missing_tools`

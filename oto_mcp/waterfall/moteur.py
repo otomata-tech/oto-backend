@@ -92,6 +92,9 @@ async def _run_step(mcp: FastMCP, sub, step: Step, mode: str, inputs: dict,
         return None
     if dry_run:
         attempt.update(status="planned", arguments=args, cost=step.cost)
+        if step.fan_out is not None:
+            # Every call it would send (one per role), not just the first.
+            attempt["fan_out"] = step.fan_out(inputs)[:step.max_calls]
         return None
     if time.monotonic() >= deadline:
         attempt.update(status="skipped", code="time_budget",
@@ -112,6 +115,14 @@ async def _run_step(mcp: FastMCP, sub, step: Step, mode: str, inputs: dict,
                                    "this lookup to answer")
             return None
         args = {**args, "timeout_s": min(left, BOUNDED_MAX_S)}
+    if step.fan_out is not None:
+        # Several calls (one per role): each billed and counted as it is sent.
+        result = await appel._fanned(mcp, sub, step, step.fan_out(inputs), inputs,
+                                     deadline, attempt, budget,
+                                     want=inputs.get("_pool") or inputs.get("limit"))
+        if result is None:
+            return None
+        return _read_find(step, result, inputs, attempt)
     issue = await appel._call(mcp, sub, step.tool, args, attempt)
     if issue is not None and paid:
         budget["paid_steps"] = budget.get("paid_steps", 0) + 1
@@ -146,9 +157,18 @@ async def _run_step(mcp: FastMCP, sub, step: Step, mode: str, inputs: dict,
         if not appel._judge(collected, attempt):
             return None
         result = _payload(collected)
+    return _read_find(step, result, inputs, attempt)
+
+
+def _read_find(step: Step, result, inputs: dict, attempt: dict):
+    """The step's find out of what it returned — `no_match` when there is none. A miss
+    cut short by a limit (`stopped`: some of a fanned step's calls never sent) is not a
+    verdict: its `code` says which limit, so a table pass leaves the row to retry."""
     found = step.extract(result, inputs)
     if not found:
         attempt.update(status="no_match")
+        if attempt.get("stopped") in ("max_paid_steps", "time_budget"):
+            attempt["code"] = attempt["stopped"]
         return None
     attempt.update(status="found")
     return found

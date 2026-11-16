@@ -276,6 +276,13 @@ def remove_org_member(org_id: int, sub: str, *, actor: Optional[str] = None) -> 
                     """,
                     (sub, org_id),
                 )
+                # Ses favoris PERSONNELS dans cette org partent avec lui : ils ne
+                # servaient qu'à lui, ici (`capabilities/orgs/favoris.py`). Les favoris
+                # PARTAGÉS qu'il a posés restent à l'org.
+                conn.execute(
+                    "DELETE FROM org_favorites WHERE org_id = %s AND owner_sub = %s",
+                    (org_id, sub),
+                )
                 has_active = conn.execute(
                     "SELECT 1 FROM org_members WHERE sub = %s AND is_active", (sub,)
                 ).fetchone()

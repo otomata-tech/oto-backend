@@ -39,7 +39,8 @@ Conséquences, toutes vérifiées :
 1. lemlist_campaign(op="create", name=…)        → cam_… + sequenceId + scheduleIds
 2. lemlist_campaign(op="pause", campaign_id=…)   ← interrupteur coupé pendant qu'on monte
 3. lemlist_team(op="user_channels")              → usr_… (utilisateur) + usm_… (boîtes)
-4. lemlist_campaign(op="update", sender_user_ids=["usr_…"])
+4. lemlist_campaign(op="update", senders=[{"userId": "usr_…", "channels": [{"type": "email", "id": "usm_…"}, …]}])
+   ← `sender_user_ids` n'attache que la PREMIÈRE boîte de chaque utilisateur
 5. lemlist_sequence(op="add_step", sequence_id="seq_…", step={"type":"email", …})
 6. lemlist_schedule(op="create"/"associate")     ← si la fenêtre par défaut ne convient pas
 7. lemlist_campaign(op="statutes")               ← LIT ce qui bloquerait : level 3 = bloquant
@@ -183,7 +184,8 @@ vient de la doc lemlist, pas d'un essai.
 `lemlist_unsubscribe` couvre trois registres distincts, et écrire dans l'un n'écrit pas
 dans les autres :
 
-- `op="add"/"get"/"list"/"delete"` — emails **et domaines** (v1) ;
+- `op="add"/"get"/"delete"` — emails **et domaines** (v1) ; `op="list"` lit la liste v2
+  (la liste v1 ne se sert plus), la même que `var_list` ;
 - `op="var_*"` — n'importe quelle valeur identifiante (email, domaine, URL LinkedIn,
   téléphone), avec `var_bulk` jusqu'à 10 000 ;
 - `op="contact_*"` — le drapeau do-not-contact posé sur un **contact** du CRM.

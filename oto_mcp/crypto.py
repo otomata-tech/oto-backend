@@ -35,6 +35,14 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 _KEY_REF = b"\x01"  # version de master key (réservé rotation future)
 
 
+class EnveloppeIndechiffrable(RuntimeError):
+    """Une enveloppe qui ne se déchiffre pas sous cette AAD et cette clé (clé maître
+    périmée, enveloppe corrompue, ou chiffrée pour une AUTRE ligne). `RuntimeError` par
+    héritage — les appelants qui l'attrapaient ainsi n'ont rien à changer —, typée pour
+    qu'un appelant qui sait que son état perdu n'est qu'un cache l'attrape SEUL, sans
+    avaler une master key absente."""
+
+
 def _load_master_key() -> Optional[bytes]:
     """Charge la master key depuis l'env (32 octets). None si absente.
 
@@ -108,7 +116,7 @@ def unseal(key: bytes, blob: bytes, aad: str) -> bytes:
         # jusqu'à Sentry (issue « InvalidTag » nue). Cause = enveloppe chiffrée
         # avec une master key ≠ courante (clé périmée) ou AAD ≠ identité de ligne.
         # Message actionnable : reconnecter le connecteur le re-chiffre avec la clé courante.
-        raise RuntimeError(
+        raise EnveloppeIndechiffrable(
             "credential indéchiffrable (chiffré avec une clé périmée ou enveloppe "
             "corrompue) — reconnecte ce connecteur depuis le dashboard"
         ) from e

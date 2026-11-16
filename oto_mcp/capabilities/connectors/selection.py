@@ -75,6 +75,15 @@ class MyConnectorsInput(BaseModel):
     # carries no list: `?include=card,docs` and `?include=card&include=docs` both work
     # (#367). An unknown value is REFUSED, never ignored.
     include: Optional[list[str] | str] = None
+    # The ROSTER only: rows and per-member state, without the three per-requester
+    # enrichments that cost most of the read — credential presence (`credential`, the
+    # whole key cascade), reachable instances (`reachable_instances`, every team and org
+    # of the member) and the connect-flow readiness (`connect.app_ready` & co). For the
+    # surfaces that paint logos, labels and states (a process list), never for a
+    # connection screen. The envelope SAYS what was skipped (`credentials` and `reach`
+    # = `not_computed`): an absent `credential` there does not mean "not connected".
+    # Refused with `name=` (a targeted read is the diagnosis) and with verbose's docs.
+    roster: bool = False
 
     @field_validator("include", mode="after")
     @classmethod
@@ -98,6 +107,9 @@ class MyConnectorsInput(BaseModel):
         if self.verbose and self.include:
             raise ValueError("pass either verbose=true (the whole card) or include=… "
                              "(card blocks on the compact row), not both")
+        if self.roster and self.name:
+            raise ValueError("roster=true lists the catalog; a name= read is the diagnosis "
+                             "of ONE connector and needs what roster skips — drop one of the two")
         return self
 
 
@@ -274,6 +286,9 @@ class MyConnectors(BaseModel):
     # `unavailable` = the snapshot could not be read: a row WITHOUT `credential` then says
     # NOTHING (it does not mean "nothing is connected").
     credentials: str = "computed"
+    # `not_computed` on a `roster=true` read only (absent otherwise): the rows carry no
+    # `reachable_instances` because they were not looked for, not because there are none.
+    reach: Optional[str] = None
     name_match: Optional[NameMatch] = None
     toolbox_scope: Optional[ToolboxScope] = None
     # `name=` designates one of the org's custom connectors (`custom_api.py`): that one,
@@ -343,7 +358,7 @@ def _guide_refs_by_ns(org_id: int | None) -> dict[str, set]:
 # it is the only scalar that distinguishes "this connector asks for no key"
 # (open data — `none`) from "it asks for one you don't have yet". Without it
 # at load time, a table cannot say so, and the absence of an entry in
-# `providers` is NOT enough to decide: `scaleway` and `http` are absent from it too
+# `providers` is NOT enough to decide: `scaleway` and `api` are absent from it too
 # while requiring a credential. The front end
 # therefore showed "Not connected" on OpenStreetMap until the card was opened,
 # where the verbose said "Included" (observed in prod on 2026-08-29).
@@ -499,7 +514,8 @@ def _refus_nom_inconnu(catalog: list[dict], demande: str,
     return AuthzDenied(
         404, "unknown_connector",
         f"No connector available to your active org is named `{demande}` or carries "
-        f"this label (or it is not open to your org).{suite}{repli} This refusal says "
+        f"this label (or it is not open to your org).{providers.refus_renomme(demande)}"
+        f"{suite}{repli} This refusal says "
         f"NOTHING about your connections: it concerns the name.",
         details={"query": demande, "suggestions": proches, **extra})
 
@@ -559,7 +575,7 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
     # only existed AFTER a failed call ("nothing resolves" error), hence never if
     # the connector is not installed (the call dies at dispatch). One
     # BATCHED pass, outside the loop, so as not to pay N×M queries.
-    reach = access.reachable_instances_map(ctx.sub, ctx.org_id)
+    reach = {} if inp.roster else access.reachable_instances_map(ctx.sub, ctx.org_id)
     catalog = _visible_catalog(ctx)
     name_match: Optional[dict] = None
     if inp.name:
@@ -588,7 +604,8 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
     # `oto_list_my_tools`. Fail-VISIBLE: an unreadable snapshot SAYS SO in the
     # envelope, otherwise rows without `credential` would be read again as "nothing is
     # connected", the very conclusion being repaired.
-    presence, credentials = credential_presence.lire(ctx.sub, org=ctx.org_id)
+    presence, credentials = (({}, "not_computed") if inp.roster
+                             else credential_presence.lire(ctx.sub, org=ctx.org_id))
     # The layer-3 option is judged by (option, credential holder): the channels of a
     # hosted account share the option AND the key of their holder, hence the same verdict.
     # One cascade walk per pair, not one per row (#1148).
@@ -622,7 +639,7 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
         # everyone — "first set the application's credentials", including to whoever has nothing left to set
         # since oto publishes its own. `fixed`, same rule: what the requester's app
         # already binds (the Zoho region of their team's app) is shown, not asked.
-        if base.get("connect"):
+        if base.get("connect") and not inp.roster:
             from ...connectors import flow as connector_flow
             pret, pret_par_niveau = connector_flow.readiness(c["name"], ctx.sub)
             base = {**base, "connect": {
@@ -671,6 +688,8 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
     out: dict = {"connectors": connectors, "verbose": inp.verbose,
                  "include": inp.include or [],
                  "credentials": credentials}
+    if inp.roster:
+        out["reach"] = "not_computed"
     if name_match is not None:
         out["name_match"] = name_match
     # Readiness verdict (#476) — on a TARGETED read only. Measured on prod
@@ -799,6 +818,10 @@ CAPABILITIES += [
                     "catalog). To render the detail of EVERY connector in one call, pass "
                     "include=card (the card without its markdown how-to `doc_sections`; "
                     "include=card,docs adds it) instead of reading card by card. "
+                    "For a surface that only paints logos, labels and states, pass "
+                    "roster=true: the rows and your state without credential presence, "
+                    "reachable instances or connect-flow readiness (the envelope says "
+                    "credentials=not_computed, reach=not_computed). "
                     "`name` also accepts a label or a tool namespace (\"linkedin\" "
                     "finds every LinkedIn connector, all returned); an unmatched name is refused "
                     "with the closest names. ⚠️ `state` is only YOUR SELECTION in the toolbox — "

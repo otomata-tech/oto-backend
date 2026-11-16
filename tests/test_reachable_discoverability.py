@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from oto_mcp import access, error_taxonomy
+from oto_mcp import access, credentials_store, error_taxonomy
 
 
 @pytest.fixture
@@ -26,13 +26,15 @@ def wired(monkeypatch):
     monkeypatch.setattr(access, "ORG_SHAREABLE_PROVIDERS", {"zoho", "serper"})
     monkeypatch.setattr(access.group_store, "list_groups_for_user",
                         lambda sub, org: [{"group_id": 2, "name": "sales"}])
-    monkeypatch.setattr(access.group_store, "list_group_secrets",
-                        lambda gid: [{"provider": "zoho"}] if gid == 2 else [])
+    # Les clés d'équipe et d'org se lisent par LOTS (`list_credentials_many`), les prêts
+    # d'équipe un par équipe.
+    cles = {("group", "2"): [{"connector": "zoho"}], ("org", "167"): [{"connector": "zoho"}]}
+    monkeypatch.setattr(credentials_store, "list_credentials_many",
+                        lambda et, ids: {i: cles[(et, i)] for i in ids if (et, i) in cles})
+    monkeypatch.setattr(access.group_store, "lent_instances", lambda gid: [])
     monkeypatch.setattr(access.org_store, "list_orgs_for_user",
                         lambda sub: [{"org_id": 35, "name": "acme"},
                                      {"org_id": 167, "name": "MM Test"}])
-    monkeypatch.setattr(access.org_store, "list_org_secrets",
-                        lambda oid: [{"provider": "zoho"}] if oid == 167 else [])
     # Mêmes faits, exposés par l'API per-provider qu'utilise `reachable_instances`.
     monkeypatch.setattr(access.group_store, "has_group_secret",
                         lambda gid, p: gid == 2 and p == "zoho")
@@ -69,16 +71,21 @@ def test_map_ignores_non_shareable_providers(wired, monkeypatch):
 
 
 def test_map_is_batched_one_query_per_entity(wired, monkeypatch):
-    """Garde-fou PERF : le coût est borné par le nombre d'entités, JAMAIS par le
-    nombre de providers (serveur mono-loop — une boucle par provider ferait N×M
-    allers-retours)."""
+    """Garde-fou PERF : le coût est borné par le nombre d'ÉQUIPES (un relevé de prêts
+    chacune), JAMAIS par le nombre de providers (serveur mono-loop — une boucle par
+    provider ferait N×M allers-retours) ni par le nombre d'orgs du membre : les clés de
+    toutes ses autres orgs se lisent en UNE requête."""
     calls = []
-    monkeypatch.setattr(access.group_store, "list_group_secrets",
-                        lambda gid: calls.append(("group", gid)) or [{"provider": "zoho"}])
-    monkeypatch.setattr(access.org_store, "list_org_secrets",
-                        lambda oid: calls.append(("org", oid)) or [])
+    monkeypatch.setattr(access.org_store, "list_orgs_for_user",
+                        lambda sub: [{"org_id": 35, "name": "acme"}]
+                        + [{"org_id": 100 + i, "name": f"o{i}"} for i in range(40)])
+    monkeypatch.setattr(credentials_store, "list_credentials_many",
+                        lambda et, ids: calls.append((et, tuple(ids))) or {})
+    monkeypatch.setattr(access.group_store, "lent_instances",
+                        lambda gid: calls.append(("prets", gid)) or [])
     access.reachable_instances_map("u1", 35)
-    assert calls == [("group", 2), ("org", 167)]
+    assert calls == [("group", ("2",)), ("prets", 2),
+                     ("org", tuple(str(100 + i) for i in range(40)))]
 
 
 def test_map_never_raises(monkeypatch):

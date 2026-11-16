@@ -55,6 +55,8 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
         "bigquery",
         # google_ads (2026-10-08) : huitième service, même flux.
         "google_ads",
+        # search_console (2026-11-15) : neuvième service, même flux.
+        "search_console",
         # `instagram_meta` (2026-09-09) : flux Instagram Login hébergé par oto,
         # déclaré dans `auth/instagram_meta.py` — importé au boot par `api.routes`,
         # qui monte sa route de retour. C'est bien le chemin du boot, pas un import
@@ -198,6 +200,13 @@ _NOMMES_TOLERES = {
 }
 
 
+def _sous_le_prefixe(chemin: str) -> str:
+    """Le chemin REST APRÈS le préfixe `/api` — que le connecteur `api` porte le même
+    nom que le préfixe ne doit pas compter pour un chemin nommé."""
+    assert chemin.startswith("/api/"), chemin
+    return chemin[len("/api"):]
+
+
 def test_aucune_face_rest_de_connexion_nommee_dapres_un_connecteur():
     """Les chemins `/api/<nom>/oauth/start` ont été RETIRÉS pour zoho et salesforce une
     fois le dashboard de prod passé au chemin fixe (v1.19.0). Aucune face REST de flux ne
@@ -210,7 +219,7 @@ def test_aucune_face_rest_de_connexion_nommee_dapres_un_connecteur():
             continue
         for binding in cap.rest_bindings():
             for n in providers.REGISTRY:
-                assert f"/{n}/" not in binding.path, (
+                assert f"/{n}/" not in _sous_le_prefixe(binding.path), (
                     f"{cap.key} expose une face REST nommée : {binding.path}")
 
 
@@ -261,7 +270,7 @@ def test_la_capacite_generique_est_montee_sur_un_chemin_fixe():
     assert cap.rest is not None and cap.rest.path == "/api/me/connectors/{name}/connect"
     # le nom du connecteur voyage en PARAMÈTRE, il n'est pas dans le chemin
     for n in providers.REGISTRY:
-        assert n not in cap.rest.path
+        assert n not in _sous_le_prefixe(cap.rest.path)
 
 
 # --- la SORTIE du seam est commune, comme son entrée ---------------------------

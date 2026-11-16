@@ -1,7 +1,7 @@
 """An OpenAPI 3 (or Swagger 2) JSON document → CANDIDATE operations for `custom_ops`.
 
 PURE: the document arrives already parsed, the candidates leave unsaved — the org
-reviews them and saves what it keeps (`PUT …/connectors/http/operations`). What
+reviews them and saves what it keeps (`PUT …/connectors/api/operations`). What
 cannot be expressed in the format is SKIPPED with its reason, never approximated:
 a header or cookie parameter (the connector's auth owns the headers), a form body,
 a non-object JSON body, a path the validator refuses.

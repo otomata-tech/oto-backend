@@ -54,7 +54,7 @@ Un agent SANS run ouvert est donc reconnu — c'est le cas que le run ratait, et
 plus dangereux, puisque c'est celui de l'agent qui n'a pas suivi la consigne.
 
 ⚠️ **Le trou qui reste, nommé.** Un agent qui atteint la face REST avec la clé de son
-propriétaire (le connecteur `http` pointé sur notre propre API, un script du client
+propriétaire (le connecteur `api` pointé sur notre propre API, un script du client
 piloté par un modèle) n'est pas distingué de l'écran : sur REST, la clé du client et
 l'écran du client sont le même porteur. Le fermer demande une identité d'agent, pas une
 heuristique — la brique existe à moitié (`token_kind ∈ {user, delegation}`, frappé à la

@@ -67,6 +67,7 @@ from . import (accords as api_routes_accords,
                microsoft as api_routes_microsoft,
                ubersuggest as api_routes_ubersuggest,
                jefacture as api_routes_jefacture,
+               logto_webhook as api_routes_logto_webhook,
                receveurs as api_routes_receveurs,
                salesforce as api_routes_salesforce,
                sirene as api_routes_sirene,
@@ -167,6 +168,7 @@ _READ_OPS = frozenset({
     "outline",  # le plan d'une page, ses titres sans son corps (`me.doc`, #1266)
     "validate",  # juger un manifeste d'app sans rien écrire (`me.app`)
     "read_file",  # un agent lit un fichier de l'app, sans rien écrire (`me.app`)
+    "revision",  # une version entière d'une app, pour la lire (`me.app`)
 })
 
 
@@ -303,6 +305,7 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     ("GET", "/api/datastores/{datastore}/comments/counts"): None,
     ("GET", "/api/datastores/{datastore}/schema"): None,
     ("GET", "/api/datastores/{datastore}/activity"): None,
+    ("GET", "/api/datastores/{datastore}/column-sources"): None,
     ("GET", "/api/datastores/{datastore}/aggregate"): None,
     ("GET", "/api/datastores/{datastore}/counts"): None,
     ("GET", "/api/datastores/{datastore}/queue"): None,
@@ -896,6 +899,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     # l'autorisation est le jeton du chemin, propre à une commande.
     receveur_routes = api_routes_receveurs.make_routes(options_handler)
 
+    # Le webhook LOGTO (10/11/2026) : un mot de passe changé révoque les jetons `oto_`
+    # du compte et ferme ses sessions Logto. À la main pour la raison de celui de
+    # Mollie : la preuve est un HMAC du corps BRUT (`logto-signature-sha-256`), aucun
+    # JWT (`auth/revocation_mot_de_passe.py`).
+    logto_webhook_routes = api_routes_logto_webhook.make_routes()
+
     table = [
         Route("/favicon.svg", public.favicon, methods=["GET"]),
         Route("/favicon.ico", public.favicon, methods=["GET"]),
@@ -997,6 +1006,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *billing_webhook_routes,
         *hook_routes,
         *receveur_routes,
+        *logto_webhook_routes,
         # EN DERNIER, et c'est la garde : un alias déprécié ne peut capturer que ce
         # que rien d'autre ne sert. Monté plus haut, un de ses placeholders pourrait
         # éclipser une vraie route sans que rien ne le dise (#519, retrait #526).

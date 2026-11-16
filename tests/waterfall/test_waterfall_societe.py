@@ -132,3 +132,26 @@ def test_reel_aiark_societe_par_domaine_avec_url_et_chiffre_d_affaires(calls):
     c = out["company"]
     assert c["domain"] == "acme.de" and c["employees"] == 4 and c["revenue_range"] == "0-100000"
     assert c["phone"] == "+4915560000000" and c["linkedin_url"].endswith("/acme-gmbh")
+
+
+@pytest.mark.parametrize("mode", ["forbidden", "over_quota"])
+def test_le_registre_ne_depend_pas_de_la_cle_insee(calls, mode):
+    """`fr_get` et `fr_search` lisent l'open data et ne résolvent aucune clé, alors que
+    leur connecteur en porte une (l'INSEE, pour `fr_siret`) : le registre n'est JAMAIS
+    sauté `no_key` sur le mode de cette clé (sauté dans une org où il
+    répondait en direct, la cascade tombait sur un homonyme d'un autre pays)."""
+    calls["modes"] = {"fr_get": mode, "fr_search": mode}
+    calls["answers"]["fr_get"] = IssueCible(ok=True, result={"identity": {
+        "siren": "123456789", "nom_complet": "ACME", "site_internet": "https://acme.com"}})
+    out = _run("waterfall_company", siren="123456789", domain="acme.com")
+    assert out["provider"] == "fr" and out["attempts"][0]["key"] == "open"
+    assert calls["made"][0] == ("fr_get", {"siren": "123456789"})
+
+
+def test_le_plan_dit_le_registre_utilisable_sans_cle(monkeypatch):
+    from oto_mcp.waterfall import ordre, plan
+    monkeypatch.setattr(ordre, "_configured_steps", lambda ns: None)
+    monkeypatch.setattr(ordre, "_key_modes", lambda sub, tools: {t: "forbidden" for t in tools})
+    fr = next(s for s in plan.plan("waterfall_company", "sub-test")["steps"]
+              if s["key"] == "fr")
+    assert (fr["key_mode"], fr["usable"]) == ("open", True)

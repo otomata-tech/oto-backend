@@ -31,7 +31,7 @@ import logging
 import math
 import time
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
@@ -165,22 +165,61 @@ def _usd(v: Any) -> Optional[float]:
     return float(v)
 
 
-def _cout(run: dict, run_id: str, outil: str) -> Optional[float]:
+def _compte(n: Any) -> Optional[int]:
+    """An event count Apify served, or None when it is not a non-negative integer."""
+    return n if isinstance(n, int) and not isinstance(n, bool) and n >= 0 else None
+
+
+def _prix_au_palier(evenement: Any, palier: Callable[[], Optional[str]]) -> Optional[float]:
+    """What ONE event costs the account that ran it: its flat price, or — a tiered
+    event (`eventTieredPricingUsd`, keyed FREE / BRONZE / … / DIAMOND) — the price of
+    the account's own tier (`palier()`, read only here: most runs never need it). None
+    when neither can be read. Never the highest tier, as the ceiling takes: a bill
+    charges what Apify charges."""
+    if not isinstance(evenement, dict):
+        return None
+    prix = _usd(evenement.get("eventPriceUsd"))
+    if prix is not None:
+        return prix
+    paliers = evenement.get("eventTieredPricingUsd")
+    if not isinstance(paliers, dict) or not paliers:
+        return None
+    nom = palier()
+    entree = paliers.get(nom) if nom else None
+    return _usd(entree.get("tieredEventPriceUsd")) if isinstance(entree, dict) else None
+
+
+def _sans_palier() -> Optional[str]:
+    return None
+
+
+def _cout(run: dict, run_id: str, outil: str,
+          palier: Callable[[], Optional[str]] = _sans_palier) -> Optional[float]:
     """What a FINISHED run costs: `usageTotalUsd` plus the events Apify has counted but
-    not yet booked.
+    not yet booked — or None when that figure is not FINAL: `usageTotalUsd` cannot be
+    read, or a counted-not-booked event cannot be priced.
 
     ⚠️ A pay-per-event actor (Google Maps, most of the Store) reaches SUCCEEDED before
     Apify books its events: measured on 14/10/2026, run Dlvmeb19jTs5K0k1a read $0.0002
     at SUCCEEDED (the actor start alone) and $0.0122 nine seconds later, once
     `accountedChargedEventCounts` caught up with `chargedEventCounts`. The biller keeps
     the first figure of a job, so the gap is priced here from the actor's own event
-    prices — once booked, the gap is 0 and the figure is the same. None when
-    `usageTotalUsd` cannot be read.
+    prices — once booked, the gap is 0 and the figure is the same.
 
-    Nothing is guessed: without the booked counts, the gap cannot be told from what
-    `usageTotalUsd` already holds — adding every counted event could bill it twice —
-    so the figure is `usageTotalUsd` alone, and the log SAYS the gap was not priced.
-    An event whose price or counts cannot be read is left out the same way, said."""
+    ⚠️ Events are now often priced BY TIER of the subscription
+    (`eventTieredPricingUsd`, no `eventPriceUsd`): on 15/11/2026, 10 of the 11 actors of
+    `tools/apify_actors.py` had such events. They are priced at the tier of the account
+    that ran the run (`palier`, `_palier`). A gap that cannot be priced is NOT billed at
+    what is booked so far: that figure, kept as the job's first, was the under-count
+    reported on 12/11/2026 (company employees: 0, or the actor start alone, for runs
+    that returned 25 profiles). The caller traces 0 WITHOUT the job and the launch
+    record stays open: the next read, or the nightly settlement once Apify has booked
+    everything, bills the real figure (`_releve`, `apify_releve.py`).
+
+    Nothing is guessed: without the booked counts (absent or `null`), the gap cannot be
+    told from what `usageTotalUsd` already holds — adding every counted event could
+    bill it twice, `usageTotalUsd` alone could be the same under-count — so the figure
+    is not final either, and the log SAYS so."""
     total = _usd(run.get("usageTotalUsd"))
     if total is None:
         return None
@@ -188,23 +227,107 @@ def _cout(run: dict, run_id: str, outil: str) -> Optional[float]:
     if not isinstance(comptes, dict) or not comptes:
         return total
     reserves = run.get("accountedChargedEventCounts")
+    if not isinstance(reserves, dict):
+        logger.warning("%s %s: counted events without readable booked counts (%s), its "
+                       "cost is not final", outil, run_id, type(reserves).__name__)
+        return None
+    ecarts: dict[str, int] = {}
+    for evenement, n in comptes.items():
+        compte, deja = _compte(n), _compte(reserves.get(evenement, 0))
+        if compte is None or deja is None:
+            logger.warning("%s %s: event %r has unreadable counts (%r counted, %r "
+                           "booked), its cost is not final", outil, run_id, evenement,
+                           n, reserves.get(evenement))
+            return None
+        if compte > deja:
+            ecarts[evenement] = compte - deja
+    if not ecarts:
+        return total
     prix = (((run.get("pricingInfo") or {}).get("pricingPerEvent") or {})
             .get("actorChargeEvents"))
-    if not isinstance(reserves, dict) or not isinstance(prix, dict):
-        logger.warning("%s %s: counted events without readable booked counts or prices "
-                       "(%s, %s), the not-yet-booked gap is not priced",
-                       outil, run_id, type(reserves).__name__, type(prix).__name__)
-        return total
-    for evenement, n in comptes.items():
-        unitaire = _usd((prix.get(evenement) or {}).get("eventPriceUsd"))
-        deja = reserves.get(evenement, 0)
-        if unitaire is None or isinstance(n, bool) or not isinstance(n, int) \
-                or isinstance(deja, bool) or not isinstance(deja, int):
-            logger.warning("%s %s: event %r has no readable price or counts, its "
-                           "not-yet-booked part is not priced", outil, run_id, evenement)
-            continue
-        total += max(0, n - deja) * unitaire
+    if not isinstance(prix, dict):
+        logger.warning("%s %s: %d event(s) counted but not booked yet, without readable "
+                       "prices (%s), its cost is not final", outil, run_id,
+                       sum(ecarts.values()), type(prix).__name__)
+        return None
+    palier_lu = _une_fois(palier)
+    for evenement, ecart in ecarts.items():
+        unitaire = _prix_au_palier(prix.get(evenement), palier_lu)
+        if unitaire is None:
+            logger.warning("%s %s: event %r counted %d time(s) more than booked has no "
+                           "readable price for this account, its cost is not final",
+                           outil, run_id, evenement, ecart)
+            return None
+        total += ecart * unitaire
+    # Apify never charges a run above its own ceiling: a priced gap past it is a wrong
+    # price (a tier misread), not a cost. Not final either — Apify's own figure, once
+    # everything is booked, is billed instead (`_cout_final`, `apify_releve.py`).
+    options = run.get("options")
+    plafond = _usd(options.get("maxTotalChargeUsd")) if isinstance(options, dict) else None
+    if plafond is not None and total > max(plafond, _usd(run.get("usageTotalUsd")) or 0.0):
+        logger.warning("%s %s: priced at $%.4f, above the run's $%g ceiling, its cost is "
+                       "not final", outil, run_id, total, plafond)
+        return None
     return total
+
+
+def _une_fois(lire: Callable[[], Optional[str]]) -> Callable[[], Optional[str]]:
+    """`lire`, called at most once — a run with several tiered events reads the tier
+    once."""
+    lu: list = []
+
+    def une_fois() -> Optional[str]:
+        if not lu:
+            lu.append(lire())
+        return lu[0]
+    return une_fois
+
+
+_ME_URL = "https://api.apify.com/v2/users/me"
+# `{fingerprint of the key: (read at, tier)}` — see `_palier`. Entries are replaced
+# whole (atomic under CPython): no lock on reads.
+_paliers_lus: dict[str, tuple[float, str]] = {}
+_PALIER_TTL_S = 3600.0
+
+
+def _palier(cle: str) -> Optional[str]:
+    """The subscription tier (`plan.tier` of `GET /v2/users/me`: FREE, BRONZE, …) of
+    the Apify account behind `cle` — the key of a tiered event's price. Read only when
+    a finished run has a tiered event not booked yet, at most once per
+    `_PALIER_TTL_S` per key and per process (a plan changes rarely; the key itself is
+    never kept, only its fingerprint). None when it cannot be read — said; the run's
+    cost is then not final (`_cout`) — and a failed read is not kept."""
+    import hashlib
+
+    import requests
+    empreinte = hashlib.sha256(cle.encode()).hexdigest()
+    lu, maintenant = _paliers_lus.get(empreinte), time.monotonic()
+    if lu is not None and maintenant - lu[0] < _PALIER_TTL_S:
+        return lu[1]
+    try:
+        r = requests.get(_ME_URL, headers={"Authorization": f"Bearer {cle}"}, timeout=15)
+        r.raise_for_status()
+        corps = r.json()
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("apify: account tier unreadable (%s: %s)", type(e).__name__, e)
+        return None
+    data = corps.get("data") if isinstance(corps, dict) else None
+    plan = data.get("plan") if isinstance(data, dict) else None
+    tier = plan.get("tier") if isinstance(plan, dict) else None
+    if not isinstance(tier, str) or not tier:
+        logger.warning("apify: the account answered without a readable tier (%s)",
+                       type(tier).__name__)
+        return None
+    _paliers_lus[empreinte] = (maintenant, tier)
+    return tier
+
+
+def _palier_de(client: Any) -> Callable[[], Optional[str]]:
+    """The tier reader of the account `client` runs on, for `_cout` (lazy)."""
+    def lire() -> Optional[str]:
+        cle = getattr(client, "api_key", None)
+        return _palier(cle) if isinstance(cle, str) and cle else None
+    return lire
 
 
 def _prix_evenement(evenement: Any) -> Optional[float]:
@@ -599,7 +722,8 @@ def _dire_plafond_atteint(run: dict, run_id: str, cout: float) -> None:
             "ceiling per run), or split the work into smaller runs.")
 
 
-def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:
+def _releve(out: Any, run_id: str, outil: str = "apify_run_status",
+            palier: Callable[[], Optional[str]] = _sans_palier) -> None:
     """Record a FINISHED run's real cost on the current call's trace: `quantity` in
     micro-dollars, and the run as the JOB of the line (`apify_run_id`, served as
     `job_id` by the billing lens) — a finished run polled N times traces N times the
@@ -612,6 +736,12 @@ def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:
     the log (run id and type only): an absent figure is not a zero, a guessed one would
     be billed, and a silent one would be lost. A terminal run at 0 traces 0 with its
     job — measured, nothing to bill.
+
+    ⚠️ A finished run whose cost is not FINAL yet (an event counted, not booked, and
+    without a readable price for this account — `_cout`; `palier` reads the account's
+    tier) traces 0 WITHOUT the job as well, and its launch record stays open: billing
+    the booked part as the job's figure would keep the under-count for good (12/11/2026).
+    The next read, or the nightly settlement, bills the real figure.
 
     ⚠️ A platform-key run belongs to the org that LAUNCHED it: read from another org
     (a platform operator looking at it), or when its launch record cannot be read, it
@@ -632,11 +762,13 @@ def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:
     if status not in _TERMINAL:
         _gratuit()
         return
-    cout = _cout(run, run_id, outil)
+    cout = _cout(run, run_id, outil, palier)
     if cout is None:
-        logger.warning("%s %s: finished (%s) without a readable cost (%s), cost not "
-                       "recorded", outil, run_id, status,
-                       type(run.get("usageTotalUsd")).__name__)
+        # Not final: `_cout` said why. Unreadable: said here.
+        if _usd(run.get("usageTotalUsd")) is None:
+            logger.warning("%s %s: finished (%s) without a readable cost (%s), cost not "
+                           "recorded", outil, run_id, status,
+                           type(run.get("usageTotalUsd")).__name__)
         _gratuit()
         return
     rid = run.get("id")
@@ -777,7 +909,7 @@ def lancer_acteur(
     # read must not leave a finished run unbilled. Only an ANSWERED call is billed
     # (`tool_calls.ok`), so from here nothing is raised: a failed run or an
     # unreadable dataset is answered, with the run, never thrown.
-    _releve(out, run_id, outil=outil)
+    _releve(out, run_id, outil=outil, palier=_palier_de(client))
     status = run.get("status")
     dataset_id = run.get("defaultDatasetId")
     try:
@@ -942,8 +1074,9 @@ def register(mcp: FastMCP) -> None:
         ABORTED), `defaultDatasetId` (where the output is) and `usageTotalUsd`
         (what it cost so far)."""
         with _upstream():
-            out = _client().run_status(run_id, wait_for_finish=wait_for_finish)
-        _releve(out, run_id)
+            client = _client()
+            out = client.run_status(run_id, wait_for_finish=wait_for_finish)
+        _releve(out, run_id, palier=_palier_de(client))
         return out
 
     @mcp.tool()

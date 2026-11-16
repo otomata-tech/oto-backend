@@ -47,6 +47,7 @@ from .. import db, interrupteurs, ownership
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .apps_html import avertissements
+from . import apps_versions as V
 from .apps_manifeste import auteur, forme, org_de_l_app
 from .orgs import partage_par_defaut
 from .remplacements import RemplacementRefuse, appliquer
@@ -60,13 +61,13 @@ MAX_TITLE = 200
 MAX_PROJECTS = 200
 _THUMB_KEYS = {"image", "color", "emoji", "design"}
 _ECRITURES = frozenset({"create", "update", "patch", "archive", "unarchive", "restore",
-                        "file", "unfile"})
+                        "file", "unfile", "publish", "delete_draft", "set_drafts"})
 
 
 class AppInput(BaseModel):
     op: Literal["list", "get", "create", "update", "patch", "archive", "unarchive",
-                "revisions", "restore", "validate", "file", "unfile", "read_file",
-                "put_file"]
+                "revisions", "revision", "restore", "validate", "file", "unfile",
+                "read_file", "put_file", "publish", "delete_draft", "set_drafts"]
     project_id: Optional[int] = Field(
         default=None, description="create: also file the new app in this project. "
         "file / unfile: the project. list: only the apps filed in it.")
@@ -86,6 +87,18 @@ class AppInput(BaseModel):
         "(or pass `\"all\": true`)."))
     revision_id: Optional[int] = None
     archived: Optional[bool] = None
+    draft: Optional[bool] = Field(
+        default=None, description="get: read the app's DRAFT (its manifest, HTML and "
+        "rev) instead of its published version — editors only.")
+    note: Optional[str] = Field(
+        default=None, description="publish / restore: what this version changes, shown "
+        "in the app's history (500 characters).")
+    to_draft: Optional[bool] = Field(
+        default=None, description="restore, on an app with drafts on: put the version "
+        "in the DRAFT, to preview it before publishing, instead of making it live.")
+    enabled: Optional[bool] = Field(
+        default=None, description="set_drafts: true = edits go to a draft that "
+        "op=publish makes live; false = every edit is live at once.")
     file_id: Optional[int] = Field(
         default=None, description="read_file: a file a person dropped in the app (its id "
         "comes with the run's input).")
@@ -123,19 +136,44 @@ class AppView(AppCard):
     manifest: dict
     html: str
     rev: str
+    # Brouillon et versions (`apps_versions.py`) : l'app passe-t-elle par un
+    # brouillon, et l'état servi est-il une version publiée, avec sa note.
+    drafts_enabled: bool = False
+    published_at: Optional[Any] = None
+    version_note: Optional[str] = None
+
+
+class AppDraft(BaseModel):
+    """Le brouillon d'une app, sans son contenu — servi à ses seuls éditeurs."""
+    rev: str
+    updated_by: Optional[str] = None
+    updated_at: Optional[Any] = None
 
 
 class AppRevision(BaseModel):
     id: int
     title: str
     edited_by: Optional[str] = None
+    # `created_at` : quand cet état a été REMPLACÉ (la révision s'écrit alors).
     created_at: Optional[Any] = None
+    # Quand cet état a été ÉCRIT ; absent pour les révisions d'avant la colonne.
+    saved_at: Optional[Any] = None
+    # Cet état était une version publiée (`op=publish`, `op=restore`), et sa note.
+    published_at: Optional[Any] = None
+    note: Optional[str] = None
 
 
 class AppOut(BaseModel):
     app: Optional[AppView] = None
     apps: Optional[list[AppCard]] = None
     revisions: Optional[list[AppRevision]] = None
+    # get (éditeurs) : le brouillon en cours, s'il y en a un ; jamais servi à un lecteur.
+    draft: Optional[AppDraft] = None
+    # revision : une version entière (manifeste, HTML), pour la lire avant de la restaurer.
+    revision: Optional[dict] = None
+    # update, patch, restore, publish : où l'écriture est allée — `draft` (les
+    # lecteurs n'en voient rien) ou `live`.
+    target: Optional[Literal["draft", "live"]] = None
     # validate : vide = le manifeste passe.
     problems: Optional[list[str]] = None
     ok: Optional[bool] = None
@@ -368,7 +406,27 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
                       "read" if inp.op in ("get", "revisions", "read_file", "put_file") else "write")
 
     if inp.op == "get":
-        return {"app": _view(sub, row)}
+        view = _view(sub, row)
+        if inp.draft:
+            lu, courant = V.lire(row, view["can_edit"])
+            return {"app": {**view, **{k: lu[k] for k in ("manifest", "html", "rev")}},
+                    "draft": V.resume(courant), "target": "draft"}
+        # Le brouillon n'est NOMMÉ qu'à qui peut modifier l'app : un lecteur n'en sait rien.
+        draft = V.resume(db.app_versions.draft(row["id"])) if view["can_edit"] else None
+        return {"app": view, **({"draft": draft} if draft else {})}
+
+    if inp.op == "revision":
+        return {"revision": V.version(row, inp.revision_id)}
+
+    if inp.op == "publish":
+        out, extra = V.publier(ctx, row, inp.expected_rev, inp.note, _checked_manifest, _avertir)
+        return {"app": _view(sub, out), "target": "live", **extra}
+
+    if inp.op == "delete_draft":
+        return {"ok": V.supprimer(row, inp.expected_rev)}
+
+    if inp.op == "set_drafts":
+        return {"app": _view(sub, V.regler(row, inp.enabled))}
 
     if inp.op == "revisions":
         return {"revisions": db.apps.revisions(row["id"])}
@@ -433,9 +491,33 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         # contre celui qui restaure (il devient l'auteur) et l'org de l'app d'aujourd'hui.
         manifest = _checked_manifest(ctx, org_de_l_app(row), old["manifest"])
         extra = _avertir(manifest, old["html"])
+        if inp.to_draft:
+            # Vers le brouillon : l'essayer avant de la rendre vivante. Le titre et la
+            # vignette, la carte, n'en font pas partie.
+            V.ecrire(ctx, row, expected_rev=inp.expected_rev, manifest=manifest,
+                     html=old["html"], auteur_ou_refus=_devenir_auteur_ou_refus)
+            return {"app": _view(sub, row), "target": "draft",
+                    "draft": V.resume(db.app_versions.draft(row["id"])), **extra}
+        # Une restauration est une version PUBLIÉE : un retour en arrière délibéré, gardé
+        # dans l'historique hors de la purge des révisions ordinaires.
         changed = _update(sub, row, inp.expected_rev, title=old["title"], manifest=manifest,
-                          html=old["html"], thumbnail=old["thumbnail"])
-        return {"app": _view(sub, changed), **extra}
+                          html=old["html"], thumbnail=old["thumbnail"], published=True,
+                          note=V._note(inp.note))
+        return {"app": _view(sub, changed), "target": "live", **extra}
+
+    if inp.op == "patch" and row.get("drafts_enabled"):
+        # Une app à brouillon : le patch s'applique au BROUILLON (ou, sans lui, à l'état
+        # vivant dont il naît), contre SON rev — jamais un `find` lu dans une version
+        # et appliqué à une autre.
+        base_html, base_manifest, base_rev = V.base_du_patch(row)
+        try:
+            html, n = appliquer(base_html, inp.edits, max_len=MAX_HTML)
+        except RemplacementRefuse as e:
+            raise AuthzDenied(400, "invalid_edits", str(e)) from None
+        extra = _avertir(base_manifest, html)
+        out = V.ecrire(ctx, row, expected_rev=inp.expected_rev or base_rev, html=html,
+                       auteur_ou_refus=_devenir_auteur_ou_refus)
+        return {"rev": out["rev"], "replaced": n, "target": "draft", **extra}
 
     if inp.op == "patch":
         # Changer une ligne sans renvoyer 40 000 caractères : un agent qui réécrit tout
@@ -452,7 +534,7 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         # Le HTML est calculé sur la révision LUE : sans `expected_rev`, on écrit contre
         # elle, sinon une écriture concurrente serait écrasée sans un mot.
         changed = _update(sub, row, inp.expected_rev or row["rev"], html=html)
-        return {"rev": changed["rev"], "replaced": n, **extra}
+        return {"rev": changed["rev"], "replaced": n, "target": "live", **extra}
 
     # update
     _content(inp, creating=False)
@@ -460,6 +542,9 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         manifest = _checked_manifest(ctx, org_de_l_app(row), inp.manifest)
     else:
         manifest = None
+    if row.get("drafts_enabled") and (manifest is not None or inp.html is not None):
+        return _update_brouillon(ctx, row, inp, manifest)
+    if manifest is None:
         # Changer le titre ou la vignette fait aussi de moi l'auteur.
         _devenir_auteur_ou_refus(ctx, row)
     thumb: Any = ...
@@ -471,7 +556,39 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
                      inp.html if inp.html is not None else row["html"])
     changed = _update(sub, row, inp.expected_rev, title=inp.title.strip() if inp.title else None,
                       manifest=manifest, html=inp.html, thumbnail=thumb)
-    return {"app": _view(sub, changed), **extra}
+    return {"app": _view(sub, changed), "target": "live", **extra}
+
+
+def _thumb_of(inp: AppInput) -> Any:
+    if inp.clear_thumbnail:
+        return None
+    return _thumbnail(inp.thumbnail) if inp.thumbnail is not None else ...
+
+
+def _update_brouillon(ctx: ResolvedCtx, row: dict, inp: AppInput,
+                      manifest: Optional[dict]) -> dict:
+    """`update` d'une app à brouillon : le manifeste et le HTML vont au brouillon ; le
+    titre et la vignette — la carte, que les lecteurs voient dans la liste — en direct,
+    s'ils sont donnés aussi. `expected_rev` nomme le brouillon (ou, sans lui, l'état
+    vivant dont il naît)."""
+    courant = db.app_versions.draft(row["id"])
+    base_manifest = courant["manifest"] if courant else row["manifest"]
+    base_html = courant["html"] if courant else row["html"]
+    extra = _avertir(manifest if manifest is not None else base_manifest,
+                     inp.html if inp.html is not None else base_html)
+    # La carte se juge AVANT d'écrire quoi que ce soit : une vignette refusée ou un
+    # auteur qui casserait l'app publiée ne laisse pas un brouillon écrit à moitié.
+    thumb = _thumb_of(inp)
+    carte = inp.title is not None or thumb is not ...
+    if carte:
+        _devenir_auteur_ou_refus(ctx, row)
+    V.ecrire(ctx, row, expected_rev=inp.expected_rev, manifest=manifest, html=inp.html,
+             auteur_ou_refus=_devenir_auteur_ou_refus)
+    if carte:
+        row = _update(ctx.sub, row, None, title=inp.title.strip() if inp.title else None,
+                      thumbnail=thumb)
+    return {"app": _view(ctx.sub, row), "target": "draft",
+            "draft": V.resume(db.app_versions.draft(row["id"])), **extra}
 
 
 def _update(sub: str, row: dict, expected_rev: Optional[str], **fields) -> dict:
@@ -542,10 +659,22 @@ def description_app(liens: bool) -> str:
             "exact find → replace in the HTML, each `find` unique, all or nothing; "
             "returns `rev`, `replaced` and `warnings`, never the HTML — prefer it to "
             "update for any change smaller than the whole page) / archive / unarchive / "
-            "revisions / restore (`revision_id`) / file / unfile (`app_id`, "
-            "`project_id`) / validate (`manifest`, and `app_id` for an existing app, "
-            "optional `html`: the problems a create would refuse, nothing written). "
-            "create, update, patch, restore and validate also return `warnings`: "
+            "revisions (each with `published_at` and `note` when it was a published "
+            "version) / revision (`revision_id`: one version in full, to read or compare "
+            "before restoring; editors) / restore (`revision_id`, optional `note`; "
+            "`to_draft: true` puts it in the draft instead of making it live) / file / "
+            "unfile (`app_id`, `project_id`) / validate (`manifest`, and `app_id` for an "
+            "existing app, optional `html`: the problems a create would refuse, nothing "
+            "written).\n"
+            "Drafts: an app with `drafts_enabled` (op=set_drafts `enabled`) keeps its "
+            "viewers on the PUBLISHED version — update and patch write its manifest and "
+            "HTML to a DRAFT (`target: \"draft\"` in the reply; title and thumbnail stay "
+            "live). op=get answers the published app, plus `draft` {rev} for editors; "
+            "read the draft with op=get `draft: true` and write against ITS rev "
+            "(409 draft_exists if you pass the published rev while a draft exists). "
+            "op=publish (`expected_rev` = the draft's rev, optional `note`) makes the draft "
+            "live for everyone and you its author; op=delete_draft drops it. "
+            "create, update, patch, restore, publish and validate also return `warnings`: "
             "oto.rows / oto.aggregate calls that sort, filter, group or measure on a "
             "field the manifest doesn't declare (`_created_at` / `_updated_at` are "
             "always sortable and filterable) — the open app would refuse them, so fix "

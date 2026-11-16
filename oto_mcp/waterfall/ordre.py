@@ -103,7 +103,10 @@ def _plan(ns: str, steps: tuple[Step, ...], providers_arg: Optional[list[str]],
         if not keys:
             keys = list(by_key)
     ordered = [_opened(by_key[k]) for k in dict.fromkeys(keys)]
-    modes = _key_modes(sub, [s.tool for s in ordered])
+    # A keyless step (`Step.keyless`: open data) is `open` whatever its connector's key:
+    # reading that key would skip it `no_key` where its tool answers without one.
+    modes = _key_modes(sub, [s.tool for s in ordered if not s.keyless])
+    modes.update({s.tool: "open" for s in ordered if s.keyless})
     if source == "default":
         # Free steps first (open data, the caller's own session), then a quota-only
         # search on the caller's OWN key (lemlist's database: nothing billed, on a quota

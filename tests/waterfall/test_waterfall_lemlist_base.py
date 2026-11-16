@@ -113,7 +113,7 @@ def test_tech_une_detection_potentielle_ne_repond_pas_a_la_question(calls):
     out = _run("waterfall_tech", domain="acme.fr", technologies="Shopify",
                providers=["lemlist", "dataforseo"])
     assert out["found"] is False
-    assert _made(calls) == ["lemlist_database", "dataforseo_technologies"]
+    assert _made(calls) == ["lemlist_database", "dataforseo"]
 
     calls["made"].clear()
     out = _run("waterfall_tech", domain="acme.fr", technologies="salesforce")

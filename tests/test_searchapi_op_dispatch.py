@@ -1,19 +1,24 @@
 """Dispatch `engine=` du tool `searchapi_search` (ADR 0047 §Amendement, appliqué au
 connecteur searchapi : 7 tools → 1).
 
-Ce module n'avait AUCUN test : son client HTTP est auto-contenu (httpx, pas d'oto-core),
-donc le garde-fou statique `test_tools_client_methods_exist.py` ne le couvre pas et une
-verticale mal câblée partirait chez SearchApi avec le mauvais `engine` — réponse 200,
-résultats plausibles, aucune erreur. D'où : pour CHAQUE verticale d'avant, l'`engine` et
-les params RÉELLEMENT envoyés amont, plus les refus (moteur vide, requête absente) et
-l'invariant « la clé ne passe jamais en query ».
+Le client vit dans oto-core depuis v1.233.0 (`oto.tools.searchapi.SearchApiClient`,
+oto-now/connectors#244) ; ce test l'exerce À TRAVERS l'outil, transport stubbé au
+niveau HTTP : une verticale mal câblée partirait chez SearchApi avec le mauvais
+`engine` — réponse 200, résultats plausibles, aucune erreur. D'où : pour CHAQUE
+verticale d'avant, l'`engine` et les params RÉELLEMENT envoyés amont, plus les refus
+(moteur vide, requête absente, en `INVALID_PARAMS`), l'invariant « la clé ne passe
+jamais en query » et le comptage sous clé plateforme, qui restent à l'hôte.
 """
 from __future__ import annotations
 
 import asyncio
 
 import pytest
+from mcp.types import INVALID_PARAMS
+
 from oto_mcp.mcp_errors import McpError
+
+
 def _tool(name: str = "searchapi_search"):
     from fastmcp import FastMCP
     from oto_mcp.tools import searchapi as S
@@ -33,11 +38,9 @@ def _tool_names():
 
 
 class _Resp:
-    def __init__(self, payload):
-        self._payload = payload
-
-    def raise_for_status(self):
-        return None
+    def __init__(self, payload, status_code=200):
+        self._payload, self.status_code = payload, status_code
+        self.text, self.headers = "", {}
 
     def json(self):
         return self._payload
@@ -50,27 +53,19 @@ def seen(monkeypatch):
     On intercepte au niveau HTTP et pas au niveau d'un client stubé : c'est la
     construction du payload (engine + noms de params SearchApi) qui est le contrat.
     """
+    import requests
+
     from oto_mcp.tools import searchapi as S
 
     captured: dict = {"usage": []}
 
-    class _Client:
-        def __init__(self, *a, **k):
-            captured["client_kwargs"] = k
+    def _get(self, url, params=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+        captured["headers"] = headers
+        return _Resp({"organic_results": []})
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get(self, url, params=None, headers=None):
-            captured["url"] = url
-            captured["params"] = params
-            captured["headers"] = headers
-            return _Resp({"organic_results": []})
-
-    monkeypatch.setattr(S.httpx, "Client", _Client)
+    monkeypatch.setattr(requests.Session, "get", _get)
     monkeypatch.setattr(S.access, "resolve_api_key", lambda p: ("k-1", False))
     from _releve import capter_units
     capter_units(monkeypatch, "searchapi", lambda p, n: captured["usage"].append(p))
@@ -167,16 +162,17 @@ def test_blank_engine_message_lists_common_ids(seen):
     with pytest.raises(McpError) as e:
         _tool()(engine="", query="pizza")
     msg = str(e.value)
-    for eid in ("google", "google_news", "google_jobs", "google_scholar",
-                "google_maps", "youtube"):
+    assert e.value.error.code == INVALID_PARAMS
+    for eid in ("google", "google_news", "google_jobs", "google_maps", "youtube"):
         assert eid in msg
 
 
 def test_missing_query_and_params_is_refused(seen):
     """Ni `query` ni `params` = une requête vide envoyée à SearchApi : refus
     actionnable, jamais un appel amont qui échouera plus loin avec un message opaque."""
-    with pytest.raises(McpError, match="query"):
+    with pytest.raises(McpError, match="query") as e:
         _tool()(engine="google")
+    assert e.value.error.code == INVALID_PARAMS
     assert "params" not in seen
 
 
@@ -220,30 +216,20 @@ def test_platform_usage_is_counted_only_on_the_platform_key(seen, monkeypatch):
 
 
 def test_upstream_error_is_propagated(seen, monkeypatch):
-    """Un 4xx amont (input rejeté) remonte tel quel via `raise_for_status` — il n'est
-    ni avalé ni converti en résultat vide."""
+    """Un 4xx amont (input rejeté) remonte tel quel (`UpstreamHTTPError`, statut
+    compris) — il n'est ni avalé ni converti en résultat vide, ni compté."""
+    import requests
+    from oto.tools.common.errors import UpstreamHTTPError
+
     from oto_mcp.tools import searchapi as S
 
-    class _Boom(_Resp):
-        def raise_for_status(self):
-            raise RuntimeError("HTTP 400")
-
-    class _Client:
-        def __init__(self, *a, **k):
-            ...
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get(self, url, params=None, headers=None):
-            return _Boom({})
-
-    monkeypatch.setattr(S.httpx, "Client", _Client)
-    with pytest.raises(RuntimeError, match="HTTP 400"):
+    monkeypatch.setattr(requests.Session, "get",
+                        lambda self, url, **k: _Resp({"error": "bad"}, status_code=400))
+    monkeypatch.setattr(S.access, "resolve_api_key", lambda p: ("k-plat", True))
+    with pytest.raises(UpstreamHTTPError) as e:
         _tool()(engine="google", query="pizza")
+    assert e.value.status_code == 400
+    assert seen["usage"] == []
 
 
 # --- surface ----------------------------------------------------------------------

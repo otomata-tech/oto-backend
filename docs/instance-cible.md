@@ -143,7 +143,8 @@ retard).
 lanceur de cet arbre (mêmes fichiers d'environnement et même clé d'API que l'unité du rôle,
 donc la `DATABASE_URL` du rôle). L'arbre installé est le seul endroit de la machine qui porte le
 registre **du tag** — la tête attendue en vient, jamais du code qui sert — et c'est depuis lui
-que la migration se joue (`oto-mcp migrer upgrade head`, borné à 20 min). La montée tourne en
+que la migration se joue (`oto-mcp maintenance copies-du-coffre`, puis `oto-mcp migrer upgrade head`,
+chacune bornée à 20 min — § Les copies du coffre ci-dessous). La montée tourne en
 root par la porte : aucun droit de plus à donner au runner ni à la clé de déploiement.
 
 | La base du rôle | Verdict |
@@ -156,6 +157,20 @@ root par la porte : aucun droit de plus à donner au runner ni à la clé de dé
 | sans `alembic_version`, plusieurs révisions, révision inconnue du tag (base plus récente, autre file), injoignable | **refus** : le motif, et les commandes qui lisent l'état (`migrer current`, `migrer heads`) |
 | registre du tag à plusieurs têtes ou vide | **refus**, sans lire la base |
 | migration en échec, ou pas à la tête une fois jouée | **refus** : la couleur ne démarre pas ; la base peut s'être arrêtée entre deux révisions — lire `migrer current` avant toute relance |
+
+**Les copies du coffre, AVANT la migration.** Un connecteur renommé garde son coffre par une
+COPIE re-chiffrée (l'AAD porte le nom du connecteur : la clé maîtresse est requise, une
+révision Alembic ne peut pas la faire), puis une révision repointe ce qui désigne l'ancienne
+instance — règles d'accès des comptes, arêtes `grants`, liens de projet — vers sa copie, et
+**lève** si la copie manque (`20261112_1200_connecteur_api`, `http` → `api`). Notre instance
+démarre puis migre : la copie du démarrage précède la révision. Une cible migre **avant** de
+démarrer : la porte joue donc d'abord `oto-mcp maintenance copies-du-coffre` (la liste que le
+démarrage parcourt aussi, `maintenance.copies_declarees` ; additive et idempotente, l'ancien
+code qui sert encore n'en voit rien), puis `migrer upgrade head`. Une copie en échec (clé
+maîtresse absente, base injoignable) refuse sans migrer ; une ligne du coffre indéchiffrable
+n'est pas copiée, et la révision qui la trouve désignée lève en le nommant — rien n'est
+sauté en silence. Le constat d'origine : sans cette étape, la révision levait sur la première
+règle d'un compte `http` (« sans copie `api` »), et la montée refusait.
 
 **Un index CONCURRENTLY, construit par la montée jusqu'à ~10 M lignes.** Une révision qui
 pose un index CONCURRENTLY (`migrations-versionnees.md` §5.1 — 0049 par exemple) ne le

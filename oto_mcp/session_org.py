@@ -374,6 +374,29 @@ def noter_avis(texte: str) -> None:
         holder.append(texte)
 
 
+# ── L'ancien nom sous lequel l'appel est arrivé (`deprecations.TOOLS`) ─────────
+# Le bord du protocole (`middleware.alias`) et `oto_call` rétablissent le nom
+# d'aujourd'hui avant que le reste ne le lise ; ce qui a été DEMANDÉ ne reste lisible
+# qu'ici, pour deux lecteurs seulement : le journal, qui compte l'usage de l'alias
+# (`calllog.apply_call_trace`), et l'avis en tête de la réponse. Rien d'autre ne doit
+# s'en servir : un gate qui le lirait rétablirait deux noms pour un outil.
+_NOM_DEPRECIE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_nom_deprecie", default=None)
+
+
+def set_nom_deprecie(nom: str) -> contextvars.Token:
+    return _NOM_DEPRECIE.set(nom)
+
+
+def reset_nom_deprecie(token: contextvars.Token) -> None:
+    _NOM_DEPRECIE.reset(token)
+
+
+def nom_deprecie_de_l_appel() -> Optional[str]:
+    """L'ancien nom sous lequel l'appel courant est arrivé, ou None."""
+    return _NOM_DEPRECIE.get()
+
+
 # ── View-as USER (« voir en tant que », face REST, LECTURE SEULE) ────────────
 # Extension de la consultation à l'axe USER : un opérateur plateforme « voit en
 # tant que » un autre user dans le dashboard. Contextvar per-requête posé par

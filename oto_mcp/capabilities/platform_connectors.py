@@ -551,7 +551,8 @@ def _connector_setting(ctx: ResolvedCtx, inp: ConnectorSettingInput) -> dict:
         raise AuthzDenied(400, "missing_connector", "`connector` required for set/clear.")
     if providers.REGISTRY.get(inp.connector) is None:
         raise AuthzDenied(404, "unknown_connector",
-                          f"Unknown connector: {inp.connector!r}.")
+                          f"Unknown connector: {inp.connector!r}."
+                          + providers.refus_renomme(inp.connector))
     scope_type, scope_id = (("org", str(inp.org_id)) if inp.org_id is not None
                             else ("platform", "platform"))
     if inp.op == "clear":

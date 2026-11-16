@@ -724,6 +724,14 @@ def clear_dedicated_app(owner_type: str, owner_id: int, connector: str) -> bool:
 # access_token_for) gardent `meta` entier ; les surfaces de statut servent le
 # `meta` public.
 _SECRET_META_KEYS = ("access_token", "refresh_token", "id_token")
+# Les satellites SCELLÉS (`seal_satellite`) : un état propre au compte, secret, qui
+# change à l'usage et non à la pose — le jar de cookies du mode `session` du connecteur
+# `api`. Rangé chiffré dans `meta` sous `<nom>_enc` (pas dans `secret_enc`, que seule la
+# pose réécrit : une écriture d'usage ne bumpe ni `version` ni `set_at`, et ne peut pas
+# écraser une carte reposée entre-temps). Jeu FERMÉ, et retiré des surfaces de statut
+# comme les bearers.
+SEALED_SATELLITES = ("session_jar",)
+_SECRET_META_KEYS += tuple(f"{nom}_enc" for nom in SEALED_SATELLITES)
 
 
 def _public_meta(meta: Optional[dict]) -> dict:
@@ -1234,6 +1242,41 @@ def update_meta(entity_type: str, entity_id: str, connector: str, account: str,
         return _do(c)
 
 
+def _satellite(nom: str) -> str:
+    if nom not in SEALED_SATELLITES:
+        raise ValueError(f"satellite scellé inconnu : {nom!r} "
+                         f"(attendu : {', '.join(SEALED_SATELLITES)})")
+    return f"{nom}_enc"
+
+
+def seal_satellite(entity_type: str, entity_id: str, connector: str, account: str,
+                   nom: str, valeur: str) -> bool:
+    """Range `valeur` CHIFFRÉE dans `meta.<nom>_enc` de la ligne, par fusion JSONB
+    (`update_meta`) : ni le secret ni les autres satellites ne bougent. L'AAD est celle
+    de la ligne suivie du nom du satellite — un chiffré ne se transplante ni vers une
+    autre ligne, ni vers `secret_enc`. Dernier écrivain gagnant entre processus. False
+    si la ligne n'existe plus (clé retirée pendant l'appel)."""
+    cle = _satellite(nom)
+    enc = crypto.encrypt(valeur, f"{_aad(entity_type, entity_id, connector, account)}#{nom}")
+    return update_meta(entity_type, entity_id, connector, account, {cle: enc})
+
+
+def unseal_satellite(entity_type: str, entity_id: str, connector: str, account: str,
+                     nom: str) -> Optional[str]:
+    """La valeur en clair de `meta.<nom>_enc`, ou None si la ligne n'en porte pas. Un
+    chiffré qui ne se relit pas LÈVE (`crypto.decrypt`) : à l'appelant de dire ce que
+    vaut son état perdu."""
+    cle = _satellite(nom)
+    with _connect() as c:
+        row = c.execute(
+            "SELECT meta->>%s AS enc FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+            (cle, entity_type, entity_id, connector, account)).fetchone()
+    if not row or not row["enc"]:
+        return None
+    return crypto.decrypt(row["enc"], f"{_aad(entity_type, entity_id, connector, account)}#{nom}")
+
+
 @lecture_d_appel
 def list_accounts(entity_type: str, entity_id: str, connector: str) -> list[dict]:
     """Lignes (account, meta, set_at) d'un connecteur multi-compte SANS secret
@@ -1684,6 +1727,37 @@ def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
     return [{**dict(r), "meta": _public_meta(r["meta"])} for r in rows]
 
 
+@lecture_d_appel
+def list_credentials_many(entity_type: str, entity_ids: Sequence[str]) -> dict[str, list[dict]]:
+    """`list_credentials` for a whole list of entities of one type, in ONE query:
+    `{entity_id: [rows]}`, each list exactly what `list_credentials(entity_type, id)`
+    returns (same columns, same `meta` filtering, same `connector, account` order). An
+    entity without any row is absent from the dict.
+
+    Why: `GET /api/me/connectors` annotates the catalog with the keys of EVERY other
+    org the caller belongs to (`access.reachable_instances_map`) — one round trip per
+    org. A member of ~40 orgs paid ~40 round trips on each library open."""
+    ids = sorted({str(e) for e in entity_ids})
+    if not ids:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_id, connector, account, secret_kind, set_by, set_at, meta "
+            "FROM connector_credentials WHERE entity_type = %s AND entity_id = ANY(%s) "
+            "ORDER BY entity_id, connector, account",
+            (entity_type, ids),
+        ).fetchall()
+    from .connectors import orphelins
+    orphelins.signaler("connector_credentials",
+                       (r["connector"] for r in rows
+                        if not (r["meta"] or {}).get("base_url")))
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        ligne = {k: v for k, v in dict(r).items() if k != "entity_id"}
+        out.setdefault(r["entity_id"], []).append({**ligne, "meta": _public_meta(r["meta"])})
+    return out
+
+
 def scan_vault_health() -> dict:
     """Scan de santé du coffre (#72) : parcourt TOUTES les lignes chiffrées de
     `connector_credentials` et teste leur déchiffrement — SANS jamais garder ni
@@ -2020,9 +2094,15 @@ def suivre_les_accords_recus(conn, old_sub: str, new_sub: str) -> int:
     return len(rows)
 
 
-def copy_connector_rows(old: str, new: str) -> dict:
+def copy_connector_rows(old: str, new: str, *, renamed: bool = False) -> dict:
     """COPIES every vault row of connector `old` to connector `new` — when a card hands
-    its credential over to a carrier (`sharepoint` → `microsoft`).
+    its credential over to a carrier (`sharepoint` → `microsoft`), or when a connector is
+    RENAMED (`http` → `api`, `renamed=True`: the new row keeps the old one's SHARING —
+    `share_mode`, `share_down`, `share_side`, `share_services`, the loans read today —
+    and its instance takes the old one's `config`, `label` and `visibility`, where the
+    custom connector's definition lives, `connector_instances.copy_instance_definition`.
+    What designates the old instance BY ID — account rules, `grants`, project pins —
+    moves in the data revision of the rename, once no served code reads `old`).
 
     A copy and not a move: the base is SHARED by prod and preprod, and the code still
     served on one of them reads `old` until its tag — moving would cut it off. Removing
@@ -2066,6 +2146,17 @@ def copy_connector_rows(old: str, new: str) -> dict:
                 continue
             meta = r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}")
             _upsert(conn, etype, eid, new, account, secret, r["set_by"], meta)
+            if renamed:
+                conn.execute(
+                    "UPDATE connector_credentials n SET share_mode = o.share_mode, "
+                    "share_down = o.share_down, share_side = o.share_side, "
+                    "share_services = o.share_services FROM connector_credentials o "
+                    "WHERE o.entity_type = %s AND o.entity_id = %s AND o.connector = %s "
+                    "AND o.account = %s AND n.entity_type = o.entity_type "
+                    "AND n.entity_id = o.entity_id AND n.connector = %s "
+                    "AND n.account = o.account", (etype, eid, old, account, new))
+                connector_instances.copy_instance_definition(conn, etype, eid, old, new,
+                                                             account)
             update_meta(etype, eid, old, account, {"copied_to": new}, conn=conn)
             bilan["copied"] += 1
     return bilan

@@ -9,7 +9,7 @@ never directly.
 """
 from __future__ import annotations
 
-from .. import credentials_store, grants_chain
+from .. import credentials_store, grants_chain, providers
 from . import scope
 
 
@@ -136,16 +136,34 @@ def _platform_grant_meta(sub, provider, active_org, *,
     counter the refusal reads (`quotas.platform_used_today`); under an `org` or `group`
     edge, the refusal keeps reading `usage`, counted per person.
 
+    For a connector whose quota counts per org (`Connector.grant_quota_per == "org"`),
+    the meta also carries `org_counter`: the org whose counter the refusal reads — the
+    org the call is made in, whichever scope granted (the settlement debits the same
+    one, `quotas.debiter_plateforme`). Without an org, such a key is not served: there
+    is no counter to hold its quota.
+
     `instances`: passed as is to whichever path answers."""
     verdict = grants_chain.platform_rung(sub, provider, active_org, instances=instances)
     if verdict is None:
-        return _legacy_platform_grant_meta(sub, provider, active_org, instances=instances)
-    if not verdict.granted:
+        meta = _legacy_platform_grant_meta(sub, provider, active_org, instances=instances)
+    elif not verdict.granted:
         return None
-    meta = {"label": verdict.label, "daily_quota": verdict.quota}
-    if verdict.grantee is not None and verdict.grantee[0] == "user":
-        meta["edge_counter"] = verdict.resource_id
-    return meta
+    else:
+        meta = {"label": verdict.label, "daily_quota": verdict.quota}
+        if verdict.grantee is not None and verdict.grantee[0] == "user":
+            meta["edge_counter"] = verdict.resource_id
+    if meta is None or not quota_per_org(provider):
+        return meta
+    if active_org is None:
+        return None
+    return {**meta, "org_counter": int(active_org)}
+
+
+def quota_per_org(provider: str) -> bool:
+    """Does the platform key of `provider` (normalized to its credential carrier) count
+    its daily quota per ORG rather than per person? (`Connector.grant_quota_per`)"""
+    con = providers.REGISTRY.get(providers.credential_provider(provider))
+    return con is not None and con.grant_quota_per == "org"
 
 
 def _resolve_platform_grant(sub, provider, active_org) -> "dict | None":

@@ -28,15 +28,16 @@ def test_every_lens_scopes_to_the_org(monkeypatch):
     monkeypatch.setattr(om.monitoring, "_resolve_sub", lambda t: t)
     monkeypatch.setattr(om.db, "tool_call_stats",
                         lambda **kw: seen.update(summary=kw) or {})
-    monkeypatch.setattr(om.db, "list_tool_calls", lambda **kw: seen.update(calls=kw) or [])
+    monkeypatch.setattr(om.db, "list_tool_calls_page",
+                        lambda **kw: seen.update(calls=kw) or {"calls": [], "next": None})
     monkeypatch.setattr(om.db, "count_calls_of_org_runs_elsewhere",
                         lambda oid, **kw: seen.update(hors=oid) or 0)
     monkeypatch.setattr(om.db, "connector_failure_stats",
                         lambda **kw: seen.update(conn=kw) or {})
     monkeypatch.setattr(om.db, "org_adoption",
                         lambda oid, **kw: seen.update(adoption=(oid, kw)) or {})
-    monkeypatch.setattr(om.db, "list_runs",
-                        lambda limit, **kw: seen.update(runs=(limit, kw)) or [])
+    monkeypatch.setattr(om.db, "list_runs_page", lambda limit, **kw: seen.update(
+        runs=(limit, kw)) or {"runs": [], "next": None, "scanned": 0})
     monkeypatch.setattr(om.db, "aggregate_gaps",
                         lambda days, **kw: seen.update(gaps=(days, kw)) or [])
     monkeypatch.setattr(om.db, "aggregate_tool_feedback",
@@ -50,7 +51,8 @@ def test_every_lens_scopes_to_the_org(monkeypatch):
     assert seen["hors"] == 35                # le plancher (#630) est scopé pareil
     assert seen["conn"]["org_id"] == 35
     assert seen["adoption"] == (35, {"active_window_days": 30})
-    assert seen["runs"] == (100, {"org_id": 35})
+    assert seen["runs"] == (100, {"org_id": 35, "sub": None, "since_days": None,
+                                  "before": None, "issues": None})
     assert seen["gaps"] == (30, {"org_id": 35})
     assert seen["quality"] == (30, {"org_id": 35})
 

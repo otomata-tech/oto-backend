@@ -20,6 +20,18 @@ EXACT du `ORDER BY created_at DESC, id DESC` de la page — un parcours d'index 
 s'arrête au `LIMIT`. Leur prédicat est celui de `_derniers_runs`, mot pour mot : un
 prédicat d'index que la requête n'implique pas ne sert aucune lecture.
 
+**`OUVERTURE_PAR_RUN`** — l'ouverture d'un run DONNÉ (révision
+`20261111_1400_ouvertures_par_run`). `usage.project_run_stats` (l'inertie de l'audit de
+liens, lue par `oto_project op=get`) cherche les ouvertures des ≤ 500 derniers runs d'un
+projet, par une sonde par run que cet index sert (la forme de la lecture suit sa
+présence, `usage._ouverture_par_run_prete`). Aucun
+index ne partait du `run_id` d'une ouverture : PostgreSQL lisait TOUTES les ouvertures de
+la plateforme par `idx_tool_calls_run_start` puis les hachait contre les runs du projet
+— mesuré en production le 11/11/2026 sur un projet de 2 218 runs : 19 877 buffers, 60 ms
+juste après un échauffement, 3,3 s dix minutes plus tard, 33 s à froid ; les réécritures sans index (LATERAL par run, jointure
+qui écarte l'index d'outil) faisaient pire, 4 s et plus de 15 s. Partiel sur le prédicat
+des ouvertures, il ne porte que ~21 000 lignes.
+
 **`GESTES_DE_LIGNE`** — le parcours d'UNE ligne de datastore (révision 0054).
 `usage.datastore_row_activity` cherche les gestes `data_*` qui portent l'`id` de la
 ligne. `idx_tool_calls_ns` ne connaît que le tableau : sur un tableau très actif, une
@@ -29,6 +41,15 @@ tableau par cet index dépassait 15 s, et la route rendait 503 à 10 s. L'index 
 l'`id` derrière le tableau : une lecture directe. Partiel sur les seuls gestes `data_*`
 qui portent un `id` — son prédicat est celui de la requête, que l'égalité sur
 `ns_id` et sur `id` implique.
+
+**`TOUR_AU_COUT`** — la CLÉ d'un tour de modèle journalisé à son coût (révision
+`20261113_1200_tours_au_cout_cle`, `tours_au_cout`). Un index UNIQUE, pas une lecture : le
+même tour rapporté deux fois en même temps (le worker rejoue un rapport resté sans
+réponse) ne s'écrit qu'une fois, et ne se débite qu'une fois au quota de la clé partagée,
+par `INSERT … ON CONFLICT DO NOTHING` (`usage.inserer_tour_au_cout`). Partiel sur les
+seuls relevés des familles au coût : il ne porte que ces lignes. ⚠️ Sans lui, l'écriture
+du tour échoue (aucune contrainte ne répond à l'`ON CONFLICT`) : le worker s'arrête, rien
+n'est servi sans dédoublonnage.
 """
 from __future__ import annotations
 
@@ -62,6 +83,16 @@ OUVERTURES: tuple[IndexConcurrent, ...] = (
                     revision=REVISION_OUVERTURES),
 )
 
+#: La révision qui pose l'index des ouvertures par run.
+REVISION_OUVERTURE_PAR_RUN = "20261111_1400_ouvertures_par_run"
+
+#: L'ouverture d'un run donné (`usage.project_run_stats`, `usage._PROJECT_SCOPE`).
+OUVERTURE_PAR_RUN = IndexConcurrent(
+    nom="idx_tool_calls_run_start_run", table="tool_calls",
+    forme=f"(run_id) WHERE {PREDICAT_OUVERTURE}",
+    revision=REVISION_OUVERTURE_PAR_RUN,
+)
+
 #: La révision qui pose l'index des gestes d'une ligne.
 REVISION_GESTES_DE_LIGNE = "0054_tool_calls_gestes_de_ligne"
 
@@ -73,4 +104,23 @@ GESTES_DE_LIGNE = IndexConcurrent(
            "WHERE tool LIKE 'data\\_%' AND args->>'ns_id' IS NOT NULL "
            "AND args->>'id' IS NOT NULL"),
     revision=REVISION_GESTES_DE_LIGNE,
+)
+
+#: La révision qui pose la clé des tours au coût.
+REVISION_TOURS_AU_COUT = "20261113_1200_tours_au_cout_cle"
+
+#: Les outils (familles de modèles) dont un relevé est UNIQUE par `call_uid` : ceux que
+#: `tours_au_cout` journalise à leur coût. Domicile unique de la liste — la famille au
+#: coût et le prédicat de sa clé ne peuvent pas diverger.
+OUTILS_AU_COUT: tuple[str, ...] = ("openrouter",)
+
+#: Le prédicat de la clé, repris MOT POUR MOT par l'`ON CONFLICT` qui l'infère.
+PREDICAT_TOUR_AU_COUT = ("kind = 'settlement' AND tool IN ("
+                         + ", ".join(f"'{o}'" for o in OUTILS_AU_COUT) + ")")
+
+#: La clé d'un tour au coût (`usage.inserer_tour_au_cout`).
+TOUR_AU_COUT = IndexConcurrent(
+    nom="idx_tool_calls_tour_au_cout", table="tool_calls",
+    forme=f"(kind, tool, call_uid) WHERE {PREDICAT_TOUR_AU_COUT}",
+    revision=REVISION_TOURS_AU_COUT, unique=True,
 )

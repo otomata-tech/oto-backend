@@ -249,3 +249,28 @@ def test_reponse_coupee_le_dit_sans_reessayer(monkeypatch):
     texte = {"stop_reason": "max_tokens", "content": [{"type": "text", "text": "Here is a lo"}]}
     events, _ = _conduire(monkeypatch, [texte])
     assert [e["type"] for e in events] == ["error", "done"]
+
+
+def test_un_patch_d_app_sans_effet_est_refuse_sans_carte(monkeypatch):
+    """`replace` égal à `find` : l'outil le refuserait, le modèle l'apprend AVANT qu'une
+    carte demande à la personne d'approuver un changement qui n'en est pas un."""
+    appels: list = []
+    rien = [{"find": "<h1>Ventes</h1>", "replace": "<h1>Ventes</h1>"}]
+    fil = _fil(queue=[
+        {"id": "p", "name": "oto_apps", "input": {"op": "patch", "app_id": 7, "edits": rien}},
+        {"id": "c", "name": "oto_call", "input": {"name": "oto_apps", "arguments": {
+            "op": "patch", "app_id": 7,
+            "edits": [{"find": "a", "replace": "b"}, *rien]}}}])
+    evs, etat = _drainer(fil, _boite("oto_apps"), monkeypatch, appels)
+    assert appels == [] and not etat["pause"] and fil["pending"] is None
+    assert "approval_required" not in [e["type"] for e in evs]
+    assert [r["is_error"] for r in fil["results"]] == [True, True]
+    assert "edits[0].replace is the same as its find" in fil["results"][0]["content"]
+    assert "edits[1]" in fil["results"][1]["content"]
+
+
+def test_un_patch_d_app_qui_change_demande_la_carte(monkeypatch):
+    fil = _fil(queue=[{"id": "p", "name": "oto_apps", "input": {
+        "op": "patch", "app_id": 7, "edits": [{"find": "Ventes", "replace": "CA"}]}}])
+    evs, etat = _drainer(fil, _boite("oto_apps"), monkeypatch, [])
+    assert evs[-1]["type"] == "approval_required" and etat["pause"]

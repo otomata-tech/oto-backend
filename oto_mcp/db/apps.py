@@ -14,7 +14,9 @@ d'écraser l'édition d'un autre.
 verrou de la ligne : de quoi restaurer, et de quoi dire qui a changé quoi. **Seules
 les `MAX_REVISIONS` plus récentes sont gardées**, purgées dans la même transaction :
 un HTML pèse jusqu'à 512 Ko, et un agent qui réécrit son app en boucle remplirait la
-base sans borne.
+base sans borne. **Une version PUBLIÉE (`published_at`) échappe à cette purge** : elle
+a sa propre borne, `MAX_PUBLISHED` — publier est un geste, pas une sauvegarde
+(`db/app_versions.py`, brouillon et publication).
 """
 from __future__ import annotations
 
@@ -30,9 +32,14 @@ from ._conn import _connect
 # des dizaines de Ko ; la liste d'une org en servait sinon des centaines).
 _CARTE = ("id, owner_type, owner_id, context_org_id, title, thumbnail, created_by, "
           "created_at, updated_by, updated_at, archived_at")
-_TOUT = _CARTE + ", manifest, html"
-# Les révisions gardées par app — autant que `revisions()` en liste.
+# L'état vivant est-il une version publiée, sa note, et l'app passe-t-elle par un
+# brouillon : de quoi dire au lecteur quelle version il ouvre. Jamais le brouillon
+# lui-même (`db/app_versions.py`), réservé à ses éditeurs.
+_VERSION = "drafts_enabled, published_at, version_note"
+_TOUT = _CARTE + ", manifest, html, " + _VERSION
+# Les révisions ORDINAIRES gardées par app ; les versions publiées, à part.
 MAX_REVISIONS = 50
+MAX_PUBLISHED = 200
 
 
 class AppConflict(Exception):
@@ -210,9 +217,11 @@ def unfile(app_id: int, project_id: int) -> bool:
 
 def update(app_id: int, *, by: str, expected_rev: Optional[str] = None,
            title: Optional[str] = None, manifest: Optional[dict] = None,
-           html: Optional[str] = None, thumbnail: Any = ..., ) -> Optional[dict]:
+           html: Optional[str] = None, thumbnail: Any = ...,
+           published: bool = False, note: Optional[str] = None) -> Optional[dict]:
     """Change les champs donnés (`thumbnail=None` l'efface ; omis, il reste). Écrit
-    l'état précédent dans `app_revisions` d'abord. `None` = app inconnue."""
+    l'état précédent dans `app_revisions` d'abord. `None` = app inconnue.
+    `published` : l'état écrit est une version publiée (`op=restore`), avec `note`."""
     with _connect() as conn:
         prior = conn.execute(
             f"SELECT {_TOUT} FROM apps WHERE id = %s FOR UPDATE", (app_id,)).fetchone()
@@ -221,36 +230,67 @@ def update(app_id: int, *, by: str, expected_rev: Optional[str] = None,
         current = app_rev(prior["title"], prior["manifest"], prior["html"], prior["thumbnail"])
         if expected_rev is not None and expected_rev != current:
             raise AppConflict(current)
-        conn.execute(
-            "INSERT INTO app_revisions (app_id, title, manifest, html, thumbnail, edited_by) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            (app_id, prior["title"], Jsonb(prior["manifest"]), prior["html"],
-             Jsonb(prior["thumbnail"]) if prior["thumbnail"] is not None else None,
-             prior["updated_by"]),
-        )
-        conn.execute(
-            "DELETE FROM app_revisions WHERE app_id = %s AND id NOT IN ("
-            "SELECT id FROM app_revisions WHERE app_id = %s ORDER BY id DESC LIMIT %s)",
-            (app_id, app_id, MAX_REVISIONS),
-        )
-        sets, params = ["updated_at = NOW()", "updated_by = %s"], [by]
-        if title is not None:
-            sets.append("title = %s")
-            params.append(title)
-        if manifest is not None:
-            sets.append("manifest = %s")
-            params.append(Jsonb(manifest))
-        if html is not None:
-            sets.append("html = %s")
-            params.append(html)
-        if thumbnail is not ...:
-            sets.append("thumbnail = %s")
-            params.append(Jsonb(thumbnail) if thumbnail is not None else None)
-        row = conn.execute(
-            f"UPDATE apps SET {', '.join(sets)} WHERE id = %s RETURNING {_TOUT}",
-            (*params, app_id),
-        ).fetchone()
+        row = ecrire_sous_verrou(conn, prior, by=by, title=title, manifest=manifest,
+                                 html=html, thumbnail=thumbnail, published=published,
+                                 note=note)
     return with_rev(row)
+
+
+def ecrire_sous_verrou(conn, prior: dict, *, by: str, title: Optional[str] = None,
+                       manifest: Optional[dict] = None, html: Optional[str] = None,
+                       thumbnail: Any = ..., published: bool = False,
+                       note: Optional[str] = None, extra_sets: Iterable[str] = ()) -> dict:
+    """Le cœur d'une écriture de l'état vivant, sur la ligne `prior` déjà verrouillée
+    (`FOR UPDATE`) par l'appelant : garde l'état remplacé dans `app_revisions` (avec sa
+    marque de version publiée et sa note), purge, écrit. Partagé par `update` et la
+    publication d'un brouillon (`db/app_versions.publish`), qui le fait dans SA
+    transaction. Changer le manifeste ou le HTML sans publier fait de l'état vivant
+    une écriture ordinaire : il perd sa marque de version publiée.
+
+    La révision ne garde la marque de version publiée que si cette écriture REMPLACE
+    la version (manifeste, HTML, ou une publication) : changer la carte d'une version
+    publiée la garde vivante, et en ferait sinon une deuxième copie épinglée."""
+    app_id = prior["id"]
+    remplace = published or manifest is not None or html is not None
+    conn.execute(
+        "INSERT INTO app_revisions (app_id, title, manifest, html, thumbnail, edited_by, "
+        "published_at, note, saved_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (app_id, prior["title"], Jsonb(prior["manifest"]), prior["html"],
+         Jsonb(prior["thumbnail"]) if prior["thumbnail"] is not None else None,
+         prior["updated_by"], prior.get("published_at") if remplace else None,
+         prior.get("version_note") if remplace else None, prior.get("updated_at")),
+    )
+    # Deux bornes : les révisions ordinaires, puis les versions publiées — jamais l'une
+    # ne pousse l'autre dehors.
+    for publiees, garde in (("IS NULL", MAX_REVISIONS), ("IS NOT NULL", MAX_PUBLISHED)):
+        conn.execute(
+            f"DELETE FROM app_revisions WHERE app_id = %s AND published_at {publiees} "
+            "AND id NOT IN (SELECT id FROM app_revisions WHERE app_id = %s "
+            f"AND published_at {publiees} ORDER BY id DESC LIMIT %s)",
+            (app_id, app_id, garde),
+        )
+    sets, params = ["updated_at = NOW()", "updated_by = %s", *extra_sets], [by]
+    if title is not None:
+        sets.append("title = %s")
+        params.append(title)
+    if manifest is not None:
+        sets.append("manifest = %s")
+        params.append(Jsonb(manifest))
+    if html is not None:
+        sets.append("html = %s")
+        params.append(html)
+    if thumbnail is not ...:
+        sets.append("thumbnail = %s")
+        params.append(Jsonb(thumbnail) if thumbnail is not None else None)
+    if published:
+        sets += ["published_at = NOW()", "version_note = %s"]
+        params.append(note)
+    elif manifest is not None or html is not None:
+        sets += ["published_at = NULL", "version_note = NULL"]
+    return conn.execute(
+        f"UPDATE apps SET {', '.join(sets)} WHERE id = %s RETURNING {_TOUT}",
+        (*params, app_id),
+    ).fetchone()
 
 
 def set_archived(app_id: int, archived: bool) -> Optional[dict]:
@@ -263,12 +303,13 @@ def set_archived(app_id: int, archived: bool) -> Optional[dict]:
     return with_rev(row)
 
 
-def revisions(app_id: int, limit: int = MAX_REVISIONS) -> list[dict]:
-    """Les états antérieurs, du plus récent au plus ancien — sans leur HTML."""
+def revisions(app_id: int, limit: int = MAX_REVISIONS + MAX_PUBLISHED) -> list[dict]:
+    """Les états antérieurs, du plus récent au plus ancien — sans leur HTML : les
+    révisions ordinaires gardées ET les versions publiées, que la purge garde à part."""
     with _connect() as conn:
         return conn.execute(
-            "SELECT id, app_id, title, edited_by, created_at FROM app_revisions "
-            "WHERE app_id = %s ORDER BY id DESC LIMIT %s",
+            "SELECT id, app_id, title, edited_by, created_at, published_at, note, saved_at "
+            "FROM app_revisions WHERE app_id = %s ORDER BY id DESC LIMIT %s",
             (app_id, limit),
         ).fetchall()
 
@@ -278,8 +319,8 @@ def revision(app_id: int, revision_id: int) -> Optional[dict]:
     autre app ne se restaure pas ici."""
     with _connect() as conn:
         return conn.execute(
-            "SELECT id, app_id, title, manifest, html, thumbnail, edited_by, created_at "
-            "FROM app_revisions WHERE id = %s AND app_id = %s",
+            "SELECT id, app_id, title, manifest, html, thumbnail, edited_by, created_at, "
+            "published_at, note, saved_at FROM app_revisions WHERE id = %s AND app_id = %s",
             (revision_id, app_id),
         ).fetchone()
 

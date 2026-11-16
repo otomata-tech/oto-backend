@@ -62,7 +62,7 @@ class CredentialField:
     # for this field. Empty (default) = the field applies whatever the discriminator —
     # so NOTHING CHANGES for the ~90 connectors that declare none.
     # When set, it says two things at once: the field is only DISPLAYED for these
-    # values, and its `required` only APPLIES there. E.g. `http`: `header_name` is
+    # values, and its `required` only APPLIES there. E.g. `api`: `header_name` is
     # required, but only with `auth_mode=header`. See `Connector.fields_for`.
     when: tuple[str, ...] = ()
     # CLOSED set of accepted values (a `select`, not a free field). Empty = free.
@@ -162,7 +162,7 @@ class Connector:
     #
     # ⚠️ The `"mount"` value (federation of a third-party MCP) was REMOVED on
     # 2026-09-09 along with the mechanism (ADR 0069): a remote service is joined through
-    # the generic `http` connector, or written as a native connector.
+    # the generic `api` connector, or written as a native connector.
     kind: str = "tools"
     # EXPLICIT input schema of the credential (generic multi-field model).
     # Empty → derived from secret_kind (see `secret_fields`). Set for
@@ -219,7 +219,7 @@ class Connector:
     # Empty = "compte". Published in the `auth` descriptor and displayed as-is.
     # French on purpose: the dashboard displays and inflects it.
     account_noun: str = ""
-    # Name of the field whose VALUE selects the others (`auth_mode` on `http`).
+    # Name of the field whose VALUE selects the others (`auth_mode` on `api`).
     # Empty (default) = flat-schema credential: all fields always apply.
     # When set, it enables `fields_for`: a form that only shows what
     # is useful, and a write-time validation that refuses an inconsistent mode instead of
@@ -264,11 +264,23 @@ class Connector:
     # Empty (default) = the quota stays optional. The unit is what the tool notes as
     # `units` (e.g. ElevenLabs credits), and the refusal names it.
     grant_quota_unit: str = ""
+    # WHO the platform key's daily quota counts, when it is not the person. Empty
+    # (default) = per person (`usage(sub, tool, day)`), as every shared key has always
+    # been metered. `"org"` = ONE counter for the org the call is made in, every member
+    # together (`usage_org(org_id, tool, day)`): the grant's `daily_quota` is then the
+    # org's ceiling, not each member's. Declared by a connector whose shared key is
+    # billed at cost to the org; `tests/test_quota_par_org.py` keeps the list.
+    grant_quota_per: str = ""
     # A connector served by the GENERIC READER of its description (`tools/decrits.py`,
     # decided 05/11/2026), which runs it by the library's engine (09/11/2026). Set by
     # `_decrit` only — false for every hand-written connector, which keeps its
     # `tools/<name>.py`.
     decrit: bool = False
+    # One sentence the platform adds to the READ tool's description of a described
+    # connector, after its head (`tools/decrits.texte_de_l_outil`): what the shared
+    # description cannot say, such as which sibling connector of THIS platform to take
+    # instead. Empty = the description's text alone. Set by `_decrit` only.
+    tool_note: str = ""
 
     @property
     def org_shareable(self) -> bool:
@@ -464,7 +476,7 @@ class Connector:
             # knows the provider's vocabulary, not the screen.
             "account_noun": self.account_noun or "compte",
             # The field whose value selects the others, when there is one
-            # (`auth_mode` on `http`): the front does not need to know the connector
+            # (`auth_mode` on `api`): the front does not need to know the connector
             # to show only the useful fields — it reads `when` (#449).
             "field_discriminator": self.field_discriminator,
             # The hosted CHANNEL of this connector, when it carries one (unipile split
@@ -579,6 +591,10 @@ BROWSER_PROVIDERS = frozenset()
 #   the vault) — mixing them in a single list is what made it unremovable.
 
 
+#: The values `Connector.grant_quota_per` takes: per person (empty) or per org.
+GRANT_QUOTA_PER = ("", "org")
+
+
 def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=False,
        personal_session=False, secret_kind="none",
        default_quota=0, default_active=False,
@@ -588,12 +604,16 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        personal_cross_org=False, cardinality="", account_axis_static=False,
        account_noun="",
        field_discriminator="", credential_of=None, hosted_channel=None,
-       spends_keys_of=(), grant_quota_unit="", decrit=False) -> Connector:
+       spends_keys_of=(), grant_quota_unit="", grant_quota_per="",
+       decrit=False, tool_note="") -> Connector:
     """Factory for a registry entry — called by `providers/<name>.py`.
 
     Adding a FIELD per connector = adding it to `Connector` AND here, then
     setting it in the module of the connector concerned, next to the declaration
     it qualifies (never in a cross-cutting list indexed by name)."""
+    if grant_quota_per not in GRANT_QUOTA_PER:
+        raise ValueError(f"{name}: `grant_quota_per` is one of {GRANT_QUOTA_PER}, "
+                         f"not {grant_quota_per!r}")
     return Connector(
         name=name, namespaces=tuple(namespaces), availability=availability,
         auth_modes=frozenset(auth_modes), keyed=keyed, personal_session=personal_session,
@@ -608,35 +628,62 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         account_noun=account_noun, field_discriminator=field_discriminator,
         credential_of=credential_of, hosted_channel=hosted_channel,
         spends_keys_of=tuple(spends_keys_of), grant_quota_unit=grant_quota_unit,
-        decrit=decrit,
+        grant_quota_per=grant_quota_per, decrit=decrit, tool_note=tool_note,
     )
 
 
-def _decrit(name, *, help, href, key_help) -> Connector:
+def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota=None,
+            tool_note="") -> Connector:
     """Registry entry of a connector served by the GENERIC READER of its description
     (`tools/decrits.py`), which runs it by the library's engine: its label, namespace,
-    modes and credential field are READ in the description (`oto.connectors.descriptions`),
+    modes and credential fields are READ in the description (`oto.connectors.descriptions`),
     never written twice; `help`, `href` and `key_help` are the catalog's prose. A
     description the reader cannot serve is refused here, at import
     (`connectors.descriptions.verifier`).
 
-    The credential is one secret. A key (`api_key`, `bearer`) is kept under `key` and
-    resolved by `access.resolve_api_key`. A service account's JSON key file
-    (`oauth2_jwt_bearer`) is kept under the description's field name, as
+    The credential is one secret, or a login and a password. A key (`api_key`, `bearer`)
+    is kept under `key` and resolved by `access.resolve_api_key`. A service account's JSON
+    key file (`oauth2_jwt_bearer`) is kept under the description's field name, as
     `google_analytics` keeps its own (`secret_kind="fields"`, resolved by
     `access.resolve_credential_fields`); `whitespace_significant`, because the PEM
-    private key holds spaces that the default cleanup would strip."""
+    private key holds spaces that the default cleanup would strip. A login and a password
+    (`basic`) are two fields under the description's names, the login not secret
+    (`secret_kind="fields"`); `key_help` is then `{field name: help}`, one per field.
+
+    A description with mode `platform` takes `platform_key_open` and `default_quota`:
+    whether the shared key serves every org or only the granted ones, and its daily
+    quota, are the registry's decision, never a default. Without the mode, neither.
+    `tool_note`: one sentence added to the read tool's description (`Connector.tool_note`)."""
     from ..connectors import descriptions  # lazy: this module stays pure
 
     description = descriptions.charger(name)
     descriptions.verifier(description)
     connecteur = description["connector"]
+    modes = set(connecteur["modes"])
+    plateforme = {"platform_key_open": platform_key_open, "default_quota": default_quota}
+    if "platform" in modes and None in plateforme.values():
+        raise ValueError(f"{name}: mode platform, its `platform_key_open` and `default_quota` are to be given")
+    if "platform" not in modes and set(plateforme.values()) != {None}:
+        raise ValueError(f"{name}: no mode platform, no `platform_key_open` nor `default_quota`")
+    reglages = {k: v for k, v in plateforme.items() if v is not None}
+    if descriptions.identifiant_et_mot_de_passe(description):
+        champs = descriptions.champs_du_compte(description)
+        if not isinstance(key_help, dict) or set(key_help) != {c["name"] for c in champs}:
+            raise ValueError(f"{name}: `key_help` names the help of each credential field "
+                             f"({', '.join(c['name'] for c in champs)})")
+        return _c(
+            name, [connecteur["namespace"]], auth_modes=modes, keyed=False, secret_kind="fields",
+            label=connecteur["label"], help=help, href=href, decrit=True, tool_note=tool_note,
+            credential_fields=tuple(CredentialField(c["name"], c["label"], secret=c.get("secret") is True,
+                                                    help=key_help[c["name"]]) for c in champs),
+            **reglages,
+        )
     secret = descriptions.secret_unique(description)
     champ = CredentialField(descriptions.champ_du_coffre(description), secret["label"], secret=True,
                             help=key_help, whitespace_significant=descriptions.compte_de_service(description))
     cle = not descriptions.compte_de_service(description)
     return _c(
-        name, [connecteur["namespace"]], auth_modes=set(connecteur["modes"]), keyed=cle,
+        name, [connecteur["namespace"]], auth_modes=modes, keyed=cle,
         secret_kind="api_key" if cle else "fields", label=connecteur["label"], help=help, href=href,
-        credential_fields=(champ,), decrit=True,
+        credential_fields=(champ,), decrit=True, tool_note=tool_note, **reglages,
     )

@@ -51,7 +51,9 @@ def _sans_base(monkeypatch):
             raise AssertionError(f"`{_nom}` appelé ligne par ligne dans une liste")
         monkeypatch.setattr(RT.db, unitaire, _interdit)
     lus: dict[str, list] = {"perimes": [], "livraisons": [], "files": [],
-                            "visibilites": []}
+                            "visibilites": [], "derniers": []}
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: lus["derniers"].append(
+        list(ids)) or {i: {"last_run": None, "last_done_at": None} for i in ids})
     monkeypatch.setattr(RT.db, "visibilites_d_agents", lambda ids, org: lus[
         "visibilites"].append(list(ids)) or {i: {"org": None, "people": 0} for i in ids})
     monkeypatch.setattr(RT.db, "comptages_perimes", lambda org, ids: lus["perimes"].append(
@@ -70,7 +72,8 @@ def test_la_liste_lit_chaque_mesure_une_fois_pour_toutes_ses_lignes(monkeypatch,
     out = asyncio.run(RT._triggers(_ctx(), RT.TriggerInput(op="list")))
     assert _sans_base == {"perimes": [[1, 2, 3, 101, 102]],
                           "livraisons": [[101, 102]], "files": [[101, 102]],
-                          "visibilites": [[1, 2, 3, 101, 102]]}, (
+                          "visibilites": [[1, 2, 3, 101, 102]],
+                          "derniers": [[1, 2, 3, 101, 102]]}, (
         "une requête par mesure pour toute la liste ; les comptes d'un webhook ne se "
         "lisent que pour les webhooks")
     par_id = {t["id"]: t for t in out["triggers"]}

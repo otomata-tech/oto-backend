@@ -175,7 +175,7 @@ def register(mcp: FastMCP) -> None:
           `append`: False (default) OVERWRITES the range ; True appends rows after
           the existing data (no overwrite), starting at the range's FIRST column.
           Instead of `values`, `source` writes a CSV oto fetches itself (e.g.
-          `{"kind": "http", "path": "/export.csv"}` through your `http` connector):
+          `{"kind": "api", "path": "/export.csv"}` through your `api` connector):
           the values never go through you. A strict number goes as a number, a cell
           starting with `'` stays text as is (long ids), a cell that would be a
           formula is written as text unless `allow_formulas=True`.
@@ -213,8 +213,8 @@ def register(mcp: FastMCP) -> None:
             values: op="write" — the 2-D array of values to write. Exclusive with
                 `source`.
             source: op="write" — a CSV fetched server-side instead of `values`:
-                `{"kind": "http", "path": "/…", "params": {…}}` (GET through your
-                `http` connector, auth injected), or any file reference
+                `{"kind": "api", "path": "/…", "params": {…}}` (GET through your
+                `api` connector, auth injected), or any file reference
                 (drive, url, project_file). UTF-8, comma, RFC 4180 quotes.
             allow_formulas: op="write" with `source` — False (default) writes a cell
                 starting with = + - @ as TEXT (a third party's CSV cannot plant a

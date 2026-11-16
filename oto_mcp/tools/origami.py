@@ -5,7 +5,7 @@ Wraps `oto.tools.origami.client.OrigamiClient` (API v2 `origami.chat/api/v2`, Be
 Origami account — enrichment credits and sends are its own.
 
 ⚠️ **DESIGN NOTE — first third-party integration whose write SENDS.** oto's
-"generic" HTTP integrations are designed read-only (the `http` connector announces itself as
+"generic" HTTP integrations are designed read-only (the `api` connector announces itself as
 GET-only in the catalog); connectors that write (folk, lemlist, notion…) write
 into a CRM or a tool, not toward third parties. Origami's value is in the POST:
 create a table from a CSV, upsert rows, have the Origami agent draft a campaign,

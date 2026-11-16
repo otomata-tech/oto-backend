@@ -76,6 +76,10 @@ _KNOWN: dict[str, str] = {
     # Slack POSTe un formulaire (`payload=<json>`), signé par le même secret d'app
     # (`X-Slack-Signature`), aucun JWT — même nature que la ligne au-dessus.
     "/api/slack/interactions": NATURE,
+    # Le webhook LOGTO (10/11/2026) : Logto POSTe quand un mot de passe change. Corps
+    # libre (la forme de Logto), signé HMAC sur les octets bruts
+    # (`logto-signature-sha-256`), aucun JWT — même nature que les deux au-dessus.
+    "/api/logto/webhook": NATURE,
     # Le RECEVEUR des téléphones Apollo (28/09/2026) : Apollo POSTe le résultat d'un
     # reveal qu'oto a commandé. Corps libre (la forme d'Apollo, pas la nôtre) et
     # aucun JWT : l'autorisation est le jeton du chemin, propre à une commande.
@@ -302,12 +306,12 @@ _KNOWN: dict[str, str] = {
     #  exactement ce qui a été fait.)
 }
 
-# ⚠️ Les alias du renommage `namespace` → `datastore` (08/09/2026) sont AJOUTÉS ICI PAR
-# DÉRIVATION, pas recopiés. Ils sont eux-mêmes dérivés des routes montées
-# (`deprecations._alias_datastore`) : les lister à la main dans cette garde rétablirait
+# ⚠️ Les alias des renommages `namespace` → `datastore` (08/09/2026) et `http` → `api`
+# (12/11/2026) sont AJOUTÉS ICI PAR DÉRIVATION, pas recopiés. Ils sont eux-mêmes dérivés
+# des routes montées (`deprecations.alias_rest_derives`) : les lister à la main dans cette garde rétablirait
 # exactement la copie que la dérivation supprime — et une garde qui porte une copie
 # périmée refuse une route légitime ou en laisse passer une qui ne l'est pas.
-_KNOWN.update({a.ancien: NATURE for a in deprecations._alias_datastore()})
+_KNOWN.update({a.ancien: NATURE for a in deprecations.alias_rest_derives()})
 
 
 class _FauxVerifieur:

@@ -39,3 +39,14 @@ def test_longueur_jugee_avant_de_remplacer():
     assert appliquer("ab", [{"find": "a", "replace": "xyz"}], max_len=4) == ("xyzb", 1)
     with pytest.raises(RemplacementRefuse):
         appliquer("ab", [{"find": "a", "replace": "xyz"}], max_len=3)
+
+
+def test_un_remplacement_qui_ne_change_rien_est_refuse():
+    """Aucune version enregistrée identique à la précédente."""
+    with pytest.raises(RemplacementRefuse, match=r"edits\[0\]\.replace is the same as its find"):
+        appliquer("a b", [{"find": "a", "replace": "a"}])
+    with pytest.raises(RemplacementRefuse, match=r"edits\[1\]"):
+        appliquer("a b", [{"find": "b", "replace": "B"}, {"find": "a", "replace": "a"}])
+    # Chaque edit change, la liste entière ne change rien : refusée aussi.
+    with pytest.raises(RemplacementRefuse, match="exactly as it was"):
+        appliquer("a b", [{"find": "a", "replace": "x"}, {"find": "x", "replace": "a"}])

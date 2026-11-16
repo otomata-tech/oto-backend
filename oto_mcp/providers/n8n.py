@@ -17,7 +17,7 @@ from ._model import CredentialField, _c
 CONNECTOR = _c(
     "n8n", ["n8n"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
     label="n8n",
-    help="workflow automation — workflows + executions (public API)",
+    help="workflow automation — build and run workflows, track executions (public API)",
     href="https://n8n.io", credential_fields=(
         CredentialField("api_key", "API key", secret=True),
         CredentialField("base_url", "Instance URL", secret=False,
@@ -30,8 +30,8 @@ PUBLISHER = "n8n"
 LOGO_DOMAIN = "n8n.io"
 
 DESCRIPTION = (
-    "n8n workflows: list, trigger and track the execution of your instance's "
-    "workflows (cloud or self-hosted), via the public API. Two fields: "
+    "n8n workflows: list, create, edit, trigger and track the execution of your "
+    "instance's workflows (cloud or self-hosted), via the public API. Two fields: "
     "the API key and your instance's URL — n8n is self-hosted, there is no "
     "single endpoint."
 )

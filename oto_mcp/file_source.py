@@ -253,44 +253,44 @@ def _from_project_file(src: dict, max_bytes: int) -> ResolvedFile:
                         row.get("mime") or "application/octet-stream")
 
 
-def _from_http(src: dict, max_bytes: int) -> ResolvedFile:
-    """Un fichier SERVI par le connecteur `http` de l'appelant (un export CSV d'un
+def _from_api(src: dict, max_bytes: int) -> ResolvedFile:
+    """Un fichier SERVI par le connecteur `api` de l'appelant (un export CSV d'un
     pont, un PDF d'une API) : GET seulement, avec EXACTEMENT la résolution
-    d'instance et de clé de `http_get` (`_project` épinglé, `_instance`, équipe) et
+    d'instance et de clé de `api_get` (`_project` épinglé, `_instance`, équipe) et
     ses gardes d'egress — c'est sa fabrique qui sert. L'authentification est
     injectée côté serveur et ne sort jamais ; une redirection est refusée (elle
     l'emporterait) ; le corps est lu en flux, borné par `max_bytes`."""
     path, params = src.get("path"), src.get("params")
     if not isinstance(path, str) or not path.startswith("/"):
         raise FileSourceError(
-            "source http : `path` requis, relatif à la base_url du connecteur "
+            "source api : `path` requis, relatif à la base_url du connecteur "
             "(commence par /).")
     if params is not None and not isinstance(params, dict):
-        raise FileSourceError("source http : `params` doit être un objet.")
+        raise FileSourceError("source api : `params` doit être un objet.")
     import requests
 
     from .mcp_errors import McpError
-    from .tools import http as connecteur_http
+    from .tools import api as connecteur_api
     try:
-        client = connecteur_http._client()
+        client = connecteur_api._client()
     except McpError as e:
-        raise FileSourceError(f"source http : {e.error.message}") from None
+        raise FileSourceError(f"source api : {e.error.message}") from None
     try:
         data, ctype = client.get_raw(path, params, max_bytes=max_bytes)
     except ValueError as e:
-        # Même traduction que `http_get` : une redirection refusée ne rend que
+        # Même traduction que `api_get` : une redirection refusée ne rend que
         # schéma://hôte/chemin, jamais la requête qui peut porter la clé.
         raise FileSourceError(
-            f"source http : {connecteur_http._value_error(e).error.message}") from None
+            f"source api : {connecteur_api._value_error(e).error.message}") from None
     except requests.HTTPError as e:
         raise FileSourceError(
-            f"source http : {connecteur_http._upstream_error(e).error.message}") from None
+            f"source api : {connecteur_api._upstream_error(e).error.message}") from None
     except requests.RequestException as e:
         # Le type seul : le texte d'une erreur réseau porte l'URL, et l'URL porte la
         # clé quand le connecteur l'injecte en paramètre de requête.
         raise FileSourceError(
-            f"source http : l'API cible n'a pas répondu ({type(e).__name__}).") from None
-    nom = path.split("?")[0].rstrip("/").rsplit("/", 1)[-1] or "http"
+            f"source api : l'API cible n'a pas répondu ({type(e).__name__}).") from None
+    nom = path.split("?")[0].rstrip("/").rsplit("/", 1)[-1] or "api"
     return ResolvedFile(data, nom, ctype.split(";")[0].strip() or "application/octet-stream")
 
 
@@ -450,8 +450,15 @@ def _from_content(src: dict, max_bytes: int) -> ResolvedFile:
 _RESOLVERS = {"drive": _from_drive, "gmail": _from_gmail}
 # Les résolveurs qui bornent la taille EUX-MÊMES, avant de matérialiser les octets.
 _RESOLVERS_BORNES = {"url": _from_url, "project_file": _from_project_file,
-                     "http": _from_http, "content": _from_content,
+                     "api": _from_api, "content": _from_content,
                      "unipile": _from_unipile, "transit": _from_transit}
+
+
+#: Les `kind` renommés, refusés en nommant le nouveau — aucun alias : le connecteur
+#: Custom API s'appelle `api` depuis le 12/11/2026 (`providers.CONNECTEURS_RENOMMES`).
+_KINDS_RENOMMES = {"http": " `kind=\"http\"` est devenu `kind=\"api\"` (le connecteur "
+                           "Custom API s'appelle `api`) : rejoue avec `\"kind\": \"api\"`, "
+                           "mêmes `path` et `params`."}
 
 
 def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
@@ -459,14 +466,14 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
             deadline: Optional[float] = None) -> ResolvedFile:
     """Résout une référence de fichier côté oto vers ses octets + métadonnées.
 
-    `source` = dict `{"kind": "drive"|"gmail"|"url"|"project_file"|"http"|"content"|
+    `source` = dict `{"kind": "drive"|"gmail"|"url"|"project_file"|"api"|"content"|
     "unipile"|"transit", …}` :
       - drive        : `{file_id, account?}`
       - gmail        : `{message_id, filename, index?, account?}`
       - url          : `{url, filename?}` (http/https, redirections refusées ; nom :
                        `filename`, sinon `Content-Disposition`, sinon le chemin)
       - project_file : `{project_id, file_id}` (ids d'`oto_project_files op=list`)
-      - http         : `{path, params?}` (GET via le connecteur `http` de l'appelant)
+      - api          : `{path, params?}` (GET via le connecteur `api` de l'appelant)
       - content      : `{filename, base64 | text, mime?}` (fichier produit par l'agent,
                        ≤ `CONTENT_MAX_BYTES`)
       - unipile      : `{channel, url}` (pièce jointe d'un message, telle que le lecteur
@@ -488,7 +495,7 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
         if fn is None:
             raise FileSourceError(
                 f"source `kind`={kind!r} inconnu (attendu : drive, gmail, url, project_file, "
-                "http, content, unipile, transit).")
+                f"api, content, unipile, transit).{_KINDS_RENOMMES.get(kind, '')}")
         try:
             rf = fn(source)
         except FileSourceError:

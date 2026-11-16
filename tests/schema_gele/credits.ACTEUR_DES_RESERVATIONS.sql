@@ -1,0 +1,1 @@
+ALTER TABLE credit_holds ADD COLUMN IF NOT EXISTS acting_sub TEXT;

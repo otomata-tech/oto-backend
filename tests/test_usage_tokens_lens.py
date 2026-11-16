@@ -40,7 +40,8 @@ def test_les_cases_sont_rendues_sous_leurs_noms_publics(monkeypatch):
         vu.update(org_id=org_id, jours=jours)
         return [{"jour": "2026-11-03", "trigger_id": 5, "paye_par": "abonnement",
                  "modele": "claude-opus-5-5", "travaux": 3, "entree": 10, "sortie": 20,
-                 "lecture_cache": 30, "ecriture_cache": 40, "non_mesures": 1}]
+                 "lecture_cache": 30, "ecriture_cache": 40, "non_mesures": 1,
+                 "secondes": 600, "non_chronometres": 1}]
 
     monkeypatch.setattr(om.db, "jetons_des_travaux", faux)
     out = om._tokens(CTX, om.OrgTokensInput(org_id=7, days=7))
@@ -48,7 +49,8 @@ def test_les_cases_sont_rendues_sous_leurs_noms_publics(monkeypatch):
     assert out == {"days": 7, "rows": [{
         "day": "2026-11-03", "trigger_id": 5, "paid_by": "abonnement",
         "model": "claude-opus-5-5", "jobs": 3, "input": 10, "output": 20,
-        "cache_read": 30, "cache_write": 40, "unmeasured": 1}]}
+        "cache_read": 30, "cache_write": 40, "unmeasured": 1,
+        "seconds": 600, "untimed": 1}]}
 
 
 @pytest.fixture
@@ -173,8 +175,41 @@ def test_la_lecture_d_une_org_chargee_passe_par_l_index(base, monkeypatch):
             "INSERT INTO runner_jobs (org_id, kind, status, due_at, attempts, max_attempts, payload) "
             "SELECT 1, 'start', 'pending', NOW() - g * interval '1 minute', 1, 3, '{}'::jsonb "
             "FROM generate_series(1, 20000) g")
+        # Le temps se lit sur le run du travail (`runs`, jointure par sa clé) : une
+        # table pleine comme en prod, pour que la jointure n'y balaye rien non plus.
+        c.execute(
+            "INSERT INTO runs (run_id, org_id, label) "
+            "SELECT 'run_plan_' || g, 1, 'x' FROM generate_series(1, 20000) g "
+            "ON CONFLICT (run_id) DO NOTHING")
         c.execute("ANALYZE runner_jobs")
+        c.execute("ANALYZE runs")
         ((sql, params),) = lues
         plan = "\n".join(r["QUERY PLAN"] for r in c.execute("EXPLAIN " + sql, params).fetchall())
         assert RJ.INDEX_CONCLUS.nom in plan and "Seq Scan" not in plan, plan
         c.rollback()
+
+
+def test_le_temps_d_un_start_court_de_son_run_a_sa_conclusion(base, pg_module_dsn):
+    """`secondes` : un `start` est chronométré de l'ouverture de son run à sa
+    conclusion, borné à 3 h ; un `continue` (il reprend un run ancien) ne l'est pas."""
+    import psycopg
+    from oto_mcp.db import runner_jobs as RJ
+    with psycopg.connect(pg_module_dsn, autocommit=True) as c:
+        c.execute("DELETE FROM runner_jobs WHERE org_id = 3")
+        for rid, debut in (("run_t1", "10 minutes"), ("run_t2", "5 hours"), ("run_t3", "2 days")):
+            c.execute("INSERT INTO runs (run_id, org_id, label, started_at) "
+                      f"VALUES (%s, 3, 'x', NOW() - interval '{debut}') "
+                      "ON CONFLICT (run_id) DO UPDATE SET started_at = EXCLUDED.started_at",
+                      (rid,))
+        for kind, rid in (("start", "run_t1"), ("start", "run_t2"),
+                          ("continue", "run_t3"), ("start", None)):
+            c.execute("INSERT INTO runner_jobs (org_id, kind, status, due_at, attempts, "
+                      "max_attempts, run_id, payload, result, finished_at) VALUES "
+                      "(3, %s, 'done', NOW(), 1, 3, %s, '{\"trigger_id\": \"8\"}'::jsonb, "
+                      "'{\"usage_input\": 1, \"usage_output\": 1}'::jsonb, NOW())",
+                      (kind, rid))
+    [row] = RJ.jetons_des_travaux(3, 30)
+    assert row["travaux"] == 4
+    # 10 min + 3 h (5 h borné) ; le `continue` et le travail sans run : non chronométrés.
+    assert abs(row["secondes"] - (600 + 10800)) <= 5
+    assert row["non_chronometres"] == 2

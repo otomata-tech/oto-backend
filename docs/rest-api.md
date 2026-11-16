@@ -48,6 +48,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 | `POST` d'un fichier de projet, `/api/me/projects/{id}/export` | `api/projects.py` | **multipart / ZIP** → hors du moule (classé `NATURE`) |
 | `POST /api/me/projects/{id}/transcriptions/upload` (audio à transcrire) | `api/transcription.py` | **multipart** → hors du moule (classé `NATURE`) ; la forme par référence est une capacité |
 | `/api/upload/{token}` (PUT/POST/GET) | `api/uploads.py` | **pas de JWT** : le jeton de l'URL fait foi |
+| `POST /api/logto/webhook` | `api/logto_webhook.py` | **pas de JWT** : HMAC-SHA256 du corps brut (`logto-signature-sha-256`, clé `OTO_LOGTO_WEBHOOK_SIGNING_KEY`) ; un mot de passe changé révoque les jetons `oto_` et ferme les sessions Logto (classé `NATURE`, `docs/auth-logto.md` §Mot de passe changé) |
 | SIRENE (`api/sirene.py`), accords (`api/accords.py`), webhook Mollie (`api/billing.py`), **callbacks OAuth** zoho/google/salesforce (`api/{zoho,datastore,salesforce}.py`) | `api/<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres. ⚠️ `api/atlassian.py` et `api/folk.py` ont porté les deux callbacks fédérés jusqu'au **2026-09-09** : partis avec la fédération MCP (**ADR 0069**). ⚠️ **Le datastore n'y est plus** depuis le 2026-08-12 (#302) : ses 24 chemins sont des capacités (bloc ci-dessous) ; `api/datastore.py` est un nom vestige qui ne porte QUE le callback Google |
 
 - `GET /api/me` + `GET /api/me/calls` + `GET /api/me/activity-summary` — **le compte**,
@@ -202,7 +203,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   `unipile`) ; `400 no_credential_form` = pas de champ de saisie, la connexion passe par
   un flux dédié (session de navigateur, consentement OAuth) ; `400 wrong_credential_scope`
   = il prend bien une clé, mais pas à ce palier — le refus **nomme le palier** qui
-  l'accepte (`http` : `scope=org`) et, pour le `POST` qui n'a pas de `scope`, la route
+  l'accepte (`api` : `scope=org`) et, pour le `POST` qui n'a pas de `scope`, la route
   qui la pose (`PUT /api/orgs/{id}/secrets/{provider}`). Autres refus :
   `400 missing_credentials`
   (le champ vide est NOMMÉ), `409 account_required` (pose anonyme là où des comptes nommés
@@ -423,8 +424,12 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   la création membre rend **201** et l'admin **200** ; le `DELETE` membre rend `{ok}` et
   l'admin `{ok, id}` ; seul le palier MEMBRE refuse un tableau que l'émetteur ne voit pas
   (`400 unknown_datastore` — sinon le jeton serait muet et on le croirait branché), et
-  seul le palier ADMIN accepte un `ttl_days` (qui n'est retenu que s'il est fait de
-  chiffres : `-1` ou un texte donnent « pas d'expiration »).
+  `ttl_days` est accepté aux deux paliers (n'est retenu que s'il est fait de chiffres) ;
+  ⚠️ **depuis le 10/11/2026, au plus 90 jours** (`400 token_ttl_too_long` au-delà), et
+  une demande sans échéance — `-1` ou un texte compris — reçoit 90 jours, rendus dans
+  `ttl_days` : plus aucun jeton neuf n'est non-expirant (`docs/auth-logto.md` §Durée de
+  vie). Les jetons d'avant sans échéance reçoivent 90 jours à la mise en prod (révision
+  `20261111_0920_jetons_echeance`).
   **Révoquer ne supprime plus la ligne** (#523, 23/09/2026) : le `DELETE …/{token_id}`
   pose `revoked_at`/`revoked_by` (l'APPELANT)/`revoked_reason` (corps facultatif
   `{"reason": "…"}`, 500 caractères au plus, `400 reason_too_long` au-delà — jamais
@@ -480,7 +485,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   - **invitations — feature cascade plateforme/org/équipe** (le scope est DÉRIVÉ des cibles : org_id NULL = plateforme, org_id seul = org, org_id+group_id = équipe). Trois faces émettrices, une seule acceptation :
     - **org** : `POST|GET /api/orgs/{id}/invitations` + `DELETE …/{inv}` (org_admin ; `oto_org` op=invite). Le POST refuse en 409 une adresse déjà membre (`already_member`) ou déjà invitée avec une invitation valide (`already_invited`, l'existante dans `details`) — #622, 29/08/2026.
     - **équipe** : `POST|GET /api/groups/{id}/invitations` + `DELETE …/{inv}` (group_admin ; `oto_group` op=invite). L'invité rejoint l'org parente PUIS l'équipe à l'acceptation.
-    - **plateforme** : `POST|GET /api/admin/invitations` + `DELETE …/{inv}` (platform_admin ; `oto_admin_invite` op=create/list/revoke). `org_id` optionnel (vide = onboarding pur, sinon rattachement direct).
+    - **plateforme** : `POST|GET /api/admin/invitations` + `DELETE …/{inv}` (platform_admin ; `oto_admin_invite` op=create/list/revoke). `org_id` optionnel (vide = onboarding pur, sinon rattachement direct). Porter une org est réservé au super admin (règle `PLATFORM_INVITE`, 403 `forbidden` sinon, quel que soit le rôle) ; sans org, un admin plateforme suffit. L'acceptation rejuge la règle sur l'émetteur : une invitation plateforme qui porte une org sans avoir été émise par un super admin n'est honorée par aucun chemin (403 `platform_invite_not_allowed` sur le lien, 404 `no_pending_invitation` sur la réclamation par l'adresse, ignorée au signup).
     - **acceptation commune** : `POST /api/me/invitations/accept` (`SUB_ONLY`, `token` + expiry). ⚠️ **Modèle BEARER** : le secret suffit, l'identité de l'accepteur n'est PAS confrontée à l'email invité — cette ligne a longtemps dit « match email vérifié », ce qui était faux du code servi (corrigé le 2026-09-01, cf. le commentaire de `_invite_accept`). Email via `oto_mcp/email.py` (otomata-mailer `mailer.oto.zone/api/send`, env `OTO_MAILER_SEND_BEARER`, best-effort → `invite_url` en repli ; **plus de Resend**).
     - **réclamation par l'adresse** : `POST /api/me/orgs/{id}/invitations/claim` (`SUB_ONLY`, sans token), depuis le 2026-10-29. Rejoint l'org `{id}` par l'invitation en attente adressée à l'adresse **vérifiée** du compte appelant — pour l'invité **déjà inscrit** qui ouvre un lien vers l'org au lieu du lien du mail (la reprise par email, `reconcile_signup_with_invitation`, ne joue qu'au signup). Bornée à cette org ; même réponse que l'acceptation. Refus, dans l'ordre des gardes : 403 `org_suspended` (l'org `{id}` elle-même est suspendue — jugée sur `{id}`, pas sur l'org de l'appel) ; déjà membre = succès ; 403 `tenant_mismatch` (compte d'un autre tenant que l'org) ; 403 `email_not_verified` (l'adresse n'est pas garantie par l'annuaire du compte — l'email primaire de notre annuaire, posé après vérification ; jamais le claim `email` du jeton : un compte d'un tenant tiers n'a donc pas de juge chez nous et passe par le lien du mail) ; 404 `no_pending_invitation` (invitation absente, expirée, refusée, révoquée, déjà consommée, ou adressée à une autre adresse). La consommation est atomique (`UPDATE … WHERE <en attente> RETURNING`, dans la transaction de l'adhésion) : de deux réclamations simultanées une seule l'emporte — le même compte reçoit le succès idempotent. Même garde, depuis le même jour, sur l'acceptation par token (org, équipe, partage d'un objet).
     - **refus commun** : `POST /api/me/invitations/reject` (`SUB_ONLY`, `token` — même entrée que l'acceptation ; `oto_org` op=reject_invite), depuis le 2026-09-01 (#654). Ferme l'invitation (`org_invitations.declined_at`/`.declined_sub`) **sans créer ni retirer aucune appartenance** : elle quitte la file de l'émetteur, et plus rien ne peut la consommer — ni `accept`, ni la reprise automatique au signup par l'email (`reconcile_signup_with_invitation`). ⚠️ **Le refus n'est PAS bearer, contrairement à l'acceptation** : l'invitation doit être adressée à l'email du compte appelant (403 `not_the_invitee` sinon, invitation anonyme comprise) — accepter avec un secret qu'on détient est un geste sur soi, refuser détruirait l'invitation d'un tiers. Le refus **ne notifie pas** l'émetteur (aucune préférence de notification n'existe encore) et **ne bloque pas** une réinvitation : le 409 `already_invited` de #622 ne voit plus une invitation refusée.
@@ -549,6 +554,36 @@ Les fiches des recettes de l'org, sans corps, membre de l'org (`capabilities/rec
 Les fiches des recettes de la plateforme, lançables depuis toute org, sans corps, tout
 compte authentifié (`capabilities/recipes.py`, `platform.recipes`, REST seule). Même forme
 que `GET /api/orgs/{id}/recipes` : `docs/recettes.md` §Les recettes de la plateforme.
+
+## Favoris d'une org — `/api/orgs/{id}/favorites`
+
+Des pages (`kind=doc`) et des tableaux (`kind=table`) épinglés dans une org, pour la barre
+latérale du tableau de bord (`capabilities/orgs/favoris.py`, `org.favorites.{list,add,
+remove}`, REST seule, membre de l'org). Deux portées : `org`, partagée avec tous les
+membres, et `me`, le favori personnel de l'appelant dans cette org.
+
+- `GET` rend les favoris `org` de l'org et les favoris `me` de l'APPELANT — jamais ceux
+  d'un autre membre ;
+- `POST {kind, id, scope}` épingle (`scope` = `org` par défaut) ;
+- `DELETE …/{kind}/{ref_id}?scope=me` désépingle (`scope` en query string, `org` par
+  défaut) ; en `me`, seule la ligne de l'appelant est touchée. En `org`, seuls l'auteur
+  du favori et un admin de l'org le retirent (200, même s'il est déjà absent) ; un autre
+  membre reçoit 404 `favorite_target_unknown` s'il ne lit pas la cible, 403
+  `favorite_not_yours` s'il la lit et que le favori existe, 200 sans effet sinon.
+
+Les trois rendent `{"favorites": [{kind, id, title, scope, project_id, added_by,
+added_at}]}`, dans l'ordre de pose ; un objet favori dans les deux portées y figure deux
+fois. ⚠️ **Un favori n'accorde rien** : chacun ne voit que ce qu'il lit déjà (la page par
+`docs.common.acces_a_la_page`, le tableau par `ownership.can_access`). Épingler exige de
+lire la cible ; pour `org`, elle doit AUSSI être de l'org (elle y vit,
+`ownership.org_ou_vit`, ou elle est partagée à l'org ou à une de ses équipes) — sinon 404
+`favorite_target_unknown`, la même réponse pour un id absent. Une cible lisible par son
+seul auteur (objet personnel que rien ne partage, ni lui ni, pour une page, son projet)
+est refusée en `org` : 409 `favorite_target_private` ; elle s'épingle en `me`. `kind` ou
+`scope` inconnu : 400 `invalid_favorite_kind` / `invalid_favorite_scope`. Supprimer une
+page ou un tableau retire ses favoris dans la même transaction ; quitter l'org retire ses favoris personnels
+(`org_store.remove_org_member`), la disparition du compte aussi (FK) ; une fusion de
+comptes garde un seul favori personnel par objet, à la date la plus ancienne.
 
 ## Surface nœuds (PROVISOIRE) — `/api/me/shell`, `/api/me/nodes/{id}`, `/api/me/nodes/{id}/rows`
 
@@ -671,7 +706,11 @@ suivants, et chaque verdict **nomme** le consommateur (`scripts/contrat-front.py
 
 Seul le CONTENU d'un contrat peut rougir. Un secret déclaré mais absent rougit aussi
 (défaut chez nous, #823) ; un dépôt illisible ou un fichier déplacé chez le consommateur
-avertit sans rougir (`scripts/lire-contrat-consommateur.sh`).
+avertit sans rougir (`scripts/lire-contrat-consommateur.sh`). Sur une PR venue d'un fork,
+GitHub ne transmet aucun secret : la garde d'avant déploiement y retire de sa matrice les
+consommateurs à secret et l'annonce en avertissement (job `consommateurs`) ; sans
+consommateur lisible, elle est sautée. Ni vert ni rouge : ils sont jugés à la poussée sur
+`main`, avant la préproduction.
 
 Déclarés au 25/09/2026 : un front tiers (extrait des opérations qu'il appelle) et le
 dashboard (**l'instantané complet** de l'API : tout retrait ou changement de forme d'une
@@ -682,6 +721,18 @@ lecture seule s'il est privé.
 Déclaré au 28/09/2026 : **oto-commerce**, le service de facturation (dépôt privé), qui épingle
 les routes `/api/service/*` qu'il appelle (`api/openapi-service.json`, secret
 `OTO_COMMERCE_CONTRACT_KEY`).
+
+**Consommateur privé à référence indirecte** (13/11/2026). Ce dépôt est public, ses journaux
+d'Actions aussi : un consommateur dont le dépôt ne doit être nommé nulle part se déclare par
+un nom neutre (`partenaire-front-N`) et `depot_ref` + `chemin_ref` à la place de `depot` +
+`chemin` — jamais les deux. Ce sont des noms de **secrets** du dépôt (owner/repo, chemin du
+contrat), pas de variables : GitHub imprime l'`env:` de chaque étape dans le journal et ne
+masque d'office que les secrets. `scripts/lire-contrat-consommateur.sh` masque en plus le
+dépôt, son nom seul et le chemin (`::add-mask::`) avant tout autre geste, expurge le détail
+d'erreur de git, rend le contrat sous un nom neutre et ne cite que le nom neutre ; un secret
+de référence absent rougit comme une clé absente (« secret déclaré absent »). Une entrée
+`PARTENAIRE_*` sans dépôt en clair est tenue par `tests/test_contrat_consommateurs_966.py`.
+Déclaré au 13/11/2026 : `partenaire-front-1`.
 
 ### Le second contrat : l'administration (`chemin_admin`, #1196)
 
@@ -1203,8 +1254,12 @@ Corps `{error, detail, details: {retryable, retry_after_seconds, …}}` et en-t�
 de l'origine. Middleware ASGI `GardeRoutesLourdes`, monté juste sous `RestCallLogger` : le
 refus est journalisé, et cette ligne de journal est tout ce qu'il coûte à la base. ⚠️ Compteurs **par processus** : une protection du pool, pas un
 quota. ⚠️ `POST /api/me/runner/jobs` n'y est pas : elle a été la victime du pool vide,
-pas sa cause, et ses appelants sondent à cadence régulière. Preuves :
-`tests/api/test_routes_lourdes_1141.py`.
+pas sa cause, et ses appelants sondent à cadence régulière. Une requête peut valoir
+PLUSIEURS appels au débit : un lot de lectures d'app (`me.app.call`, `action: "batch"`)
+passe la garde comme une requête, puis sa capacité débite ses lectures suivantes sur la
+même fenêtre (`debiter_en_plus`, posé par la garde le temps de la requête) — refusé
+entier en 429 si elles n'y tiennent pas (`docs/apps.md`). Preuves :
+`tests/api/test_routes_lourdes_1141.py`, `tests/test_apps_appel_lot.py`.
 
 **Les routes déclarées (#1145)**, réglées sur les consommateurs réels recensés le 04/10 :
 
@@ -1245,7 +1300,7 @@ lire en base, et lui fait payer un seau à jetons (débit régulier, rafale = la
 |---|---|---|---|
 | `jeton` | la requête porte `Authorization` | empreinte du jeton | 1 200 |
 | `sensible` | sans jeton : secret dans le chemin (`/api/invitations/*`, `/api/public/*`, `/p/d/*`, `/o/{u,d,r}/*`) ou geste d'auth interactif (`/api/mcp/auth_callback`, `*/oauth/callback`) | adresse | 60 |
-| `webhook` | `/api/hooks/*`, `/api/receivers/*`, `/api/billing/webhook` | (adresse, chemin), plus un plafond par adresse à 10 × ce débit (`webhook_adresse`) | 300 |
+| `webhook` | `/api/hooks/*`, `/api/receivers/*`, `/api/billing/webhook`, `/api/logto/webhook` | (adresse, chemin), plus un plafond par adresse à 10 × ce débit (`webhook_adresse`) | 300 |
 | `anonyme` | tout le reste sans jeton (`/.well-known/*`, inscription du shim anonyme d'un projet publié — un client hébergé s'inscrit à chaque connexion, depuis sa sortie partagée —, `/mcp` avant connexion, upload signé, relais) | adresse | 600 |
 | `echecs` | chaque 401/403 (et 404 sur `sensible`) en consomme un ; épuisé, l'adresse voit refuser ses jetons **inconnus** et ses requêtes `sensible` | adresse | 120 |
 

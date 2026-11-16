@@ -42,6 +42,7 @@ SECRETS: frozenset[str] = frozenset({
     "OTO_MAILER_SEND_BEARER",
     "OTO_TEM_SECRET_KEY",
     "MOLLIE_API_KEY",
+    "OTO_LOGTO_WEBHOOK_SIGNING_KEY",
     "OTO_SENTRY_DSN",
     "OTO_EXPORT_CLE_CIBLE",
 })

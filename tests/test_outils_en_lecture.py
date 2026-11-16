@@ -84,7 +84,7 @@ async def test_les_lectures_stripe_et_http_get_sont_declarees():
     synchronise par recette : ces outils ne font que lire chez leur fournisseur.
     `stripe_invoice` et `stripe_customer` restent non déclarés (brouillon, création)."""
     servis = {t.name: t for t in await _outils()}
-    for nom in ("http_get", "stripe_search", "stripe_subscription", "stripe_payment",
+    for nom in ("api_get", "stripe_search", "stripe_subscription", "stripe_payment",
                 "stripe_balance", "stripe_event"):
         assert en_lecture(servis[nom]), nom
     for nom in ("stripe_invoice", "stripe_customer", "stripe_catalog", "stripe_checkout"):
@@ -109,14 +109,18 @@ async def test_les_lecteurs_lemlist_sont_declares_en_lecture():
 async def test_les_lectures_de_prospection_sont_declarees_en_lecture():
     """Ce qu'un process de prospection lit dans une recette, qui garde côté serveur des
     réponses de centaines de milliers de caractères : la base partagée lemlist (en lecture
-    depuis que ses personas sont passés à `lemlist_act`, 23/10/2026), TheirStack, les
-    technologies d'un site, une page web publique. `lemlist_enrich`, `lemlist_enrich_bulk`
-    (une `webhook_url` pousse le résultat chez un tiers) et `apify_run_sync` (un acteur
-    arbitraire) ne le sont pas."""
+    depuis que ses personas sont passés à `lemlist_act`, 23/10/2026), TheirStack, une page
+    web publique. `lemlist_enrich`, `lemlist_enrich_bulk` (une `webhook_url` pousse le
+    résultat chez un tiers) et `apify_run_sync` (un acteur arbitraire) ne le sont pas. Les
+    technologies d'un site (`dataforseo`, servi par sa description depuis le 11/11/2026) :
+    l'outil SIMULE (un crawl se crée), une recette le classe op par op."""
+    from oto_mcp.recipes import effets as effets_recette
     servis = {t.name: t for t in await _outils()}
     for nom in ("lemlist_database", "theirstack_jobs_search", "theirstack_companies_search",
-                "dataforseo_technologies", "web_read"):
+                "web_read"):
         assert en_lecture(servis[nom]), nom
+    assert effets_recette.classer("dataforseo", "domain_technologies") == "lire"
+    assert effets_recette.classer("dataforseo", "onpage_crawl_start") == "ecrire"
     for nom in ("lemlist_enrich", "lemlist_enrich_bulk", "apify_run_sync"):
         if nom in servis:
             assert not en_lecture(servis[nom]), nom
@@ -126,7 +130,7 @@ async def test_les_lectures_de_prospection_sont_declarees_en_lecture():
 async def test_aucun_outil_de_plateforme_ni_ecrivain_connu_n_est_declare():
     servis = {t.name: t for t in await _outils()}
     for nom in ("email_send", "slack_post_message", "gmail", "gmail_act", "outlook",
-                "outlook_act", "http_post",
+                "outlook_act", "api_post",
                 "lemlist_push_rows", "hubspot_push_rows", "routine_fire", "oto_call",
                 "data_write", "whatsapp_act", "telegram_act", "instagram_act",
                 "linkedin_unipile_act", "chat_act", "teams_act", "apollo_act",

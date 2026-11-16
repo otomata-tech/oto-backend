@@ -246,15 +246,15 @@ def test_le_kind_inconnu_nomme_project_file():
 
 
 def test_le_type_http_est_annonce():
-    with pytest.raises(fs.FileSourceError, match="http"):
+    with pytest.raises(fs.FileSourceError, match="api"):
         fs.resolve({"kind": "ftp", "path": "x"})
 
 
-def test_http_exige_un_chemin_relatif():
+def test_api_exige_un_chemin_relatif():
     with pytest.raises(fs.FileSourceError, match="path"):
-        fs.resolve({"kind": "http", "path": "x.csv"})
+        fs.resolve({"kind": "api", "path": "x.csv"})
     with pytest.raises(fs.FileSourceError, match="params"):
-        fs.resolve({"kind": "http", "path": "/x.csv", "params": "a=1"})
+        fs.resolve({"kind": "api", "path": "/x.csv", "params": "a=1"})
 
 
 # --- un fichier PRODUIT par l'agent, passé en ligne (oto-backend#1149) -----------

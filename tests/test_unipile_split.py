@@ -258,8 +258,10 @@ def test_les_instances_a_portee_du_compte_apparaissent_sur_la_carte_du_canal(mon
 
     monkeypatch.setattr(rbac.group_store, "list_groups_for_user",
                         lambda s, o: [{"group_id": 3, "name": "sales"}])
-    monkeypatch.setattr(rbac.group_store, "list_group_secrets",
-                        lambda gid: [{"provider": "unipile"}])
+    monkeypatch.setattr(rbac.credentials_store, "list_credentials_many",
+                        lambda et, ids: {i: [{"connector": "unipile"}] for i in ids}
+                        if et == "group" else {})
+    monkeypatch.setattr(rbac.group_store, "lent_instances", lambda gid: [])
     monkeypatch.setattr(rbac.org_store, "list_orgs_for_user", lambda s: [])
     from oto_mcp import roles
     monkeypatch.setattr(roles, "is_org_admin", lambda s, o: False)

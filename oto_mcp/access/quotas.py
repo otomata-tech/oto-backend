@@ -23,9 +23,10 @@ from typing import Callable, Optional
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import entitlements_catalogue as catalogue, providers, db, grants_chain
-from ..db import grants as db_grants
+from ..db import grants as db_grants, usage_org as db_usage_org
 from ..mcp_errors import McpError
 from . import entitlements, heritage, scope
+from .platform_grant import quota_per_org
 
 # DERIVED from the single-source registry (`providers/` package): daily quota per
 # provider (fallback if there is no env var nor grant).
@@ -194,12 +195,16 @@ def usage_today(sub: str, provider: str) -> int:
     return db.get_usage_today(sub, providers.credential_provider(provider))
 
 
-def platform_used_today(sub: str, provider: str, edge_counter: Optional[str],
-                        usage: Optional[Callable[[], int]] = None) -> int:
+def platform_used_today(sub: str, provider: str, edge_counter: Optional[str] = None,
+                        usage: Optional[Callable[[], int]] = None, *,
+                        org_counter: Optional[int] = None) -> int:
     """The day's count the PLATFORM quota refusal reads (R6, `docs/credits-au-moment-de-l-appel.md`) — SINGLE function, like
     `plafond_du_jour`: the refusal (`resolve._win_quota`) and the `/api/me` snapshot
     (`status.status_for`) read the same number.
 
+    - a connector whose quota counts per ORG (`Connector.grant_quota_per`, the
+      platform rung then names `org_counter`) → the org's counter of the day
+      (`usage_org`), every member together, whichever scope granted;
     - a `user` edge of the grants chain (`edge_counter`, the grant's key of that name)
       → its edge counter, archived edges included (`db.grants.counter_sum_today`,
       0053-D7);
@@ -212,9 +217,18 @@ def platform_used_today(sub: str, provider: str, edge_counter: Optional[str],
     DECRYPTED secret, and a frame that raises keeps its locals in the traceback (#564).
 
     `usage`: the per-person count already read (a preloaded map), `None` reads it."""
+    if org_counter is not None:
+        return db_usage_org.du_jour(org_counter, providers.credential_provider(provider))
     if edge_counter:
         return db_grants.counter_sum_today(edge_counter, "user", sub)
     return usage() if usage is not None else usage_today(sub, provider)
+
+
+def compteurs(grant: dict) -> dict:
+    """The counter refs of a winning PLATFORM grant, as `platform_used_today` takes them
+    (`edge_counter`, `org_counter`) — refs only, never the grant: it may carry the
+    decrypted secret, and `platform_used_today` can raise."""
+    return {"edge_counter": grant.get("edge_counter"), "org_counter": grant.get("org_counter")}
 
 
 def quotas_leves(sub: str, org: Optional[int]) -> bool:
@@ -252,12 +266,24 @@ def debiter_plateforme(sub: str, provider: str, unites: int) -> None:
 
     BOTH counters debit in ONE go: a call worth N units costs one write, not N
     (a default Maps census would otherwise take 81 pool connections and 81
-    transactions for a single tool call, on the hot path of a single-loop server)."""
+    transactions for a single tool call, on the hot path of a single-loop server).
+
+    A connector whose quota counts per ORG (`Connector.grant_quota_per`): the counter of
+    the org the call is made in takes the units too, in one atomic upsert — the same org
+    the platform rung named as `org_counter`, read on the same seam (`scope.current_org`)
+    — it is the refusal's authority for that connector; the per-person history is still
+    written. Without an org there is nothing to debit: it raises, and the settlement
+    journals the lost count."""
     # Metered on the key ACTUALLY consumed (delegation): a WhatsApp call burns
     # the unipile account's quota, not that of a "whatsapp" counter that nobody
     # reads. Write and read (`usage_today`) normalize the same way.
     provider = providers.credential_provider(provider)
     db.increment_usage(sub, provider, unites)
+    if quota_per_org(provider):
+        org = scope.current_org(sub)
+        if org is None:
+            raise ValueError(f"usage_org: no org to debit {unites} units of `{provider}` on")
+        db_usage_org.ajouter(org, provider, unites)
     if grants_chain.is_chained(provider):
         grants_chain.record_usage(sub, provider, scope.current_org(sub), unites)
 

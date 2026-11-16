@@ -72,6 +72,13 @@ Code (web) ciblaient la branche de prod par défaut et se faisaient refuser par 
 - **Prod et preprod partagent la MÊME base.** Ce qu'on écrit depuis la preprod est la donnée
   de prod ; seule la prod fait tourner les boucles de fond qui agissent sur un tiers
   (`live-migrations.md`).
+- ⚠️ **Une révision ne suppose pas que le code neuf a démarré.** Chez nous, on démarre puis
+  on migre (`migrer upgrade head` après le tag) ; une instance cible migre AVANT de démarrer
+  (`instance-cible.md` § Les migrations, jouées par la montée). Ce qu'une révision attend
+  d'une étape du code (la copie du coffre d'un connecteur renommé, qui exige la clé
+  maîtresse) est une commande `oto-mcp maintenance` que le démarrage joue ET que la porte
+  d'une cible joue avant la migration — aujourd'hui `copies-du-coffre` — et la révision lève,
+  en nommant cette commande, si l'étape manque.
 - **Release log = `RELEASES.md` du dépôt public `oto`** : notes datées **rédigées à la
   main** par le mainteneur, format libre, niveau produit/plateforme (cross-repo), décorrélé
   des tags (qui restent le mécanisme de déploiement). Pas de génération automatique en CI ni

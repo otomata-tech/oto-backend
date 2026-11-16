@@ -148,31 +148,10 @@ def test_serpapi_search_filters_any_engine_payload(monkeypatch, per):
 
 def test_searchapi_search_filters_the_raw_payload(monkeypatch, per):
     from oto_mcp.tools import searchapi as S
+    inst = MagicMock()
     raw = {"organic_results": _results()}
-
-    class _Resp:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return raw
-
-    class _Client:
-        def __init__(self, *a, **k):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get(self, *a, **k):
-            return _Resp()
-
-    monkeypatch.setattr(S.httpx, "Client", _Client)
+    inst.search.return_value = raw
+    monkeypatch.setattr(S, "SearchApiClient", lambda key: inst)
     monkeypatch.setattr(S.access, "resolve_api_key", lambda p: ("k", False))
     out = _tool(S, "searchapi_search")(engine="google", query="jane")
     _assert_effect(out, raw, per, path=("organic_results",))

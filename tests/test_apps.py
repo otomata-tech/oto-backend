@@ -50,6 +50,8 @@ def seams(monkeypatch):
     monkeypatch.setattr(ownership, "can_access_many",
                         lambda sub, t, owners, want="read": {k: k != "8" for k in owners})
     monkeypatch.setattr(db.apps, "get", lambda i: dict(ROW, id=i) if i == 5 else None)
+    # Aucun brouillon par défaut : une app d'avant, publiée à chaque écriture.
+    monkeypatch.setattr(db.app_versions, "draft", lambda i: None)
     monkeypatch.setattr(db.apps, "create",
                         lambda owner, org, **k: rec["create"].append((owner, org, k)) or dict(
                             ROW, owner_type=owner[0], owner_id=owner[1], context_org_id=org, **{
@@ -542,7 +544,8 @@ def test_validate_ne_juge_pas_le_html_d_un_manifeste_a_corriger(seams):
 def test_patch_remplace_et_rend_un_recu_sans_html(seams):
     out = A._app(CTX, A.AppInput(op="patch", app_id=5, expected_rev="abc",
                                  edits=[{"find": "<p>x</p>", "replace": "<p>y</p>"}]))
-    assert out == {"rev": "abc", "replaced": 1}
+    # `target` : l'app ne passe pas par un brouillon, l'écriture est vivante.
+    assert out == {"rev": "abc", "replaced": 1, "target": "live"}
     (app_id, by, fields), = seams["update"]
     assert (app_id, by, fields["html"]) == (5, "u1", "<p>y</p>")
     assert set(fields) == {"html"}

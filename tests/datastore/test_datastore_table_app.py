@@ -71,6 +71,9 @@ def _banc(monkeypatch, *, ui: bool = True):
     pytest.importorskip("fastmcp.apps")
     from _mcp_app import static_mcp
 
+    # The shared catalogue is cached for the whole process: build it BEFORE the bundle
+    # is set, or a later test (the frozen surface) reads the bundled `data_app`.
+    middleware = static_mcp().middleware
     from oto_mcp import access, procedure_diagram
     from oto_mcp.middleware import un_seul_canal
     from oto_mcp.tools import datastore as ds
@@ -83,7 +86,7 @@ def _banc(monkeypatch, *, ui: bool = True):
     monkeypatch.setenv("OTO_DATA_APP_BUNDLE", BUNDLE)
     ta = _module(monkeypatch)
     m = FastMCP("banc")
-    for mw in static_mcp().middleware:
+    for mw in middleware:
         m.add_middleware(mw)
     ta.register(m)
     un_seul_canal.retirer_les_schemas_vides(m)

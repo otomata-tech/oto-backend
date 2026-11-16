@@ -1,18 +1,18 @@
-"""Canonicalisation du public_identifier LinkedIn (#180).
+"""Canonicalisation du public_identifier LinkedIn (#180, #1353, #1447).
 
-Un slug LinkedIn accentué (`chloé-dupré`) fait renvoyer à l'API Unipile un 403
-« Insufficient permissions » trompeur — LinkedIn génère toujours des slugs ASCII.
-`_canonical_li_identifier` retire les diacritiques avant l'appel (idempotent sur un
-slug déjà ASCII ou un provider_id opaque).
+`_canonical_li_identifier` ramène une URL à son slug et décode un slug encodé en
+pourcentage ; il GARDE les accents (un slug peut porter une lettre non ASCII).
+La forme sans accents (#180) n'est plus qu'un repli, tenté par `_read_li_slug` quand
+l'amont refuse le slug tel quel — testé dans `tests/test_unipile_slug_accents.py`.
 """
 from __future__ import annotations
 
 from oto_mcp.tools.unipile import _canonical_li_identifier as canon
 
 
-def test_strips_accents_from_slug():
-    assert canon("chloé-dupré") == "chloe-dupre"
-    assert canon("éàüô-test") == "eauo-test"
+def test_keeps_the_accents_of_a_slug():
+    assert canon("chloé-dupré") == "chloé-dupré"
+    assert canon("chloe\u0301-dupre\u0301") == "chloé-dupré"  # NFD → NFC
 
 
 def test_ascii_slug_unchanged():
@@ -25,8 +25,8 @@ def test_opaque_provider_id_unchanged():
 
 
 def test_idempotent():
-    once = canon("françois-mitterrand")
-    assert once == canon(once) == "francois-mitterrand"
+    once = canon("fran%C3%A7ois-mitterrand")
+    assert once == canon(once) == "françois-mitterrand"
 
 
 import pytest  # noqa: E402
@@ -46,8 +46,14 @@ def test_une_url_de_profil_est_ramenee_au_slug(url):
     assert canon(url) == "jean-dupont"
 
 
-def test_une_url_encodee_et_accentuee_rend_le_slug_ascii():
-    assert canon("https://www.linkedin.com/in/chlo%C3%A9-dupr%C3%A9/") == "chloe-dupre"
+def test_une_url_encodee_et_accentuee_rend_le_slug_decode():
+    assert canon("https://www.linkedin.com/in/chlo%C3%A9-dupr%C3%A9/") == "chloé-dupré"
+
+
+def test_un_slug_nu_encode_en_pourcentage_rend_le_slug_decode():
+    """#1447 : le slug nu encodé partait tel quel → INVALID_ARGUMENT de l'amont."""
+    assert canon("chlo%c3%a9-dupr%c3%a9-123456") == "chloé-dupré-123456"
+    assert canon(canon("chlo%C3%A9-dupr%C3%A9")) == "chloé-dupré"
 
 
 def test_une_url_d_entreprise_est_ramenee_au_slug():

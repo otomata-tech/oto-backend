@@ -562,3 +562,58 @@ def test_un_compte_a_nommer_est_un_refus_nomme_dans_une_recette(serveur, monkeyp
     nomme = _appeler(m, "acme_comptes", {"_account": "deux"})
     assert nomme["ok"] and nomme["result"] == {"compte": "deux"}
     assert appels == ["acme_comptes"] * 3
+
+
+def test_via_d_une_recette_est_prouve_par_ses_propres_appels(tableaux):
+    """Une recette nomme ce qui a trouvé la valeur (`via`) : retenu si ELLE a appelé cet
+    outil avec succès avant d'écrire — la case est attribuée ; sinon l'écriture se fait
+    sans attribution et la réponse le dit. Sous le geste de l'appel `oto_recipe`."""
+    from oto_mcp import geste
+    from oto_mcp.db._conn import _connect
+    from oto_mcp.recipes import pont
+    ns = _table()
+
+    async def scenario():
+        appeler = pont.appeleur_de_recette(tableaux, SUB, datastore=ns, ecrire=True)
+        with geste.portee(geste.AGENT, SUB, outil="oto_recipe"):
+            sans = await appeler("data_write", {
+                "rows": [{"slug": "a", "name": "A"}], "key": "slug", "via": "acme_people"})
+            trouve = await appeler("acme_people", {"company": "Acme"})
+            avec = await appeler("data_write", {
+                "rows": [{"slug": "b", "name": "B"}], "key": "slug", "via": "acme_people"})
+        return sans, trouve, avec
+
+    sans, trouve, avec = asyncio.run(scenario())
+    assert trouve["ok"]
+    assert sans["ok"] and "no successful `acme_people`" in sans["via_dropped"]
+    assert avec["ok"] and "via_dropped" not in avec
+    with _connect() as conn:
+        cases = conn.execute(
+            "SELECT c.champ, c.outil FROM datastore_cell_sources c "
+            "JOIN user_datastores u ON u.id = c.ns_id WHERE u.namespace = %s "
+            "ORDER BY 1", (ns,)).fetchall()
+    assert [(c["champ"], c["outil"]) for c in cases] == [
+        ("name", "acme_people"), ("slug", "acme_people")]
+
+
+def test_via_d_une_recette_sans_geste_en_cours_attribue_quand_meme(tableaux):
+    """Recette jouée hors requête (aucun geste) : `via` prouvé ouvre son geste, il ne
+    s'évapore pas en silence."""
+    from oto_mcp import geste
+    from oto_mcp.db._conn import _connect
+    from oto_mcp.recipes import pont
+    ns = _table()
+    assert geste.courant() is None
+
+    async def scenario():
+        appeler = pont.appeleur_de_recette(tableaux, SUB, datastore=ns, ecrire=True)
+        await appeler("acme_people", {"company": "Acme"})
+        return await appeler("data_write", {
+            "rows": [{"slug": "c", "name": "C"}], "key": "slug", "via": "acme_people"})
+
+    assert asyncio.run(scenario())["ok"]
+    with _connect() as conn:
+        outils = {r["outil"] for r in conn.execute(
+            "SELECT c.outil FROM datastore_cell_sources c JOIN user_datastores u "
+            "ON u.id = c.ns_id WHERE u.namespace = %s", (ns,)).fetchall()}
+    assert outils == {"acme_people"}

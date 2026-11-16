@@ -155,6 +155,58 @@ def _a_dessiner(slug: str, scope: str, version) -> str:
         f"{_FORME}\n```")
 
 
+def a_dessiner_a_la_naissance(sub: str, slug: str, cible: str, version, *,
+                              forke: bool = False) -> str:
+    """A process JUST CREATED without a drawing: draw it now, while its author is here.
+
+    The order `_a_dessiner` gives when someone first opens the graph, moved to the
+    moment of creation — on an instance whose front draws process graphs only (the
+    caller gates on `bundle_du_graphe`; the core still requires no drawing, 18/09/2026).
+    Unlike the app's order it reaches TEXT clients too: writing box characters needs no
+    renderer, and most processes are created from one. The last step differs: a host
+    that paints apps shows the graph, a text client gives the page's link. `cible` is
+    the write's own axes (`scope=… [group=…] [org=…]`), so the drawing lands on the row
+    just written, never on a copy at another scope. `forke`: the body came from the
+    library, the agent has not read it — and usually adapts it next, so the drawing
+    rides on THAT write rather than adding a version of its own."""
+    from ..procedure_diagram import client_affiche_les_apps
+    if client_affiche_les_apps():
+        montrer = (f"5) Call oto_procedure_app slug={slug} — the user sees the graph. "
+                   "ONLY THEN answer.")
+    else:
+        url = _page_du_process(sub, slug)
+        montrer = ("5) Then answer, and tell the user the graph is on the process page"
+                   + (f": {url}" if url else "") + ".")
+    if forke:
+        quand = ("this process was just forked WITHOUT a drawing, and its page opens on its "
+                 "graph: add the drawing in your NEXT write of it — the adaptation, if you "
+                 "adapt it now; otherwise right away, before you answer. ")
+        source = (f"the steps of its body (oto_procedure op=get slug={slug} {cible}), as "
+                  "adapted")
+    else:
+        quand = ("this process was just created WITHOUT a drawing, and its page opens on "
+                 "its graph: add the drawing now, before you answer. ")
+        source = "the steps you just wrote"
+    texte = (
+        f"REQUIRED NEXT STEP — {quand}"
+        f"1) oto_guide op=read slug=procedure-flowchart — follow its grammar and worked "
+        f"example exactly (only the drawing: add nothing else it mentions). 2) Draw the "
+        f"flow from {source}: the trigger, each step in "
+        f"a box naming the tools it uses, the checks as decisions, the rows that leave as "
+        f"exits — box-drawing characters (┌ ─ ┐ │ └ ┘ ┬ ▼ ├ ▶ ▪) INSIDE ONE untagged "
+        f"fence: a line with ``` alone before it and another after it. EVERY line of a box "
+        f"has exactly the width of its top line (pad with spaces): one column off and the "
+        f"whole drawing is refused; copy the shape at the end of this message. Never "
+        f"Mermaid, never ```text, never bare lines. 3) Put it after the intro (or the "
+        f"summary table), before the first step heading, change NOTHING else. "
+        f"4) oto_procedure op=set slug={slug} {cible} expected_version={version} "
+        f"body_md=<the whole body>. If `diagram_warning` says the drawing will not render, "
+        f"fix exactly what it names and set ONCE more — never a third write; if a write is "
+        f"refused, tell the user the drawing could not be added. {montrer}"
+        f"\nShape to copy:\n```\n{_FORME}\n```")
+    return _aux_noms_du_produit(sub, texte)
+
+
 def _a_encadrer(slug: str, scope: str, version) -> str:
     """The drawing was written bare, outside any fence: wrap it, never redraw it."""
     return (f"The drawing is in the body but NOT inside a ``` fence, so the page does not "

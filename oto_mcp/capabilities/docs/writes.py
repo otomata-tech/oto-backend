@@ -19,7 +19,7 @@ from .common import require
 
 
 def create(sub: Optional[str], inp) -> dict:
-    require(inp.project_id is not None, "missing_project", "`project_id` is required.")
+    require(inp.project_id is not None, "missing_project", common.PROJET_REQUIS)
     require(inp.title and inp.title.strip(), "missing_title", "`title` is required.")
     require(common.can(sub, inp.project_id, "write"), "forbidden", "Write refused.", 403)
     if inp.parent_id is not None:
@@ -54,7 +54,7 @@ def bulk_create(sub: Optional[str], inp) -> dict:
     # A4 (#6) : créer N pages en UN appel (33 pages ≠ 33 allers-retours). Arbre en un
     # coup via `parent_index` (index d'une page PLUS TÔT dans le lot) ; sinon le
     # `parent_id` de la page, sinon celui du lot.
-    require(inp.project_id is not None, "missing_project", "`project_id` is required.")
+    require(inp.project_id is not None, "missing_project", common.PROJET_REQUIS)
     require(common.can(sub, inp.project_id, "write"), "forbidden", "Write refused.", 403)
     require(bool(inp.pages), "missing_pages", "`pages` (non-empty list) is required.")
     if inp.parent_id is not None:

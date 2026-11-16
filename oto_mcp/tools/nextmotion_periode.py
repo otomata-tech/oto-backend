@@ -39,6 +39,16 @@ def _borne(valeur: Optional[str], nom: str) -> Optional[date]:
         raise ValueError(f"`{nom}` must be a YYYY-MM-DD date — got {valeur!r}.") from None
 
 
+def bornes(du: Optional[str], au: Optional[str], nom_du: str,
+           nom_au: str) -> tuple:
+    """The two bounds of a period, checked: YYYY-MM-DD each, the first not after the
+    second."""
+    debut, fin = _borne(du, nom_du), _borne(au, nom_au)
+    if debut and fin and debut > fin:
+        raise ValueError(f"`{nom_du}` is after `{nom_au}`.")
+    return debut, fin
+
+
 def _jour_facture(facture: Any) -> date:
     brut = facture.get("invoiced_time") if isinstance(facture, dict) else None
     try:
@@ -57,10 +67,7 @@ def lister(lire_page: Callable[[int], Any], invoiced_from: Optional[str],
 
     `lire_page(offset)` returns an upstream page of `PAGE` invoices. Everything is validated BEFORE
     the first call."""
-    debut = _borne(invoiced_from, "invoiced_from")
-    fin = _borne(invoiced_to, "invoiced_to")
-    if debut and fin and debut > fin:
-        raise ValueError("`invoiced_from` is after `invoiced_to`.")
+    debut, fin = bornes(invoiced_from, invoiced_to, "invoiced_from", "invoiced_to")
     plafond = MAX_PAGES_DEFAUT if max_pages is None else max_pages
     if not 1 <= plafond <= MAX_PAGES_MAX:
         raise ValueError(f"max_pages must be between 1 and {MAX_PAGES_MAX} — got {plafond}.")

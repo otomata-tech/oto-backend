@@ -59,6 +59,14 @@ def headquarters_addresses(sirens: Iterable[str]) -> dict[str, dict[str, Any]]:
     return _post("/api/sirene/enrich", {"sirens": list(sirens)})
 
 
+def lookup_sirets(sirets: Iterable[str]) -> dict[str, Any]:
+    """Établissements d'une liste de SIRET en un scan — forme de `headquarters_addresses`
+    avec l'effectif de l'établissement (`tranche_effectifs`, `annee_effectifs`) et son
+    `caractere_employeur`. Rend `{items: {siret: …}, erreurs: [{siret, code}], count}` :
+    une erreur par élément (`siret_invalide`, `introuvable`), jamais pour le lot."""
+    return _post("/api/sirene/sirets", {"sirets": list(sirets)})
+
+
 def lookup_unites_legales(sirens: Iterable[str]) -> dict[str, dict[str, Any]]:
     """Unités légales d'une liste de SIREN — porte `categorie_entreprise`
     (PME/ETI/GE), calculée par l'INSEE sur le périmètre GROUPE. Les SIREN

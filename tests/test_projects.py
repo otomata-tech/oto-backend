@@ -117,7 +117,7 @@ def seams(monkeypatch):
     # Pastilles d'état de l'index (refonte UX) : nb de grants batché + audit par projet.
     monkeypatch.setattr(P.db, "project_grant_counts", lambda ids: {})
     monkeypatch.setattr("oto_mcp.project_audit.audit_project",
-                        lambda pid, links=None, *, light=False: {"dead_links": [], "unbound_slots": [],
+                        lambda pid, links=None, **_k: {"dead_links": [], "unbound_slots": [],
                                                                  "inert_procedures": []})
     # Équipes de l'acteur dans l'org active (lentille « partagés à mon équipe ») :
     # défaut = aucune ; les tests dédiés surchargent.

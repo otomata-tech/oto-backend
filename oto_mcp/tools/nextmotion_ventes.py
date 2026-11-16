@@ -13,7 +13,11 @@ parameters do not overlap (ADR 0047):
   a credit note);
 - `nextmotion_payment` — list | get | update. A payment EMBEDS its whole invoice,
   hence its patient: the invoice goes through the same allowlist as
-  `nextmotion_invoice`. A payment cannot be deleted (accounting document).
+  `nextmotion_invoice`. A payment cannot be deleted (accounting document). The list
+  filters by payment day (`paid_from` / `paid_to`, applied by Nextmotion), and
+  `with_practitioner` names, on each invoice line, the practitioner of its act — read
+  once per treatment within the call (see `_PRACTITIONER_NOTE`) — and splits a payment
+  that settles its invoice between them (`nextmotion_ventilation`).
 - `nextmotion_statistics` — `kind` x a period: clinic aggregates, no
   patient. `meta` (free-form object, not described by the spec) and `label_field` (undocumented
   parameter, which could change what the labels name) are not served.
@@ -31,11 +35,13 @@ Every write has `dry_run=True` by default and its `data` goes through the input 
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastmcp import FastMCP
 
 from . import nextmotion_periode as periode
+from . import nextmotion_ventilation as ventilation
+from ..mcp_errors import McpError
 from .nextmotion_entrees import (_IN_CREDIT_NOTE, _IN_INVOICE, _IN_INVOICE_VALIDATE,
                                  _IN_PAY, _IN_PAYMENT, _IN_QUOTE, _IN_QUOTE_VALIDATE)
 from .nextmotion_garde import (Kind, Write, _bad, _client, _need, _paging, _refuse_ignored,
@@ -109,6 +115,117 @@ def _package_usage(c, clinic_id: str, patient_id: str) -> dict:
     return {"patient_id": patient_id, "appointments_read": len(appointments),
             "truncated": truncated, "consumed": groups, "sold": sold,
             "note": _USAGE_NOTE}
+
+_PRACTITIONER_NOTE = (
+    "practitioner = the practitioner of the act of each invoice line, read from its "
+    "treatment; each line keeps its own price, the payment's amounts stay the "
+    "payment's (its split is in `split`). `status`: ok | none (Nextmotion names no "
+    "practitioner on the treatment) | no_treatment (the line names no treatment) | "
+    "unavailable (the read failed, `reason` says why — the line's practitioner is "
+    "unknown, not absent).")
+
+
+def _practitioner(c, line: dict, cache: dict) -> dict:
+    """The practitioner of ONE invoice line, read once per treatment within the call
+    (`cache`). A failed read is said on the line, never turned into an empty value."""
+    treatment_id = line.get("treatment")
+    if treatment_id is None:
+        return {"status": "no_treatment", "reason": "this invoice line names no treatment."}
+    if not isinstance(treatment_id, str):
+        return {"status": "unavailable",
+                "reason": f"unexpected treatment reference on the line: {treatment_id!r}."}
+    if treatment_id not in cache:
+        try:
+            env = _run(lambda: c.get_treatment_provider(treatment_id))
+        except McpError as e:
+            cache[treatment_id] = {"status": "unavailable", "reason": e.error.message}
+        else:
+            provider = env["data"]["provider"]
+            cache[treatment_id] = (
+                {"status": "none",
+                 "reason": "Nextmotion names no practitioner on this treatment."}
+                if provider is None else
+                {"status": "ok", "id": provider.get("id"),
+                 "first_name": provider.get("first_name"),
+                 "last_name": provider.get("last_name")})
+    return cache[treatment_id]
+
+
+#: Payments of one invoice read to know whether a payment settles it.
+_INVOICE_PAYMENTS_MAX = 500
+
+
+def _invoice_payments(c, clinic_id: str, invoice_id: Any, cache: dict) -> tuple:
+    """All the payments of one invoice, read once per invoice within the call:
+    (rows, truncated) — or (None, reason) when the read failed."""
+    if invoice_id not in cache:
+        if not isinstance(invoice_id, str):
+            cache[invoice_id] = (None, f"unexpected invoice reference: {invoice_id!r}.")
+        else:
+            try:
+                cache[invoice_id] = _all_pages(lambda o: c.list_payments(
+                    clinic_id, invoice_id=invoice_id, limit=100, offset=o),
+                    _INVOICE_PAYMENTS_MAX)
+            except McpError as e:
+                cache[invoice_id] = (None, e.error.message)
+    return cache[invoice_id]
+
+
+def _split(c, clinic_id: str, raw: dict, practitioners: list, cache: dict) -> dict:
+    invoice = raw.get("invoice") if isinstance(raw.get("invoice"), dict) else {}
+    rows, truncated = _invoice_payments(c, clinic_id, invoice.get("id"), cache)
+    if rows is None:
+        try:
+            own = str(ventilation.amount(raw).quantize(ventilation.CENT))
+        except ventilation.Unreadable as e:
+            return {"status": "undetermined", "reason": str(e), "amount": None}
+        return {"status": "undetermined", "amount": own,
+                "reason": f"the invoice's payments could not be read: {truncated}"}
+    return ventilation.ventilate(raw, practitioners, rows, truncated)
+
+
+def _payment_with_practitioners(c, clinic_id: str):
+    """The payment allowlist, plus the practitioner of each invoice line and the
+    payment's `split`. The caches live as long as the returned shape: one tool call;
+    `shape.splits` keeps every split served, for the totals."""
+    cache: dict = {}
+    paid: dict = {}
+
+    def shape(raw):
+        out = _payment(raw)
+        if not isinstance(raw, dict) or not isinstance(out, dict):
+            return out
+        invoice = raw.get("invoice") if isinstance(raw.get("invoice"), dict) else {}
+        lines = [li for li in invoice.get("invoiced_treatments") or []
+                 if isinstance(li, dict)]
+        practitioners = [_practitioner(c, line, cache) for line in lines]
+        shaped = out.get("invoice")
+        if isinstance(shaped, dict):
+            for who, served in zip(practitioners, shaped.get("invoiced_treatments") or []):
+                served["practitioner"] = who
+        out["split"] = _split(c, clinic_id, raw, practitioners, paid)
+        shape.splits.append((raw.get("id"), out["split"]))
+        return out
+    shape.keys = _payment.keys + ("split",)
+    shape.splits = []
+    return shape
+
+
+def _unavailable(rows: list) -> int:
+    return sum(1 for r in rows if isinstance(r, dict)
+               for li in ((r.get("invoice") or {}).get("invoiced_treatments") or [])
+               if (li.get("practitioner") or {}).get("status") == "unavailable")
+
+
+def _practitioners_said(out: dict, key: str, shape) -> dict:
+    rows = out[key] if isinstance(out[key], list) else [out[key]]
+    out["practitioners_unavailable"] = _unavailable(rows)
+    out["practitioner_note"] = _PRACTITIONER_NOTE
+    out["split_note"] = ventilation.SPLIT_NOTE
+    if key == "payments":
+        out["totals"] = ventilation.totals(shape.splits)
+    return out
+
 
 def _invoice_of_credit_note(c, _, body):
     """The preview of a credit note: the invoice it points to, if it points to one."""
@@ -305,6 +422,9 @@ def register(mcp: FastMCP) -> None:
         clinic_id: Optional[str] = None,
         payment_id: Optional[str] = None,
         invoice_id: Optional[str] = None,
+        paid_from: Optional[str] = None,
+        paid_to: Optional[str] = None,
+        with_practitioner: Optional[bool] = None,
         data: Optional[dict] = None,
         dry_run: Optional[bool] = None,
         limit: Optional[int] = None,
@@ -316,17 +436,43 @@ def register(mcp: FastMCP) -> None:
         invoice paid. Health data, titles and free text are withheld; the patient is
         served by ID ONLY — resolve it with `nextmotion_patient(op="get")` when needed.
 
-        `op`: "list" (default, `clinic_id`, optional `invoice_id`) | "get" | "update"
-        (`payment_id` + `data`). A payment is recorded by
+        `op`: "list" (default, `clinic_id`, optional `invoice_id`, `paid_from`,
+        `paid_to`) | "get" | "update" (`payment_id` + `data`). A payment is recorded by
         `nextmotion_invoice(op="pay")` and never deleted. `data` takes the fields the
         Nextmotion spec accepts for the op; any other field is refused.
         ⚠️ `dry_run` DEFAULTS TO TRUE on update.
+
+        Practitioner (`with_practitioner=True`, list/get — get then needs
+        `clinic_id`): each line of the paid invoice gets `practitioner` {status, id,
+        first_name, last_name} — the practitioner of that act. `status` other than
+        "ok" comes with a `reason`; "unavailable" = the read failed, the practitioner
+        is unknown (count in `practitioners_unavailable`). Each payment gets `split`:
+        - "split": the payment SETTLES its invoice (with it, the invoice's payments in
+          payment_time order reach total_price exactly) → the WHOLE invoice is split
+          at this date: `split_amount` = total_price (deposits included, listed in
+          `deposits`), `shares` [{practitioner, amount}] pro rata of the lines' price,
+          to the cent, remainder on the last practitioner, sum = split_amount; a line
+          without a named practitioner gives a share with its status, no
+          practitioner made up;
+        - "not_split": deposit or partial payment, `amount` whole, split later with
+          the invoice at its settlement (`settled_by` {id, payment_time} if known);
+        - "undetermined": settlement not certain (reason), nothing split.
+        The list adds `totals` over THE PAGE, no double count: by_practitioner,
+        unattributed (by status), brought_forward (deposits paid outside the page,
+        split by a settlement on it), not_split (only deposits NOT settled on the
+        page), undetermined. Page payments = by_practitioner + unattributed −
+        brought_forward + not_split + undetermined. One extra read per distinct
+        treatment and per distinct invoice of the call.
 
         Args:
             op: list (default) | get | update.
             clinic_id: op="list".
             payment_id: op="get"/"update".
             invoice_id: op="list" — only this invoice's payments.
+            paid_from / paid_to: op="list" — payment days, YYYY-MM-DD, both inclusive
+                (clinic time zone), filtered by Nextmotion.
+            with_practitioner: op="list"/"get" — name each line's practitioner and
+                split the payment between them.
             data: op="update" — the fields to send.
             dry_run: op="update" — default True.
             limit / offset: op="list" — pagination (limit 1..100, default 50).
@@ -336,21 +482,38 @@ def register(mcp: FastMCP) -> None:
                 _PAYMENTS, "payment", op, client=_client, clinic_id=clinic_id,
                 item_id=payment_id, data=data, dry_run=dry_run, item_name="payment_id",
                 unused={"invoice_id": invoice_id, "limit": limit, "offset": offset,
-                        "fields": fields})
+                        "fields": fields, "paid_from": paid_from, "paid_to": paid_to,
+                        "with_practitioner": with_practitioner})
         _refuse_ignored(op, data=data, dry_run=dry_run)
         if op == "list":
             _need(op, clinic_id=clinic_id)
             _refuse_ignored(op, payment_id=payment_id)
+            _run(lambda: periode.bornes(paid_from, paid_to, "paid_from", "paid_to"))
             c = _client()
-            return _page(_run(lambda: c.list_payments(
-                clinic_id, invoice_id=invoice_id, **_paging(limit, offset))),
-                "payments", _payment, fields=fields)
+            shape = (_payment_with_practitioners(c, clinic_id) if with_practitioner
+                     else _payment)
+            out = _page(_run(lambda: c.list_payments(
+                clinic_id, invoice_id=invoice_id, paid_from=paid_from, paid_to=paid_to,
+                **_paging(limit, offset))), "payments", shape, fields=fields)
+            return (_practitioners_said(out, "payments", shape) if with_practitioner
+                    else out)
         if op == "get":
             _need(op, payment_id=payment_id)
-            _refuse_ignored(op, clinic_id=clinic_id, invoice_id=invoice_id, limit=limit,
-                            offset=offset, fields=fields)
+            if with_practitioner:
+                # The invoice's payments are read under the clinic: to know whether
+                # this payment settles it.
+                _need(op + " with_practitioner", clinic_id=clinic_id)
+            else:
+                _refuse_ignored(op, clinic_id=clinic_id)
+            _refuse_ignored(op, invoice_id=invoice_id, limit=limit,
+                            offset=offset, fields=fields, paid_from=paid_from,
+                            paid_to=paid_to)
             c = _client()
-            return _one(_run(lambda: c.get_payment(payment_id)), "payment", _payment)
+            shape = (_payment_with_practitioners(c, clinic_id) if with_practitioner
+                     else _payment)
+            out = _one(_run(lambda: c.get_payment(payment_id)), "payment", shape)
+            return (_practitioners_said(out, "payment", shape) if with_practitioner
+                    else out)
         raise _bad("op must be 'list', 'get' or 'update'.")
 
     @mcp.tool()

@@ -504,6 +504,7 @@ def test_client_exposes_methods_called_by_campaign_tools():
     for meth in (
         "list_all_campaigns", "create_campaign", "update_campaign",
         "start_campaign", "pause_campaign", "duplicate_campaign",
+        "get_campaign_senders", "add_campaign_senders", "replace_campaign_senders",
         "get_campaign_statutes", "get_campaign_reports",
         "get_campaign_stats_v2", "get_batch_campaign_stats",
         "delete_step", "create_ab_variant", "get_ab_variant",
@@ -579,13 +580,78 @@ def test_update_without_autoreview_goes_through():
     with key, cls as client_cls:
         inst = client_cls.return_value
         tool = _tool("lemlist_campaign")
+        inst.update_campaign.return_value = {
+            "name": "Q4", "stopOnEmailReplied": True,
+            "sendUsers": [{"id": "usr_1", "mailboxes": [{"sendUserMailboxId": "usm_1"}]}]}
 
-        tool.fn(op="update", campaign_id="cam_1", name="Q4",
-                sender_user_ids=["usr_1"], settings={"stopOnEmailReplied": True})
+        out = tool.fn(op="update", campaign_id="cam_1", name="Q4",
+                      sender_user_ids=["usr_1"], settings={"stopOnEmailReplied": True})
 
         inst.update_campaign.assert_called_once_with("cam_1", {
             "stopOnEmailReplied": True, "name": "Q4", "sendUserIds": ["usr_1"],
         })
+        assert "not_confirmed" not in out and "senders_excluded" not in out
+        # sendUserIds n'attache que la PREMIÈRE boîte de chaque utilisateur : dit.
+        assert "FIRST mailbox" in out["warning"]
+
+
+# --- une mise à jour qui n'a rien appliqué ne rend pas `{}` --------------------
+
+def _code(exc_info) -> str:
+    return exc_info.value.error.data["code"]
+
+
+def test_update_refuses_a_key_lemlist_would_drop_silently():
+    """`settings.sendUsers` (clé de la RÉPONSE de lemlist) : lemlist l'ignorait et
+    répondait `{}`, lu comme un succès. Refusé avant tout appel, en nommant
+    `senders`."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        with pytest.raises(Exception) as e:
+            tool.fn(op="update", campaign_id="cam_1", settings={"sendUsers": [
+                {"id": "usr_1", "mailboxes": [{"sendUserMailboxId": "usm_1"}]}]})
+        assert _code(e) == "lemlist_unknown_campaign_setting"
+        assert e.value.error.data["unknown"] == ["sendUsers"]
+        assert "`senders`" in e.value.error.message
+        inst.update_campaign.assert_not_called()
+
+
+def test_update_whose_answer_confirms_nothing_is_an_error_not_an_empty_success():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.update_campaign.return_value = {}
+        with pytest.raises(Exception) as e:
+            tool.fn(op="update", campaign_id="cam_1", sender_user_ids=["usr_1"])
+        assert _code(e) == "lemlist_update_not_applied"
+        assert e.value.error.data["not_confirmed"] == ["sendUserIds"]
+
+
+def test_update_says_which_keys_lemlist_did_not_confirm():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.update_campaign.return_value = {"name": "Q4"}
+        out = tool.fn(op="update", campaign_id="cam_1", name="Q4",
+                      settings={"stopOnEmailReplied": True, "tracking": {"trackOpens": True}})
+        assert out["name"] == "Q4"
+        assert out["not_confirmed"] == ["stopOnEmailReplied"]
+        # `tracking` n'est pas renvoyé par lemlist : invérifiable, et dit comme tel.
+        assert out["unverified"] == ["tracking"]
+
+
+def test_update_names_a_sender_lemlist_excluded():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.update_campaign.return_value = {"sendUsers": [{"id": "usr_1", "mailboxes": []}]}
+        out = tool.fn(op="update", campaign_id="cam_1", sender_user_ids=["usr_1", "usr_2"])
+        assert out["senders_excluded"] == ["usr_2"]
 
 
 def test_update_refuses_an_empty_patch():
@@ -638,6 +704,71 @@ def test_campaign_stats_reads_the_real_counters_over_the_whole_life():
         # Surtout PAS l'ancien dérivé d'activités, plafonné à 1000 événements.
         inst.get_campaign_stats.assert_not_called()
         assert out["nbLeads"] == 12
+
+
+# Signal d'usage 1744 : une fenêtre d'UN jour (start_date = end_date, dates seules)
+# partait telle quelle chez lemlist, qui lit `2026-11-12` comme minuit : une fenêtre
+# de largeur nulle, tous les compteurs à 0 alors que `nbLeads` (qui ne dépend pas de
+# la fenêtre) restait juste. Une date seule désigne désormais le jour UTC entier.
+
+def test_window_date_only_bounds_cover_the_whole_utc_day():
+    from oto_mcp.tools.lemlist import _default_window
+
+    assert _default_window("2026-11-12", "2026-11-12") == (
+        "2026-11-12T00:00:00.000Z", "2026-11-12T23:59:59.999Z")
+    # Plusieurs jours : le dernier est compris, il n'est plus perdu.
+    assert _default_window("2026-11-01", "2026-11-30") == (
+        "2026-11-01T00:00:00.000Z", "2026-11-30T23:59:59.999Z")
+
+
+def test_window_instants_pass_through_untouched():
+    from oto_mcp.tools.lemlist import _default_window
+
+    start, end = "2026-11-11T23:00:00.000Z", "2026-11-12T22:59:59.999Z"
+    assert _default_window(start, end) == (start, end)
+    assert _default_window("2026-11-12T08:00:00+01:00", "2026-11-12T18:00") == (
+        "2026-11-12T08:00:00+01:00", "2026-11-12T18:00")
+
+
+def test_window_defaults_still_mean_the_whole_life():
+    from oto_mcp.tools.lemlist import STATS_EPOCH, _default_window
+
+    start, end = _default_window(None, None)
+    assert start == STATS_EPOCH
+    assert end.endswith("Z") and "T" in end
+    # Une seule borne donnée : l'autre garde son défaut.
+    start, end = _default_window("2026-11-12", None)
+    assert start == "2026-11-12T00:00:00.000Z" and end.endswith("Z")
+    assert _default_window(None, "2026-11-12")[1] == "2026-11-12T23:59:59.999Z"
+
+
+def test_batch_stats_same_day_window_reaches_lemlist_as_the_whole_day():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_batch_campaign_stats.return_value = {"results": []}
+        tool = _tool("lemlist_campaign")
+
+        tool.fn(op="batch_stats", campaign_ids=["cam_1", "cam_2"],
+                start_date="2026-11-12", end_date="2026-11-12")
+
+        kwargs = inst.get_batch_campaign_stats.call_args.kwargs
+        assert kwargs["start_date"] == "2026-11-12T00:00:00.000Z"
+        assert kwargs["end_date"] == "2026-11-12T23:59:59.999Z"
+
+
+def test_campaign_stats_same_day_window_reaches_lemlist_as_the_whole_day():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_campaign_stats_v2.return_value = {"nbLeads": 12}
+        tool = _tool("lemlist_get_campaign_stats")
+
+        tool.fn(campaign_id="cam_1", start_date="2026-11-12", end_date="2026-11-12")
+
+        kwargs = inst.get_campaign_stats_v2.call_args.kwargs
+        assert kwargs["start_date"] == "2026-11-12T00:00:00.000Z"
+        assert kwargs["end_date"] == "2026-11-12T23:59:59.999Z"
 
 
 def test_campaign_stats_drops_the_per_step_detail_and_names_it():
@@ -723,3 +854,153 @@ def test_schedule_update_uses_the_api_key_names():
 
         with pytest.raises(Exception, match="nothing to update"):
             tool.fn(op="update", schedule_id="skd_1")
+
+
+# --- plusieurs boîtes d'un même expéditeur, par le pool -------------------------
+
+SIX = [{"userId": "usr_1", "channels": [
+    {"type": "email", "id": f"usm_{i}"} for i in range(1, 7)]}]
+
+
+def _pool(*channels, user="usr_1"):
+    return {"data": {"senderStrategy": "random", "senders": [
+        {"userId": user, "channels": [{"type": "email", "id": c} for c in channels]}]}}
+
+
+def test_senders_attache_toutes_les_boites_par_le_pool_et_relit_le_resultat():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.replace_campaign_senders.return_value = _pool(*[f"usm_{i}" for i in range(1, 7)])
+
+        out = tool.fn(op="update", campaign_id="cam_1", senders=SIX)
+
+        inst.replace_campaign_senders.assert_called_once_with("cam_1", SIX)
+        inst.update_campaign.assert_not_called()   # rien d'autre à patcher
+        assert len(out["sender_pool"]["senders"][0]["channels"]) == 6
+        assert out["mode"] == "replace" and "not_attached" not in out
+
+
+def test_senders_add_ne_retire_rien_et_relit_le_pool_si_la_reponse_ne_le_porte_pas():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.add_campaign_senders.return_value = {}
+        inst.get_campaign_senders.return_value = _pool("usm_1", "usm_2")
+
+        out = tool.fn(op="update", campaign_id="cam_1", senders_mode="add",
+                      senders=[{"userId": "usr_1", "channels": [{"type": "email", "id": "usm_2"}]}])
+
+        inst.replace_campaign_senders.assert_not_called()
+        inst.get_campaign_senders.assert_called_once_with("cam_1")
+        assert "not_attached" not in out
+
+
+def test_une_boite_que_le_pool_ne_garde_pas_est_nommee():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.replace_campaign_senders.return_value = _pool("usm_1", "usm_2")
+
+        out = tool.fn(op="update", campaign_id="cam_1", senders=SIX)
+
+        assert [m["id"] for m in out["not_attached"]] == ["usm_3", "usm_4", "usm_5", "usm_6"]
+        assert out["senders_warning"]
+
+
+def test_un_pool_qui_ne_garde_rien_de_ce_qui_est_demande_est_un_refus():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.replace_campaign_senders.return_value = _pool("usm_9", user="usr_9")
+        with pytest.raises(Exception) as e:
+            tool.fn(op="update", campaign_id="cam_1", senders=SIX)
+        assert _code(e) == "lemlist_senders_not_attached"
+
+
+@pytest.mark.parametrize("status,code", [
+    (402, "lemlist_sender_pool_needs_email_pro"),
+    (409, "lemlist_sender_pool_dynamic"),
+])
+def test_plan_ou_strategie_dynamique_sont_des_refus_nommes(status, code):
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.replace_campaign_senders.side_effect = UpstreamHTTPError(status, "x", service="lemlist")
+        with pytest.raises(Exception) as e:
+            tool.fn(op="update", campaign_id="cam_1", senders=SIX)
+        assert _code(e) == code
+
+
+def test_senders_et_sender_user_ids_ensemble_ou_un_pool_vide_sont_refuses():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        with pytest.raises(Exception, match="not both"):
+            tool.fn(op="update", campaign_id="cam_1", senders=SIX, sender_user_ids=["usr_1"])
+        with pytest.raises(Exception, match="without a sender"):
+            tool.fn(op="update", campaign_id="cam_1", senders=[])
+        inst.update_campaign.assert_not_called()
+        inst.replace_campaign_senders.assert_not_called()
+
+
+def test_settings_et_senders_dans_le_meme_appel():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.update_campaign.return_value = {"name": "Q4"}
+        inst.replace_campaign_senders.return_value = _pool(*[f"usm_{i}" for i in range(1, 7)])
+        out = tool.fn(op="update", campaign_id="cam_1", name="Q4", senders=SIX)
+        inst.update_campaign.assert_called_once_with("cam_1", {"name": "Q4"})
+        assert out["name"] == "Q4" and "sender_pool" in out
+
+
+def test_un_echec_des_expediteurs_apres_un_patch_applique_le_dit():
+    """`name` a pris, puis le pool refuse (402) : le refus porte ce qui a pris."""
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        inst.update_campaign.return_value = {"name": "Q4"}
+        inst.replace_campaign_senders.side_effect = UpstreamHTTPError(402, "x", service="lemlist")
+        with pytest.raises(Exception) as e:
+            tool.fn(op="update", campaign_id="cam_1", name="Q4", senders=SIX)
+        assert _code(e) == "lemlist_senders_failed_after_settings"
+        assert e.value.error.data["settings_applied"]["name"] == "Q4"
+        assert e.value.error.data["cause"] == "lemlist_sender_pool_needs_email_pro"
+
+
+def test_un_pool_vide_est_refuse_avant_tout_patch():
+    """Le refus d'un `replace` vide tombe AVANT l'écriture des réglages : un appel
+    refusé n'a rien appliqué."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_campaign")
+        with pytest.raises(Exception, match="without a sender"):
+            tool.fn(op="update", campaign_id="cam_1", name="Q4", senders=[])
+        inst.update_campaign.assert_not_called()
+        inst.replace_campaign_senders.assert_not_called()
+
+
+@pytest.mark.exige_pin_oto_core   # lit la description de la lib épinglée
+def test_les_cles_du_patch_sont_celles_de_la_lib_et_l_echo_en_fait_partie():
+    """Les clés acceptées viennent de la description d'`update_campaign` de la lib
+    épinglée, pas d'une copie ; celles dont on lit l'écho en font toutes partie."""
+    from oto_mcp.tools import lemlist as L
+
+    keys = L.campaign_patch_keys()
+    assert {"name", "sendUserIds", "stopOnEmailReplied", "tracking"} <= keys
+    assert set(L._ECHOED) <= keys
+    assert not keys & set(L.AUTO_REVIEW_KEYS)

@@ -36,7 +36,7 @@ def test_le_registre_reel_porte_les_annotations_attendues():
     assert (e("serper_search"), e("gmail"), e("gmail_act"), e("whatsapp"),
             e("whatsapp_act")) == ("read", "simulation", "act", "read", "act")
     assert e("hubspot_object") is None                              # ne déclare rien
-    assert e("http_get") == "read"          # déclaré en lecture : il cherche
+    assert e("api_get") == "read"          # déclaré en lecture : il cherche
 
 
 @pytest.mark.parametrize("nom, op, attendu", [
@@ -59,7 +59,7 @@ def test_le_registre_reel_porte_les_annotations_attendues():
     ("data_rows", None, None),                  # la tenue du tableau de l'agent
     ("data_claim_next", None, None),
     ("hubspot_object", "update", None),         # ne déclare rien : ne rapporte rien
-    ("http_get", None, "research"),             # LECTURE déclarée : une recherche
+    ("api_get", None, "research"),             # LECTURE déclarée : une recherche
     ("oto_doc", None, None),                    # la plateforme
     ("run_start", None, None),
     ("inconnu_partout", None, None),            # on ne devine pas

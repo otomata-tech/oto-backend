@@ -64,11 +64,11 @@ def test_member_acts_route_to_the_right_client_method(client, op, kwargs, method
     getattr(client, method).assert_called_once()
 
 
-def test_profile_person_strips_diacritics(client):
-    """LinkedIn génère ses slugs en ASCII : un slug accentué fait répondre un 403
-    « Insufficient permissions » trompeur (#180)."""
+def test_profile_person_sends_the_accented_slug_as_given(client):
+    """Un slug peut porter une lettre non ASCII — il part tel quel d'abord ;
+    la forme sans accents n'est qu'un repli (#180, `test_unipile_slug_accents.py`)."""
     _tool("linkedin_unipile_profile")(op="person", identifier="chloé-dupré")
-    assert client.get_profile.call_args.args[0] == "chloe-dupre"
+    assert client.get_profile.call_args.args[0] == "chloé-dupré"
 
 
 def test_profile_company_is_cached(client):

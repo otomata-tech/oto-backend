@@ -19,7 +19,8 @@ from pydantic import BaseModel, field_validator
 from .. import config, db, email as mailer, org_store, outreach_optout, tenancy
 from ._authz import PLATFORM_ADMIN, SUB_ONLY
 from ._lecture_bornee import bornee
-from ._types import AuthzDenied, cap_limit, Capability, ResolvedCtx, RestBinding
+from ._types import (AuthzDenied, cap_limit, Capability, DeclaredError, ResolvedCtx,
+                     RestBinding)
 from .registry import CAPABILITIES
 
 
@@ -79,7 +80,49 @@ def _active_org(sub: str) -> Optional[int]:
         return None
 
 
+# Les valeurs qu'un agent hébergé dépose quand il n'a RIEN à signaler — mesuré le
+# 13/11/2026 : une vingtaine de signaux en une soirée, refusés un à un à la main. La
+# liste est COURTE et FERMÉE, et elle se compare à la valeur ENTIÈRE (après
+# `_normalise`) : un vrai retour qui contient « test » ou « ignore » dans une phrase
+# passe, toujours. Pas de sous-chaîne, pas d'expression régulière.
+_PLACEHOLDERS = frozenset({
+    "noop", "no-op", "no op", "noop-wait", "placeholder", "ignore", "test",
+    "n/a", "accidental call", "internal-note-skip", "nothing to report",
+})
+
+_MESSAGE_PLACEHOLDER = (
+    "feedback is for a real problem or gap; if there is nothing to report, do not "
+    "call feedback. Nothing was recorded: target and text read as a placeholder "
+    "(e.g. 'noop', 'test', 'n/a'), not as a report.")
+
+
+def _normalise(valeur: Optional[str]) -> str:
+    """Minuscules, blancs repliés, `_` lu comme `-`, guillemets et ponctuation de bord
+    retirés : « Noop. », « [placeholder] » et `internal_note_skip` sont la même valeur
+    que leur forme nue."""
+    v = " ".join((valeur or "").lower().replace("_", "-").split())
+    return v.strip(" \"'`.,;:!?()[]{}<>")
+
+
+def _est_placeholder(inp: FeedbackInput) -> bool:
+    """Un dépôt qui ne porte AUCUN retour : le texte EST un mot de remplissage, ou il
+    est vide et la cible l'est aussi (vide ou mot de remplissage).
+
+    ⚠️ **Un texte vide avec une vraie cible passe** : `text` est optionnel depuis
+    toujours (« text = optional detail »), et pour un `gap` la cible EST le retour.
+    Durcir ce contrat en place casserait des appelants de bonne foi."""
+    corps = _normalise(inp.text)
+    if corps in _PLACEHOLDERS:
+        return True
+    return not corps and (not _normalise(inp.target)
+                          or _normalise(inp.target) in _PLACEHOLDERS)
+
+
 def _feedback(ctx: ResolvedCtx, inp: FeedbackInput) -> dict:
+    if _est_placeholder(inp):
+        # Refusé AVANT toute écriture : un dépôt « noop » n'est pas un signal, et
+        # l'accepter fait arbitrer à la main ce que personne n'a signalé.
+        raise AuthzDenied(400, "feedback_placeholder", _MESSAGE_PLACEHOLDER)
     source, session_id = _correlation()
     depot = db.insert_usage_signal(
         sub=ctx.sub, org_id=ctx.org_id or _active_org(ctx.sub),
@@ -433,7 +476,13 @@ CAPABILITIES += [
                     "missing_doctrine | missing_data | other). text = optional detail. A "
                     "subject already reported (same workspace, signal and target) and still "
                     "awaiting a decision is not duplicated: your report is added to it and "
-                    "the answer says its status and decision.",
+                    "the answer says its status and decision. Never call it as a no-op: "
+                    "if there is nothing to report, do not call feedback (a placeholder "
+                    "such as 'noop', 'test' or 'n/a' is refused).",
+        errors=(DeclaredError(400, "feedback_placeholder",
+                              "the report carries nothing: `text` is a placeholder "
+                              "('noop', 'test', 'n/a'…), or it is empty and `target` "
+                              "is empty or a placeholder too — nothing is recorded"),),
         mcp="feedback", rest=RestBinding("POST", "/api/me/usage/feedback"),
     ),
     # --- projections de lecture (opérateur plateforme) ---------------------

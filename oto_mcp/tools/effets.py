@@ -5,7 +5,7 @@ by op, with the batch an op that writes or sends may carry.
 direct MCP call: `middleware/call_context.py`; `oto_call` and recipes:
 `tools/meta.executer_cible`), the same for both (decision of 03/11/2026). It judges what
 the call does, and that cannot be guessed from a verb: an `add` that enrolls contacts in a
-sequence SENDS, a `set_*` that replaces DESTROYS, an `http_act` request destroys when its
+sequence SENDS, a `set_*` that replaces DESTROYS, an `api_act` request destroys when its
 `method` is DELETE. So it is written here, read and reviewed once, rather than inferred at
 call time. `tools/lecture.py` declares by WHOLE tool (`LECTURE` / `SIMULATION` / `ACTE`,
 for the MCP client); this table goes one level down, by `op`, for the server.
@@ -76,7 +76,7 @@ class EffetNonDeclare(LookupError):
     """A tool or an op this table does not declare: never presumed to read."""
 
 
-#: A judge decides the class from the ARGUMENTS when the op alone does not (`http_act`
+#: A judge decides the class from the ARGUMENTS when the op alone does not (`api_act`
 #: request: its `method`). It receives the op and the arguments and returns a class, or
 #: `None` to keep the declared one.
 Juge = Callable[[Optional[str], dict], Optional[str]]
@@ -97,27 +97,40 @@ _CLASSE_PAR_METHODE = {"GET": "lire", "HEAD": "lire", "POST": "envoyer", "PATCH"
 def _juge_http_act(op: Optional[str], args: dict) -> Optional[str]:
     """`request` does what its `method` does (none given: the declared doubt). `call` does
     what its SAVED action's method does, read in the database
-    (`http_calls.methode_de_l_action`): an unknown action raises, never a default."""
+    (`api_calls.action_jugee`): an unknown action raises, never a default. An action
+    whose admin declared `class: read` reads, whatever its verb — that action only,
+    never a `request`."""
     if op == "request":
         return _CLASSE_PAR_METHODE.get(str(args.get("method") or "").upper())
     if op == "call":
-        from .http_calls import methode_de_l_action
-        methode = str(methode_de_l_action(args.get("operation"))).upper()
+        from .. import custom_ops
+        from .api_calls import action_jugee
+        action = action_jugee(args.get("operation"))
+        if custom_ops.reads(action):
+            return "lire"
+        methode = str(action.get("method")).upper()
         if methode not in _CLASSE_PAR_METHODE:
-            raise EffetNonDeclare(f"`http_act` action `{args.get('operation')}`: "
+            raise EffetNonDeclare(f"`api_act` action `{args.get('operation')}`: "
                                   f"unknown method `{methode}`")
         return _CLASSE_PAR_METHODE[methode]
     return None
 
 
+def _juge_urba_reglement(op: Optional[str], args: dict) -> Optional[str]:
+    """`ingest=true` launches the service-side ingestion of a règlement into the shared
+    cache (like `ubersuggest_site_audit` `start`): it writes. Otherwise it reads."""
+    return "ecrire" if args.get("ingest") else None
+
+
 JUGES: dict[str, Juge] = {
-    "http_act": _juge_http_act,
+    "api_act": _juge_http_act,
+    "urba_reglement": _juge_urba_reglement,
 }
 #: The judges that READ THE DATABASE, by tool and op: `effet()` on such a call is
 #: synchronous I/O — from an `async def`, run it off the event loop
 #: (`await run_in_threadpool(effet, name, args)`), as `lit_la_base()` tells.
 JUGES_EN_BASE: dict[str, frozenset[str]] = {
-    "http_act": frozenset({"call"}),
+    "api_act": frozenset({"call"}),
 }
 
 #: A tool that only RELAYS a call to another (`oto_call`): its effect is its target's,
@@ -346,14 +359,6 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "culture_spectacle_get": "lire",
     "culture_spectacle_search": "lire",
     "culture_spectacle_stats": "lire",
-    "dataforseo_account": "lire",
-    "dataforseo_ai_visibility": "lire",
-    "dataforseo_backlinks": "lire",
-    "dataforseo_domain": "lire",
-    "dataforseo_keywords": "lire",
-    # crawl_start persists a billed crawl task at the provider; every other op reads
-    "dataforseo_site_audit": "ecrire",
-    "dataforseo_web_mentions": "lire",
     # granting shares (Google notifies by default), `remove` revokes: judged on email/remove
     "drive_access": "detruire",
     "drive_file": {"lire": "list metadata download export", "ecrire": "upload create_folder update", "detruire": "delete"},
@@ -434,6 +439,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "ga4_properties": "lire",
     "ga4_realtime": "lire",
     "ga4_report": "lire",
+    "gemini_image_act": {"ecrire": "create_image"},
     "github_act": {"ecrire": "create_branch"},
     # dispatch/rerun trigger real runs (builds, deployments)
     "github_actions": {"lire": "workflows workflow runs run jobs job logs artifacts artifact download", "envoyer": "dispatch rerun rerun_failed", "detruire": "cancel delete_run delete_artifact"},
@@ -449,7 +455,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "github_repos": {"lire": "get tags mine org user branches commits commit compare contributors languages topics releases release latest_release", "envoyer": "create_release update_release"},
     "github_search": {"lire": "users repos code issues commits"},
     "gmail": {"lire": "search get accounts attachment drafts", "ecrire": "draft"},
-    "gmail_act": {"envoyer": "send", "detruire": "archive trash"},
+    "gmail_act": {"envoyer": "send", "detruire": "archive trash delete_draft"},
     "gocardless_creditors": "lire",
     "gocardless_events": "lire",
     "gocardless_failed": "lire",
@@ -492,9 +498,9 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "hithorizons_search_unstructured": "lire",
     "hithorizons_suggestions": "lire",
     # import only proposes candidate actions; call runs a saved action of any verb
-    "http_act": {"lire": "import", "detruire": "call request set_definition"},
-    "http_doc": "lire",
-    "http_post": "envoyer",
+    "api_act": {"lire": "import", "detruire": "call request set_definition"},
+    "api_doc": "lire",
+    "api_post": "envoyer",
     # add_members may also remove (remove_record_ids); copy_from moves up to 100 000 records
     "hubspot_list": {"lire": "search get members record_lists", "ecrire": "create restore", "detruire": "update delete add_members remove_members clear_members copy_from"},
     "hubspot_object": {"lire": "search list get associations", "ecrire": "create update add_note", "detruire": "delete merge"},
@@ -650,7 +656,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     # Rewrites the whole DNS record set, removes records, replaces a CNAME (dry_run=True previews).
     "mailpool_domain_fix": "detruire",
     "mailpool_domains": {"lire": "list get dns audit availability suggestions google_workspace_check microsoft_365_check owners"},
-    "mailpool_mailboxes": {"lire": "list get"},
+    "mailpool_mailboxes": {"lire": "list get export_login export_batches export_batch", "ecrire": "create", "envoyer": "export"},
     # `run` sends a real test email from the mailbox.
     "mailpool_spam_checks": {"lire": "get list", "envoyer": "run", "detruire": "delete"},
     "make_get_scenario": "lire",
@@ -684,6 +690,10 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "monid_runs": {"lire": "list get", "detruire": "stop"},
     "monid_wallet": "lire",
     "mux_act": {"ecrire": "create_upload create_asset"},
+    # update_workflow replaces the whole workflow and puts a published one live with the
+    # change; set_workflow_tags replaces the tag list.
+    "n8n_act": {"ecrire": "create_workflow",
+                "detruire": "update_workflow delete_workflow set_workflow_tags"},
     "n8n_activate_workflow": "envoyer",
     "n8n_deactivate_workflow": "detruire",
     "n8n_get_execution": "lire",
@@ -1206,7 +1216,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_admin_unipile_seat": {"lire": "list", "detruire": "release"},
     "oto_admin_user": {"lire": "list get", "detruire": "set_role"},
     "oto_admin_vault_health": "lire",
-    "oto_apps": {"lire": "list get revisions validate read_file", "ecrire": "create update patch unarchive file", "detruire": "archive restore unfile put_file"},
+    # publish rend un brouillon vivant pour tous les lecteurs ; delete_draft le jette.
+    "oto_apps": {"lire": "list get revisions revision validate read_file", "ecrire": "create update patch unarchive file set_drafts", "detruire": "archive restore unfile put_file publish delete_draft"},
     "oto_clear_group": "ecrire",
     "oto_clear_org": "ecrire",
     "oto_clear_project": "ecrire",
@@ -1274,6 +1285,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
 #: on a tool with a list argument either declares its batch here or the tool declares
 #: that list as not a batch (`PAS_UN_LOT`).
 LOTS: dict[str, Lot] = {
+    "mailpool_mailboxes:create": Lot("mailboxes"),
+    "mailpool_mailboxes:export": Lot("mailbox_ids"),
     "lemlist_contact:list_create": Lot("contact_ids"),
     "lemlist_inbox:messages": Lot("cc"),
     "lemlist_inbox:label_create": Lot("cc"),
@@ -1525,12 +1538,6 @@ PAS_UN_LOT: dict[str, str] = {
     "cognism_enrich_account": "anchor_fields",
     "cognism_enrich_contact": "anchor_fields",
     "cognism_redeem": "ids redeem_ids",
-    "dataforseo_ai_visibility": "targets keywords filters order_by",
-    "dataforseo_backlinks": "targets exclude_targets filters order_by",
-    "dataforseo_domain": "targets keywords filters order_by",
-    "dataforseo_keywords": "keywords filters order_by",
-    "dataforseo_site_audit": "categories filters order_by",
-    "dataforseo_web_mentions": "page_type filters order_by",
     "figma_get_file": "node_ids",
     "figma_get_images": "node_ids",
     "finkare_invoice": "invoices",
@@ -1548,13 +1555,15 @@ PAS_UN_LOT: dict[str, str] = {
     "fullenrich_enrich_linkedin": "enrich_fields",
     "ga4_realtime": "metrics dimensions order_by",
     "ga4_report": "metrics dimensions order_by",
+    # the input images of ONE generation, not a batch of generations
+    "gemini_image_act": "images",
     "github_issues": "labels",
     "gmail": "attachments",
     "gmail_act": "message_ids attachments",
     "granola_webhook_endpoint": "scopes events folder_ids",
     "hellostock_offre_update": "keywords",
-    "http_act": "body operations",
-    "http_post": "body",
+    "api_act": "body operations",
+    "api_post": "body",
     "hubspot_list": "remove_record_ids properties processing_types",
     "hubspot_object": "properties associations filters sorts merge_ids",
     "hubspot_property": "names",
@@ -1565,7 +1574,7 @@ PAS_UN_LOT: dict[str, str] = {
     "klaviyo_profiles": "additional_fields include",
     "leexi_calls": "owner_uuid participating_user_uuid customer_email_address customer_phone_number",
     "lemlist_act": "filters",
-    "lemlist_campaign": "campaign_ids sender_user_ids channels",
+    "lemlist_campaign": "campaign_ids sender_user_ids senders channels",
     "lemlist_campaign_auto_review": "conditions",
     "lemlist_company": "ids_or_domains fields",
     "lemlist_contact": "ids_or_emails",
@@ -1588,6 +1597,7 @@ PAS_UN_LOT: dict[str, str] = {
     "meta_ads_insights": "fields breakdowns action_attribution_windows filtering sort",
     "minari_contact": "contact_ids",
     "modjo_calls": "ids expand participants tags",
+    "n8n_act": "tag_ids",
     "nextmotion_appointment": "fields",
     "nextmotion_calendar": "fields",
     "nextmotion_catalog": "fields",

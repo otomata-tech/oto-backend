@@ -11,7 +11,7 @@ from fastmcp import FastMCP
 
 from . import appel, ordre
 from .etape import _payload
-from .valeurs import _bad, _refused
+from .valeurs import _bad, _person_key, _refused
 
 #: The ONLY fields sent to Jev (a third party: OpenRouter, then TypeSafe) — what a fit
 #: judgement needs, never a name, an email, a phone or a profile URL.
@@ -109,10 +109,6 @@ def _passes(answers: dict, questions: dict, min_p: Optional[float]) -> bool:
             if not isinstance(p, (int, float)) or p < min_p:
                 return False
     return True
-
-
-def _person_key(p: dict) -> str:
-    return (p.get("linkedin_url") or p.get("full_name") or "").rstrip("/").lower()
 
 
 def _fit(p: dict) -> float:

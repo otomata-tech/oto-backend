@@ -57,15 +57,15 @@ from ._model import (  # noqa: F401  — surface publique historique du module
 #
 # Composition notes (ABSENT connectors, and why):
 # - `bridge` (ADR 0034) REMOVED on 2026-07-16 (ADR 0037 / oto-backend#108):
-#   subsumed by the generic `http` connector — a bridge is just an HTTP API
-#   that the back-office re-exposes, joined via http_get/http_post. The pilot bridge
-#   migrated bridge→http. The "remote data-driven" concept (base_url on a
+#   subsumed by the generic `http` connector (now `api`) — a bridge is just an HTTP API
+#   that the back-office re-exposes, joined via api_get/api_post. The pilot bridge
+#   migrated bridge→http (now `api`). The "remote data-driven" concept (base_url on a
 #   provider outside the registry) survives in `org_secret_meta`, with no
 #   catalog entry; the client identity lives in the org CONFIG, never hard-coded.
 # - `justicelibre` (no-auth mount) REMOVED on 2026-08-21, then `atlassian` and
 #   `folkmcp` on 2026-09-09 along with the MECHANISM itself: MCP federation
 #   (`kind="mount"`) is removed from the platform (ADR 0069). A remote service
-#   is now joined through the generic `http` connector, or written as a
+#   is now joined through the generic `api` connector, or written as a
 #   native connector — which is what `planity` became.
 # - `linkedin` dropped on 2026-08-10 (#231): absorbed by `aiark` — same vendor,
 #   same client, the distinction was only an auth mode, hence an INSTANCE.
@@ -82,6 +82,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "lemlist",
     # Neighbour of `lemlist`: the domains and mailboxes it sends from — wired 2026-10-05.
     "mailpool",
+    # Neighbour of `lemlist` by trade (cold email), served by the generic reader of
+    # its description.
+    "instantly",
     "kaspr",
     "pennylane",
     # The firm side of the same publisher (one token, every company of the firm):
@@ -184,6 +187,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "bigquery",
     # eighth service (2026-10-08) — same shape, `adwords` consent only, read-only tools.
     "google_ads",
+    # ninth service (2026-11-15) — same shape, `webmasters.readonly` consent only,
+    # read-only tool. The service-account connector `google_search_console` stays.
+    "search_console",
     # --- open-data / no credential ------------------------------------------
     # Unrelated public sources → distinct connectors (formerly `fr_open`, which
     # merged them: an incoherent "open data" bag, activating one activated the other).
@@ -254,8 +260,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "make",
     "zapier",
     "fireflies",
-    # --- generic http connector (secret IN the oto vault) ---------------------
-    "http",
+    # --- `api` connector, generic HTTP client (secret IN the oto vault) ---------------------
+    "api",
     "webflow",
     # Neighbour of `webflow` by trade (CMS): the two cards read together.
     "wordpress",
@@ -284,6 +290,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "amplitude",
     "snitcher",
     "waalaxy",
+    # Neighbour of `waalaxy` by trade (LinkedIn outreach), served by the generic
+    # reader of its description.
+    "heyreach",
     "airtable",
     "tally",
     # Neighbour of `tally` by trade (online forms); read-only.
@@ -353,6 +362,10 @@ _DECLARATIONS: tuple[str, ...] = (
     # Neighbour of `elevenlabs` by situation (media production): images and video
     # clips generated on the customer's prepaid Higgsfield balance — wired 2026-10-28.
     "higgsfield",
+    # Neighbour of `higgsfield` by situation (media production): images generated and
+    # edited by Google's Gemini image models (Nano Banana), billed at the tokens Google
+    # counted — wired 2026-11-09.
+    "gemini_image",
     # --- document management (GED), read-only — wired 2026-10-20 -------------
     # The documents a company keeps indexed in Zeendoc (supplier invoices…): a
     # Zeendoc user's login and password and the cabinet id travel together.
@@ -370,6 +383,7 @@ _DECLARATIONS: tuple[str, ...] = (
     # no tool: the worker consumes it on the org's behalf.
     "anthropic",
     "mistral",
+    "openrouter",
 )
 
 _MODULES: dict = {}
@@ -404,7 +418,7 @@ _LOGO_DOMAIN_BY_CONNECTOR: dict = _curee("LOGO_DOMAIN")
 # never here: this module stays pure.
 _ACCESS_LEVELS_BY_CONNECTOR: dict = _curee("ACCESS_LEVELS")
 # Connectors WITHOUT a brand logo, on purpose: either generic (the connector
-# is not a brand — `http`, `browser`), or in-house (`gr`), or made of
+# is not a brand — `api`, `browser`), or in-house (`gr`), or made of
 # heterogeneous public sources (`infosec`). The UI renders a monogram there. Declared
 # `SANS_LOGO_DE_MARQUE = True` in the connector's module, with its reason.
 # The opposite of a debt: makes the absence DELIBERATE and verifiable, instead of
@@ -522,6 +536,22 @@ def render_namespace_catalog(spine_tools=None) -> str:
 
 def connector_for_provider(name: str) -> Connector | None:
     return REGISTRY.get(name)
+
+
+#: Connectors RENAMED: old name → new name. The old CONNECTOR name designates nothing,
+#: and the refusal that meets it names the new one (`refus_renomme`). Its old tool names
+#: and REST routes stay served as deprecated aliases (`deprecations.OUTILS_CONNECTEUR_API`,
+#: `deprecations.alias_rest_derives`); the stored rows move by a data revision.
+CONNECTEURS_RENOMMES: dict[str, str] = {"http": "api"}
+
+
+def refus_renomme(name: str) -> str:
+    """The sentence a refusal appends when `name` is a RENAMED connector, `""` otherwise."""
+    nouveau = CONNECTEURS_RENOMMES.get(name)
+    if nouveau is None:
+        return ""
+    return (f" `{name}` is no longer a connector name: it is now `{nouveau}` "
+            f"(same card, same keys) — retry with `{nouveau}`.")
 
 
 def connector_for_namespace(namespace: str) -> Connector | None:

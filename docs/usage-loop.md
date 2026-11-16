@@ -83,6 +83,14 @@ volontaire d'agent + les runs / déroulés. Détail : ADR 0017 (repo public
   **neuf** (`regression_of` cite le dernier clos) : une régression doit se voir. ⚠️ Sans
   cible, rien ne se rattache. ⚠️ L'org fait partie de la clé (#684/#685). Le **rejeu**
   (même texte, même auteur, < 10 min) ne s'écrit toujours pas du tout.
+- **Un dépôt qui ne signale rien est refusé** (13/11/2026) : 400 `feedback_placeholder`
+  (`McpError` au même message côté MCP), rien n'est écrit, quand `text` EST un mot de
+  remplissage (`noop`, `no-op`, `placeholder`, `ignore`, `test`, `n/a`, `accidental call`,
+  `internal-note-skip`, `noop-wait`… — liste fermée `usage._PLACEHOLDERS`), ou qu'il est vide
+  et que `target` est vide ou un mot de remplissage. Comparaison sur la valeur ENTIÈRE
+  (minuscules, blancs et ponctuation de bord ignorés) : un vrai retour qui contient « test »
+  dans une phrase passe. ⚠️ Un `text` vide avec une vraie cible passe aussi : `text` reste
+  optionnel. Aucune longueur minimale n'est exigée.
 - **Projections** (opérateur) : `/api/admin/usage/{runs,runs/{id},gaps,tool-quality,signals}`
   (`capabilities/usage.py`, PLATFORM_ADMIN) → vue dashboard `UsageView.vue` (« usage & déroulés »).
   `signals` filtrable par `status`, chaque ligne avec `occurrences` et `last_seen_at`, triée

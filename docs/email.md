@@ -39,9 +39,14 @@ champ transport sur l'expéditeur).
   Celle d'un partenaire écrite dans notre code obligeait à nous redéployer pour
   accueillir le suivant — même défaut que son `dashboard_url`, même remède, même
   table. Le tenant **primaire** a sa marque à part (`email_brand.marque_instance`) :
-  ses teintes sont dans le code, son **nom et son site se déclarent**
-  (`OTO_BRAND_NAME`, `OTO_BRAND_SITE`, #968) — le site était écrit en dur, donc toute
-  autre instance signait ses emails de notre adresse.
+  son **nom et son site se déclarent** (`OTO_BRAND_NAME`, `OTO_BRAND_SITE`, #968) — le
+  site était écrit en dur, donc toute autre instance signait ses emails de notre
+  adresse. Ses teintes sont celles du code tant que l'instance ne pose pas
+  `OTO_BRAND_CHARTE` (15/11/2026) : sept teintes, le rayon du bouton et un logo
+  (https), validés comme une palette de tenant — posée mais invalide ou partielle, elle
+  refuse le démarrage (`email_brand.verifier_reglages`), jamais la charte du code en
+  silence. Un logo déclaré remplace le
+  nom en tête, au-dessus de la carte, avec le nom en `alt`.
   ⚠️ **Sans marque, on passe `None`, jamais `"oto"`** : `None` (une org sans
   `front_brand`) résout vers la marque de l'instance. Le littéral `"oto"` n'est le
   primaire que sur UNE instance ; ailleurs c'est un slug tiers, donc le gabarit neutre
@@ -241,6 +246,27 @@ fichier qui n'est pas une image. Laissé de côté, volontairement : plusieurs i
 l'image par section, la pièce jointe, et une entrée `image={kind: drive|url}` résolue
 côté serveur par `file_source` (un upload par envoi — la mauvaise forme pour un visuel
 qui ressert).
+
+## Un corps en markdown (`email_send(markdown=True)`)
+
+Par défaut, le corps d'un `email_send` reste du texte brut, échappé : une balise sort
+littéralisée, une liste ou un lien ne se font pas. `markdown=True` rend `body` avec le
+**même rendu assaini que `gmail`** : une seule fonction, `oto_mcp/markdown_assaini.py`
+(`rendu_markdown_assaini`), sert `email_send`, `gmail(op="draft")` et
+`gmail_act(op="send")`, réponses comprises.
+
+Le rendu d'oto-core (`_markdown_to_html_fragment` : tableaux, blocs de code, listes) laisse
+passer le HTML brut, les attributs (`attr_list` : `{: onclick=… }`) et les liens
+`javascript:`/`data:`. Le HTML est donc **assaini par liste blanche** (`nh3`) : balises de
+mise en forme seulement, liens `http`, `https`, `mailto`, aucun attribut d'événement, un
+seul style admis (`text-align` d'une cellule de tableau). `gmail` garde les images
+`http(s)` ; `email_send` n'en garde **aucune** (l'image de tête garde son paramètre, son
+`alt` exigé et son `https`). `gmail` rend lui-même le markdown avant de passer la main à
+`GmailClient`, dont le rendu n'est pas assaini ; un `html` écrit par l'appelant part tel
+quel. Les marges de la charte (`PARA`) sont posées après
+l'assainissement. La ligne d'aperçu est le texte du premier bloc, sans syntaxe. Le mailer
+commun (qui re-rend le corps) et la file différée (qui stocke le HTML rendu) reçoivent
+le même rendu.
 
 ## Locale des 6 gabarits transactionnels (oto-backend#700, 2026-09-01)
 

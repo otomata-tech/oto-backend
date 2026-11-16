@@ -496,6 +496,11 @@ def register(mcp: FastMCP) -> None:
         # becomes canonical again BEFORE the meta/spine gate: without that `acme_doc` resolves an
         # unknown namespace, escapes `_NON_DISPATCHABLE`, and the anti-loop is skipped.
         demande, name = name, tool_alias.canonical(name, _tool_prefix())
+        # A DEPRECATED name (`deprecations.TOOLS`) is served by today's tool, exactly as
+        # a direct call: same arguments, the notice heads the answer, and the journal
+        # counts the alias (`session_org.nom_deprecie_de_l_appel`).
+        ancien, name = name, deprecations.tool_canonique(name)
+        ancien = ancien if ancien != name else None
         # A RETIRED name is refused BEFORE the meta/spine gate: `oto_kb` is an `oto_*` name, and
         # "call it directly" would send the agent to a name that no longer exists.
         # It is THIS path an agent takes when a procedure names a tool absent from
@@ -545,7 +550,14 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=f"Unknown tool `{demande}`. Use oto_list_my_tools to see available names."))
-        issue = await executer_cible(tool, sub, name, demande, args)
+        jeton = session_org.set_nom_deprecie(ancien) if ancien else None
+        try:
+            issue = await executer_cible(tool, sub, name, demande, args)
+        finally:
+            if jeton is not None:
+                session_org.reset_nom_deprecie(jeton)
+        if ancien:
+            session_org.noter_avis(deprecations.avis_d_appel(ancien))
         if not issue.ok:
             # `tool` takes the REQUESTED name: the agent re-reads it to retry, and a
             # name it never typed would make it doubt its own request.

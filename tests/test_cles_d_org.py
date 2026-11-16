@@ -249,3 +249,19 @@ def test_archiver_l_org_revoque_ses_cles(base):
     assert ligne["revoked_reason"] == "org archivée"
     with pytest.raises(ValueError):
         org_store.assurer_compte_de_service(org, by="admin-1")
+
+
+# --- Le plafond de 90 jours (comme tout jeton `oto_`) -------------------------
+
+def test_une_cle_d_org_sans_echeance_recoit_le_plafond(admin):
+    """Une clé d'org confiée à une intégration naissait non expirante ; elle reçoit
+    désormais 90 jours, rendus ET écrits."""
+    code, out = _cree({"scopes": {"namespaces": {"clients": "read"}}})
+    assert code == 201 and out["ttl_days"] == 90, out
+    assert [e for e in admin if e[0] == "create"][-1][2]["ttl_days"] == 90
+
+
+def test_une_cle_d_org_au_dela_du_plafond_est_refusee(admin):
+    code, out = _cree({"scopes": {"namespaces": {"clients": "read"}}, "ttl_days": 365})
+    assert code == 400 and out["error"] == "token_ttl_too_long", out
+    assert not [e for e in admin if e[0] == "create"]

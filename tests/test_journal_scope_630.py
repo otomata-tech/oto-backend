@@ -36,8 +36,9 @@ CTX = ResolvedCtx(sub="admin-sub", org_id=35)
 def _stub(monkeypatch, *, lignes, hors):
     seen: dict = {}
     monkeypatch.setattr(om.monitoring, "_resolve_sub", lambda t: t)
-    monkeypatch.setattr(mon.db, "list_tool_calls",
-                        lambda **kw: seen.update(page=kw) or list(lignes))
+    monkeypatch.setattr(mon.db, "list_tool_calls_page",
+                        lambda **kw: seen.update(page=kw)
+                        or {"calls": list(lignes), "next": None})
     monkeypatch.setattr(mon.db, "count_calls_of_org_runs_elsewhere",
                         lambda org_id, **kw: seen.update(hors=(org_id, kw)) or hors)
     return seen

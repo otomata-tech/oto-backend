@@ -36,7 +36,7 @@ forbidden`, oto-backend#670) doublait deux suffixes hérités (`?zoho=connected`
 sans les deux mois habituels, après mesure qu'AUCUN consommateur ne lisait
 encore l'ancienne forme — le dashboard lit `connect=` depuis le 04/09
 (v1.55.0), et le seul partenaire susceptible de dépendre de ces deux
-connecteurs (Tulina) n'a mesuré aucune connexion Zoho ni Google. Contrairement
+connecteurs (un tenant) n'a mesuré aucune connexion Zoho ni Google. Contrairement
 à doctrine→guide, ce n'était pas un renommage consommé par des tiers actifs :
 c'était un doublage de précaution devenu sans objet. `ANNONCE_RETOUR_OAUTH` /
 `RETRAIT_RETOUR_OAUTH` / `dans_le_preavis_retour_oauth()` sont retirés
@@ -348,6 +348,30 @@ lot.
 | Ancien appel (refusé depuis le 23/10/2026) | Nouvel appel |
 | --- | --- |
 | `lemlist_database(op=persona_create/persona_delete)` | `lemlist_act(op="create_persona"/"delete_persona")` |
+
+### Le connecteur Custom API renommé `api` (12/11/2026)
+
+**Sa propre date : au plus tôt le 31/01/2027** (`deprecations.RETRAIT_CONNECTEUR_API`,
+au moins deux mois après `ANNONCE_CONNECTEUR_API`, avec la marge d'un tag de production
+posé jusqu'au 30/11/2026). Ce n'est pas une échéance automatique : l'ancien nom part quand
+**tous les consommateurs déclarés ont suivi** (règle du 25/09/2026) et que **l'usage compté
+est nul** — chaque appel servi par un ancien nom d'outil porte `args.deprecated_name` dans
+le journal `tool_calls` (le nom `tool` reste celui d'aujourd'hui).
+
+| Surface | Ancien nom | Nouveau nom | Forme |
+| --- | --- | --- | --- |
+| Outil MCP | `http`, `http_act`, `http_get`, `http_post`, `http_doc` | `api`, `api_act`, `api_get`, `api_post`, `api_doc` | les deux listés et appelables, aussi par `oto_call` ; l'ancien porte l'avis en tête de sa description ET de chaque réponse (`deprecations.avis_d_appel`) |
+| Chemin REST | `GET`/`PUT /api/orgs/{id}/connectors/http/operations` | `…/connectors/api/operations` | 308, dérivé des routes montées (`deprecations._alias_connecteur_api`) |
+| Chemin REST | `POST /api/orgs/{id}/connectors/http/operations/import` | `…/connectors/api/operations/import` | 308 |
+| Chemin REST | `GET`/`PUT /api/orgs/{id}/connectors/http/definition` | `…/connectors/api/definition` | 308 |
+| Nom de connecteur | `http` | `api` | **sans alias** : refusé en nommant `api` (`providers.CONNECTEURS_RENOMMES`) |
+| Source de fichier | `kind="http"` | `kind="api"` | **sans alias** : refusée en nommant `kind="api"` |
+
+Les listes d'outils enregistrées (projets, flottes, déclencheurs, travaux du runner,
+outils activés ou masqués) sont réécrites par la révision `20261112_1200_connecteur_api` :
+c'est de la configuration. Une liste qui nomme encore `http_get` continue de fonctionner,
+l'outil s'y lisant par son nom d'aujourd'hui (`deprecations.tool_canonique`). Le texte des
+tenants (procédures, guides, consignes d'agent) n'est pas réécrit : l'alias le sert.
 
 ### Pourquoi les clés de capacité n'ont pas d'alias
 

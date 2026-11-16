@@ -12,6 +12,10 @@ il apparaît, jamais un remplacement « le plus proche ». Deux occurrences qui 
 chevauchent (« aa » dans « aaa ») sont ambiguës aussi. Chaque `find` se cherche dans
 le texte déjà modifié par les précédents.
 
+**Un remplacement qui ne change rien est refusé** : `replace` égal à `find`, ou une liste
+dont le texte final est le texte de départ (« a » → « b » puis « b » → « a ») — jamais
+une version enregistrée identique à la précédente.
+
 **Borné avant d'allouer** : avec `max_len`, la longueur que le texte AURAIT est
 calculée avant chaque remplacement — un `all: true` sur un caractère avec un `replace`
 de 100 Ko refuse sans fabriquer le texte géant.
@@ -34,7 +38,7 @@ def appliquer(texte: str, edits: Any, *, max_len: Optional[int] = None) -> tuple
         raise RemplacementRefuse("`edits` is a non-empty list of {find, replace}.")
     if len(edits) > MAX_EDITS:
         raise RemplacementRefuse(f"At most {MAX_EDITS} edits per call.")
-    faits = 0
+    faits, depart = 0, texte
     for i, e in enumerate(edits):
         quoi = f"edits[{i}]"
         if not isinstance(e, dict) or not isinstance(e.get("find"), str) \
@@ -43,6 +47,12 @@ def appliquer(texte: str, edits: Any, *, max_len: Optional[int] = None) -> tuple
         find, replace, tous = e["find"], e["replace"], e.get("all") is True
         if not find:
             raise RemplacementRefuse(f"{quoi}.find is empty.")
+        # `replace` égal à `find` : un remplacement qui ne change rien, une version
+        # enregistrée pour rien. Le plus souvent l'agent n'a pas vu le texte à changer.
+        if replace == find:
+            raise RemplacementRefuse(
+                f"{quoi}.replace is the same as its find: it changes nothing. "
+                "Read the text again and put the change in `replace`. Nothing was written.")
         n = texte.count(find)
         if n == 0:
             raise RemplacementRefuse(
@@ -60,4 +70,8 @@ def appliquer(texte: str, edits: Any, *, max_len: Optional[int] = None) -> tuple
                 "Nothing was written.")
         texte = texte.replace(find, replace)
         faits += n
+    if texte == depart:
+        raise RemplacementRefuse(
+            "These edits leave the text exactly as it was: nothing to save. "
+            "Nothing was written.")
     return texte, faits

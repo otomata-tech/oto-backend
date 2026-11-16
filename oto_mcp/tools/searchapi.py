@@ -1,85 +1,49 @@
 """SearchApi — multi-engine search via SearchApi.io (full scope of the API).
 
-Wraps the **SearchApi.io** REST API (`GET https://www.searchapi.io/api/v1/search`,
-a single endpoint parameterized by `engine`). **Consolidated surface (ADR 0047
-§Amendment applied to a connector)**: since the API has only ONE endpoint, it
-exposes only ONE tool — `searchapi_search`, the vertical chosen by `engine`.
-The 6 typed tools from before (`searchapi_{web,news,jobs,scholar,maps,youtube}_search`)
-differed from the generic one only by a hardcoded `engine` and by named
-fields (`q`/`gl`/`hl`/`location`/`num`/`page`, common to most engines):
-they have become `engine` values + typed parameters of the generic tool.
-`engine` stays **open** (any SearchApi id, including an engine this
-module does not know) — that is the connector's very capability, we do not close it
-with an allowlist.
+MCP envelope of `oto.tools.searchapi.SearchApiClient` (oto-core). The API has ONE
+endpoint, so the connector exposes ONE tool — `searchapi_search`, the vertical picked
+by `engine` (ADR 0047 §Amendment applied to a connector). `engine` stays **open** (any
+SearchApi id): that is the connector's capability, not closed by an allowlist. Payload
+construction, the Bearer header (never the key in the query) and the local refusals
+live in the lib.
 
-No oto-core dependency: the HTTP client is **self-contained** (httpx), like
-`infosec`/`fr`. Key resolved per call via `access.resolve_api_key("searchapi")`:
-user key (`/account`) or the org's shared credential if set, otherwise platform key
-+ daily quota for members (same regime as serper/serpapi). Why in addition
-to serper/serpapi: SearchApi has its own engine coverage + parsing, useful
-as a fallback or when a SearchApi key is already in place on the customer side.
+Here, the host's share only: the key resolved per call via
+`access.resolve_api_key("searchapi")` (user key, the org's shared credential, else
+platform key + daily quota for members — same regime as serper/serpapi), platform
+usage counted (`note_call_trace`), the URL perimeter applied to the results, a lib
+`ValueError` turned into `INVALID_PARAMS`. An upstream refusal (`UpstreamHTTPError`)
+is left to the error envelope.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-import httpx
 from fastmcp import FastMCP
-from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
+from oto.tools.searchapi import SearchApiClient
 
 from .. import access, session_org, url_perimeter
 from ..connectors import verify as connector_verify
-
-_BASE_URL = "https://www.searchapi.io/api/v1/search"
-_ACCOUNT_URL = "https://www.searchapi.io/api/v1/me"
-_TIMEOUT = 30.0
+from ..mcp_errors import McpError
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:
     """"Test the connection" probe — otomata-tech/oto#69. Covers `auth` ONLY.
 
-    `GET /api/v1/me` — dedicated "account usage" endpoint (remaining credits,
-    hourly limit), documented as "without requiring a specific plan level":
-    free, unlike `/api/v1/search` (billed per request, which is what
-    this module wraps). Bearer header (never in the query — this module's `_run`
-    already applies that rule on `/search`, see #284).
-
-    **Authenticated ≠ usable** (class oto#69): does not read the balance (no
-    field shape confirmed in the time available) — `auth` only.
+    `GET /api/v1/me` (`SearchApiClient.account`): free account usage, unlike
+    `/search` (billed per request). **Authenticated ≠ usable** (class oto#69): the
+    balance is not read — `auth` only.
     """
-    import requests
+    SearchApiClient(fields["key"]).account()
 
-    r = requests.get(_ACCOUNT_URL, headers={"Authorization": f"Bearer {fields['key']}"},
-                     timeout=15)
-    r.raise_for_status()
+
+def _client() -> tuple[SearchApiClient, bool]:
+    key, is_platform = access.resolve_api_key("searchapi")
+    return SearchApiClient(key), is_platform
 
 
 def register(mcp: FastMCP) -> None:
     connector_verify.register("searchapi", _verify)
-
-
-    def _bad(msg: str) -> McpError:
-        return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
-
-    def _run(engine: str, params: dict) -> dict:
-        """Resolve the key, call SearchApi, count platform usage.
-
-        The key goes in `Authorization: Bearer` (never in the query — no leak
-        into access logs). An upstream 4xx (input rejected) surfaces as-is via
-        `raise_for_status`; Sentry drops third-party 4xx (see CLAUDE.md).
-        """
-        key, is_platform = access.resolve_api_key("searchapi")
-        payload = {k: v for k, v in params.items() if v is not None}
-        payload["engine"] = engine
-        with httpx.Client(timeout=_TIMEOUT) as c:
-            r = c.get(_BASE_URL, params=payload,
-                      headers={"Authorization": f"Bearer {key}"})
-            r.raise_for_status()
-            data = r.json()
-        if is_platform:
-            session_org.note_call_trace(units=1)
-        return data
 
     @mcp.tool()
     def searchapi_search(
@@ -153,22 +117,12 @@ def register(mcp: FastMCP) -> None:
                 engines whose input is not `q`, and for any filter without a
                 typed field (time range, sorting, ids…).
         """
-        if not engine or not engine.strip():
-            raise _bad(
-                "searchapi_search requires `engine` (the SearchApi vertical), "
-                "e.g. 'google', 'google_news', 'google_jobs', 'google_scholar', "
-                "'google_maps', 'youtube' — see the full list in the tool "
-                "description. Any SearchApi engine id is accepted."
-            )
-        if query is None and not params:
-            raise _bad(
-                f"searchapi_search(engine='{engine}') requires `query` (the engine's "
-                "`q`) — or `params` for an engine whose input is not `q` "
-                "(e.g. engine='google_lens' with params={'url': …})."
-            )
-        payload: dict = {"q": query, "gl": country, "hl": language,
-                         "location": location, "num": num, "page": page}
-        if params:
-            payload.update(params)
-        return url_perimeter.filter_results(_run(engine, payload),
-                                            url_perimeter.perimeter_of_call())
+        client, is_platform = _client()
+        try:
+            data = client.search(engine, query=query, country=country, language=language,
+                                 location=location, num=num, page=page, params=params)
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e))) from e
+        if is_platform:
+            session_org.note_call_trace(units=1)
+        return url_perimeter.filter_results(data, url_perimeter.perimeter_of_call())

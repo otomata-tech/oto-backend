@@ -11,5 +11,11 @@
     "depot": "otomata-tech/oto-app",
     "chemin": "commerce/api/openapi-service.json",
     "secret": "OTO_COMMERCE_CONTRACT_KEY"
+  },
+  {
+    "nom": "partenaire-front-1",
+    "depot_ref": "PARTENAIRE_FRONT_1_DEPOT",
+    "chemin_ref": "PARTENAIRE_FRONT_1_CHEMIN",
+    "secret": "PARTENAIRE_FRONT_1_CONTRACT_KEY"
   }
 ]

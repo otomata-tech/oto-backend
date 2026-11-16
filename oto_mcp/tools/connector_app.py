@@ -126,7 +126,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             name: the connector — exact name, label or namespace (e.g. "hunter",
-                "HubSpot"). The Custom API has its own link: `http(op="setup_link")`.
+                "HubSpot"). The Custom API has its own link: `api(op="setup_link")`.
         """
         sub = access.current_user_sub_or_raise()
         ctx = ResolvedCtx(sub=sub, org_id=access.current_org(sub))

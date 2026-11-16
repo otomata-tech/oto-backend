@@ -85,8 +85,10 @@ ECRITURES = {
     "service.org.suspension": {"suspend", "resume"},
     "admin.outreach": {"test", "send", "optout_clear"},
     # `file`/`unfile` rangent l'app dans un projet ; `put_file` y range un fichier.
+    # `publish` rend un brouillon vivant, `delete_draft` le jette, `set_drafts` règle le
+    # passage par un brouillon.
     "me.app": {"create", "update", "patch", "archive", "unarchive", "restore", "file",
-               "unfile", "put_file"},
+               "unfile", "put_file", "publish", "delete_draft", "set_drafts"},
     "me.doc": {"create", "bulk_create", "update", "patch", "delete", "move", "revert",
                "set_public", "archive", "unarchive", "verify"},
     "me.function": {"create", "propose", "run", "test", "publish", "refuse"},

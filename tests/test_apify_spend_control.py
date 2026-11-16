@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import psycopg
@@ -616,6 +617,7 @@ LIGNE = {"apify_run_id": "r1", "sub": "s", "org_id": 7, "run_id": "tr",
 
 def _relever(run, ligne=LIGNE, dry_run=False, effet=None):
     client = MagicMock()
+    client.api_key = "k"   # `ApifyClient(api_key=cle)`
     client.run_status.return_value = run
     client.run_status.side_effect = effet
     with patch("oto.tools.apify.client.ApifyClient", return_value=client), \
@@ -645,6 +647,64 @@ def test_un_run_a_zero_ne_cree_pas_de_ligne_mais_se_clot():
         {"data": {"id": "r1", "status": "FAILED", "usageTotalUsd": 0}})
     inserer.assert_not_called()
     marquer.assert_called_once()
+
+
+def _au_palier(usd, reserves):
+    """Un run terminé d'un acteur tarifé par palier (la forme signalée le 12/11/2026)."""
+    return {"data": {
+        "id": "r1", "status": "SUCCEEDED", "usageTotalUsd": usd,
+        "chargedEventCounts": {"actor-start": 1, "short-profile": 25},
+        "accountedChargedEventCounts": reserves,
+        "pricingInfo": {"pricingPerEvent": {"actorChargeEvents": {
+            "actor-start": {"eventTieredPricingUsd": {
+                "BRONZE": {"tieredEventPriceUsd": 0.02}}},
+            "short-profile": {"eventTieredPricingUsd": {
+                "BRONZE": {"tieredEventPriceUsd": 0.003}}}}}}}}
+
+
+def test_le_releve_chiffre_un_ecart_au_palier_du_compte_de_la_plateforme():
+    with patch.object(apify, "_palier", return_value="BRONZE") as palier:
+        compte, marquer, inserer = _relever(_au_palier(0.02, {"actor-start": 1}))
+    assert inserer.call_args.args[0]["quantity"] == 95000
+    marquer.assert_called_once_with("r1", statut="SUCCEEDED", cout_usd=pytest.approx(0.095))
+    assert compte["releves"] == 1
+    palier.assert_called_once_with("k")
+
+
+def test_un_cout_pas_encore_final_reste_a_relever_demain():
+    """Palier illisible : ni ligne ni clôture — le run est relu demain, une fois que
+    tout est réservé (son `usageTotalUsd` est alors le chiffre final)."""
+    with patch.object(apify, "_palier", return_value=None):
+        compte, marquer, inserer = _relever(_au_palier(0.02, {"actor-start": 1}))
+    assert compte["illisibles"] == 1
+    inserer.assert_not_called()
+    marquer.assert_not_called()
+    compte, marquer, inserer = _relever(
+        _au_palier(0.095, {"actor-start": 1, "short-profile": 25}))
+    assert inserer.call_args.args[0]["quantity"] == 95000
+
+
+@pytest.mark.parametrize("fini_depuis,facture", [
+    (timedelta(hours=2), True),        # tout est réservé : `usageTotalUsd` fait foi
+    (timedelta(minutes=10), False),    # trop récent : demain
+])
+def test_un_run_sans_comptes_reserves_se_releve_une_fois_tout_reserve(fini_depuis, facture):
+    """`accountedChargedEventCounts` à `null` : le coût ne se dit pas final à la lecture.
+    Sans issue, le relevé le laisserait `illisibles` pour toujours ; un run fini depuis
+    plus d'une heure a tout réservé, et son `usageTotalUsd` EST son coût."""
+    fin = (datetime.now(timezone.utc) - fini_depuis).isoformat().replace("+00:00", "Z")
+    run = _au_palier(0.095, None)
+    run["data"]["finishedAt"] = fin
+    with patch.object(apify, "_palier", return_value=None):
+        compte, marquer, inserer = _relever(run)
+    if facture:
+        assert inserer.call_args.args[0]["quantity"] == 95000
+        marquer.assert_called_once()
+        assert compte["releves"] == 1
+    else:
+        inserer.assert_not_called()
+        marquer.assert_not_called()
+        assert compte["illisibles"] == 1
 
 
 def test_un_run_en_cours_attend():

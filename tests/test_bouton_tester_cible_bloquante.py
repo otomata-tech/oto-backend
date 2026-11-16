@@ -33,12 +33,10 @@ import pytest
 
 # Outils testables ASYNCHRONES dont on a vérifié à la main qu'ils ne bloquent pas.
 # Un nom ici est une affirmation, pas un silence.
-TESTABLES_ASYNC_VERIFIES = {
-    # `infosec_domain` : tout en client asynchrone (httpx.AsyncClient) ; son seul
-    # appel bloquant est le handshake TLS, déjà enveloppé dans `asyncio.to_thread`.
-    # Vérifié le 2026-09-04.
-    "infosec_domain",
-}
+# `infosec_domain`, le seul de la pose (vérifié le 2026-09-04), en est sorti le
+# 2026-11-16 : son client vit dans oto-core (v1.233.0), synchrone, et l'outil est un
+# `def` servi au threadpool.
+TESTABLES_ASYNC_VERIFIES: set[str] = set()
 
 
 def _testables_async() -> set[str]:
@@ -75,7 +73,7 @@ def test_aucun_outil_testable_asynchrone_non_verifie():
 def test_le_temoin_MORD_sur_un_entrant_inconnu():
     """Un témoin qui ne tombe jamais ne surveille rien. On lui donne un entrant
     que personne n'a vérifié."""
-    vus = {"infosec_domain", "_faux_entrant_async"}
+    vus = {"_faux_entrant_async"}
     nouveaux = vus - TESTABLES_ASYNC_VERIFIES
     assert nouveaux == {"_faux_entrant_async"}
 

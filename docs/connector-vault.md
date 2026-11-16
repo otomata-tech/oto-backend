@@ -151,7 +151,7 @@ Invariants verrouillés par `tests/test_providers_registry_snapshot.py` : le reg
 - **B. Visibilité** : `default_active` (ADR 0050 — socle installé d'office au seed d'un nouveau (sub, org) ; **vide depuis le 16/07** : tout le catalogue est en library installable, l'agent guide).
 - **C. Credential** : `auth_modes` ⊆ {`byo_user`, `byo_org`, `platform`} ; `keyed` (résolu via `resolve_api_key`) ; `secret_kind` (api_key/basic_auth/fields/refresh_token/oauth/cookie/none) ; `personal_session` ; `env_secret_name` ; `default_quota`.
 - **Modèle de saisie multi-champs** (ADR 0011) : `secret_fields` (propriété) = schéma de saisie du credential — `credential_fields` explicites (`CredentialField` name/label/secret/**when**/**choices**) ou dérivés du `secret_kind` (`api_key`=1 champ `key` ; `basic_auth`=`email`+`password`). Vide pour `cookie`/`oauth`/`none` (flux dédiés). SOURCE UNIQUE du formulaire dashboard, de l'endpoint `/api/settings/api-keys`, de `status_for` et du packing — zéro branche par connecteur (ex. Silae = 3 champs déclarés, aucun code spécifique).
-- **Un champ peut en SÉLECTIONNER d'autres** (`Connector.field_discriminator`, 2026-08-27) : `http` déclare `auth_mode`, et chaque champ dit par `when=` les modes qui le rendent pertinent. `Connector.fields_for(valeurs)` en dérive les champs à afficher ET ceux dont le `required` s'applique ; `choices=` ferme le jeu de valeurs d'un champ. Le descripteur `auth` publie les trois (`field_discriminator`, `when`, `choices`) pour que le front filtre **sans connaître le connecteur**. Discriminant absent (les ~90 autres) = comportement inchangé.
+- **Un champ peut en SÉLECTIONNER d'autres** (`Connector.field_discriminator`, 2026-08-27) : `api` déclare `auth_mode`, et chaque champ dit par `when=` les modes qui le rendent pertinent. `Connector.fields_for(valeurs)` en dérive les champs à afficher ET ceux dont le `required` s'applique ; `choices=` ferme le jeu de valeurs d'un champ. Le descripteur `auth` publie les trois (`field_discriminator`, `when`, `choices`) pour que le front filtre **sans connaître le connecteur**. Discriminant absent (les ~90 autres) = comportement inchangé.
 - **Chargement** : `Connector.modules` = modules `tools/<m>.py` à importer (kind="tools" ; défaut = nom du provider). Voir §Chargement dérivé.
 
 **Tout dérive du registre** (mêmes symboles, ré-export) : `KEY_PROVIDERS`, `ORG_SHAREABLE_PROVIDERS`, `ADMIN_GRANT_ONLY_NAMESPACES`, `QUOTA_DEFAULTS`, `ENV_SECRET_NAMES`, `DEFAULT_BUNDLE/PRESET`. Plus de listes en dur parallèles. `GET /api/connectors` = vue publique.
@@ -207,7 +207,7 @@ reçue (`CredentialFieldsDialog.vue`, garde `!f.secret`).
 ne la change pas. Le secret ne repasse à aucun moment sur le fil.
 
 ⚠️ **Le corps rendu par le GET est PLAT** : ses autres clés sont celles du connecteur.
-`http` déclare un champ nommé `scope` (les scopes oauth2) — d'où les clés d'enveloppe
+`api` déclare un champ nommé `scope` (les scopes oauth2) — d'où les clés d'enveloppe
 `read_scope`/`read_account`, préfixées à dessein. Toute clé ajoutée à ce corps doit
 rester impossible à confondre avec un `credential_field`.
 
@@ -227,7 +227,7 @@ un admin d'org. C'est `is_org_shareable` qui décide aux paliers équipe et org.
 ## Egress — la destination d'un connecteur (`oto_mcp/egress.py`)
 
 Sept connecteurs prennent leur destination dans le credential, donc chez un **admin
-d'org cliente** : `http` (`base_url` ET `token_url`), `n8n`, `make`, `github`
+d'org cliente** : `api` (`base_url` ET `token_url`), `n8n`, `make`, `github`
 (Enterprise), `lighton`, `posthog`, `salesforce` (`login_url` — celui-là reçoit le
 refresh token, donc un secret). Le process tourne en root, sans conteneur : sa boucle
 locale porte l'administration du proxy web, le pilotage du navigateur et les autres
@@ -244,7 +244,7 @@ l'entrée exacte à déclarer.
 **L'instance elle-même est refusée (#1499)**, quelle que soit la politique et sans
 exception possible : l'hôte de `OTO_MCP_PUBLIC_URL` (`config.public_host()`), ses
 sous-domaines et ses hôtes épinglés par org (`<slug>--<hôte>`). Un agent n'appelle pas
-oto par un connecteur — une carte `http` qui visait l'instance joignait `/api/hooks/…`
+oto par un connecteur — une carte `api` qui visait l'instance joignait `/api/hooks/…`
 avec un porteur obtenu ailleurs, hors de toute liste d'outils. Sans la variable, la
 garde **lève** (`RuntimeError`, comme `config.public_host`) plutôt que de deviner. ⚠️
 Un autre nom du même service (IP de la machine, domaine de tenant) n'est pas reconnu :
@@ -323,7 +323,7 @@ Tables `orgs`/`org_members`(index partiel `org_members_one_active`)/`org_entitle
 
 ## Connecteurs remote — bridges (ADR 0003, pilote : un bridge back-office client)
 
-`kind="remote"` au registre = **aucun code ni credential client dans oto** : un bridge (service HTTP distant, ex. un bridge back-office client (repo privé)) détient le credential du système client ; oto-mcp = middleware générique `tools/remote.py` (tools `<ns>_describe` + `<ns>_call`, forward bearer M2M + `X-Oto-Sub` pour l'audit côté bridge). Le credential d'org = `secret` = token M2M + `meta.base_url` = endpoint (posé via `oto_admin_set_org_secret(..., base_url=…)`). Gating inchangé : grant-only + `require_namespace` au call-time. Contrat bridge (`/healthz`, `/describe`, `/call`) : ADR 0003 du meta-repo. ⚠️ Le flavor complémentaire envisagé pour les remotes **déjà-MCP** (« mount MCP-to-MCP », `otomata#16`) est **sans objet depuis le 2026-09-09** : la fédération MCP est retirée (**ADR 0069**). `kind="remote"`, lui, ne bouge pas — un service distant déjà-MCP se joint désormais par le connecteur `http` générique, ou s'écrit en connecteur natif.
+`kind="remote"` au registre = **aucun code ni credential client dans oto** : un bridge (service HTTP distant, ex. un bridge back-office client (repo privé)) détient le credential du système client ; oto-mcp = middleware générique `tools/remote.py` (tools `<ns>_describe` + `<ns>_call`, forward bearer M2M + `X-Oto-Sub` pour l'audit côté bridge). Le credential d'org = `secret` = token M2M + `meta.base_url` = endpoint (posé via `oto_admin_set_org_secret(..., base_url=…)`). Gating inchangé : grant-only + `require_namespace` au call-time. Contrat bridge (`/healthz`, `/describe`, `/call`) : ADR 0003 du meta-repo. ⚠️ Le flavor complémentaire envisagé pour les remotes **déjà-MCP** (« mount MCP-to-MCP », `otomata#16`) est **sans objet depuis le 2026-09-09** : la fédération MCP est retirée (**ADR 0069**). `kind="remote"`, lui, ne bouge pas — un service distant déjà-MCP se joint désormais par le connecteur `api` générique, ou s'écrit en connecteur natif.
 
 ## Projection instances (ADR 0038 B4)
 
@@ -355,7 +355,7 @@ d'identité de SA ligne** (`credentials_store._aad`), pas à la table qui la por
 table posée à côté, la ligne du secret gardant ses quatre colonnes, donne l'identifiant
 stable **sans un octet de rechiffrement**. Une fois le rechiffrement hors de l'équation,
 ce qui décide est le fond : le modèle prévoit des instances **sans secret** — une
-instance `http` qui ne fige qu'une `base_url` (0057), une sous-instance qui ne pose
+instance `api` qui ne fige qu'une `base_url` (0057), une sous-instance qui ne pose
 qu'une *détermination* (« le compte de Jane », 0053-D9-3). Un objet qui n'est plus un
 credential n'a rien à faire dans une table qui l'est.
 
@@ -622,31 +622,75 @@ l'intérieur du coffre, un relevé AST par FONCTION qui n'admet que les cinq pri
 d'écriture. Un lecteur de credential qui se mettrait à lire les instances ferait dépendre
 la désignation d'une clé d'autre chose que du quadruplet ; c'est le lot L7, avec sa revue.
 
+### Le renommage `http` → `api` (12/11/2026)
+
+Décision du propriétaire du produit : le connecteur s'appelle `api`, ses outils `api`, `api_act`, `api_get`,
+`api_post`, `api_doc` — mêmes ops, mêmes arguments. **Les surfaces se doublent** (`docs/alias-deprecies.md`) :
+les anciens noms d'outils `http*` restent servis en **alias dépréciés** (`deprecations.OUTILS_CONNECTEUR_API`),
+traduits au bord du protocole et par `oto_call`, chaque réponse portant l'avis en tête ; les routes REST
+deviennent `/api/orgs/{id}/connectors/api/{operations,definition}`, et les anciennes `…/connectors/http/…`
+répondent **308** vers elles (`deprecations.alias_rest_derives`). Retrait : quand les consommateurs déclarés ont
+suivi et que l'usage compté (`tool_calls.args.deprecated_name`) est nul, au plus tôt le 31/01/2027. Le NOM du
+connecteur, lui, n'a pas d'alias : `http` refuse en nommant `api` (`providers.CONNECTEURS_RENOMMES`, lu par les
+refus « connecteur inconnu » ; source de fichier `kind="http"` → `kind="api"`). Les données suivent en deux temps : le **coffre** par une étape de démarrage
+(`api_operations.copier_depuis_http`, COPIE re-chiffrée — l'AAD porte le nom du connecteur — qui laisse les
+lignes `http` en place, garde le partage de la ligne (`share_*`) et recopie la définition de chaque instance) ;
+le reste par la révision `20261112_1200_connecteur_api`, à jouer APRÈS la copie — après le tag chez nous ; sur
+une cible, qui migre avant de démarrer, la porte joue la copie d'abord (`oto-mcp maintenance copies-du-coffre`,
+`instance-cible.md` § Les migrations) : sélections, activations,
+réglages, kits, listes d'outils, et ce qui DÉSIGNE une instance `http` — règles d'accès des comptes
+(`connector_account_rules`), arêtes `grants`, liens de projet (`target_ref`, `instance_ref`, `identity_ref`) —
+repointé vers la copie `api` du même propriétaire et du même compte. Pourquoi la révision et pas le démarrage :
+l'id de la copie s'y lit en base, et le démarrage du code neuf précède le tag sur une base partagée avec la
+prod, qui lirait encore ces désignations. Même règle de conflit partout (même sens : le doublon part ; sens
+différent : la révision s'arrête et n'écrit rien). Les lignes `http` du coffre partent plus tard, par
+`oto-mcp maintenance orphelins`.
+
 ### La `config` d'une instance — premier écrivain : les opérations d'un « Custom API » (17/10/2026)
 
-Le connecteur `http` se présente comme **« Custom API »** (catégorie `Custom`) : c'est la
+Le connecteur `api` (nommé `http` jusqu'au 12/11/2026) se présente comme **« Custom API »** (catégorie `Custom`) : c'est la
 carte qu'on cherche quand l'outil d'un client (une paie, un ERP) n'a pas de connecteur.
 Une org y **décrit en données** les opérations qu'elle appelle (nom, description, méthode,
 gabarit de chemin, schéma d'entrée — format de `oto_mcp/custom_ops.py`, sous-ensemble à plat
-de `connector.schema.json` d'oto-core), et l'agent les appelle par leur nom (`http_act(op="call")`).
+de `connector.schema.json` d'oto-core), et l'agent les appelle par leur nom (`api_act(op="call")`).
 La liste vit dans **`connector_instances.config["operations"]`** de l'instance qui nomme la
 ligne du coffre — désignée par le quadruplet, jamais autrement
-(`connectors/http_operations.py`, seul module admis à cette clé, cf. l'allowlist de
+(`connectors/api_operations.py`, seul module admis à cette clé, cf. l'allowlist de
 `tests/test_connector_instances_l6.py`). Conséquences assumées : une **rotation** de la clé
 garde la liste (l'instance survit à l'`_upsert`), un **renommage** de compte la fait
 suivre (`move_instance_to_account`), un **retrait** de la clé l'archive avec l'instance.
 Écriture = les **clés données** de `config` remplacées (`merge_instance_config`),
 jamais le document entier. Droits : ceux de la pose de la clé (`ORG_ADMIN_OF` pour un compte d'org, chef
 d'équipe pour un compte d'équipe) ; la lecture est ouverte aux membres. Faces : REST
-`/api/orgs/{id}/connectors/http/operations` (+ `/import`, conversion OpenAPI sans
-écriture), MCP en paire (`tests/test_convention_act.py`) : `http` lit — `op=list` (les connecteurs
+`/api/orgs/{id}/connectors/api/operations` (+ `/import`, conversion OpenAPI sans
+écriture), MCP en paire (`tests/test_convention_act.py`) : `api` lit — `op=list` (les connecteurs
 personnalisés de l'org, ou la définition d'un compte) et `op=setup_link` (le lien de la carte pré-remplie **sans** secret, la clé se saisit
-dans le formulaire, jamais dans une conversation) ; `http_act` agit — `op=call` (une
+dans le formulaire, jamais dans une conversation) ; `api_act` agit — `op=call` (une
 action par son nom ; même un GET : le client ne peut pas savoir ce qu'une action décrite
 fait chez le tiers), `op=request` (appel brut), `op=import` (conversion OpenAPI, sans
 écriture mais préparant une écriture) et `op=set_definition`. Les outils d'avant la paire
-(`http_get`/`http_post`/`http_doc`) restent servis ; `http` reste dans `A_MIGRER` tant
+(`api_get`/`api_post`/`api_doc`) restent servis ; `api` reste dans `A_MIGRER` tant
 qu'ils n'ont pas rejoint la paire.
+
+**`class: read` par action** : une action peut déclarer `class: read` (le mot d'oto-core, `class` d'une
+fonction décrite), seule valeur admise, sur un GET ou un POST seulement — une recherche envoyée en corps
+JSON, un point d'appel RPC. Posée par qui administre la carte (`set_definition`, mêmes droits que ci-dessus),
+elle change deux choses pour **cette action seule** : son effet (`tools/effets` la juge `lire` au lieu de
+`envoyer`) et le mode `session`, qui la laisse passer au lieu de la refuser (`api_session_read_only`). Sans
+elle, une action se juge sur son verbe ; un appel brut (`op=request`) ne la porte jamais. `write` et
+`sensitive` sont refusés : ils ne diraient rien de plus que le verbe, ou moins.
+
+**La réponse d'une action** (`oto_mcp/custom_ops_output.py`) : deux clés facultatives, les mots et le code d'oto-core
+(`oto.connectors.serve`, jamais recopié). `output` (`items`, `strip`, `projection` ; doc « sortie » de la lib) dit
+ce que l'agent reçoit : la liste à déballer, les clés retirées par chemin à points, les clés de premier niveau
+gardées ; une réponse sans la liste `items` déclarée est refusée (`api_output_items_missing`), jamais lue vide.
+`refusals` (doc « signal de refus » de la lib) dit une erreur que le service écrit dans le **corps d'un succès**
+(`{"hasError": true, "errorCode": …}` sous un 200) : `{code, when: 200, body: {path, equals | contains}, message,
+retryable?}`. Jugée sur le corps brut, avant `output`, la première entrée qui tient est servie en refus nommé
+(`code`, `retryable`), suivie d'un extrait de la réponse, clôturé comme le corps d'une erreur du tiers — jamais
+un succès. `when` vaut 200 seulement (un statut d'erreur arrive déjà à l'agent avec son corps, et le client ne
+rend pas le 2xx exact d'un succès) ; `body` est exigé ; `marks_account` n'est pas pris. Une action qui ne déclare
+ni l'une ni l'autre rend exactement ce qu'elle rendait ; `op=request` ne les porte jamais.
 
 **Le même lien pour tout le catalogue** : `oto_connector(op="setup_link", name=…)`
 (`capabilities/connectors/setup_link.py`) rend la carte d'UN connecteur
@@ -655,7 +699,7 @@ champs que le formulaire demandera (noms, jamais de valeur), la méthode (`secre
 `oauth`, `hosted`…), et où trouver la clé (sections `prerequisite`/`setup` de la doc
 du connecteur). Le lien ne porte **ni secret ni texte choisi par le modèle** — une
 phrase d'agent affichée sur une page de confiance à côté d'un champ de clé serait un
-hameçon. `http` est renvoyé vers son propre `setup_link` (pré-remplissage). Savoir si la
+hameçon. `api` est renvoyé vers son propre `setup_link` (pré-remplissage). Savoir si la
 personne a fini : `op=list name=…` (`credential`), pas un état de plus.
 
 **Configuré une fois, servi à tous** : la `config` porte aussi la **définition** du
@@ -666,11 +710,11 @@ argument d'action du même nom). Les en-têtes constants passent par la session 
 oto-core après sa préparation (`with_constant_headers`, accroché à `_ready` — suite
 attendue : un paramètre `headers=` côté oto-core). Le nom affiché de la carte
 (`label`) vit en clair dans `meta` (`in_meta`, 17/10/2026) : la liste des connecteurs
-personnalisés de l'org (`connectors/http_operations.org_connectors`), le refus
+personnalisés de l'org (`connectors/api_operations.org_connectors`), le refus
 `oto_connector(name=…)` (qui rend le connecteur au lieu de « inconnu »), le contexte
 de l'agent (une ligne par connecteur) et le roster `/api/me/connector-instances`
 (`custom_api`) le lisent sans déchiffrer. Export/pose : `GET|PUT
-/api/orgs/{id}/connectors/http/definition` — l'export ne porte aucun champ `secret`.
+/api/orgs/{id}/connectors/api/definition` — l'export ne porte aucun champ `secret`.
 
 **Rapport à `otomata-tech/oto-pkg#60`** (le connecteur privé décrit en données, repris
 d'oto-backend#808 pour oto 2). Le Custom API est la forme d'**oto 1** de ce besoin, livrée
@@ -680,13 +724,77 @@ ici sans attendre oto 2 ; il ne fixe rien pour oto 2. Point par point :
 | --- | --- | --- |
 | le format au grain de l'opération, textes compris (nom, description, verbe, chemin, paramètres typés) | `custom_ops.py` — sous-ensemble à plat de `function` (`name`, `description`, `input`, `call.method`, `call.path`) | ✓ |
 | la forme de la sortie (`function.output.schema`, déclarable côté `connectors`) | absente : la réponse du tiers est rendue telle quelle | ✗ — à ajouter avec le même nom de clé, `output`, si oto 1 en a besoin |
-| un verbe générique : lister les méthodes d'une instance, en appeler une par son nom | `http(op="list")`, `http_act(op="call", operation=…)` — deux noms d'outils fixes, la liste vient de l'instance | ✓ |
+| un verbe générique : lister les méthodes d'une instance, en appeler une par son nom | `api(op="list")`, `api_act(op="call", operation=…)` — deux noms d'outils fixes, la liste vient de l'instance | ✓ |
 | la garde de destination dès le départ | `egress.check_url` à chaque appel (base, serveur de jeton, document importé), aucune redirection suivie | ✓ |
 | le jeton de rafraîchissement | absent (`oauth2` = client credentials seulement) | ✗ |
 | le repli hébergé chez le tiers | hors périmètre | ✗ |
 
 Le jour où oto 2 sert les connecteurs privés, une définition d'ici s'y convertit champ à champ
 (`GET …/http/definition`, sans secret) : ses champs sont ceux de `function`, à plat.
+
+**La clé d'un membre** (13/11/2026) : la carte `api` déclare `byo_user` en plus de `byo_org`. Un membre
+non-admin pose SA clé par la route du membre (`POST /api/me/credentials/api`) ; elle est rangée dans son
+org (`member`, `{org}:{sub}`), et le walker la préfère à celle de l'équipe puis de l'org — qui n'en a pas
+garde la clé de l'org. Les routes de la définition et des opérations prennent `scope` : `org` (défaut,
+droits ci-dessus) ou `member` (la clé de l'APPELANT dans cette org, lue et écrite par lui seul).
+La ligne membre se déduit de l'identité de l'appelant, jamais d'un argument : aucune route n'atteint
+la clé d'un autre membre ; l'autorisation se branche sur `scope` (`BY_OP`). Le jar du mode `session`
+vit dans la ligne résolue, donc un par personne. Banc : `tests/test_api_cle_membre_live.py`.
+
+**Plusieurs clés perso** (13/11/2026) : chaque compte de la carte est une API distincte, donc l'axe
+`_account` est annoncé **statiquement** sur les outils `api*` (`account_axis_static`) — une session qui a
+figé sa liste avant la seconde clé le voit déjà. Deux clés au même palier sans défaut et sans `_account` :
+`api_get`/`api_post`/`api_doc` refusent par l'ambiguïté de la cascade (`CompteAmbigu`, qui nomme les
+comptes), jamais par « carte non configurée » — `tools/api._resolve` ne ravale plus les refus de la
+résolution. Banc : `tests/test_api_cles_perso_multiples_live.py`.
+
+Les listes de l'agent la montrent (`connectors/api_operations.org_connectors`) : `api(op="list")` sans
+`_account`, la ligne « Custom connector » du contexte et `oto_connector(name=…)` listent les clés de
+l'APPELANT (`scope: "member"`, mention « your personal key, used before the org's ») avant celles de
+l'org (`scope: "org"`, ligne de contexte inchangée). Le palier membre n'est lu que si la carte déclare
+`byo_user`, et sa ligne se déduit de l'appelant : un collègue ne la voit dans aucune liste. Un même
+compte aux deux portées est listé deux fois, mais reste UN connecteur pour l'appel par nom
+(`api_act(op="call")`) : la cascade sert la clé perso.
+
+### Le mode `session` du Custom API : un état propre au compte, scellé dans `meta` (12/11/2026)
+
+Pour un service sans clé d'API, la carte `api` prend `auth_mode=session` : un identifiant, un mot de passe
+(secret) et des **étapes** (`session`, un objet JSON lu strictement par oto-core, `oto.tools.http.session`) —
+un POST JSON de login, puis, au besoin, le GET de l'URL que la réponse nomme et ses redirections. Chaque saut
+reste sur l'hôte de la `base_url`, un hôte listé ou le domaine déclaré, et passe par `egress.check_url`
+(`connectors/api_session.guard` ; les exceptions nommées ne valent que pour l'hôte de la `base_url`). Un 401
+ou un renvoi vers une page de login déclenche un login complet et un seul rejeu ; refusé encore, la clé passe
+au rouge (`credential_rejected`). Le mode **ne fait que lire** : `api_post` et les verbes d'écriture
+d'`api_act` sont refusés par nom (`api_session_read_only`) avant tout envoi, `dry_run` compris — sauf une
+action déclarée `class: read` (ci-dessus). ⚠️ oto-core garde sa propre garde de lecture seule
+(`READ_ONLY_MODES`) : tant qu'elle ne connaît pas cette exception, un POST `class: read` passe la garde
+de l'hôte et reste refusé par le client.
+
+**Le jar de cookies** est un état du compte qui change à l'usage, pas à la pose. Il ne va donc pas dans
+`secret_enc` (que seule la pose réécrit, sous verrou optimiste) mais dans un **satellite scellé** de la même
+ligne : `meta.session_jar_enc`, chiffré AES-GCM sous la clé du coffre, AAD = celle de la ligne suivie de
+`#session_jar` (`credentials_store.seal_satellite` / `unseal_satellite`, jeu fermé `SEALED_SATELLITES`, retiré
+des surfaces de statut comme un bearer). Écrit par fusion JSONB : ni `version` ni `set_at` ne bougent. Le
+scellé porte l'empreinte des champs qui décident qui se connecte (base, identifiant, mot de passe, étapes) :
+un jar scellé pour d'autres champs n'est pas resservi. Une repose remplace `meta`, donc efface le jar. Entre
+processus, **le dernier écrivain gagne** — au pire un login de plus, jamais un autre compte. Un scellé qui ne
+se déchiffre plus (ligne déplacée, renommée — la ligne `''` devenue `principal` à la pose d'un premier
+compte nommé —, copiée vers une autre instance) est un cache perdu : journalisé, et l'appel se reconnecte.
+`crypto.unseal` lève alors `crypto.EnveloppeIndechiffrable`, seule erreur que `read_jar` avale (une master
+key absente monte). Le jar n'est jamais rendu à l'agent ni journalisé.
+
+**Le mode `visitor`** (14/11/2026) : pour un site public sans compte. La carte ne prend que `session`, lu par
+oto-core avec son propre jeu fermé (`login` = `{path, method: "GET", query}`, sans `follow`, sans page de
+login par défaut) : la « connexion » est le GET d'une page d'entrée dont la réponse pose les cookies du
+visiteur, ses redirections suivies. Même garde à chaque saut, même jar scellé, même empreinte
+(`api_session.JAR_MODES`, `keeps_jar`) — identifiant et mot de passe y valent vide. Un 401 relance une
+visite et un seul rejeu. Le site qui ne donne pas de session (aucun cookie posé, visite refusée, refus
+encore après une visite neuve) est refusé par nom, `api_visitor_refused`, **jamais** `credential_rejected` :
+il n'y a pas de clé à reposer, la carte ne passe pas au rouge. Le mode **n'est pas en lecture seule** (aucun
+mot de passe d'une personne n'est en jeu) : un POST y est jugé comme partout (`tools/effets` : `api_post`
+envoie, `api_act` suit le verbe), sans exception par mode. Non traité ici : une réponse 200 qui porte une
+erreur métier dans son corps (un drapeau d'erreur, un code) reste un succès jusqu'au lot qui projette la
+réponse (`output`). Banc : `tests/test_api_mode_visiteur.py`.
 
 ### `inst:{id}` — la forme de fil
 

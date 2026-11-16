@@ -9,8 +9,8 @@ from ._model import _c
 
 # searchapi: multi-engine search via SearchApi.io (Google verticals +
 # YouTube/Bing/Amazon/… + jobs/news/maps/scholar). keyed api_key, platform-
-# eligible (platform key + daily quota, like serper/serpapi). Self-contained
-# HTTP client (no oto-core dep).
+# eligible (platform key + daily quota, like serper/serpapi). Client in oto-core
+# (`oto.tools.searchapi`, v1.233.0).
 CONNECTOR = _c(
     "searchapi", ["searchapi"], auth_modes={"byo_user", "byo_org", "platform"}, keyed=True,
     secret_kind="api_key", default_quota=200, platform_key_open=True,

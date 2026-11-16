@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from typing import Optional
 
 from fastmcp import FastMCP
 
 from ..mcp_errors import McpError
-from .etape import Step, _payload
+from .etape import Step, _bills, _payload
 
 #: An asynchronous step polls for at most this long, first poll after `POLL_FIRST_S`.
 POLL_BUDGET_S = 25.0
@@ -106,3 +107,69 @@ def _judge(issue, attempt: dict) -> bool:
                        message="the org's redaction policy withheld this result")
         return False
     return True
+
+
+async def _fanned(mcp: FastMCP, sub, step: Step, arg_sets: list[dict], inputs: dict,
+                  deadline: float, attempt: dict, budget: dict,
+                  want: Optional[int] = None):
+    """The calls of a step that sends several (`Step.fan_out`), in turn: their results
+    merged (`Step.merge`), or None after recording why nothing could be read.
+
+    Each call sent is billed by its tool and counted against `max_paid_steps`; before
+    each, the call's limits are checked again — `max_paid_steps`, the time budget, and
+    `want` (the find already holds that many people: the rest would be paid for
+    nothing). A failed call does not undo the ones before it: their results are read,
+    and the receipt says where it stopped (`stopped`). At most `step.max_calls` are
+    sent; the argument sets past it are named (`not_sent`)."""
+    sets, extra = arg_sets[:step.max_calls], arg_sets[step.max_calls:]
+    paid = _bills(step)
+    results: list = []
+    tried, sent, why, refusal = 0, 0, None, None
+    for i, args in enumerate(sets):
+        if i and want and _count(step.extract(step.merge(results), inputs)) >= want:
+            why = "limit_reached"
+            break
+        if (paid and budget.get("max_paid_steps") is not None
+                and budget.get("paid_steps", 0) >= budget["max_paid_steps"]):
+            why = "max_paid_steps"
+            break
+        if time.monotonic() >= deadline:
+            why = "time_budget"
+            break
+        part: dict = {}
+        tried += 1
+        issue = await _call(mcp, sub, step.tool, args, part)
+        if issue is not None:
+            sent += 1
+            if paid:
+                budget["paid_steps"] = budget.get("paid_steps", 0) + 1
+        if issue is None or not _judge(issue, part):
+            if part.get("status") == "no_match":
+                results.append({})      # a 404 from the provider: nobody for this one
+                continue
+            refusal = part
+            why = part.get("code") or part.get("status")
+            break
+        results.append(_payload(issue))
+    attempt["calls"] = sent
+    not_sent = [a.get("query", a) for a in sets[tried:] + extra]
+    if not_sent:
+        attempt["not_sent"] = not_sent
+    if why:
+        attempt["stopped"] = why
+    if refusal is not None and (not results
+                                or not step.extract(step.merge(results), inputs)):
+        # Nothing found, and a search failed (or was refused, or withheld): the outcome
+        # is that failure, not a miss — a `no_match` would be written on a table's row,
+        # where a failure leaves it to retry.
+        attempt.update({k: v for k, v in refusal.items() if k != "stopped"})
+        return None
+    if not results:
+        if why in ("max_paid_steps", "time_budget"):
+            attempt.update(status="skipped", code=why)
+        return None
+    return step.merge(results)
+
+
+def _count(found) -> int:
+    return int(found.get("count") or 0) if isinstance(found, dict) else 0

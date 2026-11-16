@@ -1,4 +1,4 @@
-"""The SAVED DEFINITION of a custom connector (the `http` connector, "Custom API") —
+"""The SAVED DEFINITION of a custom connector (the `api` connector, "Custom API") —
 everything non-secret an org configures ONCE and every member and session reuses.
 
 It lives in `connector_instances.config` of the credential's instance, next to

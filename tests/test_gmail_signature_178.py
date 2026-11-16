@@ -95,14 +95,16 @@ def test_markdown_False_donne_un_corps_texte_echappe_pas_du_markdown(monkeypatch
 def test_sign_False_n_appose_rien_et_le_dit(monkeypatch):
     cli = _FauxClient(boom=AssertionError("la signature ne doit pas être lue"))
     out = _compose(monkeypatch, cli, body="x", mode="send", to="j@x.fr", sign=False)
-    assert cli.appels[0][1]["html"] is None
+    # sans signature, le markdown est rendu (assaini) ici, pas par GmailClient
+    assert cli.appels[0][1]["html"] == "<p>x</p>"
     assert out["signature"] == "disabled"
 
 
 def test_un_compte_sans_signature_le_dit_au_lieu_de_se_taire(monkeypatch):
     cli = _FauxClient(signature="")
     out = _compose(monkeypatch, cli, body="x", mode="send", to="j@x.fr")
-    assert cli.appels[0][1]["html"] is None
+    # sans signature, le markdown est rendu (assaini) ici, pas par GmailClient
+    assert cli.appels[0][1]["html"] == "<p>x</p>"
     assert out["signature"] == "none_configured"
 
 

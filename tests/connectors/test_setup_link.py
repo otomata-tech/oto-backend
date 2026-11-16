@@ -25,7 +25,7 @@ def _ligne(name: str) -> dict:
 
 @pytest.fixture()
 def catalogue(monkeypatch):
-    lignes = [_ligne(n) for n in ("hunter", "hubspot", "http", "linkedin_unipile")]
+    lignes = [_ligne(n) for n in ("hunter", "hubspot", "api", "linkedin_unipile")]
     monkeypatch.setattr(CS, "_visible_catalog", lambda ctx: lignes)
     return lignes
 
@@ -79,7 +79,7 @@ def test_nom_inconnu_refus_nomme(catalogue, page):
 
 def test_le_custom_api_renvoie_a_son_propre_lien(catalogue, page):
     with pytest.raises(AuthzDenied) as e:
-        SL.setup_link(_CTX, "http")
+        SL.setup_link(_CTX, "api")
     assert e.value.code == "use_http_setup_link"
 
 

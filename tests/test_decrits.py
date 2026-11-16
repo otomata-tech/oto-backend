@@ -143,7 +143,7 @@ def test_a_malformed_call_is_refused_with_the_op_s_detail(monte, vendeur, argume
 def test_an_argument_the_engine_refuses_hides_the_personal_values(monte, monkeypatch):
     def refuse(description, function, arguments, **_):
         raise engine.InvalidArguments(f"{function}: `name` {arguments['name']!r} is refused.")
-    monkeypatch.setattr(decrits.engine, "call", refuse)
+    monkeypatch.setattr(decrits.engine, "execute", refuse)
     with pytest.raises(McpError) as refus:
         _appel(monte["essai_act"], op="update_thing", thing_id=1, name="bad")
     assert refus.value.error.message == "update_thing: `name` '[personal]' is refused. Nothing was done."
@@ -271,7 +271,6 @@ def test_a_sensitive_function_without_effect_is_refused_at_mount():
     (lambda d: d["functions"][0].pop("call"), "essai.get_account: a function without call"),
     (lambda d: d["connector"].update(settings=[{"name": "region", "type": "choice", "choices": ["eu"]}]),
      "connector.settings"),
-    (lambda d: d["connector"]["modes"].append("platform"), "mode platform"),
     (lambda d: d["connector"]["credential"].append({"name": "secret", "label": "S", "secret": True}),
      "the credential is not one secret of the account"),
     (lambda d: d["connector"].update(auth={"kind": "oauth2_user"}), "the credential is not one secret"),
@@ -412,12 +411,99 @@ def test_search_console_is_inscribed_with_its_service_account_key():
     assert descriptions.refus_de_montage(descriptions.charger("google_search_console")) == []
 
 
-def test_search_console_serves_one_reading_tool(search_console):
+def test_search_console_serves_its_reads_and_an_act_side_that_submits(search_console):
     outils, _ = search_console
-    assert set(outils) == {"google_search_console"}
+    assert set(outils) == {"google_search_console", "google_search_console_act"}
     assert outils["google_search_console"].parameters["properties"]["op"]["enum"] == [
         "list_sites", "query_search_analytics", "inspect_url", "list_sitemaps", "get_sitemap"]
-    assert descriptions.effets(descriptions.charger("google_search_console")) == {}
+    assert outils["google_search_console_act"].parameters["properties"]["op"]["enum"] == ["add_sitemap"]
+    assert outils["google_search_console_act"].annotations == ACTE
+    assert descriptions.effets(descriptions.charger("google_search_console")) == {
+        "google_search_console_act": {"envoyer": "add_sitemap"}}
+
+
+def _scope_de_l_assertion(requete) -> str:
+    """The `scope` claim of the service account's assertion, read in the token request's form."""
+    import base64
+    from urllib.parse import parse_qs
+    jwt = parse_qs(essai.envoyee(requete)["body"])["assertion"][0]
+    claims = jwt.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))["scope"]
+
+
+def test_search_console_reads_at_the_default_level_with_the_read_scope(search_console, vendeur):
+    """No level set: the description's `default_level`, `read` — the key asks for webmasters.readonly, as before the
+    levels existed."""
+    outils, _ = search_console
+    vendeur.answers.extend([(200, {"access_token": "ya29.not-real", "expires_in": 3599}),
+                            (200, {"siteEntry": []})])
+    _appel(outils["google_search_console"], op="list_sites")
+    assert _scope_de_l_assertion(vendeur.requests[0]) == "https://www.googleapis.com/auth/webmasters.readonly"
+
+
+def test_search_console_refuses_a_submit_at_read_before_sending_anything(search_console, vendeur):
+    outils, _ = search_console
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["google_search_console_act"], op="add_sitemap", site_url="sc-domain:example.com",
+               feedpath="https://www.example.com/sitemap.xml")
+    assert (refus.value.code, refus.value.status_code) == ("access_level_denied", None)
+    message = str(refus.value)
+    assert "'read'" in message and "oto_connector_access_level(op='set', scope='org'" in message
+    assert "level='full'" in message and "Nothing was sent." in message
+    assert vendeur.requests == []
+    info = error_taxonomy.classify(refus.value)
+    assert (info.code, info.retryable) == ("access_level_denied", False)
+
+
+@pytest.fixture
+def niveau(monkeypatch):
+    """The level the org set, as the guard resolves it at the call."""
+    def poser(valeur):
+        monkeypatch.setattr(decrits.access_level_gate, "level_of_the_call", lambda nom: valeur)
+    return poser
+
+
+def test_search_console_submits_a_sitemap_at_full(search_console, vendeur, niveau):
+    outils, _ = search_console
+    niveau("full")
+    vendeur.answers.extend([(200, {"access_token": "ya29.not-real-full", "expires_in": 3599}), (200, {})])
+    rendu = _appel(outils["google_search_console_act"], op="add_sitemap", site_url="sc-domain:example.com",
+                   feedpath="https://www.example.com/sitemap.xml")
+    assert rendu == {}
+    jeton, appel = vendeur.requests
+    assert _scope_de_l_assertion(jeton) == "https://www.googleapis.com/auth/webmasters"
+    assert appel.method == "PUT" and appel.url == (
+        "https://searchconsole.googleapis.com/webmasters/v3/sites/sc-domain%3Aexample.com/sitemaps/"
+        "https%3A%2F%2Fwww.example.com%2Fsitemap.xml")
+
+
+def test_search_console_names_a_property_shared_restricted(search_console, vendeur, niveau):
+    """`full` bounds, it does not grant: a property that shares the key as Restricted refuses the submit, under the
+    description's code and message (the gesture: Owner or Full), and the key is not painted red."""
+    outils, _ = search_console
+    niveau("full")
+    vendeur.answers.extend([(200, {"access_token": "ya29.not-real-full", "expires_in": 3599}),
+                            (403, {"error": {"code": 403, "message": "User does not have sufficient permission for "
+                                                                    "site 'sc-domain:example.com'.",
+                                             "errors": [{"reason": "insufficientPermissions"}]}})])
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["google_search_console_act"], op="add_sitemap", site_url="sc-domain:example.com",
+               feedpath="https://www.example.com/sitemap.xml")
+    assert (refus.value.code, refus.value.status_code) == ("owner_or_full_required", 403)
+    info = error_taxonomy.classify(refus.value)
+    assert (info.code, info.hint) == ("owner_or_full_required", None)
+    assert "Owner or Full" in info.message
+    assert not error_taxonomy.credential_rejected_in_chain(refus.value)
+
+
+def test_search_console_refuses_a_level_its_description_does_not_declare(search_console, vendeur, niveau):
+    outils, _ = search_console
+    niveau("admin")
+    with pytest.raises(decrits.RefusNomme) as refus:
+        _appel(outils["google_search_console"], op="list_sites")
+    assert refus.value.code == "unknown_access_level"
+    assert "oto_connector_access_level(op='set'" in str(refus.value) and "Nothing was sent." in str(refus.value)
+    assert vendeur.requests == []
 
 
 def test_search_console_exchanges_the_key_then_calls_with_the_token(search_console, vendeur):
@@ -586,3 +672,335 @@ def test_seranking_lists_come_back_reduced_to_what_an_agent_reads(seranking, ven
                                                              "history_trend": {"2026-10": 880}}]}))
     rendu = _appel(outils["seranking_act"], op="similar_keywords", source="fr", keyword="crm", limit=10)
     assert rendu["total"] == 42 and "history_trend" not in json.dumps(rendu) and "volume" in json.dumps(rendu)
+
+
+# --- HeyReach and Instantly: one key each, a read side and an act side that reaches people --------------------------
+
+
+@pytest.fixture
+def prospection(vendeur, monkeypatch):
+    """The two real descriptions mounted as the registry inscribes them, the caller's key by `resolve_api_key`."""
+    monkeypatch.setattr(decrits.access, "resolve_api_key", lambda nom, *a, **k: (f"key-of-{nom}", False))
+    outils = {}
+    for nom in ("heyreach", "instantly"):
+        outils.update({t.name: t for t in decrits.monter(FastMCP(nom), nom, descriptions.charger(nom))})
+    yield outils
+    for nom in ("heyreach", "instantly"):
+        connector_verify._REGISTRY.pop(nom, None)
+        connector_verify._COUVERTURE.pop(nom, None)
+
+
+@pytest.mark.parametrize("nom", ["heyreach", "instantly"])
+def test_outreach_connectors_are_inscribed_with_the_customers_key(nom):
+    c = providers.REGISTRY[nom]
+    assert (c.namespaces, c.auth_modes, c.secret_kind, c.keyed, c.decrit) == (
+        (nom,), frozenset({"byo_user", "byo_org"}), "api_key", True, True)
+    assert descriptions.refus_de_montage(descriptions.charger(nom)) == []
+
+
+def test_outreach_what_reaches_people_is_on_the_act_side(prospection):
+    """Every function that sends, starts outreach or destroys is an op of `<ns>_act`, declared by the description's
+    class and effect; the reading side reads only."""
+    assert {"heyreach", "heyreach_act", "instantly", "instantly_act"} <= set(prospection)
+    for nom in ("heyreach", "instantly"):
+        assert prospection[nom].annotations == LECTURE and prospection[f"{nom}_act"].annotations == ACTE
+        assert effets.EFFETS[f"{nom}_act"] == descriptions.effets(descriptions.charger(nom))[f"{nom}_act"]
+    assert "send_message" in effets.EFFETS["heyreach_act"]["envoyer"].split()
+    assert "stop_lead_in_campaign" in effets.EFFETS["heyreach_act"]["detruire"].split()
+    assert "reply_to_email" in effets.EFFETS["instantly_act"]["envoyer"].split()
+    assert "move_leads" in effets.EFFETS["instantly_act"]["detruire"].split()
+
+
+def test_heyreach_lists_one_page_by_offset_each_item_projected(prospection, vendeur):
+    """heyreach 1.0.1: the page is `items`, each item keeps its declared keys; `totalCount` is not served, the next page
+    is `offset` + `limit`."""
+    vendeur.answers.append((200, {"totalCount": 1, "items": [
+        {"id": 1001, "name": "Q4", "status": "IN_PROGRESS", "excludeListsIds": [7], "campaignAccountIds": [3001]}]}))
+    rendu = _appel(prospection["heyreach"], op="list_campaigns", limit=50, offset=50, statuses=["IN_PROGRESS"])
+    assert "excludeListsIds" not in json.dumps(rendu) and "totalCount" not in json.dumps(rendu)
+    assert "Q4" in json.dumps(rendu)
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == ("POST", "https://api.heyreach.io/api/public/campaign/GetAll")
+    assert envoi["headers"]["x-api-key"] == "key-of-heyreach"
+    assert envoi["body"] == {"limit": 50, "offset": 50, "statuses": ["IN_PROGRESS"]}
+
+
+def test_instantly_move_leads_answers_its_job_projected(prospection, vendeur):
+    """instantly 1.0.1: `move_leads` does not paginate — its `limit` bounds the leads moved, sent as is — and its
+    answer, a background job, keeps its declared keys."""
+    vendeur.answers.append((200, {"id": "job-1", "type": "move-leads", "status": "pending", "progress": 0,
+                                  "workspace_id": "ws-1", "data": {"secret_like": "x"}}))
+    rendu = _appel(prospection["instantly_act"], op="move_leads", campaign="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+                   to_list_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d", limit=25)
+    assert rendu == {"id": "job-1", "type": "move-leads", "status": "pending", "progress": 0}
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == ("POST", "https://api.instantly.ai/api/v2/leads/move")
+    assert envoi["headers"]["authorization"] == "Bearer key-of-instantly"
+    assert envoi["body"]["limit"] == 25 and len(vendeur.requests) == 1
+
+
+# --- a login and a password, and the platform key (11/11/2026) ------------------------------------------------------
+
+
+def _basique() -> dict:
+    """`essai` with a login and a password (`basic`), and a platform key."""
+    d = essai.description()
+    d["connector"]["auth"] = {"kind": "basic", "username": "login", "password": "password"}
+    d["connector"]["credential"] = [{"name": "login", "label": "Login", "secret": False},
+                                    {"name": "password", "label": "Password", "secret": True}]
+    d["connector"]["modes"] = ["byo_user", "byo_org", "platform"]
+    d["functions"][1]["cost"] = {"per": "request", "quantity": 5000, "unit": "microdollars",
+                                 "settle": {"path": "cost", "scale": 1000000}}
+    return d
+
+
+class _Resolu:
+    """What `access.resolve_credential` returns, reduced to what the reader reads."""
+
+    def __init__(self, fields: dict, is_platform: bool):
+        self.fields, self.is_platform = fields, is_platform
+
+
+@pytest.fixture
+def basique(vendeur, monkeypatch):
+    """`essai` in `basic`, mounted; `resolve_credential` answers `etat["rc"]` and notes what it was asked."""
+    etat = {"rc": _Resolu({"login": "login-0", "password": "pass-0"}, False), "demandes": []}
+
+    def resoudre(nom, want="auto", *a, **k):
+        etat["demandes"].append((nom, want))
+        return etat["rc"]
+    monkeypatch.setattr(decrits.access, "resolve_credential", resoudre)
+    monkeypatch.setattr("oto.connectors.cost._declared",
+                        lambda c, f: {"cost": _basique()["functions"][1]["cost"]} if f == "list_things" else {})
+    outils = {t.name: t for t in decrits.monter(FastMCP("essai"), "essai", _basique())}
+    yield outils, etat
+    connector_verify._REGISTRY.pop("essai", None)
+    connector_verify._COUVERTURE.pop("essai", None)
+
+
+def _avec_releve(fn):
+    from oto_mcp import session_org
+    releve: dict = {}
+    jeton = session_org.set_call_trace(releve)
+    try:
+        return fn(), releve
+    finally:
+        session_org.reset_call_trace(jeton)
+
+
+def test_a_login_and_a_password_are_sent_as_basic_auth(basique, vendeur):
+    import base64
+    outils, etat = basique
+    vendeur.answers.append((200, {"id": 7, "credits": 3}))
+    assert _appel(outils["essai"], op="get_account") == {"id": 7, "credits": 3}
+    assert etat["demandes"] == [("essai", "auto")]
+    attendu = "Basic " + base64.b64encode(b"login-0:pass-0").decode()
+    assert essai.envoyee(vendeur.requests[0])["headers"]["authorization"] == attendu
+
+
+def test_a_credential_without_its_password_is_refused_before_sending(basique, vendeur):
+    outils, etat = basique
+    etat["rc"] = _Resolu({"login": "login-0"}, False)
+    with pytest.raises(McpError, match="lacks password"):
+        _appel(outils["essai"], op="get_account")
+    assert vendeur.requests == []
+
+
+def test_each_call_notes_the_quantity_its_cost_settles(basique, vendeur):
+    """`settle.scale`: 0.0126 USD read in the answer is 12600 microdollars; a function without cost notes 0, never
+    NULL; a refused call notes nothing."""
+    outils, _ = basique
+    vendeur.answers.append((200, {"data": [{"id": 1}], "cost": 0.0126}))
+    _, releve = _avec_releve(lambda: _appel(outils["essai"], op="list_things", limit=10))
+    assert releve["quantity"] == 12600
+    vendeur.answers.append((200, {"id": 7, "credits": 3}))
+    _, releve = _avec_releve(lambda: _appel(outils["essai"], op="get_account"))
+    assert releve["quantity"] == 0
+    from oto_mcp import session_org
+    vendeur.answers.append((404, {}))
+    releve = {}
+    jeton = session_org.set_call_trace(releve)
+    try:
+        with pytest.raises(decrits.RefusNomme):
+            _appel(outils["essai"], op="get_thing", thing_id=1)
+    finally:
+        session_org.reset_call_trace(jeton)
+    assert "quantity" not in releve
+
+
+def test_the_probe_function_is_refused_on_the_platform_key(basique, vendeur):
+    """The probe reads the account itself: on the shared key, the platform's account — refused, nothing sent. The
+    other functions are served on it."""
+    outils, etat = basique
+    etat["rc"] = _Resolu({"login": "platform-login", "password": "platform-pass"}, True)
+    with pytest.raises(McpError, match="shared platform key"):
+        _appel(outils["essai"], op="get_account")
+    assert vendeur.requests == []
+    vendeur.answers.append((200, {"data": [], "cost": 0}))
+    assert _appel(outils["essai"], op="list_things", limit=10)["items"] == []
+
+
+def test_the_probe_of_a_login_and_a_password_reads_both_fields(basique, vendeur):
+    import base64
+    sonde = connector_verify.probe_for("essai")
+    vendeur.answers.append((200, {"id": 7, "credits": 3}))
+    assert sonde({"login": "l", "password": "p"}, {}) == {"quota": {"restant": 3, "unite": "credits", "seuil": 1}}
+    assert essai.envoyee(vendeur.requests[-1])["headers"]["authorization"] == (
+        "Basic " + base64.b64encode(b"l:p").decode())
+
+
+@pytest.mark.parametrize("champs", [
+    [{"name": "login", "label": "L", "secret": True}, {"name": "password", "label": "P", "secret": True}],
+    [{"name": "login", "label": "L", "secret": False}, {"name": "password", "label": "P", "secret": False}],
+    [{"name": "login", "label": "L", "secret": False}, {"name": "password", "label": "P", "secret": True},
+     {"name": "extra", "label": "E", "secret": True}],
+    [{"name": "login", "label": "L", "secret": False},
+     {"name": "password", "label": "P", "secret": True, "holder": "host"}],
+])
+def test_basic_is_served_only_as_a_login_and_a_password_of_the_account(champs):
+    d = _basique()
+    d["connector"]["credential"] = champs
+    with pytest.raises(descriptions.DescriptionNonServie, match="nor its login and password"):
+        decrits.monter(FastMCP("x"), "essai", d)
+
+
+def test_decrit_reads_a_login_and_a_password_and_the_platform_choices(monkeypatch):
+    from oto_mcp.providers._model import _decrit
+    monkeypatch.setattr(descriptions, "charger", lambda nom: _basique())
+    aide = {"login": "where the login is", "password": "where the password is"}
+    c = _decrit("essai", help="h", href="https://example.test", key_help=aide, platform_key_open=False,
+                default_quota=0)
+    assert (c.keyed, c.secret_kind, c.decrit, c.platform_key_open, c.default_quota) == (
+        False, "fields", True, False, 0)
+    assert "platform" in c.auth_modes
+    assert [(f.name, f.label, f.secret, f.help) for f in c.secret_fields] == [
+        ("login", "Login", False, "where the login is"), ("password", "Password", True, "where the password is")]
+    with pytest.raises(ValueError, match="`platform_key_open` and `default_quota` are to be given"):
+        _decrit("essai", help="h", href="https://example.test", key_help=aide)
+    with pytest.raises(ValueError, match="names the help of each credential field"):
+        _decrit("essai", help="h", href="https://example.test", key_help="one help", platform_key_open=False,
+                default_quota=0)
+    monkeypatch.setattr(descriptions, "charger", lambda nom: essai.description())
+    with pytest.raises(ValueError, match="no mode platform"):
+        _decrit("essai", help="h", href="https://example.test", key_help="k", platform_key_open=True,
+                default_quota=5)
+
+
+# --- DataForSEO, served from its description since 11/11/2026 ------------------------------------------------------
+
+
+@pytest.fixture
+def dataforseo(vendeur, monkeypatch):
+    """The real description mounted as the registry inscribes it; `resolve_credential` answers `etat["rc"]`."""
+    etat = {"rc": _Resolu({"login": "login-not-real", "password": "pass-not-real"}, False)}
+    monkeypatch.setattr(decrits.access, "resolve_credential", lambda nom, *a, **k: etat["rc"])
+    outils = {t.name: t for t in decrits.monter(FastMCP("dataforseo"), "dataforseo",
+                                                descriptions.charger("dataforseo"))}
+    yield outils, etat
+    connector_verify._REGISTRY.pop("dataforseo", None)
+    connector_verify._COUVERTURE.pop("dataforseo", None)
+
+
+def _tache(resultat: list, cout: float = 0.0126, code: int = 20000) -> dict:
+    return {"status_code": 20000, "cost": cout, "tasks": [
+        {"id": "t-1", "status_code": code, "status_message": "Ok.", "cost": cout, "path": ["v3"], "data": {},
+         "time": "0.1 sec.", "result": resultat}]}
+
+
+def test_dataforseo_is_inscribed_as_the_hand_written_entry_was():
+    """The two fields under the same names (`login` not secret, `password` secret) and the same JSON pack: every
+    credential already posted (byo_user, byo_org, the platform key) unpacks unchanged."""
+    from oto_mcp import credentials_store
+    c = providers.REGISTRY["dataforseo"]
+    assert (c.namespaces, c.auth_modes, c.secret_kind, c.keyed, c.decrit) == (
+        ("dataforseo",), frozenset({"byo_user", "byo_org", "platform"}), "fields", False, True)
+    assert (c.platform_key_open, c.default_quota, c.modules) == (False, 0, ())
+    assert [(f.name, f.label, f.secret) for f in c.secret_fields] == [
+        ("login", "API login", False), ("password", "API password", True)]
+    pose = credentials_store.pack_secret("dataforseo", {"login": "l", "password": "p"})
+    assert json.loads(pose) == {"login": "l", "password": "p"}
+    assert credentials_store.unpack_secret("dataforseo", pose) == {"login": "l", "password": "p"}
+    assert descriptions.refus_de_montage(descriptions.charger("dataforseo")) == []
+
+
+def test_dataforseo_serves_one_tool_that_simulates(dataforseo):
+    outils, _ = dataforseo
+    assert set(outils) == {"dataforseo"}
+    ops = outils["dataforseo"].parameters["properties"]["op"]["enum"]
+    assert len(ops) == 62 and {"keyword_overview", "domain_technologies", "user_data", "serp_organic_post",
+                               "serp_organic_get", "goto_url_resolve"} <= set(ops)
+    assert outils["dataforseo"].annotations == SIMULATION
+    assert effets.EFFETS["dataforseo"]["ecrire"] == "onpage_crawl_start serp_organic_post google_reviews_post"
+    assert effets_recette.classer("dataforseo", "keyword_overview") == "lire"
+
+
+def test_dataforseo_sends_one_task_with_basic_auth_and_bills_its_real_cost(dataforseo, vendeur):
+    import base64
+    outils, _ = dataforseo
+    vendeur.answers.append((200, _tache([{"items": [{"keyword": "crm"}]}])))
+    rendu, releve = _avec_releve(lambda: _appel(outils["dataforseo"], op="keyword_overview", keywords=["crm"],
+                                                location_code=2250, language_code="fr"))
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == (
+        "POST", "https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_overview/live")
+    assert envoi["body"] == [{"keywords": ["crm"], "location_code": 2250, "language_code": "fr"}]
+    assert envoi["headers"]["authorization"] == "Basic " + base64.b64encode(b"login-not-real:pass-not-real").decode()
+    assert releve["quantity"] == 12600
+    assert rendu["tasks"][0]["result"] == [{"items": [{"keyword": "crm"}]}] and "data" not in rendu["tasks"][0]
+
+
+def test_dataforseo_names_an_error_carried_in_a_200(dataforseo, vendeur):
+    outils, _ = dataforseo
+    e = _refus(outils["dataforseo"], vendeur, (200, {"status_code": 40200, "status_message": "Payment required."}),
+               op="domain_technologies", target="example.com")
+    assert (e.code, e.retryable, e.marks_account) == ("balance_exhausted", False, "quota_exhausted")
+    e = _refus(outils["dataforseo"], vendeur, (200, _tache(None, cout=0, code=40104)),
+               op="domain_technologies", target="example.com")
+    assert e.code == "account_not_verified"
+
+
+def test_dataforseo_reads_the_balance_of_its_own_key_never_of_the_shared_one(dataforseo, vendeur):
+    outils, etat = dataforseo
+    vendeur.answers.append((200, _tache([{"login": "login-0", "money": {"balance": 10.5}}], cout=0)))
+    assert _appel(outils["dataforseo"], op="user_data")["tasks"][0]["result"][0]["money"] == {"balance": 10.5}
+    etat["rc"] = _Resolu({"login": "platform-login", "password": "platform-pass"}, True)
+    with pytest.raises(McpError, match="shared platform key"):
+        _appel(outils["dataforseo"], op="user_data")
+    vendeur.answers.append((200, _tache([{"technologies": {}}], cout=0.012)))
+    _appel(outils["dataforseo"], op="domain_technologies", target="example.com")
+
+
+def test_dataforseo_probe_raises_on_an_account_run_dry(dataforseo, vendeur):
+    """The probe promises the quota (`balance`, min 1 USD): an account whose balance is under it, or that DataForSEO
+    refuses for its balance (40200, under HTTP 200), raises `QuotaEpuise` — never a green probe; a refused login is
+    `NonAutorise`; a funded account reads its balance."""
+    import base64
+    sonde = connector_verify.probe_for("dataforseo")
+    assert connector_verify.couverture("dataforseo") == connector_verify.AUTH_QUOTA
+    champs = {"login": "l", "password": "p"}
+
+    def compte(solde):
+        return (200, _tache([{"login": "l", "money": {"balance": solde, "total": 50}}], cout=0))
+    vendeur.answers.append(compte(10.5))
+    assert sonde(champs, {}) == {"quota": {"restant": 10.5, "unite": "USD", "seuil": 1}}
+    envoi = essai.envoyee(vendeur.requests[-1])
+    assert (envoi["method"], envoi["url"]) == ("GET", "https://api.dataforseo.com/v3/appendix/user_data")
+    assert envoi["headers"]["authorization"] == "Basic " + base64.b64encode(b"l:p").decode()
+    vendeur.answers.append(compte(0.4))
+    with pytest.raises(connector_verify.QuotaEpuise):
+        sonde(champs, {})
+    vendeur.answers.append((200, {"status_code": 40200, "status_message": "Payment required.", "tasks": []}))
+    with pytest.raises(connector_verify.QuotaEpuise):
+        sonde(champs, {})
+    vendeur.answers.append((200, {"status_code": 40100, "status_message": "Not authorized.", "tasks": []}))
+    with pytest.raises(connector_verify.NonAutorise):
+        sonde(champs, {})
+
+
+def test_dataforseo_old_tool_names_refuse_naming_the_new_call():
+    from oto_mcp import outils_retires
+    for r in outils_retires.RENOMMAGES_DECRITS:
+        assert r.op in {f["name"] for f in descriptions.charger("dataforseo")["functions"]}, r
+        message = outils_retires.retrait(r.ancien).message
+        assert f'`{r.outil}(op="{r.op}"' in message and "11/11/2026" in message, r
+    assert outils_retires.retrait("dataforseo") is None

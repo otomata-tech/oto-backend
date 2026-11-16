@@ -268,17 +268,17 @@ def _slim_search(res, *, facettes=(), page_suivante=False):
 
 
 def _canonical_li_identifier(identifier: str, genre: str = "in") -> str:
-    """Canonicalize a LinkedIn `public_identifier` (vanity slug): LinkedIn
-    ALWAYS generates it in ASCII (transliterates accents at creation, e.g.
-    `renée-lefèvre` → `renee-lefevre`). An accented slug typed by the agent
-    makes the Unipile API return a MISLEADING 403 "Insufficient permissions"
-    (#180) → we strip the diacritics before the call. No-op on an already ASCII slug
-    or an opaque provider_id (`ACoAA…`, no accent) — idempotent.
+    """Canonicalize a LinkedIn `public_identifier` (vanity slug) to its decoded form.
 
-    A full profile URL (`https://www.linkedin.com/<genre>/<slug>/?…`) gets the SAME
+    A full profile URL (`https://www.linkedin.com/<genre>/<slug>/?…`) gets a
     misleading 403 (#1353): it is brought back to its slug (`genre` = `in` for a
     member, `company` for a company). Any other LinkedIn URL (Sales Navigator, a post,
-    the other genre) is refused by name rather than sent."""
+    the other genre) is refused by name rather than sent. A bare slug is
+    percent-decoded too (#1447): `chlo%C3%A9-dupr%C3%A9` → `chloé-dupré`.
+
+    Accents are KEPT: a slug can carry a non-ASCII letter. The accent-free
+    form is a fallback of `_read_li_slug`, tried only when the slug as given is
+    refused (#180). No-op on an ASCII slug or an opaque provider_id — idempotent."""
     ident = identifier.strip()
     if "linkedin.com" in ident.lower() or ident.lower().startswith(("http:", "https:")):
         parts = urlsplit(ident if "://" in ident else "https://" + ident)
@@ -292,10 +292,59 @@ def _canonical_li_identifier(identifier: str, genre: str = "in") -> str:
                 "slug (the segment after "
                 f"`/{genre}/`) or the URN (`ACoAA…`); nothing was sent.")))
         ident = segments[1]
+    else:
+        # A bare slug copied from an address bar arrives percent-encoded
+        # (`chlo%C3%A9-dupr%C3%A9`): decoded like a URL segment (#1447).
+        ident = unquote(ident)
+    return unicodedata.normalize("NFC", ident)
+
+
+def _sans_accents(ident: str) -> str:
+    """The slug without its diacritics (`chloé-dupré` → `chloe-dupre`)."""
     return "".join(
         c for c in unicodedata.normalize("NFKD", ident)
         if not unicodedata.combining(c)
     )
+
+
+def _read_li_slug(ident: str, read):
+    """Read a member or a company by slug: the slug AS GIVEN first (a slug
+    can carry a non-ASCII letter), then, ONLY if upstream refuses a non-ASCII
+    slug with a 403/404, ONCE more under its accent-free form (#180 — an agent that
+    typed accents on an ASCII slug). The read's own identity guard checks each
+    attempt against the slug it sent.
+
+    For a non-ASCII slug the answer says which form matched, under
+    `identifier_form` (`as_given` / `without_accents`) — the form, never the slug,
+    which an anonymised profile must not get back. An ASCII slug or a provider id
+    is read once, its answer untouched."""
+    from oto.tools.unipile.client import UnipileError, UnipileRateLimited
+
+    plain = _sans_accents(ident)
+    if plain == ident:
+        return read(ident)
+    try:
+        res, form = read(ident), "as_given"
+    except UnipileRateLimited:
+        raise
+    except UnipileError as e:
+        if e.status_code not in (403, 404):
+            raise
+        try:
+            res, form = read(plain), "without_accents"
+        except UnipileRateLimited:
+            raise
+        except UnipileError as e2:
+            if e2.status_code in (403, 404):
+                raise e from e2  # not found either way: the error names what was asked
+            raise
+    if isinstance(res, dict):
+        res = dict(res, identifier_form=form)
+        if form == "without_accents":
+            res["warnings"] = [*(res.get("warnings") or []), (
+                "Not found under the slug as given (with its accents): found under its "
+                "accent-free form — use that form for this profile from now on.")]
+    return res
 
 
 def _slim(payload, fields: Optional[list[str]] = None,
@@ -1428,7 +1477,8 @@ def register(mcp: FastMCP) -> None:
 
         if op == "person":
             ident = _canonical_li_identifier(_need(identifier, "identifier", op))
-            return _scrape(sub, lambda: unipile_client().get_profile(ident, sections=sections))
+            return _scrape(sub, lambda: _read_li_slug(
+                ident, lambda i: unipile_client().get_profile(i, sections=sections)))
 
         if op == "company":
             ident = _canonical_li_identifier(_need(identifier, "identifier", op),
@@ -1437,7 +1487,8 @@ def register(mcp: FastMCP) -> None:
             hit = _COMPANY_CACHE.get(key)
             if hit and time.time() - hit[0] < _COMPANY_TTL:
                 return hit[1]
-            res = _scrape(sub, lambda: unipile_client().get_company(ident))
+            res = _scrape(sub, lambda: _read_li_slug(
+                ident, lambda i: unipile_client().get_company(i)))
             if len(_COMPANY_CACHE) >= _COMPANY_CACHE_MAX:
                 _COMPANY_CACHE.clear()
             _COMPANY_CACHE[key] = (time.time(), res)

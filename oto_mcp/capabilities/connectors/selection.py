@@ -358,7 +358,7 @@ def _guide_refs_by_ns(org_id: int | None) -> dict[str, set]:
 # it is the only scalar that distinguishes "this connector asks for no key"
 # (open data — `none`) from "it asks for one you don't have yet". Without it
 # at load time, a table cannot say so, and the absence of an entry in
-# `providers` is NOT enough to decide: `scaleway` and `http` are absent from it too
+# `providers` is NOT enough to decide: `scaleway` and `api` are absent from it too
 # while requiring a credential. The front end
 # therefore showed "Not connected" on OpenStreetMap until the card was opened,
 # where the verbose said "Included" (observed in prod on 2026-08-29).
@@ -514,7 +514,8 @@ def _refus_nom_inconnu(catalog: list[dict], demande: str,
     return AuthzDenied(
         404, "unknown_connector",
         f"No connector available to your active org is named `{demande}` or carries "
-        f"this label (or it is not open to your org).{suite}{repli} This refusal says "
+        f"this label (or it is not open to your org).{providers.refus_renomme(demande)}"
+        f"{suite}{repli} This refusal says "
         f"NOTHING about your connections: it concerns the name.",
         details={"query": demande, "suggestions": proches, **extra})
 

@@ -131,7 +131,7 @@ def test_les_cas_connus_du_2026_09_02():
         # différence est qu'elle est désormais un choix relisible.
         "browser": "Otomata",
         "web": "Otomata",
-        "http": "Otomata",
+        "api": "Otomata",
     }
     servis = {n: providers.REGISTRY[n].publisher_name for n in attendus}
     assert servis == attendus

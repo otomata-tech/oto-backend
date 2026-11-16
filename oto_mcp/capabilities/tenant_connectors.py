@@ -96,7 +96,7 @@ def _tenant(slug: str) -> str:
 
 def _connu(name: str) -> str:
     if name not in providers.REGISTRY:
-        raise AuthzDenied(404, "unknown_connector", f"Unknown connector `{name}`.")
+        raise AuthzDenied(404, "unknown_connector", f"Unknown connector `{name}`." + providers.refus_renomme(name))
     return name
 
 

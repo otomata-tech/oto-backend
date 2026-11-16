@@ -16,6 +16,20 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _PHONE_DIGITS = re.compile(r"\d")
 
 
+#: A LinkedIn profile, whatever its host (`fr.`, `www.`, none) and its trail (`/`, `?…`).
+_PROFILE = re.compile(r"linkedin\.com/in/([^/?#\s]+)", re.I)
+
+
+def _person_key(p: dict) -> str:
+    """Who a person is, for deduplication — ONE key for the whole cascade (a source's
+    own list, the next pages bought, the people Jev already judged): their LinkedIn
+    profile slug (two searches name the same profile `fr.linkedin.com/in/x` and
+    `www.linkedin.com/in/x/`), else their URL, else their name."""
+    url = str(p.get("linkedin_url") or "")
+    m = _PROFILE.search(url)
+    return (f"in/{m.group(1)}" if m else url.rstrip("/") or p.get("full_name") or "").lower()
+
+
 def _bad(message: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=message))
 

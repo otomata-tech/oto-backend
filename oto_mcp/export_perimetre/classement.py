@@ -166,6 +166,7 @@ CLASSEMENT: dict[str, Table] = {
     "datastore_rows": indirecte(_TABLEAUX),
     "datastore_row_revisions": indirecte(_TABLEAUX),
     "datastore_row_comments": indirecte(_TABLEAUX),
+    "datastore_cell_sources": indirecte(_TABLEAUX),
     "datastore_row_embeddings": indirecte(
         Via("datastore_rows", ("ns_id", "row_id"), ("ns_id", "row_id"))),
     "nodes": possedee(ParEntite(), "les nœuds `platform`/`tenant` (guides semés au "
@@ -258,6 +259,10 @@ CLASSEMENT: dict[str, Table] = {
     # où l'org est prévenue qu'un agent ne fonctionne plus (canal ou personne Slack) :
     # un réglage de l'org, il part avec elle.
     "agent_alert_settings": possedee(ParOrg()),
+    # les pages et tableaux épinglés dans l'org : partagés (`owner_sub` NULL) ou
+    # PERSONNELS d'un membre (`owner_sub` = son compte, la ligne est celle d'UN compte
+    # dans l'org) ; `added_by` = l'auteur du geste, pas un compte. Ils partent avec elle.
+    "org_favorites": possedee(ParOrg(), comptes=("owner_sub",)),
     "apify_runs": exclue(ParOrg(), "suivi de la clé PLATEFORME de l'instance d'origine : "
                          "ses runs ne se relèvent qu'avec cette clé, et le coût relevé "
                          "part avec le journal"),
@@ -313,9 +318,13 @@ CLASSEMENT: dict[str, Table] = {
     "credit_holds": instance("réservations en vol du budget d'unités de l'instance"),
     "credit_movements": instance("mouvements du budget d'unités de l'instance, relus par "
                                  "son commerce"),
+    "spend_blocks": exclue(ParOrg(), "blocages du jour poussés par le commerce : il les "
+                           "repousse à sa prochaine évaluation, et chacun finit à minuit UTC"),
     "limite_refus_jour": instance("palmarès des refus des limiteurs de l'instance "
                                   "(#1232) : empreintes, trente jours"),
     "usage": possedee(ParSub(), "compteurs par compte, sans org"),
+    "usage_org": possedee(ParOrg(), "compteur du jour de l'org sur une clé plateforme "
+                          "à quota par org"),
     "usage_signals": possedee(_ORG_OU_COMPTE),
     "usage_signal_occurrences": indirecte(Via("usage_signals", ("signal_id",)),
                                           comptes=("sub",)),

@@ -22,6 +22,12 @@ Un retrait peut aussi REMPLACER un nom sans le servir à côté (`RENOMMAGES`, d
 quand l'ancien nom est lui-même la faille, il n'y a pas d'alias à tenir pendant un préavis —
 il refuse tout de suite, en nommant le nouvel appel.
 
+Un connecteur qui passe au LECTEUR GÉNÉRIQUE de sa description (`tools/decrits.py`, règle de
+convergence, 11/11/2026 pour DataForSEO) change aussi de noms ce jour-là : ses outils écrits à
+la main deviennent `<ns>` / `<ns>_act`, dont l'`op` est la fonction décrite
+(`RENOMMAGES_DECRITS`). Même refus nommé, sans le récit de sécurité des lots lire/agir, et
+la migration des listes enregistrées lit cette table-là.
+
 Module PUR (aucun import `oto_mcp`) : la taxonomie d'erreurs doit rester importable seule.
 """
 from __future__ import annotations
@@ -380,9 +386,90 @@ def annonce_act() -> str:
             + ". The old names and ops refuse, naming the call to make instead.")
 
 
+# --- 11/11/2026 : les connecteurs servis par leur description ---------------------------
+# Décision d'Alexis (règle de convergence, connectors `docs/conception/fabrique.md`) : un
+# connecteur décrit dans la lib est servi par le lecteur générique, et ses noms d'outils
+# d'oto 1 changent le jour où il bascule, avec une note de migration. L'`op` est le nom de
+# la fonction décrite, les arguments sont les siens : un ancien appel ne se traduit pas
+# argument pour argument, le refus nomme l'appel et renvoie au schéma de l'op.
+
+#: Le jour de la bascule de DataForSEO.
+LOT_DATAFORSEO = datetime.date(2026, 11, 11)
+
+#: DataForSEO : huit outils écrits à la main → `dataforseo`, une op par fonction décrite.
+RENOMMAGES_DECRITS: tuple[Renommage, ...] = (
+    *_vers("dataforseo_keywords", "dataforseo", {
+        "overview": "keyword_overview", "volume": "google_ads_search_volume",
+        "difficulty": "bulk_keyword_difficulty", "intent": "search_intent",
+        "trends": "google_trends_explore", "ai_volume": "ai_keyword_search_volume",
+        "ideas": "keyword_ideas", "suggestions": "keyword_suggestions",
+        "related": "related_keywords"}, LOT_DATAFORSEO),
+    *_vers("dataforseo_domain", "dataforseo", {
+        "overview": "domain_rank_overview", "history": "historical_rank_overview",
+        "keywords": "ranked_keywords", "pages": "relevant_pages", "subdomains": "subdomains",
+        "competitors": "competitors_domain", "relevant_keywords": "keywords_for_site",
+        "gap": "domain_intersection", "serp_competitors": "serp_competitors",
+        "traffic": "bulk_traffic_estimation"}, LOT_DATAFORSEO),
+    *_vers("dataforseo_backlinks", "dataforseo", {
+        "summary": "backlinks_summary", "list": "backlinks_list",
+        "referring_domains": "referring_domains", "anchors": "anchors",
+        "top_pages": "backlinks_domain_pages", "competitors": "backlinks_competitors",
+        "gap": "backlinks_intersection", "ranks": "bulk_ranks",
+        "history": "backlinks_history", "new_lost": "backlinks_new_lost"}, LOT_DATAFORSEO),
+    *_vers("dataforseo_account", "dataforseo", {
+        "balance": "user_data", "locations": "labs_locations_and_languages"}, LOT_DATAFORSEO),
+    *_vers("dataforseo_ai_visibility", "dataforseo", {
+        "metrics": "llm_mentions_metrics", "mentions": "llm_mentions_search",
+        "top_domains": "llm_mentions_top_domains", "top_pages": "llm_mentions_top_pages",
+        "history": "llm_mentions_history", "ask": "llm_response", "models": "llm_models",
+        "ai_mode": "google_ai_mode"}, LOT_DATAFORSEO),
+    *_vers("dataforseo_web_mentions", "dataforseo", {
+        "summary": "content_summary", "search": "content_search"}, LOT_DATAFORSEO),
+    *_vers("dataforseo_site_audit", "dataforseo", {
+        "page": "onpage_instant", "content": "onpage_content", "lighthouse": "lighthouse",
+        "crawl_start": "onpage_crawl_start", "crawl_status": "onpage_summary",
+        "op=crawl_results, report=pages": "onpage_pages",
+        "op=crawl_results, report=non_indexable": "onpage_non_indexable",
+        "op=crawl_results, report=duplicate_titles": "onpage_duplicate_tags",
+        "op=crawl_results, report=duplicate_descriptions": "onpage_duplicate_tags",
+        "op=crawl_results, report=broken_links": "onpage_links",
+        "op=crawl_results, report=links": "onpage_links",
+        "op=crawl_results, report=redirect_chains": "onpage_redirect_chains"},
+        LOT_DATAFORSEO),
+    *_vers("dataforseo_technologies", "dataforseo", {
+        "domain": "domain_technologies", "domains_using": "domains_by_technology",
+        "summary": "technologies_summary"}, LOT_DATAFORSEO),
+)
+
+
+def remplacants_decrits(ancien: str) -> tuple[str, ...]:
+    """Les outils servis par la description qui reprennent `ancien` (`RENOMMAGES_DECRITS`) :
+    ce qu'une liste enregistrée reçoit à sa place, qu'elle autorise ou masque — le
+    connecteur et son geste sont les mêmes, seul le nom change. `()` s'il n'y figure pas."""
+    return tuple(dict.fromkeys(r.outil for r in RENOMMAGES_DECRITS if r.ancien == ancien))
+
+
+def _retrait_decrit(ancien: str) -> Retrait:
+    lignes = [r for r in RENOMMAGES_DECRITS if r.ancien == ancien]
+    gestes = "; ".join(f'{r.selecteur} → `{r.outil}(op="{r.op}", …)`' for r in lignes)
+    outils = " and ".join(f"`{o}`" for o in remplacants_decrits(ancien))
+    return Retrait(
+        message=(
+            f"`{ancien}` is retired ({lignes[0].depuis:%d/%m/%Y}): the connector is now served "
+            f"from its description, by {outils}, whose `op` is the vendor function and whose "
+            "arguments are that function's own — not the old ones: read the op's schema "
+            "(`oto_tool_schema`), or call it, a call that does not match answers the op's "
+            f"description, schema and an example. Call instead: {gestes}. If a procedure or a "
+            f"page told you to call `{ancien}`, it predates this change: take the path above — "
+            "this name only returns this refusal, called directly or through `oto_call`."),
+        hint=gestes,
+    )
+
+
 RETIRES: dict[str, Retrait] = {
     "oto_kb": KB,
     **{a: _retrait_act(a) for a in dict.fromkeys(r.ancien for r in RENOMMAGES)},
+    **{a: _retrait_decrit(a) for a in dict.fromkeys(r.ancien for r in RENOMMAGES_DECRITS)},
 }
 
 

@@ -42,7 +42,7 @@ def _sentinelles(connector: str) -> dict:
     """Une valeur RECONNAISSABLE par champ déclaré — de quoi la retrouver n'importe où
     dans le corps rendu, y compris imbriquée ou concaténée.
 
-    ⚠️ La sentinelle se TERMINE par un marqueur : sans lui, `http` déclare `token`
+    ⚠️ La sentinelle se TERMINE par un marqueur : sans lui, `api` déclare `token`
     (secret) et `token_url` (non secret), et la valeur du second CONTIENT celle du
     premier. Le test aurait crié au secret sorti en montrant une valeur publique."""
     c = providers.REGISTRY[connector]
@@ -72,7 +72,7 @@ def _lire(provider, query=b""):
 
 
 def _scope_lisible(connector: str) -> bytes:
-    """Le palier auquel ce connecteur accepte une saisie (`http` est `byo_org` pur)."""
+    """Le palier auquel ce connecteur accepte une saisie (`api` est `byo_org` pur)."""
     return b"" if providers.is_byo_user(connector) else b"scope=org"
 
 
@@ -169,9 +169,9 @@ def test_un_champ_secret_vide_na_pas_dempreinte(monkeypatch, paliers):
     """Une empreinte sur du vide dirait « il y a quelque chose » — et serait la MÊME
     pour tous les champs vides de la même ligne."""
     stub_authz(monkeypatch)
-    _pose(monkeypatch, "http", {"base_url": "https://api.test", "auth_mode": "bearer",
+    _pose(monkeypatch, "api", {"base_url": "https://api.test", "auth_mode": "bearer",
                                 "token": ""})
-    _, out = _lire("http", query=b"scope=org")
+    _, out = _lire("api", query=b"scope=org")
     assert "token" not in out["read_fingerprints"]
 
 
@@ -181,9 +181,9 @@ def test_les_champs_non_secrets_sortent_toujours(monkeypatch, paliers):
     """La modification partielle de #448 tenait aux champs NON secrets — jamais à la
     révélation d'un secret. Retirer l'une ne touche pas l'autre."""
     stub_authz(monkeypatch)
-    _pose(monkeypatch, "http", {"base_url": "http://172.16.16.3:8097",
+    _pose(monkeypatch, "api", {"base_url": "http://172.16.16.3:8097",
                                 "auth_mode": "bearer", "token": "TOK"})
-    code, out = _lire("http", query=b"scope=org")
+    code, out = _lire("api", query=b"scope=org")
     assert code == 200, out
     assert out["base_url"] == "http://172.16.16.3:8097"
     assert out["auth_mode"] == "bearer"

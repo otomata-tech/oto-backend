@@ -60,8 +60,15 @@ def _banc(monkeypatch, pa):
     from _mcp_app import static_mcp
 
     from oto_mcp.middleware import un_seul_canal
+    # `static_mcp` est un catalogue MIS EN CACHE pour toute la suite : construit ici sous
+    # le bundle du test, il enregistrait `oto_procedure_app` pour chaque test suivant du
+    # même worker, et `test_surface_outils_figee` y voyait un outil ajouté — rouge
+    # seulement quand la répartition les rapprochait.
+    with monkeypatch.context() as sans_bundle:
+        sans_bundle.delenv("OTO_PROCEDURE_APP_BUNDLE", raising=False)
+        middleware = static_mcp().middleware
     m = FastMCP("banc")
-    for mw in static_mcp().middleware:
+    for mw in middleware:
         m.add_middleware(mw)
     pa.register(m)
     un_seul_canal.retirer_les_schemas_vides(m)
@@ -445,3 +452,138 @@ def test_la_detection_lit_l_extension_annoncee_par_le_client(monkeypatch):
     assert _VRAIE_DETECTION() is False
     monkeypatch.setattr(dependencies, "get_context", lambda: (_ for _ in ()).throw(RuntimeError()))
     assert _VRAIE_DETECTION() is False
+
+
+# ── À la naissance : une procédure créée sans dessin repart avec la consigne ──
+
+def _ecrire(monkeypatch, *, op="create", version=1, body="# Veille\n\n1. Chercher.\n",
+            worker=False, ui=False, bundle=True, **kw):
+    from oto_mcp import access, org_store, procedure_diagram, tool_alias
+    from oto_mcp.capabilities import _execution, procedure_console as pc
+    monkeypatch.setattr(tool_alias, "prefix_for", lambda sub: "")
+    monkeypatch.setattr(tool_alias, "sert_un_worker", lambda: worker)
+    monkeypatch.setattr(procedure_diagram, "client_affiche_les_apps", lambda: ui)
+    monkeypatch.setattr(access, "current_org", lambda sub: 42)
+    monkeypatch.setattr(org_store, "org_front", lambda org_id: ("https://app.example.com/", None))
+    # Le bundle se simule à sa lecture, jamais par l'env : une écriture réelle monte le
+    # registre d'outils (mis en cache), qui enregistrerait l'app pour toute la suite.
+    monkeypatch.setattr(procedure_diagram, "bundle_du_graphe", lambda: BUNDLE if bundle else None)
+
+    async def execute(_dispatch, _args):
+        return None, {"ok": True, "slug": "veille", "version": version, "set": True}
+    monkeypatch.setattr(_execution, "execute", execute)
+    inp = pc.ProcedureInput(op=op, slug="veille", body_md=body, **kw)
+    return asyncio.run(pc._procedure(type("Ctx", (), {"sub": "s"})(), inp))
+
+
+def test_une_procedure_nee_sans_dessin_repart_avec_la_consigne(monkeypatch):
+    out = _ecrire(monkeypatch, scope="org")
+    consigne = out["draw_next"]
+    assert "procedure-flowchart" in consigne
+    assert "op=set slug=veille scope=org expected_version=1" in consigne
+    # Client texte (Claude Code) : pas d'appel à l'app, le lien de la page.
+    assert "oto_procedure_app" not in consigne
+    assert "https://app.example.com/org/42/processes/veille" in consigne
+    assert "┌" in consigne  # la forme à recopier
+
+
+def test_un_client_qui_peint_les_apps_est_renvoye_montrer_le_graphe(monkeypatch):
+    consigne = _ecrire(monkeypatch, ui=True, scope="group", group=7)["draw_next"]
+    assert "op=set slug=veille scope=group group=7 expected_version=1" in consigne
+    assert "oto_procedure_app slug=veille" in consigne
+
+
+def test_un_set_sur_un_slug_libre_est_une_naissance(monkeypatch):
+    assert "draw_next" in _ecrire(monkeypatch, op="set")
+    # Le palier omis est `user` : la consigne vise la ligne écrite, pas l'org.
+    assert "scope=user" in _ecrire(monkeypatch, op="set")["draw_next"]
+
+
+def test_pas_de_consigne_hors_naissance_hors_instance_ou_pour_le_runner(monkeypatch):
+    assert "draw_next" not in _ecrire(monkeypatch, op="set", version=2)
+    assert "draw_next" not in _ecrire(monkeypatch, op="set", from_version=3)
+    assert "draw_next" not in _ecrire(monkeypatch, bundle=False)
+    assert "draw_next" not in _ecrire(monkeypatch, worker=True)
+
+
+def test_pas_de_consigne_quand_un_trace_est_deja_la(monkeypatch):
+    assert "draw_next" not in _ecrire(monkeypatch, body=CORPS)
+    tague = CORPS.replace("```\n┌", "```text\n┌", 1)
+    assert "draw_next" not in _ecrire(monkeypatch, body=tague)
+    a_nu = f"# Veille\n\n{TRACE}\n\n1. Chercher.\n"
+    assert "draw_next" not in _ecrire(monkeypatch, body=a_nu)
+
+
+def _naissance_banc(monkeypatch, ui=False):
+    from oto_mcp import access, org_store, procedure_diagram, tool_alias
+    monkeypatch.setattr(procedure_diagram, "bundle_du_graphe", lambda: BUNDLE)
+    monkeypatch.setattr(tool_alias, "prefix_for", lambda sub: "")
+    monkeypatch.setattr(tool_alias, "sert_un_worker", lambda: False)
+    monkeypatch.setattr(procedure_diagram, "client_affiche_les_apps", lambda: ui)
+    monkeypatch.setattr(access, "current_org", lambda sub: 7)
+    monkeypatch.setattr(org_store, "org_front", lambda org_id: ("https://app.example.com/", None))
+
+
+def test_la_vraie_reponse_d_une_creation_declenche_la_consigne(monkeypatch):
+    """Sur la VRAIE réponse de l'écriture (seul le store est simulé) : la v1 née sans
+    dessin porte la consigne, la v2 non. Le pivot `version == 1` est celui du store
+    (`cur + 1 if cur else 1`)."""
+    from oto_mcp.capabilities import procedure_console as pc
+    from oto_mcp.capabilities.orgs import instructions as oi
+    from test_procedure_form import _Ctx, _Inp
+    _naissance_banc(monkeypatch)
+    corps = "# Veille\n\n1. Chercher.\n"
+    monkeypatch.setattr(oi.org_store, "get_instruction",
+                        lambda *a, **k: {"slots": [], "body_md": corps})
+
+    async def _wc(body_md, **k):
+        return {"referenced_tools": [], "unresolved_tools": []}
+    monkeypatch.setattr(oi.tool_registry, "write_check", _wc)
+    inp = pc.ProcedureInput(op="create", slug="ma-procedure", body_md=corps, scope="org")
+    for version, attendu in ((1, True), (2, False)):
+        monkeypatch.setattr(oi.org_store, "set_instruction", lambda *a, v=version, **k: v)
+        ecrit = asyncio.run(oi._set_instruction(_Ctx(), _Inp(corps)))
+        consigne = pc._a_dessiner_a_la_naissance(_Ctx(), inp, ecrit)
+        assert (consigne is not None) is attendu, (version, ecrit)
+    assert "op=set slug=ma-procedure scope=org expected_version=1" in (
+        pc._a_dessiner_a_la_naissance(_Ctx(), inp, {**ecrit, "version": 1}))
+
+
+def test_un_fork_sans_dessin_repart_avec_la_consigne(monkeypatch):
+    """Le fork de la bibliothèque est une naissance : la consigne relit le corps forké,
+    au palier que le fork a choisi, et fait porter le dessin par l'adaptation."""
+    from oto_mcp.capabilities import guide_library as dl, procedure_console as pc
+    from test_procedure_form import _Ctx
+    _naissance_banc(monkeypatch)
+    lu = {}
+
+    def relire(otype, oid, slug, version=None):
+        lu["owner"] = (otype, oid, slug)
+        return {"body_md": lu.get("corps", "# Veille\n\n1. Chercher.\n")}
+    monkeypatch.setattr(dl.org_store, "get_instruction", relire)
+    monkeypatch.setattr(dl.org_store, "get_library_entry",
+                        lambda **k: {"id": 1, "body_md": "# Veille\n\n1. Chercher.\n"})
+    monkeypatch.setattr(dl.org_store, "fork_library_entry",
+                        lambda **k: {"owner_type": k["owner_type"], "owner_id": k["owner_id"],
+                                     "slug": "veille", "version": 1, "guide_id": 11,
+                                     "forked_from": 1, "source_title": "t"})
+    monkeypatch.setattr(dl.roles, "is_org_admin", lambda sub, org_id: True)
+
+    class _F:
+        slug = "veille"; new_slug = None; scope = None; project_id = None
+
+    ecrit = dl._fork(_Ctx(), _F())
+    inp = pc.ProcedureInput(op="fork", slug="veille")
+    consigne = pc._a_dessiner_a_la_naissance(_Ctx(), inp, ecrit)
+    assert lu["owner"] == ("org", 7, "veille")
+    assert "forked" in consigne and "NEXT write" in consigne
+    assert "op=get slug=veille scope=org" in consigne
+    lu["corps"] = CORPS
+    assert pc._a_dessiner_a_la_naissance(_Ctx(), inp, ecrit) is None
+
+
+def test_la_consigne_ne_renvoie_qu_au_dessin_du_guide(monkeypatch):
+    """Le guide servi en base porte encore des consignes retirées (digest) : la
+    consigne n'en retient que la grammaire et l'exemple."""
+    consigne = _ecrire(monkeypatch)["draw_next"]
+    assert "only the drawing" in consigne

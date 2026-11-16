@@ -25,6 +25,7 @@ CLAUDE = "https://claude.ai/api/mcp/auth_callback"
 CHATGPT = "https://chatgpt.com/connector/oauth/abc123"
 GEMINI = ("https://oauth-redirect.googleusercontent.com/r/"
           "user_bound_custom-mcp-112233445566778899-mcp_exemple_test")
+GROK = "https://grok.com/connectors-oauth-exchange-code/"
 GEMINI_PREFIXE = "https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-"
 LE_CHAT = {
     "client_name": "Le Chat",
@@ -166,6 +167,14 @@ def test_le_chat_confidentiel_inscrit_en_traditional_avec_secret(client, logto, 
     ("https://oauth-redirect.googleusercontent.com.evil.example/r/"
      "user_bound_custom-mcp-1-x", False),
     (GEMINI_PREFIXE + "a" * 201, False),
+    (GROK, True),
+    ("https://grok.com/connectors/oauth/callback", False),
+    (GROK.rstrip("/"), False),
+    (f"{GROK}x", False),
+    (f"{GROK}?next=https://evil.example", False),
+    ("http://grok.com/connectors-oauth-exchange-code/", False),
+    ("https://grok.com.evil.example/connectors-oauth-exchange-code/", False),
+    ("https://x.ai/connectors-oauth-exchange-code/", False),
 ])
 def test_liste_fermee(uri, admise):
     assert dcr.retour_admis(uri) is admise
@@ -205,6 +214,17 @@ def test_gemini_obtient_un_client_confidentiel(client, logto):
     assert corps["client_secret"]
     assert logto.creees[0]["type"] == "Traditional"
     assert logto.creees[0]["name"] == f"{dcr.PREFIXE_DCR}Gemini"
+
+
+def test_grok_s_inscrit_seul(client, logto):
+    # Grok s'inscrit lui-même, client public PKCE ; adresse exacte → jamais plafonnée.
+    r = client.post("/oauth/register",
+                    json={"client_name": "Grok", "redirect_uris": [GROK],
+                          "token_endpoint_auth_method": "none"})
+    assert r.status_code == 201
+    assert r.json()["redirect_uris"] == [GROK]
+    assert logto.creees[0]["type"] == "Native"
+    assert logto.creees[0]["name"] == f"{dcr.PREFIXE_DCR}Grok"
 
 
 # ── Les métadonnées du client ────────────────────────────────────────────────

@@ -6,54 +6,36 @@ plusieurs zones). Le download + parse pdftotext + indexation est fait **une fois
 chemin d'une requête MCP. Ce module sert les **extraits**
 ciblés (par zone / mot-clé) depuis ce cache partagé.
 
-Cache-miss = `{cached: False}` : le service n'ingère pas à la volée (l'ingestion
-vit dans un batch côté service). On NE refait PAS le parsing en local : le backend
-ne doit plus porter le PDF ni la dépendance poppler (cf. retrait d'`urba_reglement`
-local). Pas de fallback (ADR 0028) : service indisponible/mal configuré ⟹ erreur
+Cache-miss = `{cached: False, statut}`. Le service sait ingérer un règlement **à la
+demande**, en tâche de fond (`POST|GET /api/reglements/{idurba}/ingestion`) : une seule
+ingestion à la fois sur la box, une pièce de 80 Mo au plus, 600 s au plus. `ingestion`
+lance ou relit cet état et rend le code HTTP avec le corps — c'est l'outil qui nomme
+le refus. On NE refait PAS le parsing en local : le backend ne porte ni le PDF ni
+poppler. Pas de fallback (ADR 0028) : service indisponible/mal configuré ⟹ erreur
 actionnable.
 
-Config (env de process) : `FOD_BASE_URL` (VPC fod-0) + `FOD_API_TOKEN` (clé S2S) —
-le même service FOD unique sert SIRENE et le DILA (règlement/CCN/LOI/JURIS) ; on
-tape la box en VPC direct, plus la façade publique `data.oto.zone` (réservée à un client).
+La plomberie (client, jeton S2S, erreurs sans adresse interne) est celle de
+`fod.http`, partagée par tous les clients FOD.
 """
 from __future__ import annotations
 
-import os
 from typing import Any, Optional
 
-import httpx
+from . import http as fod_http
 
-_BASE = os.environ.get("FOD_BASE_URL")
-_TOKEN = os.environ.get("FOD_API_TOKEN")
-# Lecture d'extraits = pas de scan (lecture S3 + recherche en mémoire) : timeout court.
-_TIMEOUT = httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
-
-_client: Optional[httpx.Client] = None
-
-
-def _c() -> httpx.Client:
-    global _client
-    if not _BASE or not _TOKEN:
-        raise RuntimeError(
-            "Service FOD règlement non configuré (FOD_BASE_URL / "
-            "FOD_API_TOKEN absents). Les règlements PLU/PLUi sont servis "
-            "par le service FOD dédié (ADR 0028)."
-        )
-    if _client is None:
-        _client = httpx.Client(
-            base_url=_BASE,
-            headers={"Authorization": f"Bearer {_TOKEN}"},
-            timeout=_TIMEOUT,
-        )
-    return _client
+#: Les réponses de la route d'ingestion qui portent un ÉTAT, pas une panne : déjà prêt
+#: (200), lancé ou en cours (202), document que le GPU ne publie pas (404), service
+#: occupé par une autre ingestion (503 + `Retry-After`). Les autres codes lèvent par
+#: `fod.http.etat`.
+_ETATS_HTTP = (200, 202, 404, 503)
 
 
 def extraits(idurba: str, *, zone: Optional[str] = None, query: Optional[str] = None,
              max_extraits: int = 8, context_lignes: int = 30) -> dict[str, Any]:
     """Extraits du règlement écrit d'un PLU/PLUi (cache partagé par `idurba`).
 
-    Renvoie `{idurba, cached, ...}` ; `cached=False` si le règlement n'est pas
-    encore ingéré dans le service.
+    Renvoie `{idurba, cached, ...}` ; `cached=False` (+ `statut`) si le règlement
+    n'est pas encore ingéré dans le service.
     """
     params: dict[str, Any] = {
         "idurba": idurba,
@@ -64,6 +46,21 @@ def extraits(idurba: str, *, zone: Optional[str] = None, query: Optional[str] = 
         params["zone"] = zone
     if query:
         params["query"] = query
-    r = _c().get("/api/reglement", params=params)
-    r.raise_for_status()
-    return r.json()
+    return fod_http.get("/api/reglement", params=params)
+
+
+def ingestion(idurba: str, *, lancer: bool) -> tuple[int, dict[str, Any], Optional[int]]:
+    """Lance (`lancer=True`, POST — idempotent côté service) ou relit (GET) l'ingestion
+    à la demande d'un règlement. Rend `(code HTTP, corps, Retry-After en secondes)`.
+
+    Pas de reprise sur 503 ici, contrairement à `fod.http.get` : ce 503 dit « une autre
+    ingestion occupe la box », un état que l'appelant doit nommer, pas absorber."""
+    from urllib.parse import quote
+
+    chemin = f"/api/reglements/{quote(idurba, safe='')}/ingestion"
+    r = fod_http.etat("POST" if lancer else "GET", chemin, _ETATS_HTTP)
+    try:
+        apres = int(r.headers.get("Retry-After") or 0) or None
+    except ValueError:
+        apres = None
+    return r.status_code, r.json(), apres

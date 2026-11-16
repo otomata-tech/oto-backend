@@ -318,7 +318,7 @@ Logto, l'`iss` reste le sien (RFC 9207), et seuls trois chemins du domaine de l'
 | `POST /oauth/register` | l'inscription RFC 7591 |
 
 - **Liste fermée des adresses de retour** (`RETOURS_ADMIS`) : égalité exacte (Le Chat,
-  claude.ai, claude.com) ou préfixe (`https://chatgpt.com/connector/oauth/`). Une seule
+  claude.ai, claude.com, grok.com) ou préfixe (`https://chatgpt.com/connector/oauth/`). Une seule
   adresse hors liste : `400 invalid_redirect_uri`, refus journalisé.
 - **Une application Logto par type et adresses de retour** : `Traditional` (secret rendu)
   pour `client_secret_basic` (défaut) ou `client_secret_post`, `Native` pour `none`, jamais

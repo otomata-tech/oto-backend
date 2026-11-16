@@ -63,8 +63,10 @@ def _pipecorn_tech(res, inputs):
 
 
 def _dataforseo_tech(res, inputs):
-    """`technologies` is `{group: {category: [names]}}` — flattened by category."""
-    groups = _get(res, "technologies")
+    """`dataforseo(op="domain_technologies")` answers DataForSEO's envelope: the site's
+    record is `tasks[0].result[0]`, its `technologies` `{group: {category: [names]}}` —
+    flattened by category."""
+    groups = _get(res, "tasks[0].result[0].technologies")
     if not isinstance(groups, dict):
         return None
     by_category: dict[str, list] = {}
@@ -166,8 +168,8 @@ TECH_STEPS: tuple[Step, ...] = (
          explains=(
              "lemlist's company record — website and business tools with a confidence "
              "(confirmed and likely kept); spends no credits.")),
-    Step("dataforseo", "dataforseo_technologies", (("domain",),),
-         lambda i: {"op": "domain", "target": i["domain"]},
+    Step("dataforseo", "dataforseo", (("domain",),),
+         lambda i: {"op": "domain_technologies", "target": i["domain"]},
          _dataforseo_tech, "~$0.01-0.02 per domain (DataForSEO)",
          label="Website — DataForSEO index",
          explains=(

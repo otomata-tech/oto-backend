@@ -533,7 +533,7 @@ def _handwritten(routes: Iterable, defs: Optional[dict] = None, *,
     # concluait que six opérations avaient perdu leurs paramètres. Elles ne les
     # avaient pas perdus : c'est le document qui décrivait mal la redirection.
     alias = ({a.ancien for a in deprecations.REST}
-             | {a.ancien for a in deprecations._alias_datastore()})
+             | {a.ancien for a in deprecations.alias_rest_derives()})
     for route in routes or ():
         path = getattr(route, "path", None)
         methods = getattr(route, "methods", None)
@@ -580,7 +580,7 @@ def _alias_deprecies() -> dict:
     qu'un client généré s'est donné, qu'on ne fait pas changer pour rien.
     """
     out: dict = {}
-    for alias in tuple(deprecations.REST) + tuple(deprecations._alias_datastore()):
+    for alias in tuple(deprecations.REST) + tuple(deprecations.alias_rest_derives()):
         item = out.setdefault(_openapi_path(alias.ancien), {})
         item[alias.verbe.lower()] = {
             "operationId": alias.operation_id or _handwritten_operation_id(

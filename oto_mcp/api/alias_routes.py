@@ -60,11 +60,12 @@ def make_routes(options_handler) -> list:
     précéder un chemin à placeholder qui l'engloberait.
     """
     routes: list = []
-    # ⚠️ Les alias du renommage `namespace` → `datastore` sont DÉRIVÉS des routes
-    # montées, pas listés (`deprecations._alias_datastore`). Ils viennent EN PREMIER
-    # dans cette boucle mais restent, comme tout ce module, montés en dernier par
-    # `routes.make_routes` : un alias ne peut donc éclipser aucune vraie route.
-    for alias in tuple(deprecations._alias_datastore()) + tuple(deprecations.REST):
+    # ⚠️ Les alias des renommages `namespace` → `datastore` et `http` → `api` sont
+    # DÉRIVÉS des routes montées, pas listés (`deprecations.alias_rest_derives`). Ils
+    # viennent EN PREMIER dans cette boucle mais restent, comme tout ce module, montés
+    # en dernier par `routes.make_routes` : un alias ne peut donc éclipser aucune vraie
+    # route.
+    for alias in tuple(deprecations.alias_rest_derives()) + tuple(deprecations.REST):
         routes.append(Route(alias.ancien, _redirection(alias), methods=[alias.verbe]))
         routes.append(Route(alias.ancien, options_handler, methods=["OPTIONS"]))
     return routes

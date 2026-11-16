@@ -350,6 +350,17 @@ sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
 main, jamais en crontab) : prod et preprod partagent la base, deux exécutants se
 disputeraient les mêmes lignes.
 
+### Copier le coffre des connecteurs renommés — `oto-mcp maintenance copies-du-coffre`
+
+La copie re-chiffrée du coffre d'un connecteur renommé (`sharepoint` → `microsoft`,
+`http` → `api` ; liste `maintenance.copies_declarees`), additive et idempotente. Le
+démarrage la joue ; la porte d'une instance cible la joue AVANT `migrer upgrade head`
+(`deploy/cible/migrations_a_jour.py`), parce qu'une révision de renommage repointe vers
+les copies et lève sans elles. À la main, sous le lanceur (la clé maîtresse est requise —
+sans elle, refus, code 2) : `lanceur_secrets.py maintenance copies-du-coffre`, puis
+`migrer upgrade head`. Pas un travail : elle n'est pas dans `all`, et son code de sortie
+dit si la migration peut suivre.
+
 ### Retirer les références orphelines — `oto-mcp maintenance orphelins` (#905)
 
 Les lignes qui nomment un connecteur absent du catalogue servi (constat :

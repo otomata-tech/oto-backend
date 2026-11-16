@@ -7,9 +7,10 @@ from fastmcp.server.middleware import Middleware
 from ..mcp_errors import McpError
 from mcp.types import ErrorData
 
-from .. import deprecations, handshake_log, tool_alias
+from .. import deprecations, handshake_log, session_org, tool_alias
 from ..auth.hooks import current_user_sub_from_token
 from . import _handshake
+from .rappel_contexte import avec_lignes_en_tete
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,9 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
     En SORTIE, `on_list_tools` est au contraire le DERNIER à retoucher la liste (une
     chaîne extern→interne se déroule en sens inverse au retour) : le renommage
     s'applique après le filtrage de visibilité et l'enrichissement des descriptions,
-    sur la liste réellement servie.
+    sur la liste réellement servie. Le TITRE de chaque outil (posé au montage,
+    `tool_alias.poser_les_titres`) suit le nom ici : un alias déprécié reçoit le sien,
+    un outil renommé au préfixe du tenant voit `Oto:` devenir le nom du produit.
 
     Deux crans de prudence :
 
@@ -45,6 +48,9 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
     **Deuxième traduction, même bord : les noms DÉPRÉCIÉS** (`deprecations.TOOLS`,
     #519). Un outil renommé est servi sous ses DEUX noms — le nouveau, et l'ancien
     avec un avis de retrait daté en tête de sa description — et les deux s'appellent.
+    La réponse d'un appel fait sous l'ancien nom porte le même avis en tête de son
+    canal texte (`deprecations.avis_d_appel`), et le journal compte l'usage de l'alias
+    (`session_org.nom_deprecie_de_l_appel`) sans changer le nom qu'il écrit.
     Ce n'est pas la même règle que le préfixe de tenant (celle-là dépend de QUI
     appelle, celle-ci de rien), mais c'est le même endroit : le seul où un nom peut
     être traduit sans que le reste du serveur l'apprenne. Le mettre ailleurs
@@ -79,9 +85,14 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
                 if ancien in pris:
                     continue
                 pris.add(ancien)
+                # Son propre titre : copié tel quel, l'ancien nom porterait le titre
+                # du nouveau, et l'annuaire afficherait deux fois le même outil.
+                titre = f"{tool_alias.titre_pose(t)} (deprecated name: {ancien})"
                 out.append(t.model_copy(update={
                     "name": ancien,
-                    "description": deprecations.avis(t.name) + (t.description or ""),
+                    "description": (deprecations.avis(t.name, ancien)
+                                    + (t.description or "")),
+                    **tool_alias.champs_titre(t, titre),
                 }))
         return out
 
@@ -110,6 +121,13 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
                 nom = tool_alias.public(t.name, prefix)
                 if nom != t.name and nom not in pris:
                     maj["name"] = nom
+                # Le TITRE au nom du produit : `Oto: Doc` → `Acme: Doc`, y compris pour
+                # `data_*`/`run_*`/`feedback`, dont le NOM reste (nom de capacité) mais
+                # dont le titre portait notre marque.
+                titre = tool_alias.titre_pose(t)
+                public = tool_alias.titre_public(titre, prefix)
+                if public != titre:
+                    maj.update(tool_alias.champs_titre(t, public))
                 # La DESCRIPTION aussi : c'est sur elle que le modèle choisit, et 27
                 # d'entre elles renvoient à un outil voisin (« resolve it with
                 # oto_kb »). Laissée en canonique, elle fait rappeler un nom que le
@@ -165,16 +183,28 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
         # Les deux traductions se composent, dans cet ordre : un ancien nom porté
         # par le préfixe d'un tenant (`acme_admin_…`) revient d'abord au canonique de
         # plateforme, puis au nom d'aujourd'hui.
-        canonical = deprecations.tool_canonique(tool_alias.canonical(name, prefix))
+        plateforme = tool_alias.canonical(name, prefix)
+        canonical = deprecations.tool_canonique(plateforme)
         if canonical != name:
             context = context.copy(
                 message=context.message.model_copy(update={"name": canonical}))
+        # Appelé sous un ancien nom : le nom DEMANDÉ reste lisible du journal, qui
+        # compte l'usage de l'alias, et la réponse le dit en tête — même place que les
+        # avis de l'appel (`session_org.noter_avis`).
+        ancien = plateforme if canonical != plateforme else None
+        jeton = session_org.set_nom_deprecie(ancien) if ancien else None
         try:
-            return await call_next(context)
+            result = await call_next(context)
         except McpError as e:
             if not prefix:
                 raise
             raise self._erreur_traduite(e, prefix) from e
+        finally:
+            if jeton is not None:
+                session_org.reset_nom_deprecie(jeton)
+        if ancien:
+            return avec_lignes_en_tete(result, [deprecations.avis_d_appel(ancien)])
+        return result
 
     @staticmethod
     def _erreur_traduite(erreur: McpError, prefix: str) -> McpError:

@@ -81,6 +81,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.usage.LIMITE_REFUS_JOUR,  # palmarès quotidien des refus des limiteurs (#1232)
     schema.connectors.LOAN_EVENTS,   # journal des prêts de compte (pose et retrait)
     schema.credits.CREDITS,          # budget d'unités : barème, soldes, réservations, mouvements
+    schema.credits.ACTEUR_DES_RESERVATIONS,  # la personne qui a agi pour une réservation
     schema.runs.AGENT_LINKS,         # liens entre agents : qui lance qui, qui exige qui
     schema.apps.APPS,                # apps : écrans bâtis sur la plateforme, rangés dans un projet
     schema.copilot.COPILOT,          # l'agent intégré à l'application : conversations, annulations
@@ -92,6 +93,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.apps.PROPRIETE,           # une app a son propriétaire et ses partages ; un projet la range
     schema.apps.FICHIERS,            # fichiers déposés dans une app par un lecteur, pour ses agents
     schema.apps.FICHIERS_ORIGINE,    # d'où vient un fichier d'app : déposé, ou rendu par un agent
+    schema.apps.VERSIONS,            # brouillon d'une app et versions publiées, gardées à part
     schema.runs.SLACK_AGENT_POSTS,   # messages postés dans Slack par un agent : à qui va une réponse
     schema.usage.APIFY_RUNS,         # runs Apify de la clé plateforme, notés au lancement
     schema.usage.HIGGSFIELD_JOBS,    # travaux Higgsfield de la clé plateforme, notés à la soumission
@@ -99,6 +101,9 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.guides.GUIDE_REVISIONS,   # versions gardées des guides et readmes, et leur rétention
     schema.connectors.ACCOUNT_RULES,  # règles d'accès des comptes de connecteur, et leur journal
     schema.runs.AGENT_ALERT_SETTINGS,  # où une org est prévenue qu'un agent ne fonctionne plus
+    schema.orgs.ORG_FAVORITES,       # pages et tableaux épinglés pour tous les membres d'une org
+    schema.usage.USAGE_ORG,          # compteur du jour d'une org sur une clé plateforme à quota par org
+    schema.credits.SPEND_BLOCKS,     # blocages du jour poussés par le commerce (limites de dépense)
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

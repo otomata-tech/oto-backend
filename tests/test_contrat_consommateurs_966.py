@@ -29,7 +29,14 @@ def test_la_liste_declaree_est_bien_formee():
     assert len(liste) >= 2, "un seul consommateur : le mécanisme n'est éprouvé par rien"
     noms = [c["nom"] for c in liste]
     assert len(set(noms)) == len(noms), "deux jambes au même nom seraient indiscernables"
+    secret = re.compile(r"[A-Z][A-Z0-9_]*")
     for c in liste:
+        if "depot_ref" in c:
+            # Référence indirecte : dépôt et chemin portés par des SECRETS, nommés ici ;
+            # dépôt privé, donc clé de lecture requise. Jamais avec `depot` en clair.
+            assert set(c) == {"nom", "depot_ref", "chemin_ref", "secret"}, c
+            assert all(secret.fullmatch(c[k]) for k in ("depot_ref", "chemin_ref", "secret")), c
+            continue
         # `chemin_admin` (#1196) : facultatif — le contrat qu'il épingle sur la console
         # `/api/admin/*`, absente du document public.
         assert {"nom", "depot", "chemin", "secret"} <= set(c) <= \
@@ -39,19 +46,107 @@ def test_la_liste_declaree_est_bien_formee():
         assert re.fullmatch(r"[\w.-]+/[\w.-]+", c["depot"]), c
         assert not c["chemin"].startswith("/"), c
         # `null` = dépôt public, lu sans clé ; sinon le NOM d'un secret du dépôt.
-        assert c["secret"] is None or re.fullmatch(r"[A-Z][A-Z0-9_]*", c["secret"]), c
+        assert c["secret"] is None or secret.fullmatch(c["secret"]), c
+
+
+def test_un_partenaire_ne_se_declare_jamais_en_clair():
+    """Garde de neutralité : ce dépôt est public. Un consommateur partenaire (clé de
+    lecture `PARTENAIRE_*`) se déclare par référence, sans dépôt ni chemin en clair."""
+    for c in _consommateurs():
+        if (c.get("secret") or "").startswith("PARTENAIRE_"):
+            assert not {"depot", "chemin", "chemin_admin"} & set(c), c["nom"]
+            assert c["nom"].startswith("partenaire-"), c["nom"]
 
 
 def test_les_deux_jobs_de_contrat_tournent_sur_toute_la_liste():
     wf = yaml.safe_load((_RACINE / ".github" / "workflows" / "deploy-canari.yml").read_text())
     jobs = wf["jobs"]
-    for nom in ("contrat-front", "contrat-front-code"):
+    # `liste_code` : la liste entière, sauf sur une PR de fork où les consommateurs à
+    # secret en sont retirés et annoncés (test_workflow_secret_absent_rougit.py).
+    for nom, sortie in (("contrat-front", "liste"), ("contrat-front-code", "liste_code")):
         strat = jobs[nom]["strategy"]
         assert strat["fail-fast"] is False, f"{nom} : un rouge masquerait les suivants"
-        assert "fromJSON(needs.consommateurs.outputs.liste)" in strat["matrix"]["consommateur"]
+        assert f"fromJSON(needs.consommateurs.outputs.{sortie})" in strat["matrix"]["consommateur"]
         assert "consommateurs" in jobs[nom]["needs"]
     assert "contrat-front-code" in jobs["deploy-preprod"]["needs"], \
         "la garde d'avant déploiement doit bloquer la préproduction"
+
+
+_LECTEUR = _RACINE / "scripts" / "lire-contrat-consommateur.sh"
+_DEPOT_CACHE, _CHEMIN_CACHE = "org-cachee/depot-cache", "dossier-cache/contrat-cache.json"
+
+
+def _faux_distant(tmp_path) -> pathlib.Path:
+    """Un dépôt « distant » local, servi à la place de github.com par `insteadOf` (passé
+    par l'environnement) : le script clone sa vraie URL SSH, git la réécrit en `file://`.
+    Identité git passée en ligne : la CI n'en a pas."""
+    racine = tmp_path / "distants"
+    depot = racine / f"{_DEPOT_CACHE}.git"
+    travail = tmp_path / "source"
+    (travail / "dossier-cache").mkdir(parents=True)
+    (travail / _CHEMIN_CACHE).write_text(json.dumps(_contrat({"/api/a": _op("a")})))
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@exemple.invalid",
+           "-c", "init.defaultBranch=main"]
+    subprocess.run([*git, "init", "-q", str(travail)], check=True)
+    subprocess.run([*git, "-C", str(travail), "add", "-A"], check=True)
+    subprocess.run([*git, "-C", str(travail), "commit", "-qm", "c"], check=True)
+    subprocess.run([*git, "clone", "-q", "--bare", str(travail), str(depot)], check=True)
+    return racine
+
+
+def _lire_par_reference(tmp_path, racine, depot=_DEPOT_CACHE, chemin=_CHEMIN_CACHE):
+    import os
+    sortie = tmp_path / "sortie"
+    sortie.write_text("")
+    env = {**os.environ, "CLE_LECTURE": "cle-factice", "GITHUB_OUTPUT": str(sortie),
+           "DEPOT_REF": "PRIVE_1_DEPOT", "CHEMIN_REF": "PRIVE_1_CHEMIN",
+           "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"url.file://{racine}/.insteadOf",
+           "GIT_CONFIG_VALUE_0": "git@github.com:"}
+    r = subprocess.run([str(_LECTEUR), "prive-1", depot, chemin, "PRIVE_1_CLE"],
+                       env=env, capture_output=True, text=True, timeout=60)
+    sorties = dict(l.split("=", 1) for l in sortie.read_text().splitlines())
+    return r, sorties
+
+
+def _sans_nom_cache(r, sorties):
+    """Hors des lignes `::add-mask::` (qui ne s'impriment pas), rien ne nomme le dépôt,
+    son nom seul ni le chemin — ni le journal, ni les sorties réimprimées ensuite."""
+    journal = [l for l in (r.stdout + r.stderr).splitlines() if not l.startswith("::add-mask::")]
+    for cache in (_DEPOT_CACHE, "depot-cache", "org-cachee", _CHEMIN_CACHE, "dossier-cache"):
+        assert not any(cache in l for l in journal), (cache, journal)
+        assert not any(cache in v for v in sorties.values()), (cache, sorties)
+
+
+def test_une_reference_indirecte_lit_le_contrat_sans_jamais_nommer_le_depot(tmp_path):
+    r, sorties = _lire_par_reference(tmp_path, _faux_distant(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorties["lu"] == "oui"
+    assert json.loads(pathlib.Path(sorties["contrat"]).read_text())["paths"] == {"/api/a": _op("a")}
+    # Masqués AVANT tout autre geste : les premières lignes du journal.
+    assert r.stdout.splitlines()[:3] == [f"::add-mask::{_DEPOT_CACHE}", "::add-mask::depot-cache",
+                                         f"::add-mask::{_CHEMIN_CACHE}"]
+    _sans_nom_cache(r, sorties)
+
+
+def test_une_reference_indirecte_introuvable_avertit_sans_nommer(tmp_path):
+    racine = _faux_distant(tmp_path)
+    r, sorties = _lire_par_reference(tmp_path, racine, chemin="dossier-cache/ailleurs.json")
+    assert r.returncode == 0 and sorties["lu"] == "non"
+    assert "::warning title=Contrat de prive-1 introuvable::" in r.stdout
+    _sans_nom_cache(r, {k: v for k, v in sorties.items() if k != "travail"})
+    # Un dépôt illisible : le détail de git, qui cite l'URL, est expurgé.
+    r, sorties = _lire_par_reference(tmp_path, racine, depot="org-cachee/depot-absent")
+    assert r.returncode == 0 and sorties["lu"] == "non"
+    assert "::warning title=Contrat de prive-1 inaccessible::le dépôt de prive-1" in r.stdout
+    assert "<dépôt>" in r.stdout
+    assert not any("depot-absent" in l for l in r.stdout.splitlines() if not l.startswith("::add-mask::"))
+
+
+def test_une_reference_indirecte_mal_formee_est_refusee_sans_la_citer(tmp_path):
+    r, _ = _lire_par_reference(tmp_path, tmp_path, depot="pas un depot")
+    assert r.returncode == 1
+    assert "référence mal formée" in r.stdout and "PRIVE_1_DEPOT" in r.stdout
+    assert not any("pas un depot" in l for l in r.stdout.splitlines() if not l.startswith("::add-mask::"))
 
 
 def _contrat(chemins: dict) -> dict:

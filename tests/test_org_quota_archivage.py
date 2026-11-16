@@ -57,7 +57,9 @@ _TABLES = ("tenants", "tenant_admins", "users", "orgs", "org_members", "org_grou
            "org_member_events",
            # Les clés d'org (#1188) : les lectures d'appartenance lisent le compte de
            # service, l'archivage révoque ses jetons.
-           "user_api_tokens", "org_service_accounts")
+           "user_api_tokens", "org_service_accounts",
+           # Les favoris d'org : retirer un membre retire ses favoris personnels.
+           "org_favorites")
 
 
 def _real_ddl(table: str) -> str:

@@ -123,7 +123,8 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
 Une app ouverte ne parle qu'à `POST /api/me/apps/{app_id}/call` (face REST seule, pas
 d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :**
 `read_rows`, `read_aggregate` (lire), `write_cell`, `add_row`, `start_agent`,
-`upload_file` (gestes, avec consentement), `list_files`, `agent_runs`, `run_result`.
+`upload_file` (gestes, avec consentement), `list_files`, `agent_runs`, `run_result` —
+et `batch`, un lot de lectures (plus bas).
 
 - **Droits d'une app = droits de son auteur ∩ droits de son lecteur.** L'auteur est
   `updated_by` ; il est jugé par l'ownership SEUL (numéro du tableau), jamais par sa
@@ -138,13 +139,54 @@ d'outil MCP : un agent n'est jamais le lecteur d'une app). **Actions servies :**
 - **Route lourde** (`api/routes_lourdes.py`) : 240/min par jeton, 8 en parallèle — une
   app laissée ouverte relit ses tableaux en fond. L'appel relit le manifeste sans le
   HTML (`db.apps.get_for_call`).
+- **Une lecture = UN emprunt au pool** : `read_rows` et `read_aggregate` tiennent leur
+  chemin dans `db.reuse_connection()` (17 emprunts mesurés avant, ~3 allers-retours
+  chacun, pour une app qui ouvre son écran par huit à quinze lectures), une question déjà
+  posée dans l'appel n'y repart pas (`lecture_d_appel` sur le propriétaire et la ligne du
+  tableau), et la projection aux champs déclarés DESCEND au store
+  (`page_rows(fields=…)`) au lieu d'être faite après coup. Le chemin ne fait que lire —
+  condition de la portée, gardée par `tests/test_apps_appel_une_connexion.py`. Les
+  gestes restent hors de la portée : ils écrivent.
+- **Un lot de lectures** (`action: "batch"`) : l'écran d'une app s'ouvre sur huit à
+  quinze lectures, et chacune prenait une des 8 places de la route — pour tout le
+  processus, tous lecteurs confondus (503 `route_busy` au-delà) — et rejouait
+  l'authentification, l'appartenance, l'app, son partage et le jugement de son tableau.
+  Corps : `{action: "batch", draft?, reads: [{id, action, table, options}]}`, au plus
+  `MAX_LECTURES_PAR_LOT` (10) lectures, `action` ∈ `read_rows` | `read_aggregate`.
+  Réponse : `{results: [...]}`, une par lecture, dans l'ordre, sous son `id` :
+  `{id, ok: true, rows, total}` ou `{id, ok: true, groups}` — ce qu'un appel seul aurait
+  rendu —, ou `{id, ok: false, status, code, detail}` — le refus qu'un appel seul aurait
+  rendu (`details` quand il en porte). Ce qui se juge UNE fois pour tout le lot : la
+  forme du lot (400 `invalid_batch` : `reads` vide ou absent, une lecture sans `id` de 1 à
+  64 caractères, deux `id` égaux, un champ d'appel à côté de `reads` ; 400
+  `batch_too_large`), l'app, son partage et son brouillon (`_app_pour` : un refus là
+  refuse tout le lot, comme il refuserait chaque appel). Chaque lecture est ensuite
+  jugée par le MÊME code qu'un appel seul (`_lire`) — son tableau, son org, l'auteur, le
+  lecteur, sans rien partager avec les autres lectures : un champ inconnu
+  (`unknown_fields`), une forme invalide (`invalid_input`), un champ non déclaré, un
+  auteur qui a perdu le tableau sont SA réponse, les autres lectures sont servies. Une
+  lecture que la borne `statement_timeout` du pool coupe rend SA réponse
+  `{ok: false, status: 503, code: "read_timeout"}` : l'emprunt est en autocommit, les
+  suivantes restent servies. Un geste, ou toute action qui n'est
+  pas une lecture (`list_files`, `file_url`, `agent_runs`, `run_result`), est refusé
+  dans le lot (400 `batch_reads_only`) : un geste a son jeton et reste seul. Tout le
+  lot tient UN emprunt au pool (`db.reuse_connection`), sur un chemin qui ne fait que
+  lire. **Débit** : le lot prend une place de concurrence, mais chaque lecture coûte
+  au débit par jeton ce que coûte un appel — la garde compte la requête, la capacité
+  débite les lectures suivantes sur la même fenêtre (`routes_lourdes.debiter_en_plus`) ;
+  si ce qui reste ne les couvre pas, le lot est refusé entier (429 `rate_limited`,
+  `Retry-After`). Une erreur imprévue (ni refus nommé ni réponse) d'une lecture rend le
+  lot entier en 500, comme elle rendrait son appel seul. ⚠️ Un lot tient sa place et sa
+  connexion le temps de toutes ses lectures, l'une après l'autre : dix lectures lentes
+  la tiennent dix fois plus longtemps qu'une. Gardé par
+  `tests/test_apps_appel_lot.py`.
 - **Journal** : l'appel est tracé comme toute requête REST (`tool_calls`, `kind=rest`),
   mais la route y est réduite (`/api/me/apps/:id/call`) : le numéro de l'app et le
   tableau lu n'y sont pas. Aucun journal d'audit des lectures n'existe à ce jour.
 
 ### Écrire, ajouter, lancer, déposer — l'accord du lecteur, donné hors de l'app (`me.app.consent`, #1386)
 
-**Le clic dans l'app VAUT accord, jugé par l'hôte** (décision d'Alexis du 31/10/2026, sur proposition de Julien, qui remplace
+**Le clic dans l'app VAUT accord, jugé par l'hôte** (décision du 31/10/2026, qui remplace
 celle du 29/10). Le serveur ne distingue pas un clic du lecteur d'un appel que l'app fait
 seule : c'est l'écran hôte qui en juge, sur l'activation navigateur. Un geste qui écrit ou
 lance (`write_cell`, `add_row`, `start_agent`, `upload_file`) exige toujours un **jeton de
@@ -353,9 +395,66 @@ par l'hôte, après l'accord du lecteur :
 `rev` est une ETag de contenu (titre, manifeste, HTML, vignette), comme celle des
 pages. `update` et `patch` acceptent `expected_rev` et refusent en 409 `conflict` si l'app a changé.
 Chaque mise à jour écrit d'abord l'état précédent dans `app_revisions` ; seules les
-50 plus récentes sont gardées (`db.apps.MAX_REVISIONS`, purge dans la même
-transaction). `restore` remet une révision (en écrivant à son tour l'état courant),
-après avoir REJUGÉ son manifeste : celui qui restaure en devient l'auteur.
+50 plus récentes révisions ORDINAIRES sont gardées (`db.apps.MAX_REVISIONS`, purge dans la
+même transaction) — une version PUBLIÉE (`published_at`, voir plus bas) a sa propre borne,
+`db.apps.MAX_PUBLISHED` (200), et la purge des ordinaires ne la touche jamais. `restore`
+remet une révision (en écrivant à son tour l'état courant), après avoir REJUGÉ son
+manifeste : celui qui restaure en devient l'auteur, et l'état restauré est une version
+publiée (un retour en arrière délibéré, avec sa `note`). `restore to_draft=true` la met
+au brouillon à la place, pour l'essayer avant de la publier (app à brouillon seulement). `op=revision` rend une
+version ENTIÈRE (manifeste, HTML), aux éditeurs seuls — un HTML d'hier peut porter ce
+qu'on en a retiré — pour la lire ou la comparer avant de la restaurer. Une révision dit
+quand son état a été REMPLACÉ (`created_at`), pas quand il a été écrit.
+
+## Brouillon et publication
+
+Décidé le 12/11/2026 : une app peut passer par un **brouillon**, comme un dépôt passe par
+une branche avant d'arriver sur sa branche principale (`db/app_versions.py`,
+`capabilities/apps_versions.py`).
+
+- **`drafts_enabled`** (`op=set_drafts enabled=…`, écriture sur l'app) : faux par défaut —
+  une app d'avant reste publiée à chaque écriture. Vrai : `update` et `patch` écrivent
+  le manifeste et le HTML au BROUILLON (`apps.draft_*`, sur la ligne de l'app : publier
+  ne verrouille qu'une ligne), et la réponse le dit (`target: "draft"`). Le titre et la
+  vignette — la carte, que la liste montre — restent écrits en direct. Couper le
+  brouillon avec un brouillon en cours est refusé (409 `draft_pending`).
+  Écrire un brouillon dans une app qui n'en a pas est refusé (409 `drafts_off`), jugé
+  sous le verrou de la ligne : un brouillon posé à côté d'écritures vivantes vieillirait
+  sous elles, et sa publication les déferait sans un mot.
+- **Le brouillon a son ETag** (`draft_rev`, préfixé `d`) : `op=get draft=true` le sert
+  (manifeste, HTML, `rev`) ; `update`/`patch` s'écrivent contre lui. Une écriture qui
+  nomme la version PUBLIÉE alors qu'un brouillon existe est refusée (409
+  `draft_exists`) : l'agent a lu une version et écrirait sur une autre. Un `patch` sans
+  `expected_rev` s'applique au brouillon (ou, sans lui, à la version publiée dont il
+  naît) et s'écrit contre le `rev` de ce qu'il a lu.
+- **Qui le voit** : ses éditeurs seuls. `op=get` ne nomme le brouillon (`draft` :
+  `rev`, auteur, date) qu'à qui peut modifier l'app ; `draft=true` refuse un lecteur
+  du même 403 `draft_editors_only` qu'il y ait un brouillon ou non. Aucune carte de liste
+  ne le porte.
+- **L'auteur du brouillon** (`draft_by`) est le dernier à l'avoir écrit, avec la règle
+  d'une écriture de l'app : il doit atteindre ce que le manifeste du brouillon déclare
+  (403 `would_break_app`), un manifeste écrit se juge contre lui.
+- **L'aperçu** : `POST /api/me/apps/{id}/call` et `…/consent` avec `draft: true`, et le
+  dépôt de fichier avec le champ `draft`, ouvrent le brouillon — jugé comme une app à
+  part entière : SON manifeste, SON auteur ∩ le lecteur (éditeur). Un jeton émis pour
+  l'aperçu ne se brûle pas sur l'app publiée (`draft` entre dans l'empreinte, absent
+  quand il est faux : les jetons d'avant restent valides). L'aperçu n'est pas une
+  préproduction : il lit et écrit les VRAIS tableaux et lance les vrais agents.
+- **`op=publish`** (`expected_rev` = le `rev` du brouillon vu, obligatoire ; `note`
+  facultative, 500 caractères) : le manifeste du brouillon est REJUGÉ contre qui publie,
+  qui devient l'auteur de l'app ; l'état remplacé part dans `app_revisions`, l'état
+  publié porte `published_at` et `version_note`, le brouillon est vidé — une
+  transaction, sous le verrou de la ligne. Un brouillon changé depuis l'aperçu est
+  refusé (409 `draft_conflict`). `op=delete_draft` le jette.
+- **L'agent intégré** demande l'accord de la personne avant `publish` et
+  `delete_draft` (`copilot/classement._OP_DESTRUCTRICE`) ; `tools/effets.py` les classe
+  `detruire`, `revision` `lire`.
+- Une écriture DIRECTE du manifeste ou du HTML (app sans brouillon) fait perdre à l'état
+  vivant sa marque de version publiée ; changer la carte la garde.
+
+⚠️ **Base partagée** : tant que la prod tourne un code d'avant ce lot, elle écrit l'état
+vivant en direct et purge les révisions sans voir les versions publiées — n'activer le
+brouillon d'une app qu'une fois le tag en prod.
 
 ## Liste
 

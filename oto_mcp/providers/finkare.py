@@ -23,7 +23,7 @@ from ._model import _c
 # `docs.finkare.io/mcp-server.md` describes `https://mcp.finkare.io/mcp` (OAuth 2.1 +
 # PKCE + dynamic registration, 21 tools) — checked on 2026-09-02: **no DNS
 # record**, the host does not resolve. If that server existed, this connector
-# would have no reason to be: we would reach it through the generic `http` connector
+# would have no reason to be: we would reach it through the generic `api` connector
 # (ADR 0069 — MCP federation, for its part, has been removed since 2026-09-09).
 #
 # The note is here, and not in someone's head: a service that announces a nonexistent door

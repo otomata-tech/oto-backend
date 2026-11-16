@@ -271,7 +271,7 @@ def _niveau(ctx: _Contexte, regles: dict, sub: str, iid: Optional[int],
 
 def _effet(ligne: dict) -> str:
     """Le niveau qu'un appel du journal a exercé. Un outil absent de la table des effets
-    est un outil en lecture (`tools/lecture`) ; un juge qui lit la base (`http_act`
+    est un outil en lecture (`tools/lecture`) ; un juge qui lit la base (`api_act`
     `call`) n'est pas rejoué : le doute est le plus contraignant."""
     from oto_mcp.tools import effets
     args: dict = {}

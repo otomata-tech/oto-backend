@@ -317,3 +317,116 @@ def rewrite_prose(text: str, prefix: str) -> str:
         # scan mémoire, la substitution un automate — et le serveur est MONO-LOOP.
         return text
     return _PROSE_RE.sub(lambda m: f"{prefix}_{m.group(1)}", text)
+
+
+# ── Le TITRE d'un outil : son nom pour un HUMAIN (spec MCP 2025-06-18) ─────────────
+# L'annuaire des connecteurs d'Anthropic refuse un serveur dont un outil n'a pas
+# `annotations.title` (« a human-readable name for the directory listing »). Le titre
+# est le pendant du nom MONTRÉ : même module, mêmes deux bords (le montage, puis la
+# liste servie par `ToolAliasMiddleware`).
+#
+# **Dérivé, jamais écrit à la main** : `<libellé du connecteur>: <action>`. Le libellé
+# est celui du registre (`Connector.label`, le même que la carte des namespaces des
+# instructions) ; l'action est le reste du nom, humanisé. Un outil de la plateforme
+# (`oto_*`, ou revendiqué par une famille du socle, `spine_catalog`) porte `Oto`. Un
+# outil qui n'est ni l'un ni l'autre LÈVE au montage : un titre bricolé serait le nom
+# brut déguisé, et l'annuaire ne le verrait pas.
+
+PLATFORM_LABEL = "Oto"
+
+
+class TitreIntrouvable(LookupError):
+    """Un outil dont aucun connecteur ni aucune famille du socle ne donne le libellé."""
+
+
+def _humanise(reste: str) -> str:
+    """`search_people` → `Search people` ; `act` → `Actions` ; `excel_act` →
+    `Excel actions` (l'outil d'ÉCRITURE d'un connecteur multiplexé)."""
+    mots = [m for m in reste.split("_") if m]
+    if mots and mots[-1] == "act":
+        mots[-1] = "actions"
+    return " ".join(mots).capitalize()
+
+
+def title_of(name: str, platform_label: str = PLATFORM_LABEL) -> str:
+    """Le titre lisible de l'outil `name` (nom CANONIQUE, ou ancien nom déprécié).
+
+    `apollo_search_people` → `Apollo: Search people` ; `pennylane_act` →
+    `Pennylane: Actions` ; `oto_doc` → `Oto: Doc` ; `gmail` → `Gmail`.
+    Lève `TitreIntrouvable` si le nom ne relève d'aucun connecteur ni du socle.
+    """
+    from . import providers, spine_catalog
+    from .tool_visibility import PROTECTED_NAMESPACES, namespace_of
+    # Le nom ENTIER peut être un namespace (`gmail`, `linkedin_unipile`) : `namespace_of`
+    # ne l'essaie pas quand le nom porte un `_`.
+    ns = name if providers.connector_for_namespace(name) else namespace_of(name)
+    connecteur = providers.connector_for_namespace(ns)
+    if connecteur is not None:
+        # Un connecteur à PLUSIEURS namespaces (`droit` : juris/loi/ccn) garde le sien
+        # dans l'action, sinon `loi_article` et `ccn_article` porteraient le même titre.
+        multiple = len(connecteur.namespaces) > 1
+        label, reste = connecteur.label, (name if multiple else name[len(ns):])
+    elif name.startswith(PRIMARY_PREFIX + "_"):
+        label, reste = platform_label, name[len(PRIMARY_PREFIX):]
+    elif spine_catalog.family_of(name) is not None or ns in PROTECTED_NAMESPACES:
+        label, reste = platform_label, name
+    else:
+        raise TitreIntrouvable(
+            f"outil {name!r} : aucun connecteur ne déclare son namespace {ns!r} "
+            "(`providers/`) et aucune famille du socle ne le revendique "
+            "(`spine_catalog.SPINE_FAMILIES`) — impossible de lui donner un titre")
+    action = _humanise(reste)
+    return f"{label}: {action}" if action else label
+
+
+def champs_titre(tool, titre: str) -> dict:
+    """Les champs à poser sur un outil FastMCP pour qu'il porte `titre` : `title` (champ
+    de premier niveau) ET `annotations.title`. Les annotations sont COPIÉES — `LECTURE`
+    et `ENVOI` sont des constantes partagées par des centaines d'outils."""
+    from mcp.types import ToolAnnotations
+    annotations = getattr(tool, "annotations", None)
+    return {"title": titre,
+            "annotations": (annotations.model_copy(update={"title": titre})
+                            if annotations is not None else ToolAnnotations(title=titre))}
+
+
+def titre_pose(tool) -> Optional[str]:
+    """Le titre déjà porté par l'outil (posé à la main ou au montage), ou None."""
+    annotations = getattr(tool, "annotations", None)
+    return getattr(tool, "title", None) or getattr(annotations, "title", None) or None
+
+
+def poser_les_titres(instance) -> None:
+    """Pose son titre sur chaque outil monté — à appeler après le DERNIER montage.
+
+    Un titre posé à la main par l'outil est conservé. Lève si un outil n'a pas de
+    libellé (`TitreIntrouvable`) ou si deux outils portent le même titre : l'annuaire
+    les afficherait comme un seul.
+
+    ⚠️ Lit le magasin de CHAQUE fournisseur de FastMCP, comme
+    `un_seul_canal.retirer_les_schemas_vides` (même raison : le montage est synchrone) :
+    le fournisseur local, et ceux qui ont le leur (`FastMCPApp`, la carte de revue
+    `data_review_app`, garde son `_local`). Un fournisseur sans magasin lisible lève.
+    """
+    from fastmcp.tools import Tool
+    par_titre: dict[str, str] = {}
+    composants = [c for fournisseur in instance.providers
+                  for c in getattr(fournisseur, "_local", fournisseur)._components.values()]
+    for composant in composants:
+        if not isinstance(composant, Tool):
+            continue
+        titre = titre_pose(composant) or title_of(composant.name)
+        if titre in par_titre:
+            raise ValueError(f"titre {titre!r} porté par deux outils : "
+                             f"{par_titre[titre]!r} et {composant.name!r}")
+        par_titre[titre] = composant.name
+        for champ, valeur in champs_titre(composant, titre).items():
+            setattr(composant, champ, valeur)
+
+
+def titre_public(titre: Optional[str], prefix: str) -> Optional[str]:
+    """Le titre MONTRÉ : `Oto: Doc` → `Acme: Doc` quand le tenant déclare `acme` —
+    le pendant exact de `public` (`oto_doc` → `acme_doc`)."""
+    if not prefix or not titre or not titre.startswith(PLATFORM_LABEL + ":"):
+        return titre
+    return prefix.capitalize() + titre[len(PLATFORM_LABEL):]

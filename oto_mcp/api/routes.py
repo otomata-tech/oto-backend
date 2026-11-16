@@ -168,6 +168,7 @@ _READ_OPS = frozenset({
     "outline",  # le plan d'une page, ses titres sans son corps (`me.doc`, #1266)
     "validate",  # juger un manifeste d'app sans rien écrire (`me.app`)
     "read_file",  # un agent lit un fichier de l'app, sans rien écrire (`me.app`)
+    "revision",  # une version entière d'une app, pour la lire (`me.app`)
 })
 
 
@@ -304,6 +305,7 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     ("GET", "/api/datastores/{datastore}/comments/counts"): None,
     ("GET", "/api/datastores/{datastore}/schema"): None,
     ("GET", "/api/datastores/{datastore}/activity"): None,
+    ("GET", "/api/datastores/{datastore}/column-sources"): None,
     ("GET", "/api/datastores/{datastore}/aggregate"): None,
     ("GET", "/api/datastores/{datastore}/counts"): None,
     ("GET", "/api/datastores/{datastore}/queue"): None,

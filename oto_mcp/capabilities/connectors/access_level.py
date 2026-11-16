@@ -61,7 +61,8 @@ class AccessLevelDecl(BaseModel):
 class AccessLevelState(BaseModel):
     """The level of a connector at one scope. `level` = what THIS scope sets (None = it
     sets nothing); `effective` = what applies under it (the org's level for a team that
-    sets nothing, `full` by default); `source` ∈ group|org|default says who decided.
+    sets nothing, else the connector's default level — `full` unless it declares another);
+    `source` ∈ group|org|default says who decided.
     `levels` = the declared levels, `full` filtering nothing. `deleted` (clear only):
     `false` = there was nothing to remove (idempotent)."""
     connector: str
@@ -178,7 +179,7 @@ CAPABILITIES += [
         authz=ORG_ADMIN_OF("org_id"), refresh_visibility=True,
         errors=_ERREURS + _ORG_ERR,
         description="[org admin] Remove your org's access level for a connector: back "
-                    "to `full`.",
+                    "to its default level (`full` unless it declares another).",
         rest=RestBinding("DELETE", _ORG, _ID),
     ),
     Capability(

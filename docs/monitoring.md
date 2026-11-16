@@ -509,6 +509,38 @@ plateforme avec `org_id` posé, **plus une** qui n'existe qu'à cet étage, et *
 | `export` | rebranche `org.audit_log.export` (#67), même autz, même scope. **Dit sa complétude** (`total`/`truncated`/`next_cursor`, #770) — voir plus bas |
 | ~~`rest`~~ · ~~`funnel`~~ | ne descendent pas : télémétrie de surface `/api/*` et comptes de toute la base = santé d'infra, pas usage d'org. `adoption` répond à la question du funnel à l'échelle d'une équipe |
 
+**`calls` et `runs` se paginent** (usage signal 1553, 13/11/2026). Un agent de
+supervision ne voyait que les ~2 dernières heures d'une org : `op=runs` rendait 100 runs
+quelle que soit la `limit` (l'Input écrêtait à 100, le store à 500), `sub`, `errors` et
+`days` n'étaient pas transmis — écartés sans un mot, la console d'org n'ayant pas la garde
+« champ muet » de la console plateforme — et aucune des deux listes n'avait de curseur.
+Désormais, sur les deux faces (`op=` et `GET …/monitoring/{calls,runs}`, même Input) :
+
+| liste | `limit` (défaut / plafond, écrêté) | filtres | suite |
+|---|---|---|---|
+| `calls` | 200 / 1000 (`db.CALLS_LIMITE_MAX`) | `sub`, `tool`, `errors`, `days`, `run_id`, `session_id`, `min_duration_ms`, `error_contains` | `next_cursor` |
+| `runs` | 100 / 500 (`db.RUNS_LIMITE_MAX`) | `sub`, `days` (sur l'OUVERTURE), `errors` (clos `failed`/`blocked`/`partial`) | `next_cursor`, `scanned` |
+
+`next_cursor` est opaque : la position `(horodatage µs, id)` de la dernière ligne
+examinée — keyset sur `(created_at, id)`, l'ordre même de la page et des index —, la
+lentille et l'org, **jamais un filtre** (il traverse des URL). On le repasse en `cursor`
+avec les MÊMES filtres jusqu'à `null`. Lentille et org sont vérifiées : un curseur pris
+à l'autre liste ou à une autre org rend `400 invalid_cursor`, comme un curseur abîmé.
+⚠️ **`errors=true` sur `runs` filtre la page, pas la portée** : l'issue vit dans la
+clôture, que seule la reconstruction lit ; la pousser dans le choix des ouvertures
+ferait sonder chaque clôture de la portée — le parcours qu'infra#9 a retiré. La page
+examine `limit` ouvertures (`scanned`) et n'en rend que les échecs : elle peut être vide
+avec un `next_cursor` non nul, et « aucun échec » ne se lit qu'au `next_cursor` nul.
+Un run jamais clos n'est pas un échec ici (`outcome` nul). La console plateforme garde
+ses listes sans curseur ; le modèle partagé `monitoring.CallsInput` écrête désormais au
+plafond du store (1000, il écrêtait à 200 — c'est lui qui bridait la lentille d'org),
+ce que `GET /api/admin/monitoring/calls` hérite ; `oto_admin_monitoring`, lui, reste
+écrêté à 200 par sa propre console. Testé contre PostgreSQL par `tests/test_org_monitoring_pagination.py`.
+`op=runs` de la console d'org rend aussi `ignored_params` — les champs passés qu'il ne
+lit pas (`tool`, `since`…), nommés plutôt que refusés — et un `hint` : « cet agent
+a-t-il tourné ? » se lit sur le déclencheur (`oto_trigger` list/get, `last_run`,
+`last_done_at`), pas en cherchant son passage dans la liste.
+
 **Gardes cross-org à ne pas perdre** : `call_id` est un BIGSERIAL donc devinable →
 `op=call` compare `row.org_id` et rend le **même 404** qu'un id inexistant ; `op=run`
 filtre en SQL puis 404 sur timeline vide. Testé par `tests/test_org_monitoring.py` — un
@@ -679,7 +711,10 @@ Le choix de page lui-même est servi par trois index partiels des ouvertures
 l'ordre de la page : sans eux, il parcourait le journal à rebours (5 s pour la page
 plateforme, plus de 15 s pour la plus grosse org, mesurés le 09/10). D'où des égalités
 dans la portée (`org_id = %s` ou `IS NULL`), jamais `IS NOT DISTINCT FROM`, que l'index
-ne sait pas servir dans l'ordre.
+ne sait pas servir dans l'ordre. Les filtres de la lentille d'org (`sub`, `days`, la
+position du curseur) s'y posent de même, sur l'ouverture `d` : égalité sur `sub`, bornes
+sur `created_at` et `(created_at, id)`, que l'index d'org ou de compte × org sert dans
+son ordre.
 
 **L'entonnoir lit une seule fenêtre** : « REST seul » (`rest_only`) compte les comptes
 venus en REST SANS appel d'outil sur la fenêtre `days`, comme `active` et `blocked` —
@@ -758,12 +793,12 @@ réponse à l'ancienne lecture du journal, recopiée dans le banc.
 | `tool_call_stats` | `monitoring.summary`, `org.monitoring.summary`, `me.activity_summary`, consoles `op=summary` | oui — p95 sur les valeurs |
 | `connector_failure_stats` | `monitoring.connectors`, `org.monitoring.connectors`, `op=connectors` | oui |
 | `org_adoption` | `org.monitoring.adoption`, `op=adoption` | oui — le dernier appel sur tout l'historique consolidé |
+| `org_members_by_seniority` | `service.org.members` (commerce) | oui, sur `activity=true` — le dernier appel de chaque membre sur tout l'historique consolidé ; par défaut, la route ne lit rien |
 | `list_tenants_overview`, `get_tenant_overview` | `admin.tenants`, `admin.tenant`, console de tenant | oui |
 | `count_org_mcp_calls` | `billing.status` (usage inclus du mois), fiche d'org `org.get`, `org.admin.get` | oui |
 | `list_billable_calls_for_org`, `list_tool_calls`, `list_runs`, `export_tool_calls_for_org`, activité d'un tableau | `usage/calls`, `calls`, `runs`, `export`… | non — des LISTES, ligne à ligne |
 | `rest_call_stats`, `list_rest_calls`, `transport_refusal_stats`, `activation_funnel` | `monitoring.{rest,rest_calls,transport,funnel}` | non — le REST n'est pas agrégé (vues plateforme, vers Grafana) |
 | `instruction_usage`, `instructions_usage_by_slug` | `org.instruction.usage`, `me/instructions-usage` | non — la procédure vient d'`args`, servie par l'index partiel `(org_id, tool) WHERE ok` sur deux verbes |
-| `org_members_by_seniority` | `service.org.members` | non — un dernier appel par membre, pas une période |
 
 **Refus nommé, jamais le journal en silence** : un jour clos de la fenêtre que le
 registre n'a pas lève `AgregatIncomplet` — trou dans le registre, retard (un jour clos
@@ -1057,6 +1092,26 @@ TERMINÉ trace son coût. Quatre garde-fous (`tools/apify.py`, `apify_releve.py`
   autre org ne facture personne ; une lecture dont la fiche de lancement est illisible non
   plus (le relevé facture le lanceur). Le relevé sert UNE clé plateforme : s'il en trouve
   plusieurs, il échoue en les nommant.
+- **Le coût d'un run terminé est son chiffre FINAL, ou rien** (`apify._cout`). Un acteur
+  payé à l'événement atteint SUCCEEDED avant qu'Apify ne réserve ses événements
+  (`accountedChargedEventCounts` en retard sur `chargedEventCounts`) : l'écart se chiffre
+  au prix de l'acteur, souvent tarifé **par palier d'abonnement**
+  (`eventTieredPricingUsd`, FREE … DIAMOND, sans `eventPriceUsd` : 10 des 11 acteurs
+  des outils dédiés le 15/11/2026) — le prix est alors
+  celui du palier du compte qui a lancé le run (`plan.tier` de `GET /v2/users/me`, lu
+  seulement quand un écart à palier se chiffre, gardé une heure par clé et par
+  processus). Un écart qui ne se chiffre pas (palier illisible, événement sans prix)
+  n'est **pas** facturé à ce qui est réservé : ce chiffre, premier du job, restait pour de
+  bon (signalé le 12/11/2026 : des runs d'employés LinkedIn rendant 25 profils facturés 0, ou le
+  seul démarrage). Sans comptes réservés lisibles (absents ou `null`), pareil. Un total chiffré au-delà du plafond
+  du run (`maxTotalChargeUsd`, qu'Apify ne dépasse jamais) aussi : c'est un prix faux, pas un coût. La lecture
+  trace 0 sans le job, la fiche de lancement reste ouverte, et la lecture suivante ou le
+  relevé de nuit facture le vrai chiffre — le relevé prend `usageTotalUsd` tel quel pour
+  un run fini depuis plus d'une heure (tout est réservé), sans quoi un tel run resterait
+  `illisibles` pour toujours.
+- **L'unité est le micro-dollar** : la `quantity` d'un appel Apify — donc les `units` d'un
+  reçu de recette et son `max_units` — compte le coût du run en millionièmes de dollar
+  (1 $ = 1 000 000), arrondi au supérieur comme Jev.
 - **Le mois se compare à ce qu'Apify compte** : au-delà de 5 $ d'écart, un signal `gap` de
   cible `apify_cost_gap`. Il ne se compare qu'une fois la table couvrant tout le cycle.
   Une comparaison en échec se journalise à part (`comparaison.echec`) : le bilan du relevé

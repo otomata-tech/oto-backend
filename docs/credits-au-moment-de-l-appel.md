@@ -56,12 +56,21 @@ son propre relevé ; l'enveloppe ne reçoit jamais `CLES_REGLEMENT`) et `jev_job
 
 | l'arête qui sert | le compte du refus |
 | --- | --- |
+| toute arête, connecteur à quota **par org** (`Connector.grant_quota_per = "org"`) | `usage_org(org_id, tool, day)`, l'org de l'appel, tous ses membres ensemble |
 | `user` (connecteur chaîné) | son compteur d'arête, arêtes archivées comprises |
 | `org` ou `group` | `usage(sub, tool, day)`, par personne |
 | aucune (chaîne muette, connecteur non chaîné) | `usage(sub, tool, day)`, par personne |
 
 Le refus, la sonde (`platform_quota_hint`), le mode affiché et l'instantané `/api/me`
-lisent ce même nombre. Là où la chaîne accorde ou refuse, l'ancien chemin n'est plus lu,
+lisent ce même nombre.
+
+Un connecteur à quota par org est une décision par connecteur : sa clé partagée est
+facturée au coût à l'org, donc l'octroi plafonne l'org, pas chacun de ses membres. Le
+barreau plateforme nomme alors `org_counter` (l'org de l'appel, quelle que soit la
+portée qui accorde ; sans org, la clé n'est pas servie), et le règlement débite le
+compteur de la même org (`scope.current_org`, la couture que lit la résolution) par un
+seul upsert atomique, en plus de l'historique par personne. Seul `gemini_image` le déclare
+(`tests/test_quota_par_org.py`). Là où la chaîne accorde ou refuse, l'ancien chemin n'est plus lu,
 et le journal d'écart (accès, quota, compteur) disparaît avec lui. Le compteur d'une
 arête d'org continue d'être débité : c'est la consommation de l'org entière, lue par
 l'administration des arêtes.
@@ -382,6 +391,29 @@ comptage avant l'appel) : ils se règlent `exceeded: true`. Échéance :
 `OTO_CREDITS_HOLD_MAX_S` (le runner n'est pas sous la borne d'un appel d'outil MCP).
 Le rapprochement avec le relevé d'Anthropic se fait en jetons, au total et par modèle
 (`oto_admin_model_spend`, `by_model`).
+
+**Les modèles OUVERTS servis par OpenRouter** (famille `openrouter`, `runner_models`) ne
+passent PAS par le budget d'unités : ni réservés, ni réglés, ni plancher au départ du
+travail. Un même id y est servi par plusieurs hôtes à des prix différents, et l'hôte d'un
+tour se choisit à la requête : une ligne au jeton ne serait qu'une supposition (mesuré le
+12/11 : 7 à 13 % au-dessus du coût au prix de l'hôte le plus cher). OpenRouter rend avec
+chaque appel ce qu'il a facturé (`usage.cost`) ; le worker le rapporte (`usage_cost_usd`)
+et oto l'ÉCRIT au journal, une ligne par tour — `kind='settlement'`, outil `openrouter`,
+`quantity` en micro-dollars arrondis au-dessus —, sans y appliquer aucun tarif : le prix
+d'un dollar est celui de la grille du commerce (`tours_au_cout`, `FAMILLES_AU_COUT`). Sans
+coût déclaré, le tour est refusé (`usage_unmeasured`) et le travail s'arrête ; rejoué, même
+deux fois en même temps, il n'est écrit qu'une fois (clé unique `idx_tool_calls_tour_au_cout`,
+`INSERT … ON CONFLICT DO NOTHING`). `oto_admin_model_spend` ne rapproche qu'Anthropic.
+
+Le frein, sur la clé de PLATEFORME, est le **quota du jour de l'accord, en micro-dollars**
+(`grant_quota_unit` de `providers/openrouter.py`) : un accord sans quota est refusé
+(`grant_quota_required`). À la première écriture de la ligne d'un tour, son coût est débité
+sur ce quota (`quotas.debiter_plateforme`), dans la même transaction — un rejeu ne débite
+rien. Avant chaque appel (`op=reserve`) et au lancement du travail, « utilisé contre
+plafond » se lit comme au refus d'un outil (`resolve._win_quota`) : plafond atteint, le tour
+est refusé (`platform_quota_exhausted`, 402) et le travail ne part pas. Le coût n'étant
+connu qu'après l'appel, le dépassement est borné au coût d'UN tour par travail en cours. La
+clé du tenant primaire n'a pas de quota d'accord : journalisée, jamais débitée.
 
 **Les appels au modèle de l'agent intégré** (`capabilities/copilot/cle.py`, `docs/copilot.md`) : le même chemin que les tours d'un agent hébergé (`reserver_tour` avant, `regler_tour` après), clé `copilot:<conversation>:<rang>` (lue `call_id` au rapprochement). Deux différences : une réservation que le registre n'a pas tenue hors du mode `off` (barème sans les lignes du modèle en `report`) REFUSE l'appel au lieu de le servir ; une erreur HTTP du fournisseur LIBÈRE la réservation (rien n'a été consommé).
 

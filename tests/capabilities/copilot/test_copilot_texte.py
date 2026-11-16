@@ -62,6 +62,15 @@ def test_le_guide_garde_le_plafond_de_la_procedure():
     assert couper(guide, plafond_de("oto_guide")) == guide
 
 
+def test_une_app_se_lit_entiere_jusqu_a_80_000():
+    """`oto_apps op=get` rend le HTML d'un bloc, et `op=patch` copie chaque `find` de cette
+    lecture : coupée à 20 000, l'app ne se corrige pas au-delà de la coupe."""
+    from oto_mcp.capabilities.copilot.texte import plafond_de
+    assert plafond_de("oto_apps") == 80_000
+    app = "h" * 60_000
+    assert couper(app, plafond_de("oto_apps")) == app
+
+
 def test_couper_reecrit_le_json_sans_espaces():
     import json
     lignes = [{"id": i, "note": "x" * 50} for i in range(200)]

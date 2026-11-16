@@ -12,6 +12,8 @@ a Mailpool workspace member creates a key in Mailpool → Settings → **API Key
 - "add the lemlist tracking domain" → `mailpool_domain_fix(domain_id=…, tracking_host="track", tracking_target="custom.lemlist.com", dry_run=False)`, then set `track.<domain>` as custom tracking domain in lemlist; if lemlist then asks for a verification TXT, add it with `add_records=[{"type": "TXT", "key": null, "value": "…"}]`
 - "are my inboxes landing well?" → `mailpool_spam_checks(op="run", mailbox_id=…)`: score and per-check status in a few seconds, free
 - "which mailboxes do we have?" → `mailpool_mailboxes(op="list")`, optionally `domain_id=…`
+- "set up new mailboxes on our domains" → `mailpool_mailboxes(op="create", mailboxes=[{email, firstName, lastName, type, forwardTo}])` previews (free slots, domain types, taken addresses); then `dry_run=False`. A domain never used takes the type of its first mailbox; one domain = one type
+- "add our new mailboxes to lemlist" → save the lemlist login once in the Mailpool dashboard, then `mailpool_mailboxes(op="export", platform="lemlist", mailbox_ids=[…])` previews (login saved, each mailbox `active`), `dry_run=False` schedules it, `op="export_batch"` follows it. Mailpool passes the passwords to lemlist itself
 - "is this domain name free?" → `mailpool_domains(op="availability", domain="…")` or `op="suggestions"`
 - "do we have room for more inboxes?" → `mailpool_account(op="slots")`
 
@@ -33,6 +35,6 @@ a Mailpool workspace member creates a key in Mailpool → Settings → **API Key
 
 ## note — credentials and scope
 
-- **mailbox credentials are never returned** (mailbox, IMAP/SMTP, admin passwords): they stay in the Mailpool dashboard. Handing inboxes to a sending tool is done from Mailpool's own export
+- **mailbox credentials are never returned** (mailbox, IMAP/SMTP, admin passwords): they stay in the Mailpool dashboard. Handing inboxes to a sending tool goes through Mailpool's export (`op="export"`), which carries them itself
 - **registrant owners are served as company and country only**: names, emails, addresses and phones stay in Mailpool
-- **nothing billed is served**: registering, transferring or renewing a domain, creating a mailbox, buying slots, enrolling in warmup and inbox-placement tests are done in Mailpool
+- **nothing is bought**: registering, transferring or renewing a domain, buying slots, enrolling in warmup and inbox-placement tests are done in Mailpool. Creating mailboxes IS served (`mailpool_mailboxes(op="create")`) because it only takes slots already paid for: it is refused, before anything is sent, when a slot of the type is missing

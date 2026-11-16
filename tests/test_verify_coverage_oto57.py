@@ -91,6 +91,8 @@ QUOTA_AUTORISE = {
     "pipecorn",
     # `tests/test_decrits.py::test_seranking_probe_reads_the_credits_left` (`units_left` à 0)
     "seranking",
+    # `tests/test_decrits.py::test_dataforseo_probe_raises_on_an_account_run_dry` (solde sous 1 USD, refus 40200)
+    "dataforseo",
 }
 
 

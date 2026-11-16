@@ -298,7 +298,7 @@ def _resolved(monkeypatch, filename="Suivi.xlsx", mime="application/octet-stream
 
 def test_upload_resolves_the_source_and_converts_under_the_given_name(client, monkeypatch):
     seen = _resolved(monkeypatch)
-    src = {"kind": "http", "path": "/export.xlsx"}
+    src = {"kind": "api", "path": "/export.xlsx"}
     _call("drive_file", op="upload", source=src, name="Suivi octobre",
           parent_folder_id="fold", convert=True)
     assert seen["source"] == src

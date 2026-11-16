@@ -139,6 +139,7 @@ def agent(monkeypatch):
                                       "derniere": None})
     monkeypatch.setattr(RT.db, "file_du_declencheur",
                         lambda t, o: {"pending": 0, "held": 0})
+    monkeypatch.setattr(RT.db, "derniers_travaux", lambda org, ids: {int(i): {} for i in ids})
     monkeypatch.setattr(RT.db, "comptage_perime",
                         lambda o, t: {"expired_count": 0, "expired_since": None,
                                       "expired_last": None})

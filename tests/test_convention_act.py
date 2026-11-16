@@ -39,13 +39,13 @@ from _mcp_app import static_mcp
 #: Les connecteurs pas encore migrés vers `<ns>` / `<ns>_act` (17/10/2026). Ne fait que
 #: rétrécir.
 A_MIGRER = frozenset({
-    "affinity", "ahrefs", "aircall", "airtable", "amplitude", "apify", "apollo",
+    "affinity", "ahrefs", "aircall", "airtable", "amplitude", "api", "apify", "apollo",
     "ashby", "attio", "bigquery", "bls", "bodacc", "boondmanager", "brevo", "brevoauto",
     "browser", "calendar", "ccn", "claap", "clay", "cloro", "cognism",
-    "crunchbase", "culture", "dataforseo", "drive", "dropcontact", "figma", "finkare",
+    "crunchbase", "culture", "drive", "dropcontact", "figma", "finkare",
     "firecrawl", "fireflies", "folk", "foncier", "forager", "fr", "frenchtech",
     "fullenrich", "ga4", "github", "gocardless", "google", "google_ads", "gr", "grain",
-    "granola", "greenhouse", "hellostock", "hithorizons", "http", "hubspot", "hunter",
+    "granola", "greenhouse", "hellostock", "hithorizons", "hubspot", "hunter",
     "infosec", "inqom", "instagram_meta", "jev", "juris", "kaspr",
     "klaviyo", "leexi", "lemlist", "lever", "lightfield", "lighton", "linear",
     "linkedin_aiark", "linkedin_unipile", "loi", "lucca", "luma", "lusha", "mailpool",
@@ -128,7 +128,9 @@ def test_un_connecteur_servi_suit_sa_description(par_connecteur):
             agit = nom != ns
             assert all(descriptions.agit(f) is agit for f in fonctions), nom
             annotation = (ACTE if agit else SIMULATION if descriptions.lecteur_simule(fonctions) else LECTURE)
-            assert outils[nom].annotations == annotation, nom
+            # Le titre est propre à chaque outil (`tool_alias.poser_les_titres`) : la
+            # convention porte sur les indices, pas sur lui.
+            assert outils[nom].annotations.model_copy(update={"title": None}) == annotation, nom
 
 
 def test_un_connecteur_migre_ne_sert_que_sa_paire(par_connecteur):
@@ -426,7 +428,7 @@ def test_la_revision_des_personas_masque_l_acteur_et_garde_l_envoi():
 
 #: Les connecteurs encore dans `A_MIGRER` dont la PAIRE est déjà née : leurs outils
 #: d'avant restent, mais `<ns>` et `<ns>_act` ont la forme cible dès aujourd'hui.
-PAIRES_NEES = ("http", "slack", "linkedin_unipile")
+PAIRES_NEES = ("api", "slack", "linkedin_unipile")
 #: Les connecteurs encore dans `A_MIGRER` dont l'ACTEUR est né (lot des envois,
 #: 21/10/2026) avant leur lecteur `<ns>` : leurs lecteurs gardent leur nom, ce qui atteint
 #: un tiers est dans `<ns>_act`, qui a déjà la forme cible.

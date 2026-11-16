@@ -33,7 +33,7 @@ pytestmark = pytest.mark.usefixtures("connecteurs_tous_disponibles")
 # Les six du split (2026-09-26) — ceux que le fan-out du boot a déménagés.
 SPLIT = ("gmail", "drive", "sheets", "calendar", "tasks", "chat")
 # Les services ajoutés DEPUIS : connecteurs neufs, jamais déménagés.
-POST_SPLIT = ("bigquery", "google_ads")
+POST_SPLIT = ("bigquery", "google_ads", "search_console")
 SERVICES = SPLIT + POST_SPLIT
 EMAIL = "https://www.googleapis.com/auth/userinfo.email"
 
@@ -170,6 +170,21 @@ def test_google_ads_demande_adwords_seul_depuis_sa_carte():
     assert ads in G.KNOWN_SCOPES
     assert G.services_granted(f"{ads} {EMAIL}") == ["google_ads"]
     assert G.SERVICE_LABELS["google_ads"] == "Google Ads"
+
+
+def test_search_console_demande_webmasters_readonly_seul_depuis_sa_carte():
+    """search_console (2026-11-15) : même règle — `webmasters.readonly` seul, depuis sa
+    carte, jamais ajouté au consentement du compte ; jamais `webmasters` (écriture) ; le
+    coffre le connaît."""
+    gsc = "https://www.googleapis.com/auth/webmasters.readonly"
+    assert gsc not in G.scopes_for("google", _app("env"))
+    assert G.scopes_for("search_console", _app("env")) == list(G.IDENTITY_SCOPES) + [gsc]
+    assert "https://www.googleapis.com/auth/webmasters" not in G.KNOWN_SCOPES
+    assert gsc in G.KNOWN_SCOPES
+    assert G.services_granted(f"{gsc} {EMAIL}") == ["search_console"]
+    # Le nom de SA carte, que le refus « n'a pas encore autorisé … » cite : jamais celui
+    # de la carte du compte de service (« Google Search Console »).
+    assert G.SERVICE_LABELS["search_console"] == "Search Console (Google sign-in)"
 
 
 def test_un_connecteur_inconnu_nobtient_aucun_scope():

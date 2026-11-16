@@ -4,10 +4,11 @@ Le sommet de la cascade : l'admin plateforme invite un nouvel utilisateur sur ot
 L'inscription est libre (ADR 0013 supersédé) → une invite plateforme n'est plus un
 droit d'accès mais un geste d'onboarding + attribution. Org cible **optionnelle** :
 - sans `org_id` → onboarding pur (l'invité aura son compte + org perso au signup) ;
-- avec `org_id` → rattachement direct à une org choisie par l'admin (pratique super).
+- avec `org_id` → rattachement direct à une org choisie, avec son rôle d'org.
 
-Autz = `PLATFORM_ADMIN` (parité avec la console admin). L'acceptation passe par la
-même capacité `org.invite.accept`. Faces REST par-verbe (idiomatique + dashboard) ; la
+Autz = `PLATFORM_INVITE` (parité avec la console admin) : un admin plateforme pour
+l'onboarding pur, le super admin seul dès que l'invitation porte une org. L'acceptation
+passe par la même capacité `org.invite.accept`, qui tient la même règle. Faces REST par-verbe (idiomatique + dashboard) ; la
 face MCP consolidée `oto_admin_invite` vit dans `admin_console`.
 """
 from __future__ import annotations
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 
 from .. import org_store
 from .orgs import invites as orgs_invites
-from ._authz import PLATFORM_ADMIN
+from ._authz import PLATFORM_ADMIN, PLATFORM_INVITE
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -64,10 +65,11 @@ def _invite_revoke(ctx: ResolvedCtx, inp: PlatformInviteRevokeInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="platform.invite.create", handler=_invite_create, Input=PlatformInviteCreateInput,
-        authz=PLATFORM_ADMIN,
+        authz=PLATFORM_INVITE,
         description=("[ADMIN] Invite a user to the oto platform. Optional `org_id` attaches "
-                     "them directly to a chosen org (role org_member|org_admin); omit it for "
-                     "pure onboarding. send_email=false returns the share link only."),
+                     "them directly to a chosen org (role org_member|org_admin) and is "
+                     "reserved to the super admin; omit it for pure onboarding. "
+                     "send_email=false returns the share link only."),
         rest=RestBinding("POST", "/api/admin/invitations"),
     ),
     Capability(

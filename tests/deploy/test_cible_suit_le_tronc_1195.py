@@ -104,7 +104,8 @@ def test_une_base_en_retard_lineaire_est_migree_puis_relue(lineaire, monkeypatch
     assert code == 0 and migration.appels == 1 and base.lues == 2
     sortie = capsys.readouterr()
     assert "chaîne linéaire : 0035 → 0037" in sortie.err
-    assert "on joue `migrer upgrade head` depuis l'arbre du tag (0031 → 0037)" in sortie.out
+    assert ("on joue `migrer upgrade head` depuis l'arbre du tag (0031 → 0037), après "
+            "`maintenance copies-du-coffre`") in sortie.out
     assert ("un index CONCURRENTLY se construit jusqu'à 10_000_000 lignes (défaut 100_000)"
             in sortie.out)
     assert "migrations : base migrée de 0031 vers 0037" in sortie.out
@@ -204,7 +205,10 @@ def test_un_argument_inconnu_refuse(lineaire, monkeypatch, capsys):
     assert "usage" in capsys.readouterr().err
 
 
-def test_la_migration_part_de_l_arbre_du_tag(monkeypatch):
+def test_la_migration_part_de_l_arbre_du_tag_apres_les_copies_du_coffre(monkeypatch):
+    """Les copies du coffre des connecteurs renommés, PUIS la migration : une révision de
+    renommage repointe vers ces copies, que notre instance fait au démarrage — ici, la
+    migration précède le démarrage."""
     lances = []
 
     def lancer(commande, timeout, env):
@@ -214,15 +218,30 @@ def test_la_migration_part_de_l_arbre_du_tag(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://exemple.invalid/base")
     monkeypatch.delenv(garde.index_concurrent.PLAFOND_ENV, raising=False)
     garde.migrer_la_base()
-    (commande, delai, env), = lances
-    assert commande == [str(garde.ARBRE / ".venv" / "bin" / "oto-mcp"),
-                        "migrer", "upgrade", "head"]
-    assert delai == garde.DELAI_MIGRATION_S
+    (copies, delai_copies, env_copies), (commande, delai, env) = lances
+    oto_mcp = str(garde.ARBRE / ".venv" / "bin" / "oto-mcp")
+    assert copies == [oto_mcp, "maintenance", "copies-du-coffre"]
+    assert commande == [oto_mcp, "migrer", "upgrade", "head"]
+    assert delai == delai_copies == garde.DELAI_MIGRATION_S
     # Le plafond relevé des index CONCURRENTLY : sur CETTE commande, par-dessus
     # l'environnement du lanceur (`DATABASE_URL` comprise) — jamais dans celui de la porte.
     assert env[garde.index_concurrent.PLAFOND_ENV] == str(garde.PLAFOND_INDEX_LIGNES)
-    assert env["DATABASE_URL"] == "postgresql://exemple.invalid/base"
+    assert garde.index_concurrent.PLAFOND_ENV not in env_copies
+    assert env["DATABASE_URL"] == env_copies["DATABASE_URL"] == "postgresql://exemple.invalid/base"
     assert garde.index_concurrent.PLAFOND_ENV not in os.environ
+
+
+def test_des_copies_en_echec_refusent_sans_migrer(monkeypatch):
+    lances = []
+
+    def lancer(commande, timeout, env):
+        lances.append(commande[1:])
+        return subprocess.CompletedProcess(commande, 2)
+    monkeypatch.setattr(garde.subprocess, "run", lancer)
+    with pytest.raises(garde.Refus, match=r"`maintenance copies-du-coffre` a échoué "
+                                          r"\(code 2.*rien n'est migré"):
+        garde.migrer_la_base()
+    assert lances == [["maintenance", "copies-du-coffre"]]
 
 
 def test_le_plafond_releve_tient_dans_la_fenetre_de_migration():

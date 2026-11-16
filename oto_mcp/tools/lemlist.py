@@ -59,17 +59,21 @@ so a user key is required.
 from __future__ import annotations
 
 from dataclasses import asdict
+from functools import lru_cache
 import datetime as _dt
+import re
 from typing import Literal, Optional
 
+import requests
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
-from mcp.types import ErrorData, INVALID_PARAMS
+from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
 from .. import access
 from ..connectors import verify as connector_verify
 from ..output_projection import project
 from .lecture import LECTURE
+from .lemlist_crm import raised_by_view
 
 #: Action vocabulary of lemlist's v2 bulk. Deliberately written by hand:
 #: it is NOT a snake_case of the v1 flags — email verification is called
@@ -192,8 +196,39 @@ def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
 
+#: The module of oto-core that shapes a list of activities (`fields`, `compact`).
+_ACTIVITY_VIEWS = "oto.tools.lemlist.activity_views"
+
+
+def _activities_not_a_list() -> McpError:
+    """lemlist answered `GET /activities` with something other than a list. The view
+    cannot apply, and returning the answer whole would hand the agent what `fields`
+    and `compact` were asked to avoid."""
+    return McpError(ErrorData(code=INTERNAL_ERROR, message=(
+        "lemlist returned activities that are not a list, so `fields` and `compact` "
+        "cannot shape them. Call again without `fields` and `compact` to read the "
+        "answer as lemlist sends it."),
+        data={"code": "lemlist_activities_not_a_list", "retryable": False}))
+
+
+#: A bound given as a bare day (`YYYY-MM-DD`), with no time part.
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def _default_window(start_date: Optional[str], end_date: Optional[str]) -> tuple[str, str]:
-    """Fill in the stats window — ISO 8601 bounds, both required upstream."""
+    """Fill in the stats window — ISO 8601 instants, both required upstream.
+
+    A date-only bound is a whole UTC day, both ends included: the start opens
+    at `T00:00:00.000Z`, the end closes at `T23:59:59.999Z` (the shape of
+    lemlist's own examples). Sent bare, lemlist reads `2026-11-12` as that
+    midnight: a same-day window was zero-wide and every counter read 0, and a
+    longer one silently dropped its last day. A bound with a time part is an
+    instant and passes through untouched.
+    """
+    if start_date and _DATE_ONLY.fullmatch(start_date):
+        start_date = f"{start_date}T00:00:00.000Z"
+    if end_date and _DATE_ONLY.fullmatch(end_date):
+        end_date = f"{end_date}T23:59:59.999Z"
     # Aliased `_dt`: `timezone` is an ARGUMENT of `lemlist_campaign`/
     # `lemlist_schedule` (lemlist's IANA zone), importing it bare would shadow it.
     now = _dt.datetime.now(_dt.timezone.utc)
@@ -262,6 +297,139 @@ def _refuse_auto_review(settings: dict) -> None:
             "sending takes a deliberate action, not a key slipped into a settings "
             "dict."
         )
+
+
+@lru_cache(maxsize=1)
+def campaign_patch_keys() -> frozenset:
+    """The keys `PATCH /campaigns/{id}` takes, as the library's description of
+    `update_campaign` declares them (its `data` object, closed): the pinned
+    library is the reference, not a copy kept here. Auto-review is not among
+    them (refused above). lemlist drops any OTHER key without an error and
+    answers `{}`: `sendUsers` (a key of its ANSWER) sent as a setting changed
+    nothing and read as a success. Refused here instead."""
+    from ..connectors import descriptions
+
+    fonction = next(f for f in descriptions.charger("lemlist")["functions"]
+                    if f["name"] == "update_campaign")
+    return frozenset(fonction["input"]["properties"]["data"]["properties"])
+
+
+#: The keys lemlist's answer echoes once applied (its 200 schema); `sendUserIds`
+#: comes back as `sendUsers`. The others (aiFeatures, tracking, on*) are
+#: not echoed, so their absence proves nothing.
+_ECHOED = {k: k for k in (
+    "name", "stopOnEmailReplied", "stopOnMeetingBooked", "stopOnLinkClicked",
+    "stopOnLinkClickedFilter", "leadsPausedByInterest", "opportunityReplied",
+    "opportunityClicked", "autoLeadInterest", "disableTrackOpen",
+    "disableTrackClick", "disableTrackReply", "disableOutOfOffice",
+    "sequenceSharing")} | {"sendUserIds": "sendUsers"}
+
+#: Keys an agent reaches for to pick senders, none of which PATCH takes.
+_SENDER_LOOKALIKES = {"sendUsers", "senders", "sendUserMailboxIds",
+                      "sendUserMailboxId", "mailboxes", "sendUserEmails"}
+
+
+def _refuse_unknown_settings(settings: dict) -> None:
+    unknown = sorted(set(settings) - campaign_patch_keys() - set(AUTO_REVIEW_KEYS))
+    if not unknown:
+        return
+    hint = ""
+    if set(unknown) & _SENDER_LOOKALIKES:
+        hint = (" To choose the sending mailboxes, pass `senders` "
+                "([{userId, channels: [{type: \"email\", id: \"usm_…\"}]}]); "
+                "`sender_user_ids` attaches only the FIRST mailbox of each user.")
+    raise _refus(
+        "lemlist_unknown_campaign_setting",
+        f"lemlist's campaign update does not take {unknown}: it would drop "
+        f"them silently and answer {{}}.{hint}",
+        unknown=unknown, accepted=sorted(campaign_patch_keys()))
+
+
+def _check_patch_echo(patch: dict, answer) -> dict:
+    """What lemlist's answer confirms of `patch`. Raises when it confirms NONE
+    of the keys it echoes (a bare `{}` must not read as success); otherwise
+    adds `not_confirmed` / `unverified` beside the answer."""
+    answer = answer if isinstance(answer, dict) else {}
+    checkable = [k for k in patch if k in _ECHOED]
+    missing = [k for k in checkable if _ECHOED[k] not in answer]
+    unverified = [k for k in patch if k not in _ECHOED]
+    if checkable and len(missing) == len(checkable):
+        raise _refus(
+            "lemlist_update_not_applied",
+            f"lemlist answered the campaign update without confirming any of "
+            f"{missing}: nothing is known to have changed. Re-read the campaign "
+            "before retrying.", not_confirmed=missing, answer=answer)
+    out = dict(answer)
+    if missing:
+        out["not_confirmed"] = missing
+    if unverified:
+        out["unverified"] = unverified
+    if "sendUserIds" in patch and isinstance(answer.get("sendUsers"), list):
+        attached = {u.get("id") for u in answer["sendUsers"] if isinstance(u, dict)}
+        dropped = [u for u in patch["sendUserIds"] if u not in attached]
+        if dropped:
+            out["senders_excluded"] = dropped
+        out["warning"] = (
+            "`sender_user_ids` attaches the FIRST mailbox of each user only "
+            "(see `sendUsers`). To send from several mailboxes of a user, pass "
+            "`senders` with their ids (usm_…).")
+    return out
+
+
+def _set_senders(client, campaign_id: str, senders: list, mode: str) -> dict:
+    """Attach the senders AND the mailboxes named, through the sender-pool
+    routes (the only ones that pick WHICH accounts of a user send), then check
+    the pool lemlist returns against what was asked."""
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    call = (client.replace_campaign_senders if mode == "replace"
+            else client.add_campaign_senders)
+    try:
+        answer = call(campaign_id, senders)
+    except ValueError as e:
+        raise _bad(f"`senders`: {e}")
+    except UpstreamHTTPError as e:
+        if e.status_code == 402:
+            raise _refus(
+                "lemlist_sender_pool_needs_email_pro",
+                "lemlist serves the choice of sending mailboxes only on its Email "
+                "Pro plan. Without it, pick the mailboxes in the lemlist app, in "
+                "the campaign's sender settings.")
+        if e.status_code == 409:
+            raise _refus(
+                "lemlist_sender_pool_dynamic",
+                "this campaign picks its sender per lead (contact owner, lead "
+                "importer or a custom field): its pool cannot be set. Switch it "
+                "to a fixed sender pool in the lemlist app first.")
+        raise
+    pool = answer.get("data") if isinstance(answer, dict) else None
+    if not isinstance(pool, dict) or "senders" not in pool:
+        read = client.get_campaign_senders(campaign_id)
+        pool = (read.get("data") if isinstance(read, dict) else None) or {}
+    in_pool = pool.get("senders") or []
+    users = {s.get("userId") for s in in_pool if isinstance(s, dict)}
+    channels = {(s.get("userId"), ch.get("type"), ch.get("id"))
+                for s in in_pool if isinstance(s, dict)
+                for ch in s.get("channels") or [] if isinstance(ch, dict)}
+    asked = [(s["userId"], ch["type"], ch["id"]) for s in senders
+             for ch in s.get("channels") or [] if ch.get("id")]
+    missing = [{"userId": u, "type": t, "id": i} for u, t, i in asked
+               if (u, t, i) not in channels]
+    missing_users = [s["userId"] for s in senders if s["userId"] not in users]
+    if (asked and len(missing) == len(asked)) or len(missing_users) == len(senders):
+        raise _refus(
+            "lemlist_senders_not_attached",
+            "lemlist answered, but its sender pool holds none of the senders or "
+            "mailboxes asked for.", not_attached=missing or missing_users, pool=pool)
+    out = {"sender_pool": pool, "mode": mode}
+    if isinstance(answer, dict) and answer.get("impact"):
+        out["impact"] = answer["impact"]
+    if missing or missing_users:
+        out["not_attached"] = missing + [{"userId": u} for u in missing_users]
+        out["senders_warning"] = (
+            "lemlist's pool does not hold everything asked for: see "
+            "`not_attached` and the `diagnostics` of `sender_pool`.")
+    return out
 
 
 def _found_digest(data: dict) -> dict:
@@ -412,9 +580,18 @@ def register(mcp: FastMCP) -> None:
         field names changed with the fix (`nbLeads`, `messagesSent`, `opened`,
         `replied`… instead of `emails_sent` & co).
 
+        `start_date`/`end_date`: both ends included; a date-only bound
+        (`YYYY-MM-DD`) is a whole UTC day, so `start_date=end_date` reads that
+        one day; instants with a time part are sent as is.
+
         Args:
-            start_date / end_date: ISO 8601 window. Defaults to "since 2015" →
-                now, i.e. the campaign's whole life.
+            start_date / end_date: ISO 8601 window, both ends included.
+                Defaults to "since 2015" → now, i.e. the campaign's whole
+                life. A date-only bound (`YYYY-MM-DD`) is a whole UTC day:
+                `start_date=end_date="2026-11-12"` reads that one day. For a
+                day in another timezone pass UTC instants (a Paris day in
+                winter: `2026-11-11T23:00:00.000Z` →
+                `2026-11-12T22:59:59.999Z`), sent as is.
             channels: Any of `email`, `linkedin`, `others`.
             ab_selected: `A` or `B`, to read one side of a running A/B test.
             send_user: `usr_…|sender@email` — both halves required.
@@ -444,8 +621,15 @@ def register(mcp: FastMCP) -> None:
         all_pages: bool = False,
         since: Optional[str] = None,
         max_pages: int = 50,
+        fields: Optional[list[str]] = None,
+        compact: bool = False,
     ) -> dict:
         """Get activity events (opens, clicks, replies, LinkedIn actions…).
+
+        Each event carries its whole lead (every personalised copy of the
+        sequence, in HTML, and the custom variables) and lemlist's metadata:
+        100 events run to hundreds of thousands of characters. Pass
+        `compact=True` unless you need a field it drops.
 
         Args:
             campaign_id: Restrict to a campaign.
@@ -465,18 +649,46 @@ def register(mcp: FastMCP) -> None:
                 paging route only takes the campaign and the date floor.
             since: With `all_pages`, keep only what is newer than this date.
             max_pages: Ceiling on the walk.
+            compact: The short view of each event: what happened, when, in
+                which campaign and step, to which lead, who sent or answered,
+                the subject, and `excerpt` (the first 280 characters of the
+                body). Never HTML, never the lead's variables.
+            fields: Keep only these keys of each event, a nested one by a
+                dotted path (`lead.variables.email`). With `compact=True`,
+                each one named replaces the short view's key of the same first
+                level. Neither: the events as lemlist sends them.
         """
         client, is_platform = _client()
-        if all_pages:
-            events = client.sync_activities(
-                campaign_id=campaign_id, since=since, max_pages=max_pages)
-        else:
-            events = client.get_activities(
-                campaign_id=campaign_id, limit=limit, offset=offset,
-                type=activity_type, lead_id=lead_id, is_first=is_first,
-                start_date=start_date, end_date=end_date,
-                min_date=min_date, max_date=max_date,
-            )
+        # Passed only when asked for: a call without a view stays the call lemlist
+        # has always received, whatever the installed client.
+        view = {}
+        if fields is not None:
+            view["fields"] = fields
+        if compact:
+            view["compact"] = compact
+        try:
+            if all_pages:
+                events = client.sync_activities(
+                    campaign_id=campaign_id, since=since, max_pages=max_pages,
+                    **view)
+            else:
+                events = client.get_activities(
+                    campaign_id=campaign_id, limit=limit, offset=offset,
+                    type=activity_type, lead_id=lead_id, is_first=is_first,
+                    start_date=start_date, end_date=end_date,
+                    min_date=min_date, max_date=max_date, **view,
+                )
+        except ValueError as e:
+            # A malformed `fields` or `compact`: the client refuses it before any
+            # request. Only then: `requests` has ValueErrors of its own (a bad URL,
+            # a body that is not JSON), which say nothing about the arguments.
+            if not view or isinstance(e, requests.RequestException):
+                raise
+            raise _bad(str(e)) from e
+        except RuntimeError as e:
+            if not view or not raised_by_view(e, _ACTIVITY_VIEWS):
+                raise
+            raise _activities_not_a_list() from e
         return {"activities": events, "count": len(events)}
 
     @mcp.tool(annotations=LECTURE)
@@ -927,6 +1139,8 @@ def register(mcp: FastMCP) -> None:
         timezone: Optional[str] = None,
         settings: Optional[dict] = None,
         sender_user_ids: Optional[list[str]] = None,
+        senders: Optional[list[dict]] = None,
+        senders_mode: Literal["replace", "add"] = "replace",
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         channels: Optional[list[str]] = None,
@@ -961,7 +1175,11 @@ def register(mcp: FastMCP) -> None:
           senders) and/or `settings` (raw PATCH body: `stopOnEmailReplied`,
           `stopOnMeetingBooked`, `stopOnLinkClicked`, `disableTrackOpen`,
           `disableTrackClick`, `disableTrackReply`, `tracking`, `onReplied`,
-          `aiFeatures`…). Only the keys sent change.
+          `aiFeatures`…). Only the keys sent change; unknown keys are refused.
+          `sender_user_ids` takes the FIRST mailbox of each user; to pick
+          mailboxes: `senders=[{userId, channels: [{type: "email", id:
+          "usm_…"}]}]`; `senders_mode` replace (default: drops unlisted
+          senders) or add.
         - `pause`: `campaign_id`. THE off switch — a campaign created here is
           already running. Stops it advancing; already-scheduled leads are NOT
           recalled. Errors if the campaign is not running.
@@ -976,7 +1194,10 @@ def register(mcp: FastMCP) -> None:
           (`emailsSent`, `emailsOpened`, `emailsReplied`, `senderNames`, `state`)
           — the shape for comparing campaigns.
         - `batch_stats`: `campaign_ids` (≤ 100) + optional `start_date`/`end_date`
-          (defaults to the whole life), `channels` (`email`/`linkedin`/`others`),
+          (defaults to the whole life; both ends included, a date-only
+          `YYYY-MM-DD` bound is a whole UTC day, so `start_date=end_date` reads
+          that one day; instants with a time part are sent as is),
+          `channels` (`email`/`linkedin`/`others`),
           `send_user` (`usr_…|sender@email`), `ab_selected` (`A`/`B`).
           Same counters as `lemlist_get_campaign_stats`, in one call.
 
@@ -1027,15 +1248,41 @@ def register(mcp: FastMCP) -> None:
             if not campaign_id:
                 raise _bad("`campaign_id` required")
             _refuse_auto_review(settings)
+            _refuse_unknown_settings(settings)
             if name is not None:
                 settings["name"] = name
             if sender_user_ids is not None:
+                if senders is not None:
+                    raise _bad("pass `senders` or `sender_user_ids`, not both: "
+                               "each sets the sender pool")
                 settings["sendUserIds"] = sender_user_ids
-            if not settings:
+            if not settings and senders is None:
                 raise _bad(
-                    "nothing to update — pass `name`, `sender_user_ids` "
-                    "and/or `settings`")
-            result = client.update_campaign(campaign_id, settings)
+                    "nothing to update — pass `name`, `senders`, "
+                    "`sender_user_ids` and/or `settings`")
+            if senders is not None and senders_mode == "replace" and not senders:
+                # Checked before ANY write: the PATCH below must not apply
+                # for a call refused afterwards.
+                raise _bad("`senders` is empty: replacing the pool with nothing "
+                           "would leave the campaign without a sender.")
+            result = (_check_patch_echo(
+                settings, client.update_campaign(campaign_id, settings))
+                if settings else {})
+            if senders is not None:
+                try:
+                    result.update(_set_senders(client, campaign_id, senders, senders_mode))
+                except Exception as e:
+                    if not result:
+                        raise
+                    # The PATCH has applied: a refusal that hid it would let the
+                    # caller believe nothing changed, and retry blind.
+                    error = getattr(e, "error", None)
+                    raise _refus(
+                        "lemlist_senders_failed_after_settings",
+                        f"the settings DID apply (see `settings_applied`), then "
+                        f"the senders step failed: {getattr(error, 'message', None) or e}",
+                        settings_applied=result,
+                        cause=(getattr(error, "data", None) or {}).get("code"))
 
         elif op == "pause":
             if not campaign_id:

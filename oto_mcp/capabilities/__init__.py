@@ -16,7 +16,10 @@ import oto_mcp.capabilities.orgs.reads  # noqa: F401 — org.list/get/admin.list
 import oto_mcp.capabilities.orgs.field_filters  # noqa: F401 — org.field_filters.{get,set} (ADR 0015)
 import oto_mcp.capabilities.orgs.email_settings  # noqa: F401 — org.email_settings.{get,set} (envoi per-org)
 import oto_mcp.capabilities.orgs.mfa  # noqa: F401 — org.mfa.{get,set} (MFA obligatoire par org, miroir Logto)
+import oto_mcp.capabilities.orgs.favoris  # noqa: F401 — org.favorites.{list,add,remove} (pages et tableaux épinglés pour l'org)
 import oto_mcp.capabilities.orgs.model_subscriptions  # noqa: F401 — org.model_subscriptions.{get,set,set_mode} (plafond, pool d'org)
+import oto_mcp.capabilities.orgs.model_regions  # noqa: F401 — org.model_regions.{get,set} (modèles qui tournent en Chine)
+import oto_mcp.capabilities.orgs.models  # noqa: F401 — org.models.{get,set} (modèles éteints par l'org)
 from . import scheduled_emails  # noqa: F401 — org.scheduled_email.{list,cancel} (envoi différé)
 import oto_mcp.capabilities.orgs.invites  # noqa: F401 — org.invite.{create,list,revoke,accept}
 # Invitation PLATEFORME (feature cascade, sommet) — onboarding admin, org cible optionnelle.
@@ -133,7 +136,7 @@ import oto_mcp.capabilities.connectors.account_grants  # noqa: F401 — connecto
 import oto_mcp.capabilities.connectors.force  # noqa: F401 — connectors.force.member (MCP via oto_connector op=force)
 # Projection lecture du coffre en instances possédées nommées (ADR 0038 B4).
 import oto_mcp.capabilities.connectors.instances  # noqa: F401 — connectors.instances.list (ADR 0038 B4)
-import oto_mcp.capabilities.connectors.http_operations  # noqa: F401 — custom_api.operations.{get,set,import} (connecteur `http`)
+import oto_mcp.capabilities.connectors.api_operations  # noqa: F401 — custom_api.operations.{get,set,import} (connecteur `api`)
 # Console admin consolidée par concept (ADR 0009, fusion *_op) — réutilise les handlers
 # de domaine. À importer APRÈS eux (orgs_admin/reads/members, users_admin).
 from . import admin_console  # noqa: F401 — admin.{org,org_member,user,key_grant,guide,signal}
@@ -196,6 +199,7 @@ import oto_mcp.capabilities.apps_appel  # noqa: F401 — me.app.call (POST /api/
 from . import uploads  # noqa: F401 — me.upload_url (oto_upload_url) — push out-of-bande de gros contenu (#105)
 # Journal de travail du datastore (ADR 0046 b4) — parcours d'une ligne + activité du tableau.
 import oto_mcp.capabilities.datastore.activity  # noqa: F401 — me.datastore.{row_activity,activity} (REST-only)
+import oto_mcp.capabilities.datastore.column_sources  # noqa: F401 — me.datastore.column_sources (REST-only)
 # File de travail côté application (signal #362) — réserver depuis un front web.
 import oto_mcp.capabilities.datastore.claim  # noqa: F401 — me.datastore.{claim_next,claim_row} (REST-only)
 import oto_mcp.capabilities.datastore.schema  # noqa: F401 — me.datastore.{get,set}_schema (MCP data_get_schema + REST)

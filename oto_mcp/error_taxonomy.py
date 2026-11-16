@@ -378,6 +378,30 @@ def _surviving_siblings(name: str) -> Optional[list[str]]:
         return None
 
 
+def _refus_nomme_hors_http(exc):
+    """The refusal a connector DESCRIPTION names (`tools.decrits.RefusNomme`), when no HTTP error status carries it:
+    a refusal read in a 200 answer's body (DataForSEO's `status_code` 40101, 40602…) or a check of the arguments or
+    of the answer (`status_code` None). Its message is the description's, written by us, never the vendor's body.
+    Matched by name, as `UnipileError`: `tools.decrits` imports this module's world, not the reverse. With a 4xx/5xx
+    status, path (3) of `classify` reads it as any upstream error."""
+    for e in _chain(exc):
+        if type(e).__name__ == "RefusNomme":
+            sc = getattr(e, "status_code", None)
+            return e if sc is None or sc < 400 else None
+    return None
+
+
+def _refus_nomme_d_un_403(exc):
+    """The refusal a connector DESCRIPTION names under a 403 that does not mark the key: a right the account lacks on
+    one resource (a property shared Restricted, where submitting needs Owner or Full). Its message is ours and says
+    the gesture, so it is served under its own code — never "check that the connector is connected", which sends
+    people replacing a key that works (13/11/2026)."""
+    for e in _chain(exc):
+        if type(e).__name__ == "RefusNomme":
+            return e if e.status_code == 403 and not e.credential_rejected else None
+    return None
+
+
 def _is_expected_error(exc) -> bool:
     """Handled error, NOT to be reported to Sentry: upstream 4xx OR user input/config
     refusal OR rejected args OR OAuth exchange refusal OR unmounted tool (toolbox
@@ -388,6 +412,7 @@ def _is_expected_error(exc) -> bool:
             or _is_arg_validation_error(exc)
             or _is_upstream_managed_error(exc)
             or _is_oauth_exchange_refused(exc)
+            or _refus_nomme_hors_http(exc) is not None
             or _unknown_tool_name(exc) is not None)
 
 
@@ -499,6 +524,21 @@ def classify(exc, parametres: Optional[list] = None) -> ErrorInfo:
                          or "Credits exhausted on the upstream service.",
                          QUOTA_HINT)
 
+    # (0b) A refusal a connector description names, carried by no HTTP error status (a 200 answer whose body
+    # refuses, a check of the arguments or of the answer): its message is ours, written in the description, so it is
+    # served as is, under its own code. Without this, path (5) answered "Internal server error." to "the task is not
+    # done yet: read it again later" (DataForSEO, 12/11/2026).
+    refus = _refus_nomme_hors_http(exc)
+    if refus is not None:
+        message = str(refus)
+        if refus.marks_account == "quota_exhausted":
+            return ErrorInfo("quota_exhausted", False, message, QUOTA_HINT)
+        if refus.marks_account == "credential_rejected":
+            return ErrorInfo("not_authorized", False, message,
+                             "check that the connector is connected and authorized")
+        return ErrorInfo(refus.code, bool(refus.retryable), message,
+                         "retry in a moment" if refus.retryable else None)
+
     # (1) McpError curated by a tool/capability: message already agent-facing.
     for e in _chain(exc):
         if isinstance(e, McpError):
@@ -583,6 +623,9 @@ def classify(exc, parametres: Optional[list] = None) -> ErrorInfo:
         if sc == 404:
             return ErrorInfo("not_found", False,
                              raw or "Resource not found on the upstream service.")
+        refus = _refus_nomme_d_un_403(exc) if sc == 403 else None
+        if refus is not None:
+            return ErrorInfo(refus.code, False, str(refus))
         if sc in (401, 403):
             return ErrorInfo("not_authorized", False,
                              raw or "Access denied by the upstream service.",

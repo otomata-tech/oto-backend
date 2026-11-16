@@ -28,7 +28,7 @@ import pytest
 
 from oto_mcp.capabilities.connectors.catalog_card import AuthDescriptor, CredentialField
 from oto_mcp.providers import REGISTRY
-from oto_mcp.providers.http import CONNECTOR as HTTP
+from oto_mcp.providers.api import CONNECTOR as HTTP
 
 
 @pytest.mark.parametrize("modele, champ", [

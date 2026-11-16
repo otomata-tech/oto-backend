@@ -590,13 +590,13 @@ rien ne rendait navigable et que rien ne tenait.
   Surface admin `/api/admin/connectors/activation`
   (`capabilities/platform_connectors.py`) + écran dashboard « connector activation ».
 - **Connecteur client-sensible = JAMAIS de code ici** : pont via le connecteur
-  **`http` générique** (ADR 0037, amende 0034/0003/0011). Le connecteur historique
+  **`api` générique** (Custom API, ex-`http`, ADR 0037, amende 0034/0003/0011). Le connecteur historique
   **`bridge`** (`kind="remote"`, tools `bridge_describe`/`bridge_call`,
   `tools/remote.py`) a été **RETIRÉ le 2026-07-16** (oto-backend#108) : un bridge
   n'est qu'une **API HTTP** que le service distant re-expose → l'org configure sur
-  la carte `http` son `base_url` (endpoint du bridge) + `auth_mode=bearer` + `token`
+  la carte `api` son `base_url` (endpoint du bridge) + `auth_mode=bearer` + `token`
   M2M (`credential_fields`, jamais dans le namespace → catalogue sans nom client),
-  et l'agent appelle `http_get`/`http_post`. Le service distant détient le credential
+  et l'agent appelle `api_get`/`api_post`. Le service distant détient le credential
   métier (contrat ADR 0003 §4 : bearer M2M, politique bornée côté bridge, audit
   `X-Oto-Sub`). Visibilité = régime commun (activation × sélection 0019/0050 — hors
   socle, installable). Pilote : le **bridge back-office d'un client pilote** (repo privé),

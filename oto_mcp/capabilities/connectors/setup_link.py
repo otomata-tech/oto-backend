@@ -5,7 +5,7 @@ Why: an agent that hits a missing key had two bad ways out — ask for the key i
 chat (it then sits in the model's context, the client's history and its logs), or
 tell the person "go to your connectors page" and let them find the card. The front
 already serves one URL per connector (`<connectors page>/<name>`, it opens that
-connector's panel: key form, OAuth button or hosted login), and `http(op="setup_link")`
+connector's panel: key form, OAuth button or hosted login), and `api(op="setup_link")`
 already handed it out for the Custom API alone. This op hands it out for EVERY catalog
 connector, with what the person will be asked for, so the agent can say it in one
 message.
@@ -90,11 +90,11 @@ def setup_link(ctx: ResolvedCtx, name: str) -> dict:
             details={"query": name, "candidates": noms})
     card = trouves[0]
     connector = card["name"]
-    if connector == "http":
+    if connector == "api":
         raise AuthzDenied(
             400, "use_http_setup_link",
             "The Custom API connector has its own setup link, pre-filled with the API's "
-            "name, base URL and auth mode: `http(op=\"setup_link\", label=…, base_url=…)`.")
+            "name, base URL and auth mode: `api(op=\"setup_link\", label=…, base_url=…)`.")
     method = (card.get("auth") or {}).get("method") or "secret"
     # The product's one-connector page when it declares one (`connect` link kind);
     # else its connectors page, opened on this card, with `via=agent` — a FIXED

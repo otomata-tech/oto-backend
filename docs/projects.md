@@ -17,6 +17,14 @@ Capacités co-déclarées : **`oto_project`** (`capabilities/projects.py`, op cr
 update/archive/link/unlink/activity, `POST /api/me/projects`), **`oto_doc`** (`capabilities/
 docs/`, op create/list/get/update/patch/delete/move/revisions/revert…, `POST /api/me/docs` —
 un package depuis le 01/09, dispatcher et descripteur dans `docs/core.py`).
+⚠️ Sur la face MCP, `oto_doc` et `oto_procedure` reçoivent le jeton d'appel `_project=`
+(signal d'usage 1471, `call_axes._PROJECT_SPINE_TOOLS`) : la consigne dit « sur chaque
+appel », et ils le refusaient. Sur `oto_doc`, il tient lieu de `project_id` pour
+create/bulk_create/list/search (les deux différents : 400 `project_conflict`) ; sur
+`oto_procedure`, il fait sortir le bloc `project_instance` de `op=get`. ⚠️ Sur ces deux
+outils, le jeton pose le projet SEUL (`call_axes._pin_project_pour`) : ni l'org du projet,
+ni son groupe, ni ses clés — leurs listes liraient l'org co-posée comme celle de
+l'appelant, et un invité hors de l'org y verrait ses procédures et ses pages.
 Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dispatch `_OPS`).
 
 > **Archiver se défait, et dit ce qu'il range (23/09/2026, oto#38).** `op=archive` pose
@@ -744,8 +752,8 @@ d'URL. Le cliquet `test_every_covered_module_calls_the_seam` fige la liste des c
 | `reddit_search`, `reddit_post`, `linkedin_unipile_*`, `linkedin_aiark_*` | — | non couvert : objets d'une plateforme propre ; exclure = ne pas activer le connecteur |
 | `kaspr_enrich_linkedin`, `fullenrich_enrich_linkedin`, `apollo_match_person`, `cognism_enrich_*`, `lemlist_enrich`, `forager_organization` | — | non couvert : l'URL est un IDENTIFIANT passé à un fournisseur de données, pas une page lue |
 | `apify_run*` | — | non couvert : `run_input` opaque d'un acteur tiers ; cran = activation |
-| `http_get/post` | — | non couvert : chemin relatif à une `base_url` configurée par l'org (client d'API) |
-| `http_act` (`op=call`, `op=request`, `op=import` avec `source="url"`) | — | non couvert : chemin relatif à la `base_url` de l'org ; l'import lit un document de description d'API (garde d'egress sans exception nommée), pas une page |
+| `api_get/post` | — | non couvert : chemin relatif à une `base_url` configurée par l'org (client d'API) |
+| `api_act` (`op=call`, `op=request`, `op=import` avec `source="url"`) | — | non couvert : chemin relatif à la `base_url` de l'org ; l'import lit un document de description d'API (garde d'egress sans exception nommée), pas une page |
 | `browser_connect_start` | — | non couvert : page de login ouverte à l'humain, pas une lecture |
 | `email_send(cta_url, image_url)`, `brevo_import_contacts(file_url)`, `fireflies_transcript(url)`, webhooks (`folk`/`linear`/`grain`/`granola`/`webflow`), `ahrefs_*`, `promptwatch_*`, `snitcher_*` | — | non couvert : URL écrite, importée par le fournisseur, ou de configuration — rien n'est lu par nous. (`apollo_reveal_phone`/`apollo_bulk_match` ne prennent plus d'URL depuis le 28/09/2026 : la réception est la nôtre, `docs/donnees-par-reference.md`.) |
 

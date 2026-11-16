@@ -94,6 +94,50 @@ PREAVIS_DU = _plus_de_mois(ANNONCE, PREAVIS_MOIS)
 RETRAIT = max(PREAVIS_DU, datetime.date(2026, 11, 30))
 
 
+# ── Le connecteur Custom API renommé `api` (ex-`http`, 12/11/2026) ──────────
+# Décision du propriétaire du produit : `http` était un nom de protocole, qui ne dit
+# pas ce que le connecteur sert. Le connecteur s'appelle `api`, ses outils `api*` —
+# mêmes ops, mêmes arguments, même effet. Comme tout renommage servi, il se DOUBLE :
+# les anciens noms d'outils et les anciens chemins REST continuent de répondre, en
+# disant le nom d'aujourd'hui et la date.
+#
+# **Quand l'ancien nom part** : quand tous les consommateurs déclarés ont suivi
+# (`.github/contrat-consommateurs.json`, règle du 25/09/2026) ET que l'usage compté
+# des alias est nul — le journal `tool_calls` porte `args.deprecated_name` sur chaque
+# appel servi par un ancien nom d'outil (`calllog.apply_call_trace`). La date
+# ci-dessous est le PLUS TÔT possible, jamais une échéance automatique.
+#
+# Sa propre date — même raison que `RETRAIT_DATASTORE`. Le plancher contractuel se
+# compte depuis l'annonce (deux mois, `PREAVIS_MOIS`) ; la fenêtre s'ouvre au tag de
+# production, d'où la marge : un tag posé jusqu'au 30/11/2026 tient encore ses deux
+# mois. Posé plus tard, `ANNONCE_CONNECTEUR_API` prend la date du tag.
+ANNONCE_CONNECTEUR_API = datetime.date(2026, 11, 12)
+RETRAIT_CONNECTEUR_API = max(_plus_de_mois(ANNONCE_CONNECTEUR_API, PREAVIS_MOIS),
+                             datetime.date(2027, 1, 31))
+
+#: Ancien nom d'outil → nom d'aujourd'hui, le même suffixe des deux côtés.
+OUTILS_CONNECTEUR_API: dict = {f"http{suffixe}": f"api{suffixe}"
+                               for suffixe in ("", "_act", "_get", "_post", "_doc")}
+
+#: L'annonce du renommage est servie aux agents (`instructions`) jusqu'à ce jour
+#: inclus — un mois. La description et chaque réponse de l'ancien nom le disent
+#: ensuite jusqu'au retrait.
+ANNONCE_CONNECTEUR_API_JUSQU_AU = _plus_de_mois(ANNONCE_CONNECTEUR_API, 1)
+
+
+def annonce_connecteur_api_du_jour(aujourd_hui: Optional[datetime.date] = None
+                                   ) -> Optional[str]:
+    """La ligne servie aux agents tant que le renommage est récent, None ensuite."""
+    jour = aujourd_hui or datetime.date.today()
+    if jour > ANNONCE_CONNECTEUR_API_JUSQU_AU:
+        return None
+    return ("The Custom API connector is now `api`, and its tools renamed — "
+            + " · ".join(f"`{a}` → `{n}`" for a, n in OUTILS_CONNECTEUR_API.items())
+            + ". Same arguments, same effect. The old names still answer as deprecated "
+            f"aliases until {RETRAIT_CONNECTEUR_API.isoformat()} at the earliest: "
+            "call the new ones.")
+
+
 # ── Outils MCP (lot B1) ─────────────────────────────────────────────────────
 # ancien nom SERVI → nom canonique. L'ancien reste listé et appelable jusqu'au
 # retrait ; le bord du protocole (`middleware/alias.ToolAliasMiddleware`) rétablit
@@ -111,22 +155,39 @@ TOOLS: dict = {
     # qu'une procédure d'org le référence (mesuré, pas supposé).
     "oto_salesforce_connect": "salesforce_connect",
     "oto_zoho_connect": "zoho_connect",
+    **OUTILS_CONNECTEUR_API,
 }
 
-
-def date_de_retrait() -> str:
-    """La date de retrait telle qu'elle est SERVIE (JJ/MM/AAAA)."""
-    return RETRAIT.strftime("%d/%m/%Y")
+#: La date de retrait PROPRE à un ancien nom d'outil, quand elle n'est pas `RETRAIT`.
+_RETRAIT_DES_OUTILS: dict = {a: RETRAIT_CONNECTEUR_API for a in OUTILS_CONNECTEUR_API}
 
 
-def avis(canonique: str) -> str:
+def date_de_retrait(ancien: Optional[str] = None) -> str:
+    """La date de retrait telle qu'elle est SERVIE (JJ/MM/AAAA) — celle de l'ancien
+    nom d'outil `ancien`, ou celle du lot #519."""
+    return _RETRAIT_DES_OUTILS.get(ancien, RETRAIT).strftime("%d/%m/%Y")
+
+
+def avis(canonique: str, ancien: Optional[str] = None) -> str:
     """L'avis qui PRÉFIXE la description d'un nom déprécié.
 
     En tête, pas en queue : beaucoup de clients tronquent une description longue,
     et un avis de dépréciation lu après 400 caractères n'a averti personne. C'est
     aussi la première chose que le modèle lit quand il choisit son outil.
     """
-    return (f"Déprécié : utilisez `{canonique}` (retrait le {date_de_retrait()}). ")
+    return (f"Déprécié : utilisez `{canonique}` (retrait le {date_de_retrait(ancien)}). ")
+
+
+def avis_d_appel(ancien: str) -> Optional[str]:
+    """L'avis en tête de la RÉPONSE d'un appel fait sous un ancien nom — None si `ancien`
+    n'est pas déprécié. Il nomme ce qui a été appelé, ce qui a servi et la date : un
+    agent qui ne relit pas sa liste d'outils l'apprend au geste."""
+    canonique = TOOLS.get(ancien)
+    if canonique is None:
+        return None
+    return (f"Déprécié : `{ancien}` est renommé `{canonique}` (retrait le "
+            f"{date_de_retrait(ancien)}). L'appel a été servi par `{canonique}` ; "
+            f"appelle désormais `{canonique}`, mêmes arguments.")
 
 
 def tool_canonique(nom: str) -> str:
@@ -264,6 +325,32 @@ def _alias_datastore() -> tuple:
     # `…/namespaces` avant `…/namespaces/{namespace}`. Le tri par longueur puis par
     # nombre de placeholders donne cet ordre sans qu'on ait à le tenir à jour.
     return tuple(sorted(out, key=lambda a: (a.ancien.count("{"), len(a.ancien))))
+
+
+#: Le préfixe REST du connecteur Custom API, avant et après son renommage.
+_API_ANCIEN = "/api/orgs/{id}/connectors/http/"
+_API_NOUVEAU = "/api/orgs/{id}/connectors/api/"
+
+
+def _alias_connecteur_api() -> tuple:
+    """Un alias par route du connecteur `api` réellement montée — même dérivation que
+    `_alias_datastore` : une route ajoutée demain hérite de son ancien chemin, une route
+    retirée perd le sien. Le placeholder ne change pas de nom."""
+    from .capabilities.registry import CAPABILITIES  # tardif : évite un cycle
+
+    out = []
+    for cap in CAPABILITIES:
+        for rest in cap.rest_bindings():
+            if rest.path.startswith(_API_NOUVEAU):
+                ancien = _API_ANCIEN + rest.path[len(_API_NOUVEAU):]
+                out.append(AliasRest(rest.verb, ancien, rest.path, {}, "",
+                                     RETRAIT_CONNECTEUR_API))
+    return tuple(sorted(out, key=lambda a: (a.ancien.count("{"), len(a.ancien))))
+
+
+def alias_rest_derives() -> tuple:
+    """Tous les alias DÉRIVÉS des routes montées (à côté des déclarés, `REST`)."""
+    return _alias_datastore() + _alias_connecteur_api()
 
 
 REST: tuple = (

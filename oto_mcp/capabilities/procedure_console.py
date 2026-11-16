@@ -176,6 +176,55 @@ async def _avec_le_graphe(ctx: ResolvedCtx, inp: ProcedureInput, lecture):
     return {**out, "show_graph": indice} if indice else out
 
 
+def _a_dessiner_a_la_naissance(ctx: ResolvedCtx, inp: ProcedureInput, ecrit: dict) -> str | None:
+    """La consigne de dessin d'une procédure qui vient de NAÎTRE sans dessin — ou `None`.
+
+    Le dessin reste facultatif dans le cœur (18/09/2026) : la consigne ne part que là où
+    l'INSTANCE déclare un front qui peint le graphe (`bundle_du_graphe`, le même
+    interrupteur que `oto_procedure_app`), jamais à un travail du runner (personne pour
+    relire, `sert_un_worker`), et seulement à la naissance — v1 écrite par `create`, par
+    un `set` sur un slug libre (hors restauration) ou par un `fork` de la bibliothèque. Une procédure qui existe déjà
+    n'est pas renvoyée réécrire son corps à chaque édition : son dessin se demande à
+    l'ouverture du graphe, comme avant.
+
+    ⚠️ Pas de garde client : la naissance se fait d'abord depuis un client TEXTE (Claude
+    Code), qui sait écrire des caractères de tracé sans rien peindre ; c'est ce trou qui
+    laissait les procédures neuves sans graphe."""
+    from .. import org_store, tool_alias
+    if (ecrit.get("version") != 1 or inp.from_version is not None
+            or procedure_diagram.bundle_du_graphe() is None or tool_alias.sert_un_worker()):
+        return None
+    forke = inp.op == "fork"
+    if forke:
+        # Le fork rend le palier qu'il a choisi (selon le rôle), pas le corps : relu
+        # là où il vient d'écrire.
+        if not ecrit.get("forked") or ecrit.get("scope") not in ("user", "org"):
+            return None
+        scope = ecrit["scope"]
+        owner = ("org", ecrit.get("org_id")) if scope == "org" else ("user", ctx.sub)
+        ligne = org_store.get_instruction(*owner, ecrit.get("slug")) or {}
+        corps = ligne.get("body_md") or ""
+        cible = f"scope={scope}"
+    else:
+        if not ecrit.get("set") or not inp.body_md:
+            return None
+        corps = inp.body_md
+        cible = f"scope={_ECRIT_SCOPE(inp)}"
+        if inp.group is not None:
+            cible += f" group={inp.group}"
+        if inp.org is not None:
+            cible += f" org={inp.org}"
+    if not corps:
+        return None
+    if (procedure_diagram.has_diagram(corps) or procedure_diagram.dessin_tague(corps)
+            or procedure_diagram.dessin_hors_fence(corps)):
+        # Un tracé est là (rendu, ou dit par `diagram_warning`) : rien à demander.
+        return None
+    from ..tools import procedure_app
+    return procedure_app.a_dessiner_a_la_naissance(
+        ctx.sub, ecrit.get("slug") or inp.slug, cible, 1, forke=forke)
+
+
 def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
     oi, lib = orgs_instructions, guide_library
     # Sous un jeton de délégation, la procédure du travail et celles qu'elle nomme, rien
@@ -290,6 +339,12 @@ def _dispatch_share(ctx: ResolvedCtx, inp: ProcedureInput):
 async def _procedure(ctx: ResolvedCtx, inp: ProcedureInput) -> dict:
     from ._execution import execute
     _, result = await execute(_dispatch_procedure, lambda: (ctx, inp))
+    if inp.op in ("create", "set", "fork") and isinstance(result, dict):
+        from starlette.concurrency import run_in_threadpool
+        # Hors de la boucle : la relecture du fork et le lien de la page lisent la base.
+        consigne = await run_in_threadpool(_a_dessiner_a_la_naissance, ctx, inp, result)
+        if consigne:
+            return {**result, "draw_next": consigne}
     if inp.op == "list" and isinstance(result, dict):
         # La liste, plus — là où l'instance sait la peindre — la ligne qui envoie l'agent
         # MONTRER une procédure. Posé ici, hors du dispatch, pour laisser `list` tel quel.

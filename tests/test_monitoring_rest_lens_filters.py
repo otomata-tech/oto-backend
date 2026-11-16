@@ -6,20 +6,21 @@ de celle d'un compte. Le SQL de la lentille se construit maintenant par morceaux
 deux requêtes partagent la clause, donc chacune doit porter ses paramètres, et
 l'arithmétique placeholders/params est la seule preuve locale qu'aucune n'en a un de
 trop (l'erreur ne se voit sinon qu'en prod, sur un `%s` orphelin).
+
+Depuis #1455, totaux, routes et statuts sortent d'UNE requête qui lit la fenêtre une
+seule fois (`WITH f`) : un filtre ne peut plus s'appliquer à l'un sans l'autre, par
+construction.
 """
 from oto_mcp.db import usage
 
 
 class _Cur:
-    def fetchone(self):
-        return {"total": 0, "errors": 0, "users": 0}
-
     def fetchall(self):
         return []
 
 
 class _Conn:
-    """Enregistre CHAQUE requête de la lentille (elle en fait trois)."""
+    """Enregistre CHAQUE requête de la lentille (elle n'en fait qu'une)."""
 
     def __init__(self, sink):
         self.sink = sink
@@ -45,20 +46,20 @@ def _run(monkeypatch, **kw):
 
 def test_sans_filtre_la_lentille_reste_plateforme(monkeypatch):
     out, vues = _run(monkeypatch, since_days=7)
-    assert len(vues) == 3
+    assert len(vues) == 1
     for sql, _ in vues:
         assert "sub = %s" not in sql and "org_id = %s" not in sql
     # Rien n'a été restreint : rien à annoncer (le contrat du dashboard ne bouge pas).
     assert "filters" not in out and "org_id_caveat" not in out
 
 
-def test_les_trois_requetes_portent_le_filtre_et_ses_parametres(monkeypatch):
-    """Les totaux, la ventilation par route et celle par statut sont TROIS requêtes :
-    un filtre posé sur une seule rendrait un total d'un compte et des routes de la plateforme —
-    incohérence muette, plus trompeuse que l'absence de filtre."""
+def test_la_requete_unique_porte_le_filtre_et_ses_parametres(monkeypatch):
+    """Les totaux, la ventilation par route et celle par statut sortent d'UNE requête
+    (#1455) : le filtre posé s'applique aux trois ventilations à la fois."""
     out, vues = _run(monkeypatch, since_days=30, org_id=42, sub="sub-jane")
 
-    assert len(vues) == 3
+    assert len(vues) == 1
+    assert vues[0][0].count("FROM tool_calls") == 1     # UNE lecture du journal
     for sql, params in vues:
         assert "org_id = %s" in sql and "sub = %s" in sql
         assert sql.count("%s") == len(params), f"placeholders ≠ params : {params}"
@@ -66,14 +67,14 @@ def test_les_trois_requetes_portent_le_filtre_et_ses_parametres(monkeypatch):
     assert out["filters"] == {"org_id": 42, "sub": "sub-jane"}
 
 
-def test_route_ajoute_un_prefixe_like_aux_trois_requetes(monkeypatch):
+def test_route_ajoute_un_prefixe_like_a_la_requete(monkeypatch):
     """oto-dashboard#125 : `by_route` est plafonné à `LIMIT 100` — une route à faible
     volume peut ne jamais y apparaître sans que rien ne le dise. `route` donne un
     compte EXACT (pas de limite) en ajoutant un `LIKE route || '%'` aux TROIS requêtes,
     comme `org_id`/`sub` — sinon totaux et ventilation divergeraient."""
     out, vues = _run(monkeypatch, since_days=30, route="/api/atlassian/oauth/start")
 
-    assert len(vues) == 3
+    assert len(vues) == 1
     for sql, params in vues:
         assert "tool LIKE %s" in sql
         assert sql.count("%s") == len(params), f"placeholders ≠ params : {params}"
@@ -89,21 +90,19 @@ def test_route_est_un_prefixe_pas_une_egalite():
     assert 'f"{route}%"' in src, "le motif LIKE doit rester un préfixe, pas une égalité"
 
 
-def test_last_call_at_vient_du_max_de_la_requete_de_totaux(monkeypatch):
+def test_last_call_at_vient_du_groupe_des_totaux(monkeypatch):
     """oto-dashboard#125 : « appels/erreurs/DERNIER appel » pour une route — le champ
-    doit sortir de `totals`, pas être recalculé ailleurs (une deuxième requête pourrait
-    diverger de la fenêtre/du filtre de la première)."""
+    sort du groupe des TOTAUX (ensemble vide), pas d'un groupe de route ou de statut."""
     class _CurAvecDate:
-        def fetchone(self):
-            return {"total": 3, "errors": 1, "users": 2, "last_call_at": "2026-09-01T10:00:00"}
-
         def fetchall(self):
-            return []
+            return [
+                _g("total", calls=3, errors=1, users=2, last_call_at="2026-09-01T10:00:00"),
+                _g("route", route="GET /api/x", calls=3, errors=1),
+            ]
 
     class _ConnAvecDate:
         def execute(self, sql, params):
-            if "GROUP BY" not in sql:      # la requête de TOTAUX, pas by_route/by_status
-                assert "MAX(created_at) AS last_call_at" in sql
+            assert "MAX(created_at) AS last_call_at" in sql
             return _CurAvecDate()
 
         def __enter__(self):
@@ -117,23 +116,33 @@ def test_last_call_at_vient_du_max_de_la_requete_de_totaux(monkeypatch):
     monkeypatch.setattr(usage, "_agregat", lambda objet, **kw: usage._connect())
     out = usage.rest_call_stats(since_days=7)
     assert out["last_call_at"] == "2026-09-01T10:00:00"
+    assert (out["total_calls"], out["error_count"], out["active_users"]) == (3, 1, 2)
+    assert out["by_route"] == [{"route": "GET /api/x", "calls": 3, "errors": 1,
+                                "avg_ms": None, "p95_ms": None}]
+
+
+def _g(groupe, *, route=None, error=None, calls=0, errors=0, users=None,
+       last_call_at=None):
+    """Une ligne de la requête unique : son `groupe` (total, route, statut)."""
+    return {"groupe": groupe, "route": route, "error": error,
+            "calls": calls, "errors": errors, "users": users,
+            "last_call_at": last_call_at, "avg_ms": None, "p95_ms": None}
 
 
 def _run_statuts(monkeypatch, lignes):
     """La lentille avec une ventilation d'erreurs donnée — rend la sortie et le SQL."""
     vues: list = []
+    groupes = [_g("statut", error=l["error"], calls=l["calls"], errors=l["calls"])
+               for l in lignes]
 
     class _CurStatuts(_Cur):
-        def __init__(self, sql):
-            self.sql = sql
-
         def fetchall(self):
-            return lignes if "GROUP BY error" in self.sql else []
+            return groupes
 
     class _ConnStatuts(_Conn):
         def execute(self, sql, params):
             self.sink.append((sql, params))
-            return _CurStatuts(sql)
+            return _CurStatuts()
 
     monkeypatch.setattr(usage, "_connect", lambda: _ConnStatuts(vues))
     # La borne de durée se juge ailleurs (test_lecture_bornee) : ici, le SQL.
@@ -152,8 +161,8 @@ def test_by_status_distingue_les_4xx_des_5xx(monkeypatch):
     assert out["by_status"] == [{"status": 403, "calls": 40},
                                 {"status": 500, "calls": 3},
                                 {"status": None, "calls": 1}]
-    (sql, params), = [v for v in vues if "GROUP BY error" in v[0]]
-    assert "NOT ok" in sql and "tool LIKE %s" in sql
+    (sql, params), = vues
+    assert "WHERE NOT ok GROUP BY error" in sql and "tool LIKE %s" in sql
     assert list(params) == [7, "POST /api/auth/token%"]
 
 
@@ -255,3 +264,49 @@ def test_list_rest_calls_filtre_pour_de_vrai(live):
         "GET /api/me", "GET /api/orgs/:id"]
     # La route SANS méthode n'est le préfixe de rien : zéro, pas « tout ».
     assert usage.list_rest_calls(route="/api/orgs") == []
+
+
+def _ref_rest_stats(days):
+    """La lentille telle qu'elle lisait le journal en TROIS requêtes, avant #1455."""
+    w = (f"kind = 'rest' AND {usage._REST_ROUTE_SHAPE} "
+         "AND created_at >= NOW() - make_interval(days => %s)")
+    with usage._connect() as conn:
+        t = conn.execute(f"SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE NOT ok) AS errors, "
+                         f"COUNT(DISTINCT sub) AS users, MAX(created_at) AS last_call_at "
+                         f"FROM tool_calls WHERE {w}", (days,)).fetchone()
+        routes = conn.execute(
+            f"""SELECT tool AS route, COUNT(*) AS calls,
+                       COUNT(*) FILTER (WHERE NOT ok) AS errors,
+                       ROUND(AVG(duration_ms))::int AS avg_ms,
+                       ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int
+                           AS p95_ms
+                  FROM tool_calls WHERE {w} GROUP BY tool""", (days,)).fetchall()
+        erreurs = conn.execute(f"SELECT error, COUNT(*) AS calls FROM tool_calls "
+                               f"WHERE {w} AND NOT ok GROUP BY error", (days,)).fetchall()
+    return t, routes, erreurs
+
+
+def test_la_requete_unique_rend_ce_que_rendaient_les_trois(live):
+    """#1455, contre le VRAI journal : une lecture de la fenêtre — la même réponse que
+    les trois requêtes d'avant, y compris l'échec sans statut (NULL), distinct des
+    succès dont `error` est aussi NULL, et le compte distinct sans le sub NULL."""
+    lignes = [("GET /api/orgs/:id", "s1", True, None, 120),
+              ("GET /api/orgs/:id", "s2", False, "HTTP 403", 80),
+              ("GET /api/orgs/:id", "s2", True, None, None),
+              ("POST /api/files", "s1", False, "HTTP 500", 900),
+              ("POST /api/files", None, False, None, 40),
+              ("GET /api/me", "s3", True, None, 10),
+              ("data_write", "s1", False, "boom", 5)]   # geste sémantique : dehors
+    for tool, sub, ok, err, ms in lignes:
+        usage.insert_tool_call({"kind": "rest", "tool": tool, "sub": sub, "ok": ok,
+                                "error": err, "duration_ms": ms})
+    out = usage.rest_call_stats(since_days=7)
+    t, routes, erreurs = _ref_rest_stats(7)
+    assert (out["total_calls"], out["error_count"], out["active_users"],
+            out["last_call_at"]) == (t["total"], t["errors"], t["users"], t["last_call_at"])
+    assert sorted(out["by_route"], key=lambda r: r["route"]) == sorted(
+        (dict(r) for r in routes), key=lambda r: r["route"])
+    assert sorted(out["by_status"], key=lambda r: (r["status"] or 0)) == sorted(
+        ({"status": usage._rest_status(r["error"]), "calls": r["calls"]} for r in erreurs),
+        key=lambda r: (r["status"] or 0))
+    assert {r["status"] for r in out["by_status"]} == {403, 500, None}

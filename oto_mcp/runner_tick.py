@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import db, org_suspension, procedure_retiree, runner_models
-from .capabilities import _abonnement, _instruction, _limites_du_run, _projet_de_l_agent
+from .capabilities import _abonnement, _instruction, _limites_du_run, _modele, _projet_de_l_agent
 
 log = logging.getLogger(__name__)
 
@@ -66,15 +66,17 @@ def next_due(expr: str, tz: str,
 def _occurrence_sautee(t: dict, issue: str = db.REFUSE_SUSPENDED,
                        exige: Optional[int] = None) -> None:
     """Trace d'une échéance consommée sans rien enfiler — org suspendue, procédure
-    archivée, agent sans modèle, ou agent exigé sans succès du jour : un journal, et une
-    livraison `refused_*` (sans créneau) visible sur la page de l'agent, comme pour un
-    webhook refusé."""
+    archivée, agent sans modèle ou sur un modèle éteint, ou agent exigé sans succès du
+    jour : un journal, et une livraison `refused_*` (sans créneau) visible sur la page de
+    l'agent, comme pour un webhook refusé."""
     if issue == db.REFUSE_PROCEDURE_ARCHIVED:
         cause = "procédure archivée"
     elif issue == db.REFUSE_REQUIRES:
         cause = f"l'agent {exige} qu'il exige n'a pas réussi aujourd'hui"
     elif issue == db.REFUSE_NO_MODEL:
         cause = runner_models.motif_sans_famille(t.get("model"))
+    elif issue == db.REFUSE_MODEL_DISABLED:
+        cause = f"modèle `{t.get('model')}` éteint par l'org {t['org_id']}"
     else:
         cause = f"org {t['org_id']} suspendue"
     log.warning("déclencheur %s : %s, échéance %s sautée",
@@ -233,6 +235,18 @@ def _tick() -> int:
         # suffit à ce que l'échéance suivante parte.
         if runner_models.motif_sans_famille(t.get("model")):
             _occurrence_sautee(t, db.REFUSE_NO_MODEL)
+            continue
+        # Modèle ÉTEINT par un admin de l'org (`orgs.disabled_models`) : l'occurrence est
+        # arrêtée, motif nommé sur la page de l'agent (`refused_model_disabled`). Aucun
+        # repli sur un autre modèle. Une lecture qui échoue laisse partir le travail : la
+        # réservation le refuse alors, raison écrite (`runner_jobs._avec_cle`).
+        try:
+            eteint = _modele.modele_eteint(t["org_id"], t.get("model"))
+        except Exception as e:  # noqa: BLE001 — la réservation garde de toute façon
+            log.warning("déclencheur %s : modèles éteints illisibles (%s)", t["id"], e)
+            eteint = False
+        if eteint:
+            _occurrence_sautee(t, db.REFUSE_MODEL_DISABLED)
             continue
         # EXIGE un autre agent (lien `requires`) dont le dernier run du jour n'a pas
         # réussi : même trace qu'une procédure archivée, avec son motif. Une lecture

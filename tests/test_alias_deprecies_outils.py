@@ -31,8 +31,9 @@ from _mcp_app import static_mcp as _test_mcp
 import mcp.types as mt
 import pytest
 from fastmcp.server.middleware import MiddlewareContext
+from fastmcp.tools.tool import ToolResult
 
-from oto_mcp import deprecations, server
+from oto_mcp import deprecations, server, session_org
 from oto_mcp.middleware.alias import ToolAliasMiddleware
 
 _ARGS = {"op": "list", "org_id": 1}
@@ -64,9 +65,10 @@ async def _recu_en_aval(monkeypatch, demande, args, sub=None):
 
     async def _suivant(c):
         vus.append((c.message.name, dict(c.message.arguments or {})))
-        return "réponse"
+        return ToolResult(content=[mt.TextContent(type="text", text="réponse")])
 
-    assert await ToolAliasMiddleware().on_call_tool(ctx, _suivant) == "réponse"
+    rendu = await ToolAliasMiddleware().on_call_tool(ctx, _suivant)
+    assert rendu.content[-1].text == "réponse"
     return vus[0]
 
 
@@ -108,15 +110,18 @@ async def test_la_liste_sert_les_deux_noms(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_lalias_decrit_le_meme_contrat_que_son_outil(monkeypatch):
-    """Hors le nom et l'avis en tête : même schéma d'entrée, même schéma de sortie."""
+    """Hors le nom, l'avis en tête et le titre (propre à chaque entrée, cf.
+    `tests/test_tool_alias_titres.py`) : même schéma d'entrée, même schéma de sortie."""
     servis = {t.name: t for t in await _liste_servie(monkeypatch)}
+    hors_contrat = {"name": True, "description": True, "title": True,
+                    "annotations": {"title"}}
     for ancien, canonique in deprecations.TOOLS.items():
         a, c = servis[ancien], servis[canonique]
-        assert (a.model_dump(exclude={"name", "description"})
-                == c.model_dump(exclude={"name", "description"})), (
+        assert (a.model_dump(exclude=hors_contrat)
+                == c.model_dump(exclude=hors_contrat)), (
             f"`{ancien}` a dérivé de `{canonique}` : l'agent lirait un contrat et en "
             "appellerait un autre.")
-        assert a.description == deprecations.avis(canonique) + (c.description or "")
+        assert a.description == deprecations.avis(canonique, ancien) + (c.description or "")
 
 
 @pytest.mark.asyncio
@@ -127,7 +132,7 @@ async def test_lavis_est_en_TETE_de_la_description(monkeypatch):
     for ancien, canonique in deprecations.TOOLS.items():
         debut = servis[ancien].description[:80]
         assert debut.startswith("Déprécié : utilisez `" + canonique + "`")
-        assert deprecations.date_de_retrait() in debut
+        assert deprecations.date_de_retrait(ancien) in debut
 
 
 # ── 4. La date vit à UN endroit ─────────────────────────────────────────────
@@ -141,7 +146,21 @@ async def test_la_date_servie_suit_la_constante(monkeypatch):
     monkeypatch.setattr(deprecations, "RETRAIT", faux)
     servis = {t.name: t for t in await _liste_servie(monkeypatch)}
     for ancien in deprecations.TOOLS:
+        if ancien in deprecations.OUTILS_CONNECTEUR_API:
+            continue                    # sa propre date : `test_la_date_propre_…`
         assert "15/01/2027" in servis[ancien].description
+
+
+@pytest.mark.asyncio
+async def test_la_date_propre_au_connecteur_api_suit_sa_constante(monkeypatch):
+    """Les anciens noms du connecteur Custom API portent LEUR date, pas celle du lot
+    #519 : une seule date pour deux renommages est une copie qui devient fausse."""
+    import datetime
+    monkeypatch.setitem(deprecations._RETRAIT_DES_OUTILS, "http_get",
+                        datetime.date(2027, 3, 2))
+    servis = {t.name: t for t in await _liste_servie(monkeypatch)}
+    assert "02/03/2027" in servis["http_get"].description
+    assert "02/03/2027" not in servis["oto_admin_doctrine"].description
 
 
 # ── 5. La table ne ment pas ─────────────────────────────────────────────────
@@ -233,3 +252,66 @@ def test_le_preavis_se_compte_en_mois_CALENDAIRES_jamais_en_jours():
     # fin de mois : on retombe sur le dernier jour existant, jamais sur un 31/02.
     assert d(datetime.date(2026, 12, 31), 2) == datetime.date(2027, 2, 28)
     assert d(datetime.date(2026, 11, 30), 2) == datetime.date(2027, 1, 30)
+
+
+# ── 7. La RÉPONSE d'un ancien nom porte l'avis, et le journal compte l'alias ─
+
+async def _rendu(monkeypatch, demande):
+    """(nom vu en aval, ancien nom lu en aval, réponse rendue) d'un appel par `demande`."""
+    monkeypatch.setattr("oto_mcp.middleware.alias.current_user_sub_from_token",
+                        lambda: None)
+    ctx = MiddlewareContext(
+        message=mt.CallToolRequestParams(name=demande, arguments=dict(_ARGS)),
+        method="tools/call")
+    vus = []
+
+    async def _suivant(c):
+        vus.append((c.message.name, session_org.nom_deprecie_de_l_appel()))
+        return ToolResult(content=[mt.TextContent(type="text", text="réponse")])
+
+    rendu = await ToolAliasMiddleware().on_call_tool(ctx, _suivant)
+    return vus[0], rendu
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ancien,canonique", sorted(deprecations.TOOLS.items()))
+async def test_la_reponse_d_un_ancien_nom_porte_l_avis_en_tete(monkeypatch, ancien,
+                                                               canonique):
+    (vu, nom_lu), rendu = await _rendu(monkeypatch, ancien)
+    assert (vu, nom_lu) == (canonique, ancien)
+    textes = [c.text for c in rendu.content]
+    assert textes[-1] == "réponse", "la réponse de l'outil est rendue telle quelle"
+    assert textes[0] == deprecations.avis_d_appel(ancien)
+    assert f"`{ancien}` est renommé `{canonique}`" in textes[0]
+    assert deprecations.date_de_retrait(ancien) in textes[0]
+    assert session_org.nom_deprecie_de_l_appel() is None, "l'ancien nom ne fuit pas"
+
+
+@pytest.mark.asyncio
+async def test_la_reponse_du_nom_d_aujourd_hui_ne_porte_aucun_avis(monkeypatch):
+    (vu, nom_lu), rendu = await _rendu(monkeypatch, "api_get")
+    assert (vu, nom_lu) == ("api_get", None)
+    assert [c.text for c in rendu.content] == ["réponse"]
+
+
+def test_le_journal_compte_l_appel_par_un_ancien_nom():
+    """`tool` reste le nom d'aujourd'hui (un seul nom pour un seul outil) ; l'usage de
+    l'alias se lit dans `args.deprecated_name` — c'est ce qui dit quand le retirer."""
+    from oto_mcp.calllog import apply_call_trace
+    jeton = session_org.set_nom_deprecie("http_get")
+    try:
+        row = apply_call_trace({"tool": "api_get", "args": {"path": "/x"}}, None, ())
+    finally:
+        session_org.reset_nom_deprecie(jeton)
+    assert row == {"tool": "api_get", "args": {"path": "/x", "deprecated_name": "http_get"}}
+    assert apply_call_trace({"tool": "api_get", "args": {}}, None, ()) == {
+        "tool": "api_get", "args": {}}
+
+
+def test_le_retrait_du_connecteur_api_tient_les_deux_mois():
+    """Même PLANCHER que le lot #519, compté depuis l'annonce de CE renommage."""
+    plancher = deprecations._plus_de_mois(deprecations.ANNONCE_CONNECTEUR_API,
+                                          deprecations.PREAVIS_MOIS)
+    assert deprecations.RETRAIT_CONNECTEUR_API >= plancher
+    assert all(deprecations._RETRAIT_DES_OUTILS[a] == deprecations.RETRAIT_CONNECTEUR_API
+               for a in deprecations.OUTILS_CONNECTEUR_API)

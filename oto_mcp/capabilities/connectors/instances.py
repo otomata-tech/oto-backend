@@ -187,7 +187,7 @@ class ConnectorInstance(BaseModel):
     # filed by R9 under an opt-in org setting.
     # ⚠️ **May be absent** — same fail-open as `id`.
     visible_to: Optional[list[str]] = None
-    # `http` instances only: the custom connector's card (`custom_api.py`). May be absent.
+    # `api` instances only: the custom connector's card (`custom_api.py`). May be absent.
     custom_api: Optional[dict] = None
 
 

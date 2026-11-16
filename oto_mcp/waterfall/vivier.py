@@ -9,8 +9,8 @@ from fastmcp import FastMCP
 
 from . import appel, qualification
 from .etape import Step, _payload
-from .qualification import _QUALIFY_MIN_S, _Tally, _person_key
-from .valeurs import _get
+from .qualification import _QUALIFY_MIN_S, _Tally
+from .valeurs import _get, _person_key
 
 #: The most people a judged pool holds: every page of a free search, up to this (Jev
 #: judges them 200 a call — 1,000 titles are ~$0.02).
@@ -80,6 +80,8 @@ async def _fill_from_pages(mcp: FastMCP, sub, step: Step, got: dict, inputs: dic
     pages and why it stopped (`pages`, `stopped`)."""
     param, first = step.pages
     base = step.build(inputs)
+    # A fanned step (Google: one search per role) buys the next page of EACH search.
+    bases = step.fan_out(inputs) if step.fan_out is not None else None
     people = list(got["people"])
     seen = {_person_key(p) for p in people} | set(tally.seen())
     page, read, why = first + 1, 1, None
@@ -92,14 +94,23 @@ async def _fill_from_pages(mcp: FastMCP, sub, step: Step, got: dict, inputs: dic
             why = "time_budget"
             break
         part: dict = {}
-        issue = await appel._call(mcp, sub, step.tool, {**base, param: page}, part)
-        if issue is not None:
-            budget["paid_steps"] = budget.get("paid_steps", 0) + 1
-        if issue is None or not appel._judge(issue, part):
-            why = part.get("code") or "page_refused"
-            break
+        if bases is not None:
+            payload = await appel._fanned(mcp, sub, step,
+                                          [{**b, param: page} for b in bases], inputs,
+                                          deadline, part, budget)
+            if payload is None:
+                why = part.get("code") or "page_refused"
+                break
+        else:
+            issue = await appel._call(mcp, sub, step.tool, {**base, param: page}, part)
+            if issue is not None:
+                budget["paid_steps"] = budget.get("paid_steps", 0) + 1
+            if issue is None or not appel._judge(issue, part):
+                why = part.get("code") or "page_refused"
+                break
+            payload = _payload(issue)
         read += 1
-        more = step.extract(_payload(issue), inputs) or {}
+        more = step.extract(payload, inputs) or {}
         fresh = [p for p in more.get("people") or [] if _person_key(p) not in seen]
         if not fresh:
             break       # the end of the results, or only people already seen

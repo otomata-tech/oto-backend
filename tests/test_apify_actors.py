@@ -176,6 +176,36 @@ def test_bills_the_finished_run_once_like_run_sync(name):
     assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
 
 
+def test_company_employees_bills_every_profile_even_before_apify_books_them():
+    """Reported 12/11/2026: runs of `apify_linkedin_company_employees` that returned 25
+    profiles traced 0 — read at SUCCEEDED, before Apify booked the events, whose price
+    is by subscription tier. Shape of the actor's public card (15/11/2026), BRONZE:
+    actor start $0.02 + 25 short profiles × $0.003."""
+    tiers = lambda prix: {"eventTieredPricingUsd": {  # noqa: E731
+        "BRONZE": {"tieredEventPriceUsd": prix}, "GOLD": {"tieredEventPriceUsd": prix / 2}}}
+    fini = {"data": {
+        "id": RUN, "status": "SUCCEEDED", "usageTotalUsd": 0, "defaultDatasetId": "ds1",
+        "chargedEventCounts": {"actor-start": 1, "short-profile": 25},
+        "accountedChargedEventCounts": {},
+        "pricingInfo": {"pricingModel": "PAY_PER_EVENT", "pricingPerEvent": {
+            "actorChargeEvents": {"actor-start": tiers(0.02),
+                                  "short-profile": tiers(0.003)}}}}}
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+            patch("oto.tools.apify.client.ApifyClient") as cls, \
+            patch.object(apify, "_palier", return_value="BRONZE") as palier, \
+            patch("oto_mcp.tools.apify.session_org.note_call_trace") as trace:
+        inst = cls.return_value
+        inst.api_key = "fake-key"
+        inst.run.return_value = fini
+        inst.dataset_items.return_value = [{"x": i} for i in range(25)]
+        out = _tool("apify_linkedin_company_employees").fn(
+            companies=["https://www.linkedin.com/company/acme"])
+    assert len(out) == 25
+    assert [c.kwargs for c in trace.call_args_list] == [
+        {"quantity": 95000, "apify_run_id": RUN}]
+    palier.assert_called_once_with("fake-key")   # the tier of the key that ran it
+
+
 def test_fields_reach_the_dataset_read():
     _, inst, _ = _lancer("apify_linkedin_profiles",
                          {"urls": ["a"], "fields": ["firstName", "headline"]})

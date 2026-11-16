@@ -230,7 +230,10 @@ WITH h AS MATERIALIZED (
     FROM (SELECT pg_snapshot_xmin(pg_current_snapshot()) AS x) s)
 SELECT h.as_of, least(h.as_of, h.non_reglee) AS settled_as_of, p.*
 FROM h LEFT JOIN LATERAL (
-    SELECT {_MOUVEMENT}, xid AS _ordre FROM credit_movements
+    SELECT {_MOUVEMENT}, xid AS _ordre,
+           (SELECT o.acting_sub FROM credit_holds o
+             WHERE o.call_uid = credit_movements.call_uid) AS sub
+    FROM credit_movements
     WHERE xid < h.x AND (xid, id) > (%(xid)s::text::xid8, %(id)s) ORDER BY xid, id
     LIMIT %(limite)s
 ) p ON true
@@ -297,8 +300,10 @@ class _Annuler(Exception):
 
 def reserver(*, call_uid: str, payer: str, connector: str, function: str, unit: str,
              scale_version: int, quantity: int, reserved: int, deadline_s: int,
-             forcer: bool) -> Reservation:
+             forcer: bool, acting_sub: Optional[str] = None) -> Reservation:
     """Réserve `reserved` unités pour l'appel `call_uid`, échéance dans `deadline_s`.
+    `acting_sub` = la personne qui a agi (pas le payeur) : notée sur la réservation, le
+    flux de mouvements la rend avec chaque règlement (`docs/limites-de-depense.md`).
 
     `forcer=False` (application) : refuse — sans rien écrire — ce que le disponible ne
     couvre pas. `forcer=True` (mesure) : pose la réservation quand même, et dit
@@ -308,11 +313,11 @@ def reserver(*, call_uid: str, payer: str, connector: str, function: str, unit: 
         with _connect() as conn, conn.transaction():
             neuve = conn.execute(
                 "INSERT INTO credit_holds (call_uid, payer, connector, function, unit, "
-                "scale_version, quantity, reserved, deadline) VALUES "
-                "(%s, %s, %s, %s, %s, %s, %s, %s, NOW() + make_interval(secs => %s)) "
+                "scale_version, quantity, reserved, deadline, acting_sub) VALUES "
+                "(%s, %s, %s, %s, %s, %s, %s, %s, NOW() + make_interval(secs => %s), %s) "
                 "ON CONFLICT (call_uid) DO NOTHING RETURNING call_uid",
                 (call_uid, payer, connector, function, unit, scale_version, quantity,
-                 reserved, deadline_s)).fetchone()
+                 reserved, deadline_s, acting_sub or None)).fetchone()
             if neuve is None:
                 return Reservation(posee=False, deja=True, insuffisant=False, disponible=0)
             row = conn.execute(

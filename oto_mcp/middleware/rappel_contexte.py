@@ -36,6 +36,20 @@ _RELEVE: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "oto_rappel_contexte", default=None)
 
 
+def avec_lignes_en_tete(result, lignes):
+    """`result` avec `lignes` (les vides écartées) EN TÊTE de son canal texte — le
+    reste tel quel. Une réponse en erreur, ou sans ligne, passe inchangée."""
+    lignes = [t for t in lignes if t]
+    if not lignes or getattr(result, "is_error", False):
+        return result
+    return ToolResult(
+        content=[*(TextContent(type="text", text=t) for t in lignes),
+                 *(result.content or [])],
+        structured_content=getattr(result, "structured_content", None),
+        meta=getattr(result, "meta", None),
+    )
+
+
 class RappelContexteMiddleware(Middleware):
     """Pose la ligne de rappel EN TÊTE du canal texte d'une réponse réussie."""
 
@@ -52,15 +66,7 @@ class RappelContexteMiddleware(Middleware):
         # Les avis de l'appel (`session_org.noter_avis`) prennent la même place que le
         # rappel, et pour la même raison : rien de ce qui réécrit le canal texte ne
         # passe au-dessus.
-        lignes = [t for t in (releve.get("ligne"), *avis) if t]
-        if not lignes or getattr(result, "is_error", False):
-            return result
-        return ToolResult(
-            content=[*(TextContent(type="text", text=t) for t in lignes),
-                     *(result.content or [])],
-            structured_content=getattr(result, "structured_content", None),
-            meta=getattr(result, "meta", None),
-        )
+        return avec_lignes_en_tete(result, [releve.get("ligne"), *avis])
 
 
 class ConstatContexteMiddleware(Middleware):

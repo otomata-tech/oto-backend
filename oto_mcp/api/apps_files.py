@@ -41,6 +41,8 @@ async def app_files_upload(request: Request, *, verifier: JWTVerifier) -> JSONRe
     if not data:
         return _json_error(request, 400, "missing_file")
     consent = form.get("consent")
+    # L'aperçu du brouillon (ses éditeurs seuls) : jugé par `deposer`, comme l'appel.
+    draft = str(form.get("draft") or "").lower() in ("1", "true")
 
     def _deposer():
         # Tout ce qui lit la base tourne ICI, hors de la boucle (le serveur est
@@ -51,7 +53,8 @@ async def app_files_upload(request: Request, *, verifier: JWTVerifier) -> JSONRe
         with geste.portee(geste.CONSOLE, sub):
             return apps_appel.deposer(ctx, app_id, str(consent) if consent else None,
                                       getattr(upload, "filename", None) or "file",
-                                      getattr(upload, "content_type", None), data)
+                                      getattr(upload, "content_type", None), data,
+                                      draft=draft)
 
     try:
         out = await run_in_threadpool(_deposer)
@@ -69,7 +72,9 @@ app_files_upload.contrat = ContratDeRoute(
         "a rendu pour `action=upload_file` et `file={name, size, media_type}` — jeton que "
         "seul l'écran hôte obtient, après avoir affiché ce résumé et reçu la confirmation "
         "du lecteur ; ce qui arrive doit y répondre. Seul le lecteur qui l'a déposé lit le fichier, et les "
-        "runs qu'il lance (`start_agent` avec `files`). Session interactive seule."),
+        "runs qu'il lance (`start_agent` avec `files`). `draft` (facultatif, `true`) : "
+        "l'aperçu du brouillon de l'app, ses éditeurs seuls, comme l'appel. Session "
+        "interactive seule."),
     Output=apps_appel.AppCallOut,
     errors=(
         DeclaredError(400, "invalid_multipart", "le corps n'est pas un multipart lisible"),

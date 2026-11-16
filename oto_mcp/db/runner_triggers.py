@@ -263,6 +263,22 @@ def get_trigger(trigger_id: int, org_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def porteurs_des_agents(trigger_ids: list[int], org_id: int) -> list[dict]:
+    """`{id, org_id, sub}` de chacun des agents `trigger_ids` de `org_id` qui existe
+    encore, par id — UNE lecture pour toute une page de travaux, là où `get_trigger`
+    en ferait une par agent. De quoi juger un niveau (`_acces_agent.niveaux`), rien de
+    ce que l'agent exécute."""
+    if not trigger_ids:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, org_id, sub FROM runner_triggers "
+            "WHERE org_id = %s AND id = ANY(%s) ORDER BY id",
+            (org_id, sorted({int(i) for i in trigger_ids})),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def trigger_sans_org(trigger_id: int) -> Optional[dict]:
     """Le déclencheur d'un id, SANS borne d'org — pour `ownership` seul, qui résout
     le propriétaire d'une ressource par son id. Tout geste d'une capacité passe par

@@ -242,7 +242,8 @@ def _one_row(key: str, label: str, cost: str, *variants: Step, explains: str,
         groups += [g for g in v.requires if g not in groups]
     first = variants[0]
     return Step(key, first.tool, tuple(groups), first.build, first.extract, cost,
-                free=all(v.free for v in variants), label=label, explains=explains,
+                free=all(v.free for v in variants),
+                keyless=all(v.keyless for v in variants), label=label, explains=explains,
                 fills=fills, variants=variants)
 
 
@@ -251,12 +252,12 @@ COMPANY_STEPS: tuple[Step, ...] = (
         "fr", "French registry", "free (French open data)",
         Step("fr_siren", "fr_get", (("siren",),),
              lambda i: {"siren": i["siren"]}, _fr_get_company, "free (French open data)",
-             free=True),
+             free=True, keyless=True),
         Step("fr_name", "fr_search", (("company_name", "fr"),),
              lambda i: {"query": i["company_name"], "per_page": 5},
              _fr_search_company, "free (French open data)",
              needs="company_name, and a French company (country omitted or FR)",
-             free=True),
+             free=True, keyless=True),
         explains=(
             "The French company registry — legal name, SIREN, address, NAF code, size "
             "band; free, France only."),

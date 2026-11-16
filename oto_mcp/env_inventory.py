@@ -246,10 +246,10 @@ _IDENTITE: tuple[Variable, ...] = (
              ("oto_mcp/legal_docs.py:66",)),
     Variable("OTO_BRAND_NAME", Classe.IDENTITE, None,
              "Nom du produit du tenant primaire, tel qu'il s'imprime dans les emails "
-             "et les pages publiques.", ("oto_mcp/email_brand.py:135",)),
+             "et les pages publiques.", ("oto_mcp/email_brand.py:222",)),
     Variable("OTO_BRAND_SITE", Classe.IDENTITE, None,
              "Site du tenant primaire, hôte nu (`exemple.tld`) : pied des emails, lien "
-             "du pied des pages publiques.", ("oto_mcp/email_brand.py:139",)),
+             "du pied des pages publiques.", ("oto_mcp/email_brand.py:226",)),
     Variable("OTO_TENANT_PRIMAIRE_SLUG", Classe.IDENTITE, None,
              "Slug du tenant PRIMAIRE de l'instance (#969, ADR 0070 §7.2) : la ligne 1 "
              "de `tenants`, semée à la naissance de la base sous ce slug et le nom "
@@ -272,7 +272,15 @@ _REGLAGES: tuple[Variable, ...] = (
              "Langue (`fr`|`en`) des emails du tenant primaire pour un destinataire "
              "sans préférence connue (un invité sans compte). Vide = FR ; toute autre "
              "valeur lève `LangueInconnue` à l'envoi.",
-             ("oto_mcp/email_brand.py:131",)),
+             ("oto_mcp/email_brand.py:218",)),
+    Variable("OTO_BRAND_CHARTE", Classe.REGLAGE, "",
+             "La charte des emails du tenant primaire, en JSON : les sept teintes "
+             "(`fond`, `surface`, `encre`, `discret`, `filet`, `bouton_fond`, "
+             "`bouton_encre`, hexadécimales), en option `bouton_rayon` (px) et `logo` "
+             '(`{"url": "https://…", "largeur": n, "hauteur": n}`). Vide = la charte du '
+             "code ; posée mais invalide ou partielle, elle refuse le démarrage "
+             "(`email_brand.verifier_reglages`) et lève `CharteInvalide` à l'envoi.",
+             ("oto_mcp/email_brand.py:154",)),
     Variable("OTO_ENV", Classe.REGLAGE, None,
              "`prod`|`preprod`, DÉCLARÉ jamais deviné (ADR 0070). Absente → `None` "
              "(poste de dev, tests) : rien n'engage un tiers. Une valeur hors des "

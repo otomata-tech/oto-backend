@@ -121,21 +121,154 @@ def test_un_message_sans_fil_rend_zero_reponse_sans_erreur(slack):
     assert out["replies"] == [] and out["parent"]["ts"] == "1787848395.878659"
 
 
-def test_le_ts_d_une_REPONSE_est_refuse_avec_le_ts_du_parent(slack):
-    """Piège sondé le 28/08 : passer le `ts` d'une RÉPONSE ne rend pas le fil —
-    Slack rend ce seul message, `ok:true`. Rendu tel quel, ça dit « ce fil n'a
-    aucune réponse » : un mensonge rassurant sur l'erreur la plus probable de
-    l'appelant. On le détecte (`thread_ts` ≠ `ts`) et on rend le bon ts."""
+# Une réponse de FIL, et Slack tel qu'il répond sur son ts (sondé le 28/08) : le
+# « fil » d'une réponse est ce seul message, `ok:true`.
+PARENT_TS, REPONSE_TS = "1787812434.744429", "1787813698.937919"
+DERNIERE_TS = "1787813999.000000"
+UNE_REPONSE = {"ts": REPONSE_TS, "thread_ts": PARENT_TS, "text": "On arrête Snitcher, trop cher"}
+
+
+def _slack_fidele(fenetre_vide_la_reponse: bool):
+    """`conversations.replies` modélisé par ses arguments. Sur le ts d'une réponse :
+    ce seul message — ou RIEN quand une fenêtre `oldest` ≥ son ts l'exclut (la forme
+    non sondée, que le correctif doit couvrir aussi). Sur le parent : le fil."""
+    def replies(channel, ts, limit=50, cursor=None, oldest=None, latest=None,
+                inclusive=False):
+        if ts == REPONSE_TS:
+            if fenetre_vide_la_reponse and oldest and oldest >= REPONSE_TS and not inclusive:
+                return {"ok": True, "messages": []}
+            return {"ok": True, "messages": [UNE_REPONSE]}
+        if ts == PARENT_TS:
+            msgs = [FIL["messages"][0]] + [
+                m for m in FIL["messages"][1:] if not oldest or m["ts"] > oldest]
+            return {"ok": True, "has_more": False, "messages": msgs}
+        raise SlackError("thread_not_found")
+    return replies
+
+
+def _run(m, **args):
+    """Par le CHEMIN SERVI (`Tool.run` : validation, threadpool) et non par la seule
+    fonction : c'est là qu'une exception se change en « Internal server error »."""
+    tool = asyncio.run(m.get_tool("slack_read_thread"))
+    return asyncio.run(tool.run(args))
+
+
+def _structure(res) -> dict:
+    return res.structured_content.get("result", res.structured_content)
+
+
+def test_le_ts_d_une_REPONSE_lit_le_fil_de_son_parent_et_le_dit(slack):
+    """Piège sondé le 28/08 : le `ts` d'une RÉPONSE ne rend pas le fil — Slack rend ce
+    seul message, `ok:true`. Rendu tel quel, ça dit « ce fil n'a aucune réponse ».
+    Slack nomme le parent (`thread_ts`) : on lit SON fil, et la réponse le dit."""
     m, client = slack
-    client.replies.return_value = {"ok": True, "messages": [
-        {"ts": "1787813698.937919", "thread_ts": "1787812434.744429", "text": "une réponse"}]}
+    client.replies.side_effect = _slack_fidele(fenetre_vide_la_reponse=False)
+    out = _fn(m, "slack_read_thread")(channel="C1", thread_ts=REPONSE_TS)
+    assert out["parent"]["ts"] == PARENT_TS
+    assert [r["ts"] for r in out["replies"]] == [REPONSE_TS, DERNIERE_TS]
+    assert out["thread_ts"] == PARENT_TS and out["requested_ts"] == REPONSE_TS
+    assert PARENT_TS in out["note"] and REPONSE_TS in out["note"]
+    assert [c.args for c in client.replies.call_args_list] == [
+        ("C1", REPONSE_TS), ("C1", PARENT_TS)]
+
+
+def test_un_vrai_parent_ne_porte_aucune_note_de_redirection(slack):
+    m, client = slack
+    client.replies.side_effect = _slack_fidele(fenetre_vide_la_reponse=False)
+    out = _fn(m, "slack_read_thread")(channel="C1", thread_ts=PARENT_TS)
+    assert set(out) == {"parent", "replies", "has_more", "next_cursor"}
+    assert client.replies.call_count == 1
+
+
+@pytest.mark.parametrize("fenetre_vide_la_reponse", [False, True],
+                         ids=["slack-rend-la-reponse", "slack-rend-un-fil-vide"])
+def test_reponse_en_thread_ts_oldest_egal_limit_1(slack, fenetre_vide_la_reponse):
+    """La forme EXACTE : une ronde qui ne garde que les `latest_reply`
+    repart avec le ts d'une réponse, `oldest` = ce même ts, `limit=1`. Servi
+    « Internal server error », sans le ts du parent : ça se lisait comme une panne.
+    Quelle que soit la façon dont Slack répond sous la fenêtre (la réponse seule, ou
+    rien), l'appel lit le fil du parent avec la même fenêtre : les réponses APRÈS."""
+    m, client = slack
+    client.replies.side_effect = _slack_fidele(fenetre_vide_la_reponse)
+    out = _structure(_run(m, channel="C1", thread_ts=REPONSE_TS,
+                          oldest=REPONSE_TS, limit=1))
+    assert out["parent"]["ts"] == PARENT_TS and out["thread_ts"] == PARENT_TS
+    assert [r["ts"] for r in out["replies"]] == [DERNIERE_TS]
+    assert client.replies.call_count == (3 if fenetre_vide_la_reponse else 2)
+    dernier = client.replies.call_args_list[-1]
+    assert dernier.args == ("C1", PARENT_TS)
+    assert dernier.kwargs["oldest"] == REPONSE_TS and dernier.kwargs["limit"] == 1
+
+
+@pytest.mark.parametrize("slack_vide_sous_fenetre", [False, True],
+                         ids=["slack-rend-toujours-le-message", "slack-vide-sous-fenetre"])
+def test_ronde_sans_nouveaute_depuis_la_DERNIERE_reponse(slack, slack_vide_sous_fenetre):
+    """Le cas le plus fréquent d'une ronde : `latest_reply` = la dernière réponse, et
+    rien de neuf depuis. Ts de réponse, `oldest` = ce ts, `limit=1` : le parent, ZÉRO
+    réponse et la note — jamais un refus, que Slack vide ou non la page sous la
+    fenêtre (pour la réponse comme pour le parent)."""
+    m, client = slack
+    derniere = FIL["messages"][2]
+
+    def replies(channel, ts, limit=50, cursor=None, oldest=None, latest=None,
+                inclusive=False):
+        if ts == DERNIERE_TS:
+            if slack_vide_sous_fenetre and oldest:
+                return {"ok": True, "messages": []}
+            return {"ok": True, "messages": [derniere]}
+        assert ts == PARENT_TS
+        nouvelles = [r for r in FIL["messages"][1:] if not oldest or r["ts"] > oldest]
+        if slack_vide_sous_fenetre and oldest and not nouvelles:
+            return {"ok": True, "messages": []}
+        return {"ok": True, "has_more": False,
+                "messages": [FIL["messages"][0]] + nouvelles}
+    client.replies.side_effect = replies
+    out = _structure(_run(m, channel="C1", thread_ts=DERNIERE_TS,
+                          oldest=DERNIERE_TS, limit=1))
+    assert out["parent"]["ts"] == PARENT_TS and out["replies"] == []
+    assert out["thread_ts"] == PARENT_TS and out["requested_ts"] == DERNIERE_TS
+    assert PARENT_TS in out["note"]
+    assert out["has_more"] is False and out["next_cursor"] is None
+
+
+def test_un_vrai_parent_sans_reponse_dans_la_fenetre_rend_zero_reponse(slack):
+    """Si Slack vidait la page d'un VRAI parent sous la fenêtre, le regard sans
+    fenêtre le dit parent : zéro réponse, pas un refus — une ronde sans nouveauté
+    n'est pas une erreur."""
+    m, client = slack
+
+    def replies(channel, ts, limit=50, cursor=None, oldest=None, latest=None,
+                inclusive=False):
+        return ({"ok": True, "messages": []} if oldest
+                else {"ok": True, "messages": [FIL["messages"][0]]})
+    client.replies.side_effect = replies
+    out = _fn(m, "slack_read_thread")(channel="C1", thread_ts=PARENT_TS, oldest="9.9")
+    assert out == {"parent": FIL["messages"][0], "replies": [], "has_more": False,
+                   "next_cursor": None}
+
+
+def test_fil_du_parent_illisible_refus_qui_NOMME_le_parent(slack):
+    """Le parent nommé par Slack ne se lit pas comme un parent (paranoïa : jamais
+    observé) : pas de boucle, un refus d'entrée qui donne le ts à reprendre —
+    `invalid_input` par la taxonomie, jamais « Internal server error » (#1350)."""
+    m, client = slack
+    client.replies.return_value = {"ok": True, "messages": [UNE_REPONSE]}
     with pytest.raises(McpError) as e:
-        _fn(m, "slack_read_thread")(channel="C1", thread_ts="1787813698.937919")
-    assert "1787812434.744429" in str(e.value)
-    # #1350 : un `ValueError` nu était servi « Internal server error », sans le ts.
+        _run(m, channel="C1", thread_ts=REPONSE_TS)
     from oto_mcp import error_taxonomy
     info = error_taxonomy.classify(e.value)
-    assert info.code == "invalid_input" and "1787812434.744429" in info.message
+    assert info.code == "invalid_input" and PARENT_TS in info.message
+    assert client.replies.call_count == 2
+
+
+def test_un_fil_vide_sans_fenetre_est_un_refus_d_entree(slack):
+    m, client = slack
+    client.replies.return_value = {"ok": True, "messages": []}
+    with pytest.raises(McpError) as e:
+        _run(m, channel="C1", thread_ts="1.1")
+    from oto_mcp import error_taxonomy
+    assert error_taxonomy.classify(e.value).code == "invalid_input"
+    assert client.replies.call_count == 1
 
 
 def test_la_fenetre_et_la_pagination_du_fil_sont_transmises(slack):

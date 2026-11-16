@@ -1,6 +1,6 @@
 """Garde d'egress des connecteurs — une destination de credential ne vise pas l'intérieur.
 
-Sept connecteurs prennent leur hôte dans le credential : `http` (`base_url` et
+Sept connecteurs prennent leur hôte dans le credential : `api` (`base_url` et
 `token_url`), `n8n`, `make`, `github` Enterprise, `lighton`, `posthog`,
 `salesforce`. Cette valeur est déclarée par un **administrateur d'organisation
 cliente**, et le process qui l'appelle tourne en root, sans conteneur : sa boucle
@@ -49,7 +49,7 @@ côté lib — autre lot, et un bump de pin.
 (`config.public_host()`, lu de `OTO_MCP_PUBLIC_URL`), ses sous-domaines et ses hôtes
 épinglés par org (`<slug>--<hôte>`, `subdomain_org`) sont refusés, quelle que soit la
 politique et sans exception possible : un agent n'appelle pas oto par un connecteur.
-Une carte `http` dont la `base_url` visait l'instance joignait `/api/hooks/…` avec un
+Une carte `api` dont la `base_url` visait l'instance joignait `/api/hooks/…` avec un
 porteur obtenu ailleurs, et réveillait un agent hors de toute liste d'outils. Sans la
 variable, la garde LÈVE (comme `config.public_host`) : on ne devine pas quel hôte est
 le nôtre. ⚠️ Limite : un AUTRE nom du même service (l'adresse IP de la machine, un
@@ -258,7 +258,7 @@ def check_url(url: str, *, connector: str, field: str = "base_url",
                 "tourne sur une machine dont le réseau interne porte des services "
                 "d'administration, et une URL choisie dans une conversation ne "
                 "l'atteint pas, sans exception. Si cette adresse est un service de "
-                "ton organisation, il se déclare comme connecteur `http` par un "
+                "ton organisation, il se déclare comme connecteur `api` par un "
                 "administrateur (carte HTTP du tableau de bord) — et une adresse "
                 "interne y est refusée aussi, sauf exception nommée par l'opérateur "
                 f"de la plateforme. (Champ `{field}`.)")

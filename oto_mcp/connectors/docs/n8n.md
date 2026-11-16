@@ -7,8 +7,11 @@ fill in both in your oto connector keys under `n8n`. more info at [n8n.io](https
 
 ## usage — manage workflows and executions
 
-list, activate and inspect your workflows and their runs.
+list, build, activate and inspect your workflows and their runs.
 - `n8n_list_workflows` lists workflows (filter `active`, `tags`), `n8n_get_workflow` details one workflow
+- `n8n_act` writes one: `create_workflow` (created inactive), `update_workflow` (the keys given replace the current ones; a published workflow goes live with the change unless `publish_if_active=false`), `delete_workflow`, `set_workflow_tags`
 - `n8n_activate_workflow` / `n8n_deactivate_workflow` start or stop its triggers/cron
 - `n8n_list_executions` the executions (filter by workflow or `status` success/error/waiting)
 - `n8n_get_execution` the detail of one execution (with `include_data` for per-node data)
+
+with an enterprise n8n, a key limited to scopes needs `workflow:create`, `workflow:update`, `workflow:delete` and `workflowTags:update` to write.

@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 #: A run still unfinished after this long is left to the comparison, and said.
 _ABANDON_APRES = timedelta(days=7)
+#: A run finished this long ago has all its events booked (Apify books them seconds
+#: after the finish): its `usageTotalUsd` is final, priced or not (`_cout_final`).
+_RESERVE_APRES = timedelta(hours=1)
 #: A gap below this is Apify's own storage and rounding, not a leak.
 SEUIL_ECART_USD = 5.0
 _CIBLE_SIGNAL = "apify_cost_gap"
@@ -88,10 +91,34 @@ def _tracer(ligne: dict, cout: float) -> None:
     })
 
 
+def _cout_final(run: dict, run_id: str, cout: Optional[float],
+                maintenant: datetime) -> Optional[float]:
+    """`cout`, or — a cost `_cout` could not call final (an event not booked, without a
+    price for the account, or no booked counts at all) — the run's `usageTotalUsd` once
+    the run finished more than `_RESERVE_APRES` ago: Apify has booked everything by
+    then, and the figure it serves IS the cost. Without that way out, such a run would
+    stay unsettled for good. None while it is too recent, or its finish unreadable."""
+    from .tools.apify import _usd
+    if cout is not None:
+        return cout
+    total, fin = _usd(run.get("usageTotalUsd")), run.get("finishedAt")
+    if total is None or not fin:
+        return None
+    try:
+        depuis = maintenant - _instant(fin)
+    except (TypeError, ValueError):
+        logger.warning("apify run %s: unreadable finish (%s)", run_id, type(fin).__name__)
+        return None
+    if depuis <= _RESERVE_APRES:
+        return None
+    logger.info("apify run %s: finished %s ago, its usageTotalUsd is final", run_id, depuis)
+    return total
+
+
 def _relever_un(client: Any, ligne: dict, *, dry_run: bool, maintenant: datetime) -> str:
     from oto.tools.common.errors import UpstreamHTTPError
 
-    from .tools.apify import _TERMINAL, _cout, _run_of
+    from .tools.apify import _TERMINAL, _cout, _palier_de, _run_of
     run_id = ligne["apify_run_id"]
     try:
         run = _run_of(client.run_status(run_id))
@@ -108,9 +135,12 @@ def _relever_un(client: Any, ligne: dict, *, dry_run: bool, maintenant: datetime
             logger.warning("apify run %s: %s after %s, still unsettled", run_id, statut,
                            _ABANDON_APRES)
         return "en_cours"
-    cout = _cout(run, run_id, "apify_run_status")
+    cout = _cout_final(run, run_id, _cout(run, run_id, "apify_run_status",
+                                          _palier_de(client)), maintenant)
     if cout is None:
-        logger.warning("apify run %s: finished (%s) without a readable cost", run_id, statut)
+        # Unreadable, or not final yet (`_cout` says which): retried tomorrow.
+        logger.warning("apify run %s: finished (%s) without a readable, final cost",
+                       run_id, statut)
         return "illisibles"
     if not dry_run:
         if cout > 0:

@@ -58,7 +58,7 @@ def test_le_masquage_s_applique_a_la_valeur_longue():
 
 def test_la_declaration_ne_porte_que_des_noms_et_des_tailles():
     """Ce qui est ajouté à la ligne ne contient aucune valeur d'argument."""
-    args = calllog.truncated_args({"body": "secret-in-body " * 1000}, tool="http_post")
+    args = calllog.truncated_args({"body": "secret-in-body " * 1000}, tool="api_post")
     decl = args[calllog.ARGS_TRUNCATED_KEY]
     assert set(decl) == {"at", "sizes"}
     assert all(isinstance(v, int) for v in decl["sizes"].values())

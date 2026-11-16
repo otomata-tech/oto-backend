@@ -456,6 +456,36 @@ def _pied_de_l_org(org_footer: dict, en: bool) -> tuple[str, tuple | None]:
     return tete + ecrire + lien, ((url, libelle) if url else None)
 
 
+# Les marges qu'un paragraphe ou une liste du corps texte porte déjà (`_charte.PARA`) :
+# posées APRÈS l'assainissement, qui retire tout attribut `style`. Lues à l'appel, pas à
+# l'import : `email_brand` importe ce module, et l'import à froid de l'un ou l'autre
+# passe par un module à moitié initialisé (`tests/test_email_cycle_import_a_froid.py`).
+_MD_MARGES_EN_PLUS = {"p": "", "ul": ";padding-left:24px", "ol": ";padding-left:24px",
+                      "blockquote": ";padding-left:12px;border-left:3px solid #ddd"}
+
+
+def corps_markdown(body: str) -> str:
+    """Le HTML du corps d'un email écrit en markdown : le MÊME rendu assaini que `gmail`
+    (`markdown_assaini.rendu_markdown_assaini` — HTML brut, attributs `attr_list` et
+    liens hors `http(s)`/`mailto` retirés), sans image (l'image de tête a son paramètre,
+    son `alt` exigé et son `https` vérifié), puis les marges de la charte."""
+    from .markdown_assaini import rendu_markdown_assaini
+
+    sur = rendu_markdown_assaini(body, images=False)
+    for balise, en_plus in _MD_MARGES_EN_PLUS.items():
+        sur = sur.replace(f"<{balise}>", f'<{balise} style="{_charte.PARA}{en_plus}">')
+    return sur
+
+
+def _apercu_markdown(html_corps: str) -> str:
+    """La ligne d'aperçu d'un corps markdown : le texte de son premier bloc, sans
+    balise ni syntaxe (« **bonjour** » s'afficherait tel quel dans la boîte)."""
+    import nh3
+
+    texte = _html.unescape(nh3.clean(html_corps, tags=set()))
+    return next((ligne.strip() for ligne in texte.splitlines() if ligne.strip()), "")
+
+
 def render_composed_email(
     body: str,
     *,
@@ -468,13 +498,15 @@ def render_composed_email(
     locale: str | None = None,
     unsubscribe_url: str | None = None,
     org_footer: dict | None = None,
+    markdown: bool = False,
 ) -> str:
     """Rend le HTML, à la charte de `brand`, d'un email dont le **contenu est fourni
     par l'agent** (prose brute + CTA optionnel + UNE image de tête).
 
     `body` = texte brut : les lignes vides séparent des paragraphes, les sauts de
     ligne simples deviennent des `<br>`. Échappé (jamais de HTML injecté par
-    l'agent). `footer` ajoute la signature de marque + l'opt-out par réponse.
+    l'agent). `markdown=True` : `body` est du markdown, rendu puis assaini
+    (`corps_markdown`). `footer` ajoute la signature de marque + l'opt-out par réponse.
     `image_url` + `image_alt` (les deux, ou aucun) placent une image AVANT le corps ;
     voir `_image_html` pour ce qui est refusé (`ValueError`).
 
@@ -489,11 +521,16 @@ def render_composed_email(
     avec la clé commune du mailer, ne l'accepte pas, et c'est délibéré."""
     m = _charte.marque(brand)
     image_html = _image_html(image_url, image_alt)
-    paras = [p.strip() for p in (body or "").split("\n\n") if p.strip()]
-    body_html = "".join(
-        f'<p style="{_charte.PARA}">{_esc(p).replace(chr(10), "<br>")}</p>'
-        for p in paras
-    )
+    if markdown:
+        body_html = corps_markdown(body)
+        premier = _apercu_markdown(body_html)
+    else:
+        paras = [p.strip() for p in (body or "").split("\n\n") if p.strip()]
+        body_html = "".join(
+            f'<p style="{_charte.PARA}">{_esc(p).replace(chr(10), "<br>")}</p>'
+            for p in paras
+        )
+        premier = paras[0] if paras else ""
     cta_html = _charte.bouton(m, cta_url, cta_text) if (cta_text and cta_url) else ""
     # Le pied MARKETING (pourquoi vous recevez ça, comment ne plus le recevoir) —
     # celui d'un transactionnel dit autre chose, cf. `email_templates`.
@@ -504,7 +541,7 @@ def render_composed_email(
     # enregistré quelque part (une réponse humaine ne persiste aucun refus).
     locale = locale or m.langue or None
     en = locale == "en"
-    apercu = paras[0] if paras else m.nom
+    apercu = premier or m.nom
     if footer and org_footer:
         if unsubscribe_url:
             raise ValueError("`org_footer` et `unsubscribe_url` s'excluent : le pied de "
@@ -560,6 +597,7 @@ def send_composed_email(
     locale: str | None = None,
     unsubscribe_url: str | None = None,
     cc: list[str] | None = None,
+    markdown: bool = False,
 ) -> bool:
     """Envoie un email à contenu libre (fourni par l'agent), rendu à la charte de
     `brand`, via le mailer Otomata (Scaleway TEM).
@@ -577,7 +615,8 @@ def send_composed_email(
                          "lien de désabonnement nominatif partirait aux copies.")
     html = render_composed_email(body, cta_text=cta_text, cta_url=cta_url, footer=footer,
                                  image_url=image_url, image_alt=image_alt, brand=brand,
-                                 locale=locale, unsubscribe_url=unsubscribe_url)
+                                 locale=locale, unsubscribe_url=unsubscribe_url,
+                                 markdown=markdown)
     # `require_env` seulement si `reply_to` est absent (court-circuit `or`) — sans
     # elle, le repli irait vers NOTRE boîte personnelle (#968).
     rt = reply_to or _contact_to()

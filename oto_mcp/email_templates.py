@@ -467,71 +467,136 @@ def send_unipile_fin_de_droit_email(to: str, *, org_name: str | None, canaux: li
 
 def send_credential_alert_email(to: str, *, retrait: dict | None, cles_ko: list,
                                 brand: str | None = None,
-                                locale: str | None = None) -> bool:
+                                locale: str | None = None,
+                                org_id: int | None = None,
+                                sub: str | None = None) -> bool:
     """L'alerte hors bande d'une org (oto#59) : une clé retirée, refusée ou à sec sous
     ses agents programmés. UN message par org, écrit pour un humain qui ne connaît pas
-    le vocabulaire de la plateforme : ce qui est arrivé, ce que ça casse, et les deux
-    gestes possibles.
+    le vocabulaire de la plateforme.
+
+    **Ce qu'il dit, par clé (15/11/2026)** : le connecteur par son NOM de produit
+    (`providers.REGISTRY`, jamais le slug), ce qui lui arrive, les agents qui en
+    dépendent — chacun NOMMÉ, et lien vers sa page quand l'instance la déclare —, et ce
+    que le fournisseur a répondu. Puis UN geste : un bouton vers Connecteurs (`org_id`
+    et `sub` du destinataire ; sans eux, ou sans patron déclaré, pas de bouton). Un
+    destinataire qui lit « une clé est refusée » sans savoir laquelle, ni quels agents,
+    ouvre l'application pour le deviner.
 
     `brand` = `orgs.front_brand` de l'org (None = l'instance) : son nom, son expéditeur
-    et sa langue, comme ses invitations — l'alerte partait sous le nom et la langue de
-    l'INSTANCE, depuis l'expéditeur de l'instance. `locale` = la préférence de l'admin
-    destinataire (`users.locale`), à défaut la langue de la marque."""
+    et sa langue. `locale` = la préférence de l'admin destinataire (`users.locale`), à
+    défaut la langue de la marque."""
+    from . import links
+
     m = _charte.marque(brand)
     locale = locale or m.langue or None
-    en = locale == "en"
-    corps = ""
+    t = _ALERTE_CLE["en" if locale == "en" else "fr"]
+    esc = _email._esc
+    org = int(org_id) if org_id is not None else None
+    sections = []
     if retrait:
-        connecteurs = ", ".join(retrait.get("connectors") or [])
-        agents = int(retrait.get("agents_max") or 0)
-        corps += (
-            f'<p style="{_charte.PARA}">A connector key was removed from your '
-            f"organization ({_email._esc(connecteurs)}) while {agents} active "
-            "scheduled agent(s) were using it.</p>"
-            f'<p style="{_charte.PARA}">They will keep starting on schedule and fail '
-            "mid-run, and nobody else will be told: turn them off, or add a key "
-            "again.</p>") if en else (
-            f'<p style="{_charte.PARA}">Une clé de connecteur a été retirée de votre '
-            f"organisation ({_email._esc(connecteurs)}), alors que {agents} agent(s) "
-            "programmé(s) actif(s) l'utilisaient.</p>"
-            f'<p style="{_charte.PARA}">Ils continueront de partir à l\'heure et '
-            "échoueront en vol, sans que personne d'autre en soit averti : coupez-les, "
-            "ou reposez une clé.</p>")
-    if cles_ko:
-        corps += _paragraphe_cles_ko(cles_ko, _email._esc, en)
-    if en:
+        par_cnx = retrait.get("agents") or {}
+        for cnx in retrait.get("connectors") or []:
+            nom = libelle_connecteur(cnx)
+            sections.append(_section_cle(
+                m, t, t["retiree"].format(c=nom), t["geste_retiree"].format(c=nom),
+                par_cnx.get(cnx) or [], int(retrait.get("agents_max") or 0), None,
+                org, sub))
+    for c in cles_ko or []:
+        # À sec, le geste est CHEZ le fournisseur (recharger), pas chez nous : le
+        # bouton Connecteurs ne sert alors qu'à brancher une autre clé.
+        etat = "a_sec" if c.get("verdict") == _sans_credit() else "refusee"
+        nom = libelle_connecteur(c.get("connector"))
+        sections.append(_section_cle(
+            m, t, t[etat].format(c=nom), t["geste_" + etat].format(c=nom),
+            c.get("agents") or [], len(c.get("agents") or []), c.get("raison"), org, sub))
+    titre = t["titre_un"] if len(sections) == 1 else t["titre_n"]
+    lien = links.link_for("connectors", sub=sub, org=org) if org is not None else None
+    corps = (f'<h1 style="margin:0 0 4px;font-size:20px;line-height:1.3;font-weight:600;'
+             f'letter-spacing:-0.01em;color:{m.encre}">{esc(titre)}</h1>'
+             + "".join(sections)
+             + f'<p style="margin:24px 0 0">{esc(t["fin"])}</p>'
+             + (_charte.bouton(m, lien, t["ouvrir"]) if lien else ""))
+    if locale == "en":
         subject = ("A key was removed under your scheduled agents" if retrait and not cles_ko
                    else "A key is failing under your scheduled agents")
     else:
         subject = ("Une clé retirée sous vos agents programmés" if retrait and not cles_ko
                    else "Une clé en panne sous vos agents programmés")
     return _envoyer(m, to, subject, _charte.page(
-        m, corps, preheader=subject,
+        m, corps, preheader=t["fin"],
         mention=_charte.mention_transactionnelle(m, locale), locale=locale))
 
 
-def _paragraphe_cles_ko(cles: list[dict], esc, en: bool = False) -> str:
-    """Le paragraphe des clés refusées ou à sec, pour un humain qui ne connaît pas le
-    vocabulaire de la plateforme : quelle clé, ce que dit le fournisseur, combien
-    d'agents butent dessus, et les deux gestes possibles."""
-    from .credentials_store import NO_QUOTA_VERDICT
+#: Les mots de l'alerte de clé, par langue (`send_credential_alert_email`).
+_ALERTE_CLE = {
+    "fr": {"titre_un": "Une clé est à remplacer", "titre_n": "Des clés sont à remplacer",
+           "retiree": "Clé {c} retirée", "refusee": "Clé {c} refusée par le fournisseur",
+           "a_sec": "Compte {c} sans crédit",
+           "geste_retiree": "Reposez une clé dans Connecteurs.",
+           "geste_refusee": "Créez une nouvelle clé chez {c} et collez-la dans Connecteurs.",
+           "geste_a_sec": "Rechargez votre compte {c} chez {c}, ou branchez une autre clé "
+                          "dans Connecteurs.",
+           "utilisee": "Utilisée par", "erreur": "Erreur",
+           "n_agents": "{n} agent(s) programmé(s) actif(s) l'utilisent",
+           "fin": "D'ici là, ces agents échouent à chaque passage.",
+           "ouvrir": "Ouvrir Connecteurs"},
+    "en": {"titre_un": "A key needs replacing", "titre_n": "Keys need replacing",
+           "retiree": "{c} key removed", "refusee": "{c} key refused by the provider",
+           "a_sec": "{c} account out of credit",
+           "geste_retiree": "Add a key again in Connectors.",
+           "geste_refusee": "Create a new key with {c} and paste it in Connectors.",
+           "geste_a_sec": "Top up your {c} account with {c}, or connect another key in "
+                          "Connectors.",
+           "utilisee": "Used by", "erreur": "Error",
+           "n_agents": "{n} active scheduled agent(s) use it",
+           "fin": "These agents fail on every run until then.",
+           "ouvrir": "Open Connectors"},
+}
 
-    items = []
-    for c in cles:
-        a_sec = c.get("verdict") == NO_QUOTA_VERDICT
-        raison = f" ({esc(c['raison'])})" if c.get("raison") else ""
-        if en:
-            etat = "is out of credits" if a_sec else "is refused by the provider"
-            items.append(f"<li>The {esc(c['connector'])} key {etat}{raison}: "
-                         f"{len(c['agents'])} active scheduled agent(s) use it.</li>")
-            continue
-        etat = "n'a plus de crédits" if a_sec else "est refusée par le fournisseur"
-        items.append(f"<li>La clé {esc(c['connector'])} {etat}{raison} : "
-                     f"{len(c['agents'])} agent(s) programmé(s) actif(s) l'utilisent.</li>")
-    if en:
-        return ("<ul>" + "".join(items) + "</ul>"
-                "<p>These agents still start on schedule and fail mid-run: top up or "
-                "replace the key, or turn them off.</p>")
-    return ("<ul>" + "".join(items) + "</ul>"
-            "<p>Ces agents partent à l'heure et échouent en vol : rechargez ou reposez "
-            "la clé, ou coupez-les.</p>")
+
+def _sans_credit() -> str:
+    from .credentials_store import NO_QUOTA_VERDICT
+    return NO_QUOTA_VERDICT
+
+
+def libelle_connecteur(nom) -> str:
+    """Le NOM de produit d'un connecteur (`providers.REGISTRY`), sinon son slug mis en
+    forme — jamais le slug brut en minuscules, que le destinataire n'a jamais vu."""
+    from . import providers
+    slug = str(nom or "").strip()
+    con = providers.REGISTRY.get(slug)
+    label = getattr(con, "label", None) if con is not None else None
+    return label or slug.replace("_", " ").strip().capitalize() or "?"
+
+
+def _section_cle(m, t: dict, titre: str, geste: str, agents: list, nb: int, raison, org,
+                 sub) -> str:
+    """Une clé : son état en gras, ce qu'il faut faire (une ligne, propre à l'état : reposer,
+    recréer, ou recharger chez le fournisseur), puis « utilisée par » (les agents nommés, chacun lien
+    vers sa page quand l'instance la déclare ; à défaut leur nombre) et l'erreur du
+    fournisseur. Tout est échappé : libellés d'agents et raison viennent de tiers."""
+    from . import links
+    esc, attr = _email._esc, _email._esc_attr
+    noms = []
+    for a in agents:
+        nom = f"<strong>{esc(a.get('label') or '#' + str(a.get('id')))}</strong>"
+        url = (links.link_for("agent", sub=sub, org=org, id=int(a["id"]))
+               if org is not None and a.get("id") is not None else None)
+        noms.append(f'<a href="{attr(url)}" style="color:{m.encre}">{nom}</a>'
+                    if url else nom)
+    lignes = [(t["utilisee"], "<br>".join(noms) if noms
+               else esc(t["n_agents"].format(n=nb)) if nb else None),
+              (t["erreur"], (f'<span style="font-family:SFMono-Regular,Menlo,Consolas,'
+                             f'monospace;font-size:13px;color:{m.discret}">{esc(raison)}</span>')
+               if raison else None)]
+    tr = "".join(
+        f'<tr><td style="padding:3px 16px 3px 0;color:{m.discret};white-space:nowrap;'
+        f'vertical-align:top">{esc(k)}</td><td style="padding:3px 0;vertical-align:top">'
+        f'{v}</td></tr>' for k, v in lignes if v)
+    return (f'<div style="margin-top:20px;padding-top:20px;border-top:1px solid {m.filet}">'
+            f'<p style="margin:0;font-weight:600">{esc(titre)}</p>'
+            f'<p style="margin:2px 0 0">{esc(geste)}</p>'
+            + (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+               f'style="margin:10px 0 0;font-size:14px;line-height:1.45">{tr}</table>'
+               if tr else "")
+            + '</div>')

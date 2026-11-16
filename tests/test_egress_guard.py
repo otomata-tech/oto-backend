@@ -31,6 +31,7 @@ import ast
 import pathlib
 
 import pytest
+from types import SimpleNamespace
 
 from oto_mcp import egress
 
@@ -105,14 +106,14 @@ def test_le_deballage_v4_dans_v6_precise_la_RAISON():
 def test_une_destination_publique_passe(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"api.acme.test": ["93.184.216.34"]}))
-    egress.check_url("https://api.acme.test/v1", connector="http")
+    egress.check_url("https://api.acme.test/v1", connector="api")
 
 
 def test_une_adresse_interne_ecrite_en_clair_est_refusee(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"127.0.0.1": ["127.0.0.1"]}))
     with pytest.raises(egress.EgressRefused):
-        egress.check_url("http://127.0.0.1:9001/config", connector="http")
+        egress.check_url("http://127.0.0.1:9001/config", connector="api")
 
 
 def test_le_deguisement_par_nom_de_domaine_est_refuse(monkeypatch):
@@ -121,7 +122,7 @@ def test_le_deguisement_par_nom_de_domaine_est_refuse(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"interne.acme.test": ["127.0.0.1"]}))
     with pytest.raises(egress.EgressRefused) as pris:
-        egress.check_url("https://interne.acme.test/", connector="http")
+        egress.check_url("https://interne.acme.test/", connector="api")
     message = str(pris.value)
     # Le refus doit montrer les DEUX : le nom saisi ET l'adresse jointe. Sans le
     # nom, il paraît absurde ; sans l'adresse, il ne dit pas ce qui cloche.
@@ -160,7 +161,7 @@ def test_un_schema_hors_http_est_refuse(monkeypatch, url):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"api.acme.test": ["93.184.216.34"]}))
     with pytest.raises(egress.EgressRefused):
-        egress.check_url(url, connector="http")
+        egress.check_url(url, connector="api")
 
 
 def test_un_hote_qui_ne_resout_pas_n_est_pas_appele(monkeypatch):
@@ -180,12 +181,12 @@ def test_le_refus_nomme_sa_destination(monkeypatch):
                         _resolution(**{"pont.acme.test": ["127.0.0.1"]}))
     with pytest.raises(egress.EgressRefused) as pris:
         egress.check_url("http://pont.acme.test:9000/healthz",
-                         connector="http", field="base_url")
+                         connector="api", field="base_url")
     message = str(pris.value)
     assert egress.ALLOW_VAR in message
     assert "nom=adresse:port" in message
     assert "127.0.0.1:9000" in message, "l'entrée à déclarer doit être donnée telle quelle"
-    assert "base_url" in message and "http" in message, "quelle carte corriger"
+    assert "base_url" in message and "api" in message, "quelle carte corriger"
 
 
 # ── 3. les exceptions nommées ────────────────────────────────────────────────
@@ -196,7 +197,7 @@ def test_une_destination_interne_declaree_passe(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"127.0.0.1": ["127.0.0.1"]}))
     monkeypatch.setenv(egress.ALLOW_VAR, "pont-local=127.0.0.1:9000")
-    egress.check_url("http://127.0.0.1:9000/healthz", connector="http")
+    egress.check_url("http://127.0.0.1:9000/healthz", connector="api")
 
 
 def test_une_exception_n_ouvre_QUE_son_port(monkeypatch):
@@ -206,7 +207,7 @@ def test_une_exception_n_ouvre_QUE_son_port(monkeypatch):
                         _resolution(**{"127.0.0.1": ["127.0.0.1"]}))
     monkeypatch.setenv(egress.ALLOW_VAR, "pont-local=127.0.0.1:9000")
     with pytest.raises(egress.EgressRefused):
-        egress.check_url("http://127.0.0.1:9001/config", connector="http")
+        egress.check_url("http://127.0.0.1:9001/config", connector="api")
 
 
 def test_une_exception_ne_vaut_pas_pour_une_autre_adresse(monkeypatch):
@@ -214,7 +215,7 @@ def test_une_exception_ne_vaut_pas_pour_une_autre_adresse(monkeypatch):
                         _resolution(**{"10.0.0.7": ["10.0.0.7"]}))
     monkeypatch.setenv(egress.ALLOW_VAR, "pont-local=127.0.0.1:9000")
     with pytest.raises(egress.EgressRefused):
-        egress.check_url("http://10.0.0.7:9000/", connector="http")
+        egress.check_url("http://10.0.0.7:9000/", connector="api")
 
 
 def test_le_defaut_est_vide():
@@ -251,7 +252,7 @@ def test_une_declaration_illisible_n_atteint_pas_le_trafic_public(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"api.acme.test": ["93.184.216.34"]}))
     monkeypatch.setenv(egress.ALLOW_VAR, "n'importe quoi")
-    egress.check_url("https://api.acme.test/", connector="http")
+    egress.check_url("https://api.acme.test/", connector="api")
 
 
 # ── 4. le câblage, cran 1 : l'inventaire DÉRIVÉ du registre ──────────────────
@@ -401,7 +402,7 @@ def test_l_inventaire_derive_n_est_pas_vide():
     pour la pire des raisons — c'est exactement la forme du vert creux."""
     inventaire = _champs_de_destination()
     assert len(inventaire) >= 7, f"inventaire suspect : {sorted(inventaire)}"
-    assert "http" in inventaire and "base_url" in inventaire["http"]
+    assert "api" in inventaire and "base_url" in inventaire["api"]
 
 
 def test_ce_qui_est_ecarte_de_l_inventaire_est_justifie():
@@ -449,16 +450,22 @@ def test_salesforce_garde_son_serveur_d_auth(monkeypatch):
     assert salesforce._login_url("") == "https://login.salesforce.com"
 
 
-def test_http_refuse_la_carte_et_le_dit_en_McpError(monkeypatch):
+def _carte(fields: dict) -> SimpleNamespace:
+    """La ligne de coffre que `tools.api._resolve()` rend : ses champs et la ligne."""
+    return SimpleNamespace(fields=dict(fields), entity_type="org", entity_id="1",
+                           account="")
+
+
+def test_api_refuse_la_carte_et_le_dit_en_McpError(monkeypatch):
     """Le vecteur le plus large, de bout en bout : credential résolu → refus
     traduit pour l'appelant, sans qu'aucun client ne soit construit."""
     from oto_mcp.mcp_errors import McpError
-    from oto_mcp.tools import http as tool_http
+    from oto_mcp.tools import api as tool_http
 
     monkeypatch.setattr(tool_http, "current_user_sub_from_token", lambda: "u-1")
-    monkeypatch.setattr(tool_http, "_resolve_fields",
-                        lambda: {"base_url": "https://pont.acme.test",
-                                 "auth_mode": "bearer", "token": "t"})
+    monkeypatch.setattr(tool_http, "_resolve",
+                        lambda: _carte({"base_url": "https://pont.acme.test",
+                                 "auth_mode": "bearer", "token": "t"}))
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"pont.acme.test": ["127.0.0.1"]}))
     monkeypatch.delenv(egress.ALLOW_VAR, raising=False)
@@ -467,18 +474,18 @@ def test_http_refuse_la_carte_et_le_dit_en_McpError(monkeypatch):
     assert egress.ALLOW_VAR in str(pris.value)
 
 
-def test_http_garde_aussi_le_serveur_de_jetons_oauth2(monkeypatch):
+def test_api_garde_aussi_le_serveur_de_jetons_oauth2(monkeypatch):
     """`token_url` part en POST depuis la lib sans repasser par `base_url` : ne
     garder que la base laisserait un chemin sortant entier hors de la garde."""
     from oto_mcp.mcp_errors import McpError
-    from oto_mcp.tools import http as tool_http
+    from oto_mcp.tools import api as tool_http
 
     monkeypatch.setattr(tool_http, "current_user_sub_from_token", lambda: "u-1")
-    monkeypatch.setattr(tool_http, "_resolve_fields",
-                        lambda: {"base_url": "https://api.acme.test",
+    monkeypatch.setattr(tool_http, "_resolve",
+                        lambda: _carte({"base_url": "https://api.acme.test",
                                  "auth_mode": "oauth2",
                                  "token_url": "http://127.0.0.1:8200/token",
-                                 "client_id": "c", "client_secret": "s"})
+                                 "client_id": "c", "client_secret": "s"}))
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"api.acme.test": ["93.184.216.34"],
                                        "127.0.0.1": ["127.0.0.1"]}))
@@ -488,15 +495,15 @@ def test_http_garde_aussi_le_serveur_de_jetons_oauth2(monkeypatch):
     assert "token_url" in str(pris.value)
 
 
-def test_http_laisse_passer_une_carte_publique(monkeypatch):
+def test_api_laisse_passer_une_carte_publique(monkeypatch):
     """L'autre sens. Sans cette épreuve, une garde qui refuse TOUT serait verte
     partout ailleurs dans ce fichier."""
-    from oto_mcp.tools import http as tool_http
+    from oto_mcp.tools import api as tool_http
 
     monkeypatch.setattr(tool_http, "current_user_sub_from_token", lambda: "u-1")
-    monkeypatch.setattr(tool_http, "_resolve_fields",
-                        lambda: {"base_url": "https://api.acme.test",
-                                 "auth_mode": "bearer", "token": "t"})
+    monkeypatch.setattr(tool_http, "_resolve",
+                        lambda: _carte({"base_url": "https://api.acme.test",
+                                 "auth_mode": "bearer", "token": "t"}))
     monkeypatch.setattr(egress, "resolved_addresses",
                         _resolution(**{"api.acme.test": ["93.184.216.34"]}))
     assert tool_http._client() is not None
@@ -514,20 +521,20 @@ def test_http_laisse_passer_une_carte_publique(monkeypatch):
 ])
 @pytest.mark.parametrize("exceptions_declarees", [True, False])
 def test_l_instance_elle_meme_est_refusee(monkeypatch, url, exceptions_declarees):
-    """Un agent n'appelle pas oto par un connecteur : `http_post` sur une carte dont la
+    """Un agent n'appelle pas oto par un connecteur : `api_post` sur une carte dont la
     `base_url` vise l'instance joignait `/api/hooks/…` avec un porteur obtenu ailleurs, et
     réveillait un agent hors de toute liste d'outils."""
     monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
     with pytest.raises(egress.EgressRefused) as pris:
-        egress.check_url(url, connector="http",
+        egress.check_url(url, connector="api",
                          exceptions_declarees=exceptions_declarees)
     assert "OTO_MCP_PUBLIC_URL" in str(pris.value)
 
 
 def test_un_hote_qui_ne_fait_que_ressembler_a_l_instance_passe(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
-    egress.check_url("https://xmcp.exemple.test/v1", connector="http")
-    egress.check_url("https://exemple.test/v1", connector="http")
+    egress.check_url("https://xmcp.exemple.test/v1", connector="api")
+    egress.check_url("https://exemple.test/v1", connector="api")
 
 
 def test_sans_adresse_publique_declaree_la_garde_leve(monkeypatch):
@@ -536,18 +543,18 @@ def test_sans_adresse_publique_declaree_la_garde_leve(monkeypatch):
     monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
     monkeypatch.delenv("OTO_MCP_PUBLIC_URL", raising=False)
     with pytest.raises(RuntimeError, match="OTO_MCP_PUBLIC_URL"):
-        egress.check_url("https://api.acme.test/v1", connector="http")
+        egress.check_url("https://api.acme.test/v1", connector="api")
 
 
-def test_http_refuse_une_carte_qui_vise_l_instance(monkeypatch):
-    """De bout en bout, le vecteur : la carte `http` de l'org vise oto."""
+def test_api_refuse_une_carte_qui_vise_l_instance(monkeypatch):
+    """De bout en bout, le vecteur : la carte `api` de l'org vise oto."""
     from oto_mcp.mcp_errors import McpError
-    from oto_mcp.tools import http as tool_http
+    from oto_mcp.tools import api as tool_http
 
     monkeypatch.setattr(tool_http, "current_user_sub_from_token", lambda: "u-1")
-    monkeypatch.setattr(tool_http, "_resolve_fields",
-                        lambda: {"base_url": "https://mcp.exemple.test",
-                                 "auth_mode": "bearer", "token": "t"})
+    monkeypatch.setattr(tool_http, "_resolve",
+                        lambda: _carte({"base_url": "https://mcp.exemple.test",
+                                 "auth_mode": "bearer", "token": "t"}))
     monkeypatch.setattr(egress, "resolved_addresses", lambda h, p: {"93.184.216.34"})
     with pytest.raises(McpError) as pris:
         tool_http._client()
@@ -589,7 +596,7 @@ def test_le_detecteur_ne_confond_pas_une_autre_check_url():
     src = ('from . import web\n'
            'def f(u):\n'
            '    web.check_url_public(u)\n'
-           '    autre.check_url(u, connector="http")\n')
+           '    autre.check_url(u, connector="api")\n')
     assert connecteurs_gardes(src) == set()
 
 

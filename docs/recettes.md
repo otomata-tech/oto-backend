@@ -121,7 +121,10 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   run), leur ligne dans `tool_calls`. Le pont rétrécit ce que le code leur passe, il
   n'ouvre jamais le store lui-même.
 - **Le budget** est `limits` : unités facturées (`max_units`, obligatoire), appels,
-  secondes. Atteint, les appels suivants sont refusés et le reçu le dit (`stopped`).
+  secondes. Les `units` du reçu additionnent la `quantity` de chaque appel, **dans l'unité
+  de chaque outil** (crédits Serper, profils AI Ark… ; **micro-dollars** pour Apify,
+  1 $ = 1 000 000 — `docs/monitoring.md` §Le coût des runs Apify) : une recette qui mêle
+  deux outils additionne deux unités. Atteint, les appels suivants sont refusés et le reçu le dit (`stopped`).
 - **Une place dans le bac à sable** : une recette-code en prend une, comme une fonction
   (`docs/fonctions.md` §Combien d'exécutions à la fois) — au plus une par compte, au plus
   `OTO_FUNCTIONS_MAX_SIMULTANEES` par processus. Pas de place : 429 `sandbox_busy` avec
@@ -192,12 +195,12 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   si toutes ses ops lisent. Les connecteurs à modèle (`jev`, `lighton`) sont refusés
   même s'ils lisent : une recette est « sans modèle ». Pour marquer un outil : le
   décorateur, et la garde `tests/test_outils_en_lecture.py` le vérifie.
-  ⚠️ `http_get` est déclaré en lecture : il ne joint que la `base_url` de la carte `http`
+  ⚠️ `api_get` est déclaré en lecture : il ne joint que la `base_url` de la carte `api`
   posée par l'org (plus un chemin), sous la garde d'egress. Mais si cette adresse est
   un RELAIS (un webhook qui agit sur un simple GET, une automatisation), une recette
   « en lecture » peut y déclencher un effet de bord, ou y porter des cases d'un tableau
   dans la query string. Le périmètre de confiance reste celui de l'org qui a branché
-  l'adresse : ne déclarer en `http` qu'une API qu'on accepte de voir appelée ainsi.
+  l'adresse : ne déclarer en `api` qu'une API qu'on accepte de voir appelée ainsi.
 - **Chaque page est un appel ordinaire de l'outil** (`tools/meta.executer_cible`, le
   corps d'`oto_call`) : activation du connecteur, axes, org du run, **journal sous le
   nom de l'outil avec sa `quantity`** — donc facturé comme un appel direct — et

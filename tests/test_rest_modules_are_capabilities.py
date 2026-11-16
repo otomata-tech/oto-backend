@@ -306,12 +306,12 @@ _KNOWN: dict[str, str] = {
     #  exactement ce qui a été fait.)
 }
 
-# ⚠️ Les alias du renommage `namespace` → `datastore` (08/09/2026) sont AJOUTÉS ICI PAR
-# DÉRIVATION, pas recopiés. Ils sont eux-mêmes dérivés des routes montées
-# (`deprecations._alias_datastore`) : les lister à la main dans cette garde rétablirait
+# ⚠️ Les alias des renommages `namespace` → `datastore` (08/09/2026) et `http` → `api`
+# (12/11/2026) sont AJOUTÉS ICI PAR DÉRIVATION, pas recopiés. Ils sont eux-mêmes dérivés
+# des routes montées (`deprecations.alias_rest_derives`) : les lister à la main dans cette garde rétablirait
 # exactement la copie que la dérivation supprime — et une garde qui porte une copie
 # périmée refuse une route légitime ou en laisse passer une qui ne l'est pas.
-_KNOWN.update({a.ancien: NATURE for a in deprecations._alias_datastore()})
+_KNOWN.update({a.ancien: NATURE for a in deprecations.alias_rest_derives()})
 
 
 class _FauxVerifieur:

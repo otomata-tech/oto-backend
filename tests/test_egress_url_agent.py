@@ -1,8 +1,8 @@
 """Une URL choisie par l'agent sort par la MÊME garde que les connecteurs (oto#180).
 
 Le fait, mesuré le 12/09/2026 : depuis un run, la seule façon d'atteindre une API
-ouverte sans instance déclarée est `web_read` (le connecteur `http` exige une
-`base_url` posée par un administrateur ; `http_get` refuse sans elle). Ce chemin
+ouverte sans instance déclarée est `web_read` (le connecteur `api` exige une
+`base_url` posée par un administrateur ; `api_get` refuse sans elle). Ce chemin
 sortait par une garde À PART, écrite avant la garde d'egress du 06/09
 (`oto_mcp/egress.py`) : `not is_global` seul, sans le mot de la plage refusée, et
 qui laissait passer une plage que l'autre refuse (`is_reserved`, dont le préfixe
@@ -92,7 +92,7 @@ def test_une_exception_declaree_ouvre_le_connecteur_mais_PAS_web_read(monkeypatc
     """Le cœur de la décision : le pont déclaré pour une organisation reste
     joignable par SON credential, et par rien d'autre."""
     monkeypatch.setenv(egress.ALLOW_VAR, "pont=127.0.0.1:80")
-    egress.check_url("http://127.0.0.1/", connector="http")      # passe
+    egress.check_url("http://127.0.0.1/", connector="api")      # passe
     with pytest.raises(McpError) as e:
         W.check_url_public("http://127.0.0.1/")
     assert "boucle locale" in str(e.value)
@@ -105,17 +105,17 @@ def test_une_exception_declaree_ouvre_le_connecteur_mais_PAS_web_read(monkeypatc
 def test_le_refus_d_une_url_d_agent_dit_SON_geste_pas_celui_d_un_operateur():
     """« Déclare-la dans OTO_EGRESS_ALLOW » est le geste d'un opérateur de la
     plateforme ; l'agent qui lit ce refus ne peut pas le faire. Son geste : un
-    administrateur pose le service comme connecteur `http`."""
+    administrateur pose le service comme connecteur `api`."""
     with pytest.raises(McpError) as e:
         W.check_url_public("http://192.168.1.10/")
     msg = str(e.value)
     assert egress.ALLOW_VAR not in msg
-    assert "connecteur `http`" in msg and "administrateur" in msg
+    assert "connecteur `api`" in msg and "administrateur" in msg
 
 
 def test_le_refus_d_un_credential_garde_le_geste_de_l_operateur():
     with pytest.raises(egress.EgressRefused) as e:
-        egress.check_url("http://192.168.1.10/", connector="http")
+        egress.check_url("http://192.168.1.10/", connector="api")
     assert egress.ALLOW_VAR in str(e.value)
 
 

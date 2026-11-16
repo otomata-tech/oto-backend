@@ -34,7 +34,7 @@ ETRANGER = "usr_etranger"
 SECRET = "sk-FICTIF-ne-doit-jamais-sortir-9f3a"
 MULTI = "hunter"          # multi-compte, clé perso ET clé d'org
 MONO = "pennylaneged"     # mono-compte, clé perso ET clé d'org
-ORG_SEULE = "http"        # clé d'org seulement : pas de clé personnelle
+ORG_SEULE = "resend"     # clé d'org seulement : pas de clé personnelle
 
 
 def _exec(sql, params=()):

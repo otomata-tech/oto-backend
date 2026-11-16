@@ -202,3 +202,52 @@ def test_une_equipe_ne_peut_pas_elargir(monkeypatch):
     assert not ecrit, "un refus n'écrit rien"
     al.set_level("group", 7, "zoho", "read", "sub", org_id=1)
     assert ecrit == [("group", "7", "zoho", al.KEY, "read", "sub")]
+
+
+# --- un niveau par défaut autre que `full` : Search Console, lue dans sa description ----
+
+GSC = "google_search_console"
+LECTURE_GSC = "https://www.googleapis.com/auth/webmasters.readonly"
+
+
+def test_la_declaration_de_search_console_vient_de_sa_description():
+    """Ni `ACCESS_LEVELS` écrit à la main ni liste recopiée : les niveaux, l'implication,
+    les scopes de chaque op et le défaut sont ceux de la description servie."""
+    from oto_mcp.connectors import descriptions
+    decl = al.DECLARED[GSC]
+    assert decl.default == "read" and decl.widening_needs_consent is False
+    auth = descriptions.charger(GSC)["connector"]["auth"]
+    assert {n: list(s) for n, s in decl.levels.items()} == {
+        n: v["scopes"] for n, v in auth["access_levels"].items()}
+    assert decl.covered_ops("read", GSC) == set(decl.tools[GSC])
+    assert decl.covered_ops("read", "google_search_console_act") == set()
+    assert decl.covered_ops(al.FULL, "google_search_console_act") == {"add_sitemap"}
+    assert LECTURE_GSC in decl.closure(al.FULL)
+
+
+def test_sans_reglage_search_console_reste_en_lecture(monkeypatch):
+    """Les clés posées avant les niveaux gardent leur lecture, sans le geste de personne."""
+    _reglages(monkeypatch)
+    assert al.resolve(GSC, 1, 2) == ("read", "default")
+    _reglages(monkeypatch, google_search_console={"org": "full"})
+    assert al.resolve(GSC, 1, 2) == (al.FULL, "org")
+
+
+def test_une_equipe_ne_depasse_pas_le_defaut_de_son_org(monkeypatch):
+    from oto_mcp.db import connector_settings
+    monkeypatch.setattr(connector_settings, "set_connector_setting", lambda *a: None)
+    _reglages(monkeypatch)
+    with pytest.raises(al.AccessLevelError) as e:
+        al.set_level("group", 7, GSC, al.FULL, "sub", org_id=1)
+    assert e.value.code == "access_level_wider_than_org"
+    _reglages(monkeypatch, google_search_console={"org": "full", "group": "full"})
+    assert al.resolve(GSC, 1, 2) == (al.FULL, "group")
+
+
+@pytest.mark.parametrize("data", [
+    {"levels": {"full": ("A",)}, "tools": {}, "default": "read"},           # défaut non déclaré
+    {"levels": {"full": ("A",)}, "tools": {}, "widening_needs_consent": 1},  # pas un bool
+])
+def test_un_defaut_mal_forme_leve(data):
+    with pytest.raises(ValueError):
+        al._valider("x", data)

@@ -594,17 +594,20 @@ def _prepare_database() -> None:
             credentials_store.backfill_member_scope()
     except Exception as e:
         logger.warning("backfill_member_scope at boot failed: %s", e)
-    # Le porteur `microsoft` reprend le coffre et les coordonnées d'application de la
-    # carte `sharepoint` (devenue un service qui l'emprunte) : COPIE re-chiffrée,
-    # additive — la base est partagée, le code servi d'avant lit encore `sharepoint`.
-    # Idempotente par marque (`credentials_store.copy_connector_rows`), après
-    # backfill_member_scope (lignes au scope membre).
-    try:
-        from .auth import microsoft as ms_auth
-        with _timed("microsoft_copy_from_sharepoint"):
-            ms_auth.copier_depuis_sharepoint()
-    except Exception as e:
-        logger.warning("microsoft_copy_from_sharepoint at boot failed: %s", e)
+    # Les copies du coffre des connecteurs renommés (`sharepoint` → porteur `microsoft`,
+    # `http` → `api`) : COPIES re-chiffrées, additives — la base est partagée, le code
+    # servi d'avant lit encore l'ancien nom. Idempotentes par marque
+    # (`credentials_store.copy_connector_rows`), après backfill_member_scope (lignes au
+    # scope membre). UNE liste, `maintenance.copies_declarees` : la porte d'une cible,
+    # qui migre AVANT de démarrer, la joue avant la migration (`oto-mcp maintenance
+    # copies-du-coffre`) — une révision de renommage lit ces copies.
+    from .maintenance import copies_declarees
+    for nom, copier in copies_declarees():
+        try:
+            with _timed(nom):
+                copier()
+        except Exception as e:
+            logger.warning("%s at boot failed: %s", nom, e)
     # (Le backfill ADR 0044 §F R2 — clés plateforme legacy → instances scope PLATFORM —
     # a été RETIRÉ le 2026-07-28 : la fenêtre R2→R4 est close, `platform_keys` est droppée
     # par les migrations (`db/_init.py`) et les lectures passent par le coffre unifié. Il
@@ -696,6 +699,12 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # que décroître. Cf. `middleware/un_seul_canal.py`.
     from .middleware.un_seul_canal import UnSeulCanalMiddleware, retirer_les_schemas_vides
     retirer_les_schemas_vides(instance)
+    # Après le DERNIER montage, lui aussi : chaque outil porte son TITRE (`title` et
+    # `annotations.title`), dérivé du libellé de son connecteur — l'annuaire des
+    # connecteurs d'Anthropic refuse un outil sans. Un outil sans libellé, ou deux
+    # outils au même titre, font LEVER la construction (`tool_alias.poser_les_titres`).
+    from . import tool_alias
+    tool_alias.poser_les_titres(instance)
 
     # oto-backend#534 : chronomètre TOUTE la chaîne de middlewares ci-dessous, sans
     # toucher un seul de ses appels ni leur ordre (contrat figé, cf. les commentaires
@@ -1118,6 +1127,11 @@ def main():
     # par défaut en silence. Cf. `links.verifier_reglages`.
     from . import links
     links.verifier_reglages()
+    # Charte des emails du tenant primaire (`OTO_BRAND_CHARTE`) : posée mais illisible,
+    # elle refuse le démarrage ici, jamais la charte du code en silence.
+    # Cf. `email_brand.verifier_reglages`.
+    from . import email_brand
+    email_brand.verifier_reglages()
     # Modèles de l'agent intégré (`OTO_COPILOT_MODEL`, `OTO_COPILOT_MODEL_UP`) : un modèle
     # sans prix connu refuse le démarrage ici, jamais le défaut en silence.
     # Cf. `capabilities/copilot/palier.verifier_reglages`.

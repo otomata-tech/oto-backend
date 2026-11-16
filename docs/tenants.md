@@ -471,7 +471,7 @@ pas. Deux faces pour la poser, même ligne au coffre :
   `GET …/apps` (liste, jamais le secret, avec le rappel de chacune) ; `DELETE
   …/apps/{connector}`. Plancher `TENANT_ADMIN_OF(slug)` comme ses clés : l'admin du
   tenant (rôle lu sur le sub qualifié) OU le super admin. **Scopé au slug de la
-  route** : un admin de `pilote` ne voit ni ne pose rien sous `tulina`, et l'app d'un
+  route** : un admin de `pilote` ne voit ni ne pose rien sous `autre`, et l'app d'un
   tenant ne sert qu'aux comptes qualifiés sous son slug (`google_oauth.app_for`) —
   jamais à un autre tenant, jamais à la plateforme. **Liste fermée** : `google` seul —
   un connecteur n'y entre qu'avec un flux qui LIT l'app d'un tenant ; zoho lit une

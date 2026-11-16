@@ -50,10 +50,26 @@ class Geste:
     source: str
     acteur: Optional[str]
     geste_id: str
+    #: L'OUTIL qui écrit : le nom de l'outil MCP de l'appel (`oto_call` déplié vers sa
+    #: cible), celui qu'un travail de fond rejoue (`jev_rows` en tâche de fond), ou
+    #: celui qu'un `data_write(via=…)` a prouvé dans son run. `None` = la face ne le
+    #: sait pas (console, API, maintenance) — jamais deviné. C'est ce que lit l'en-tête
+    #: d'une colonne (« trouvé par Jev »), `db/historique.sources_des_colonnes`.
+    outil: Optional[str] = None
 
 
 _GESTE: contextvars.ContextVar[Optional[Geste]] = contextvars.ContextVar(
     "oto_geste", default=None)
+
+#: Le FOURNISSEUR derrière la valeur écrite, plus fin que l'outil et propre à CHAQUE
+#: écriture : une cascade (`waterfall_email_act(op="update_rows")`) trouve l'email d'une
+#: ligne chez Hunter et celui de la suivante chez FullEnrich, sous le même appel. Nommé
+#: par l'OUTIL de l'étape qui a trouvé (`hunter_email_finder`) : c'est ce qu'un client
+#: résout vers son connecteur. Hors
+#: du geste pour cette raison : il se pose autour d'UNE écriture (`par_fournisseur`),
+#: pas pour la requête entière.
+_FOURNISSEUR: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "oto_geste_fournisseur", default=None)
 
 
 def nouvel_identifiant() -> str:
@@ -73,10 +89,11 @@ def _verifier(source: str) -> str:
 
 
 def poser(source: str, acteur: Optional[str],
-          geste_id: Optional[str] = None) -> contextvars.Token:
+          geste_id: Optional[str] = None, *,
+          outil: Optional[str] = None) -> contextvars.Token:
     """Pose le geste de la requête courante. Rend le jeton à passer à `retirer`."""
     return _GESTE.set(Geste(_verifier(source), acteur or None,
-                            geste_id or nouvel_identifiant()))
+                            geste_id or nouvel_identifiant(), outil or None))
 
 
 def retirer(jeton: contextvars.Token) -> None:
@@ -89,8 +106,9 @@ def courant() -> Optional[Geste]:
 
 @contextmanager
 def portee(source: str, acteur: Optional[str],
-          geste_id: Optional[str] = None) -> Iterator[Geste]:
-    jeton = poser(source, acteur, geste_id)
+          geste_id: Optional[str] = None, *,
+          outil: Optional[str] = None) -> Iterator[Geste]:
+    jeton = poser(source, acteur, geste_id, outil=outil)
     try:
         yield _GESTE.get()
     finally:
@@ -117,6 +135,33 @@ def comme(source: str, acteur=_GARDER) -> Iterator[Geste]:
         yield g
     finally:
         _GESTE.reset(jeton)
+
+
+@contextmanager
+def via(outil: str) -> Iterator[Optional[Geste]]:
+    """Requalifie l'OUTIL du geste en cours, le temps d'une écriture : `data_write(via=…)`
+    écrit ce qu'un autre outil du même run a trouvé, et le journal le nomme. Le geste,
+    l'acteur et la source restent ceux de l'appel. Sans geste en cours : rien à
+    requalifier, rien n'est inventé."""
+    avant = _GESTE.get()
+    if avant is None:
+        yield None
+        return
+    jeton = _GESTE.set(replace(avant, outil=outil or None))
+    try:
+        yield _GESTE.get()
+    finally:
+        _GESTE.reset(jeton)
+
+
+@contextmanager
+def par_fournisseur(nom: Optional[str]) -> Iterator[None]:
+    """Le fournisseur de la valeur écrite DANS ce bloc (`hunter`, `fullenrich`…)."""
+    jeton = _FOURNISSEUR.set(str(nom).strip().lower()[:128] if nom else None)
+    try:
+        yield
+    finally:
+        _FOURNISSEUR.reset(jeton)
 
 
 def interne(nom: str):
@@ -150,7 +195,7 @@ def source_rest(token_kind: Optional[str]) -> str:
 
 
 def estampille() -> dict:
-    """Les quatre réglages de transaction que lit le déclencheur du journal.
+    """Les six réglages de transaction que lit le déclencheur du journal.
 
     Sans geste en cours : `source='system'`, acteur NULL, un identifiant neuf — une
     écriture dont le serveur ne connaît pas l'origine le DIT, elle ne s'invente pas
@@ -162,4 +207,6 @@ def estampille() -> dict:
         "run_id": session_org.current_call_or_session_run(),
         "source": g.source if g else SYSTEM,
         "geste_id": g.geste_id if g else nouvel_identifiant(),
+        "outil": g.outil if g else None,
+        "fournisseur": _FOURNISSEUR.get(),
     }

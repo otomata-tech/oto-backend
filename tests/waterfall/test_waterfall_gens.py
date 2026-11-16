@@ -588,3 +588,165 @@ def test_lemlist_chaque_page_est_reduite_avant_de_rejoindre_le_vivier(calls, mon
     whole = page1 + page2
     assert (gens._lemlist_people({"results": gens._lemlist_slim(whole, inputs)}, inputs)
             == gens._lemlist_people({"results": whole}, inputs))
+
+
+# --- Google : une recherche par rôle -------------------------------
+
+def _profil(nom, titre, slug, hote="fr"):
+    return {"title": f"{nom} – Acme", "subtitle": f"Lyon · {titre} · Acme",
+            "link": f"https://{hote}.linkedin.com/in/{slug}"}
+
+
+def _serper(*organic):
+    return IssueCible(ok=True, result={"organic": list(organic)})
+
+
+def _requetes(calls):
+    return [a["query"] for n, a in calls["made"] if n == "serper_search"]
+
+
+def test_google_une_recherche_par_role_fusionnee_et_dedoublonnee(calls):
+    """Serper rend une liste VIDE pour `"Acme" (a OR "b c" OR d)` là où `"Acme" "a"`
+    trouve (mesuré) : une recherche par rôle, jamais un OU entre parenthèses ; les
+    résultats sont fusionnés, le même profil (un autre hôte, une barre finale) compté
+    une fois, chaque recherche envoyée facturée et comptée."""
+    calls["answers"]["serper_search"] = [
+        _serper(_profil("Ann Boss", "Responsable handicap", "ann-boss")),
+        _serper(_profil("Ann Boss", "Responsable handicap", "ann-boss/", hote="www"),
+                _profil("Cy Dee", "Chargée mission handicap", "cy-dee")),
+        _serper(_profil("Di Eve", "Directrice diversité", "di-eve"))]
+    out = _run("waterfall_people", company_name="Acme",
+               roles=["handicap", "mission handicap", "diversité", "handicap"],
+               providers=["google"])
+    assert _requetes(calls) == ['"Acme" "handicap"', '"Acme" "mission handicap"',
+                                '"Acme" "diversité"']
+    assert not any("(" in q or " OR " in q for q in _requetes(calls))
+    assert all(a["site_filter"] == "linkedin.com/in" for _, a in calls["made"])
+    assert out["provider"] == "google"
+    assert sorted(p["full_name"] for p in out["people"]["people"]) == [
+        "Ann Boss", "Cy Dee", "Di Eve"]
+    a = out["attempts"][0]
+    assert a["status"] == "found" and a["calls"] == 3 and "stopped" not in a
+
+
+def test_google_sans_role_une_seule_recherche_sur_la_societe(calls):
+    _gens(calls)
+    out = _run("waterfall_people", company_name="Acme", providers=["google"])
+    assert _requetes(calls) == ['"Acme"']
+    assert out["people"]["count"] == 2 and out["attempts"][0]["calls"] == 1
+
+
+def test_google_rien_nulle_part_reste_no_match(calls):
+    calls["answers"]["serper_search"] = _serper()
+    out = _run("waterfall_people", company_name="Acme", roles=["sales", "CEO"],
+               providers=["google"])
+    assert out["found"] is False and out["attempts"][0]["status"] == "no_match"
+    assert out["attempts"][0]["calls"] == 2 and "code" not in out["attempts"][0]
+
+
+def test_google_borne_le_nombre_de_recherches_et_nomme_les_roles_laisses(calls):
+    from oto_mcp.waterfall import gens
+    calls["answers"]["serper_search"] = _serper()
+    roles = [f"role{i}" for i in range(gens.GOOGLE_MAX_QUERIES + 2)]
+    out = _run("waterfall_people", company_name="Acme", roles=roles, providers=["google"])
+    assert len(_requetes(calls)) == gens.GOOGLE_MAX_QUERIES
+    assert out["attempts"][0]["not_sent"] == ['"Acme" "role5"', '"Acme" "role6"']
+
+
+def test_google_s_arrete_quand_la_limite_est_atteinte(calls):
+    calls["answers"]["serper_search"] = [
+        _serper(_profil("Ann Boss", "CEO", "ann-boss")),
+        _serper(_profil("Never Sent", "CFO", "never"))]
+    out = _run("waterfall_people", company_name="Acme", roles=["CEO", "CFO", "CTO"],
+               limit=1, providers=["google"])
+    assert _requetes(calls) == ['"Acme" "CEO"']
+    a = out["attempts"][0]
+    assert a["calls"] == 1 and a["stopped"] == "limit_reached"
+    assert a["not_sent"] == ['"Acme" "CFO"', '"Acme" "CTO"']
+
+
+def test_google_chaque_recherche_compte_dans_max_paid_steps(calls):
+    """Chaque recherche envoyée est une étape payée : sous `max_paid_steps=2`, la
+    troisième ne part pas, et un échec ainsi coupé n'est pas un verdict (`code`)."""
+    calls["answers"]["serper_search"] = _serper()
+    out = _run("waterfall_people", company_name="Acme", domain="acme.com",
+               roles=["CEO", "CFO", "CTO"], providers=["google", "aiark"],
+               max_paid_steps=2)
+    assert len(_requetes(calls)) == 2 and "linkedin_aiark_search" not in _made(calls)
+    a = out["attempts"][0]
+    assert a["calls"] == 2 and a["stopped"] == "max_paid_steps"
+    assert a["status"] == "no_match" and a["code"] == "max_paid_steps"
+    assert out["attempts"][1]["code"] == "max_paid_steps"
+
+
+def test_google_un_echec_tardif_garde_ce_que_les_premieres_ont_trouve(calls):
+    calls["answers"]["serper_search"] = [
+        _serper(_profil("Ann Boss", "CEO", "ann-boss")),
+        IssueCible(ok=False, code="upstream_error", message="Serper 500")]
+    out = _run("waterfall_people", company_name="Acme", roles=["CEO", "CFO", "CTO"],
+               providers=["google"])
+    assert [p["full_name"] for p in out["people"]["people"]] == ["Ann Boss"]
+    a = out["attempts"][0]
+    assert a["status"] == "found" and a["calls"] == 2 and a["stopped"] == "upstream_error"
+    assert a["not_sent"] == ['"Acme" "CTO"']
+
+
+def test_google_un_premier_echec_reste_un_echec(calls):
+    calls["answers"]["serper_search"] = IssueCible(ok=False, code="upstream_error",
+                                                   message="Serper 500")
+    out = _run("waterfall_people", company_name="Acme", roles=["CEO", "CFO"],
+               providers=["google"])
+    a = out["attempts"][0]
+    assert out["found"] is False and a["status"] == "failed" and a["calls"] == 1
+
+
+def test_google_dry_run_montre_chaque_recherche(calls):
+    out = _run("waterfall_people", company_name="Acme", roles=["CEO", "head of sales"],
+               providers=["google"], dry_run=True)
+    a = out["attempts"][0]
+    assert a["arguments"]["query"] == '"Acme" "CEO"'
+    assert [x["query"] for x in a["fan_out"]] == ['"Acme" "CEO"', '"Acme" "head of sales"']
+    assert calls["made"] == []
+
+
+def test_google_les_pages_suivantes_relancent_chaque_recherche(calls):
+    """Sous `qualify_min`, la page suivante d'une liste payée se lit pour CHAQUE
+    recherche par rôle — jamais la page 2 d'un OU entre parenthèses."""
+    calls["answers"]["serper_search"] = [
+        _serper(_profil("Ann Boss", "CEO", "ann-boss")),
+        _serper(_profil("Bob Dev", "CFO", "bob-dev")),
+        _serper(_profil("Cy Dee", "CEO", "cy-dee")),
+        _serper()]
+    calls["answers"]["jev_items"] = [_verdicts(0.9, 0.1), _verdicts(0.9)]
+    out = _run("waterfall_people", company_name="Acme", roles=["CEO", "CFO"], limit=2,
+               qualify=_FIT, qualify_min=0.7, providers=["google"])
+    made = [(a["query"], a.get("page", 1)) for n, a in calls["made"] if n == "serper_search"]
+    assert made == [('"Acme" "CEO"', 1), ('"Acme" "CFO"', 1),
+                    ('"Acme" "CEO"', 2), ('"Acme" "CFO"', 2)]
+    assert sorted(p["full_name"] for p in out["people"]["people"]) == ["Ann Boss", "Cy Dee"]
+
+
+def test_google_rien_trouve_puis_un_echec_reste_un_echec(calls):
+    """Une première recherche vide puis une qui échoue : l'issue est l'ÉCHEC, pas un
+    `no_match` — le mode tableau l'écrirait sur la ligne au lieu de la reprendre."""
+    calls["answers"]["serper_search"] = [
+        _serper(), IssueCible(ok=False, code="upstream_error", message="Serper 500")]
+    out = _run("waterfall_people", company_name="Acme", roles=["CEO", "CFO", "CTO"],
+               providers=["google"])
+    a = out["attempts"][0]
+    assert out["found"] is False and a["status"] == "failed"
+    assert a["code"] == "upstream_error" and a["calls"] == 2
+
+
+def test_google_une_page_suivante_ne_rend_pas_deux_fois_le_meme_profil(calls):
+    """Le même profil, revenu sous un autre hôte à la page 2, n'est ni rejugé ni rendu
+    deux fois : une seule clé de personne pour toute la cascade (son slug LinkedIn)."""
+    calls["answers"]["serper_search"] = [
+        _serper(_profil("Ann Boss", "CEO", "ann-boss")),
+        _serper(_profil("Ann Boss", "CEO", "ann-boss/", hote="www")),
+        _serper()]
+    calls["answers"]["jev_items"] = [_verdicts(0.9)]
+    out = _run("waterfall_people", company_name="Acme", roles=["CEO"], limit=2,
+               qualify=_FIT, qualify_min=0.7, providers=["google"])
+    assert [p["full_name"] for p in out["people"]["people"]] == ["Ann Boss"]
+    assert _made(calls).count("jev_items") == 1

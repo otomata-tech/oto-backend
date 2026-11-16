@@ -290,14 +290,15 @@ CAPABILITIES += [
         }, fields=("op", "scope")),
         refresh_visibility=True,
         description=(
-            "Access level of an OAuth connector that declares levels (e.g. zoho, zohodesk: "
-            "`read`, `full`). op=get (the level set at this scope, the one in force, the "
+            "Access level of a connector that declares levels (e.g. zoho, zohodesk: "
+            "`read`, `full`; google_search_console: `read` by default, `full` to submit "
+            "sitemaps). op=get (the level set at this scope, the one in force, the "
             "declared levels and their scopes) / set (`name`, `level`) / clear (back to the "
-            "level above). scope=org (`org_id`, org admin) | group (`group_id`, team lead; "
-            "restrict-only, a level wider than the org's is refused). Under a level other "
-            "than `full`, the tools and ops it does not cover are hidden and refused "
-            "(`access_level_denied`), and the consent asks only for its scopes; widening "
-            "needs a new consent."),
+            "level above, else the connector's default). scope=org (`org_id`, org admin) | "
+            "group (`group_id`, team lead; restrict-only, a level wider than the org's is "
+            "refused). Under a level other than `full`, the tools and ops it does not cover "
+            "are hidden and refused (`access_level_denied`); an OAuth consent asks only for "
+            "the level's scopes, and widening it needs a new consent."),
         mcp="oto_connector_access_level",
     ),
     Capability(
@@ -325,7 +326,7 @@ CAPABILITIES += [
             "page where a PERSON connects it themselves — key form, OAuth button or hosted "
             "login — plus the fields they will be asked for and where to find the key: send "
             "them the `url`; never ask for a key in the chat, this op takes no secret; the "
-            "Custom API has its own, `http(op=\"setup_link\")`). Org admin, on "
+            "Custom API has its own, `api(op=\"setup_link\")`). Org admin, on "
             "`org_id`: op=force (install `name` in ONE `member`'s toolbox — refused, with the "
             "date, if they paused or removed it themselves; not an access grant) / recommend (set the org's KIT `connectors` as a whole list: the "
             "DIFFERENCE is installed for current members too, never over their own choice; [] "

@@ -239,6 +239,19 @@ def _org_active_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _aucun_modele_eteint_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans base, aucune org n'a éteint de modèle (`orgs.disabled_models`). La lecture a
+    lieu à chaque occurrence d'un agent (horloge, webhook, lancement, campagne), à chaque
+    réservation et à chaque catalogue servi ; un banc qui double le runner sans base n'a
+    rien à y lire. Un banc sur base réelle lit la vraie colonne ; un banc qui teste
+    l'interrupteur la double lui-même."""
+    if os.environ.get("DATABASE_URL"):
+        return
+    from oto_mcp.db import modeles_eteints
+    monkeypatch.setattr(modeles_eteints, "eteints", lambda org_id: [])
+
+
+@pytest.fixture(autouse=True)
 def _palmares_neufs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Chaque banc part de palmarès vides. Ceux du processus
     (`limite_refus_top.palmares_du_processus`) gardent ce qu'un banc précédent y a

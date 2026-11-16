@@ -73,7 +73,7 @@ def test_unknown_connector_named_account_is_refused(monkeypatch):
 # --- 2. La règle de cardinalité ---------------------------------------------
 
 @pytest.mark.parametrize("name", ["slack", "silae", "stripe", "salesforce",
-                                  "zohodesk", "posthog", "http"])
+                                  "zohodesk", "posthog", "api"])
 def test_multi_field_credential_is_multi_account(name):
     """Un credential multi-champs porte N comptes comme une clé simple : la forme
     du credential n'est pas une raison de fournisseur."""
@@ -116,7 +116,7 @@ def test_seuls_les_depots_de_cle_se_declarent_MONO_et_on_sait_pourquoi():
     ajouter un est une décision explicite, qui casse ce test et se motive en revue.
     Voici le motif des trois premiers.
 
-    `anthropic` et `mistral` sont des DÉPÔTS DE CLÉ (`kind="credential"`) : ils ne
+    `anthropic`, `mistral` et `openrouter` sont des DÉPÔTS DE CLÉ (`kind="credential"`) : ils ne
     portent aucun outil, seulement la clé de modèle sur laquelle les agents
     programmés de l'org tournent. La dérivation les rendrait multi (c'est une
     `api_key`), donc l'écran proposerait d'en poser une deuxième — et
@@ -154,7 +154,7 @@ def test_seuls_les_depots_de_cle_se_declarent_MONO_et_on_sait_pourquoi():
     palier, que rien ne départagerait au moment de lancer la cascade."""
     assert sorted(c.name for c in providers._REGISTRY_LIST
                   if c.cardinality == "mono") == ["anthropic", "jev", "mistral",
-                                                  "pennylane_firm", "transcription",
+                                                  "openrouter", "pennylane_firm", "transcription",
                                                   "waterfall_company", "waterfall_email",
                                                   "waterfall_people", "waterfall_person",
                                                   "waterfall_phone", "waterfall_tech"]
@@ -178,7 +178,7 @@ def test_seuls_deux_connecteurs_se_declarent_MULTI_et_on_sait_pourquoi():
     # Split google (2026-09-26) : les six services déclarent la cardinalité du compte
     # qu'ils empruntent — même raison de fournisseur, portée par `google.service`.
     # bigquery (2026-10-02) : septième service, même forme ; google_ads (2026-10-08),
-    # huitième.
+    # huitième ; search_console (2026-11-15), neuvième.
     # sharepoint (2026-10-05, oto-backend#23) : OAuth comme google, une ligne par
     # compte Microsoft lié — même raison de fournisseur.
     # microsoft (2026-10-08) : le porteur du compte Microsoft 365 reprend la raison ;
@@ -189,7 +189,7 @@ def test_seuls_deux_connecteurs_se_declarent_MULTI_et_on_sait_pourquoi():
                   if c.cardinality == "multi") == [
         "bigquery", "browser", "calendar", "chat", "drive", "entra", "gmail", "google",
         "google_ads", "microsoft", "onenote", "outlook", "outlook_calendar", "powerbi",
-        "sharepoint", "sheets", "tasks", "teams"]
+        "search_console", "sharepoint", "sheets", "tasks", "teams"]
     for nom in ("zoho", "folk"):
         con = providers.REGISTRY[nom]
         assert con.cardinality == "" and con.auth_multi_account is True, nom
@@ -230,9 +230,11 @@ def test_l_annonce_STATIQUE_de_l_axe_compte_n_est_plus_la_cardinalite():
     statiques = sorted(c.name for c in providers._REGISTRY_LIST if c.account_axis_static)
     # + microsoft et ses services (15/10/2026) : un compte prêté ne sert que nommé par
     # `_account`, que l'annonce dynamique ne montrait jamais à l'emprunteuse.
-    assert statiques == ["bigquery", "browser", "calendar", "chat", "drive", "entra", "folk", "gmail",
+    # + api (13/11/2026) : chaque compte de la carte est une API distincte, choisie par
+    # `_account` à chaque appel, comme le disent ses descriptions.
+    assert statiques == ["api", "bigquery", "browser", "calendar", "chat", "drive", "entra", "folk", "gmail",
                          "google", "google_ads", "microsoft", "onenote", "outlook",
-                         "outlook_calendar", "powerbi", "sharepoint", "sheets", "tasks", "teams",
-                         "zoho"]
+                         "outlook_calendar", "powerbi", "search_console", "sharepoint", "sheets",
+                         "tasks", "teams", "zoho"]
     multi = [c.name for c in providers._REGISTRY_LIST if c.auth_multi_account]
     assert set(statiques) < set(multi) and len(multi) > len(statiques)

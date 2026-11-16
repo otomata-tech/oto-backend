@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 from ._conn import _connect
 from ._partage_vivant import PARTAGE_VIVANT, PARTAGE_VIVANT_G
 from . import backlinks as _backlinks
+from . import favoris as _favoris
 from .datastore import (
     create_datastore,
     datastore_insert_row,
@@ -1351,13 +1352,15 @@ def delete_doc(doc_id: int) -> int:
     problème.
 
     doc_links (Ship 4) est purgée en CASCADE des deux côtés (`from_doc` ET `to_doc`) :
-    supprimer une page retire ses liens sortants ET les mentions vers elle.
+    supprimer une page retire ses liens sortants ET les mentions vers elle. Les favoris
+    d'org des pages retirées partent dans la même transaction (`favoris.purger`).
     """
-    with _connect() as conn:
+    with _connect() as conn, conn.transaction():
         rows = conn.execute(
             _SOUS_ARBRE
             + "DELETE FROM docs WHERE id IN (SELECT id FROM sub) RETURNING id",
             (doc_id,)).fetchall()
+        _favoris.purger(conn, "doc", [r["id"] for r in rows])
         return max(0, len(rows) - 1)   # la page elle-même n'est pas un descendant
 
 

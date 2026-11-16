@@ -4,7 +4,8 @@
 consommateur épingle sur la console `/api/admin/*`, absente du document public. Ce banc
 tient :
 1. la forme : le job `consommateurs` accepte `chemin_admin` absent, `null` ou relatif, et
-   refuse une forme invalide — le filtre `jq` est EXÉCUTÉ, pas relu ;
+   refuse une forme invalide — le filtre `jq` est EXÉCUTÉ, pas relu ; il tient aussi la
+   référence indirecte (`depot_ref`/`chemin_ref`, jamais avec `depot`) ;
 2. la garde : dans `contrat-front-code`, les quatre étapes admin ne tournent que si
    `chemin_admin` est déclaré — et tournent MÊME si le contrat public a rougi (`!cancelled()`), lisent CE chemin, dérivent le document admin
    (`build(admin=True)`) et le confrontent avec l'outil commun ;
@@ -65,6 +66,35 @@ def test_la_liste_valide_chemin_admin_facultatif(chemin_admin, accepte):
     assert _valide([entree]) is accepte
 
 
+_RETIRE = object()
+_INDIRECT = {"nom": "prive-1", "depot_ref": "PRIVE_1_DEPOT", "chemin_ref": "PRIVE_1_CHEMIN",
+             "secret": "PRIVE_1_CLE"}
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq absent")
+@pytest.mark.parametrize("retouche, accepte", [
+    ({}, True),
+    ({"depot": "org/prive"}, False),                  # depot ET depot_ref : jamais les deux
+    ({"chemin": "api/openapi.json"}, False),          # chemin en clair à côté d'une référence
+    ({"chemin_admin": "api/admin.json"}, False),      # pas de second contrat en clair
+    ({"depot_ref": _RETIRE}, False),
+    ({"chemin_ref": _RETIRE}, False),
+    ({"secret": None}, False),                        # une référence = un dépôt privé
+    ({"depot_ref": "prive_1_depot"}, False),          # un nom de secret, en MAJUSCULES
+    ({"chemin_ref": "PRIVE-1"}, False),
+    ({"inconnu": 1}, False),
+])
+def test_la_liste_valide_une_reference_indirecte(retouche, accepte):
+    entree = {k: v for k, v in {**_INDIRECT, **retouche}.items() if v is not _RETIRE}
+    assert _valide([_UN, entree]) is accepte
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq absent")
+def test_une_entree_en_clair_ne_porte_pas_de_reference():
+    assert _valide([{**_UN, "depot_ref": "X_DEPOT"}]) is False
+    assert _valide([{k: v for k, v in _UN.items() if k != "depot"}]) is False
+
+
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq absent")
 def test_la_liste_declaree_passe_le_filtre():
     liste = json.loads((_RACINE / ".github" / "contrat-consommateurs.json").read_text())
@@ -100,7 +130,9 @@ def test_les_etapes_admin_ne_tournent_que_si_chemin_admin_est_declare():
 
 def test_le_contrat_public_est_toujours_lu_sur_chemin_pas_chemin_admin():
     lire = next(s for s in _jobs()["contrat-front-code"]["steps"] if s.get("id") == "contrat")
-    assert lire["env"]["CHEMIN"] == "${{ matrix.consommateur.chemin }}"
+    assert lire["env"]["CHEMIN"] == ("${{ matrix.consommateur.chemin_ref && "
+                                     "secrets[matrix.consommateur.chemin_ref] || "
+                                     "matrix.consommateur.chemin }}")
     assert "if" not in lire
 
 

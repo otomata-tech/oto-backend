@@ -26,6 +26,7 @@ from typing import Optional
 
 from ...access import credits as budget
 from ...access import credits_tours as tours
+from ...access import limite_du_jour
 from .. import _cle_exigee
 from ..runner_jobs import _cle_de_modele, _depot_pose
 
@@ -101,6 +102,8 @@ def reserver(cle: Cle, uid: str, sub: str, org_id: Optional[int], modele: str,
     ledger refuses or cannot hold it (see the module's rule)."""
     if cle.payeur is None:
         return
+    if (bloc := limite_du_jour.refus(sub, org_id)) is not None:
+        raise SansCle(limite_du_jour.CODE, limite_du_jour.message(bloc), 429)
     try:
         r = tours.reserver_tour(uid, sub, org_id, max_tokens, modele)
     except tours.TourRefuse as e:

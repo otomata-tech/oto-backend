@@ -915,7 +915,9 @@ def register(mcp: FastMCP) -> None:
 
     # --- Actions --------------------------------------------------------------
 
-    @mcp.tool()
+    # Titre posé à la main : dérivé, il vaudrait `GitHub: Actions`, celui de `github_act`
+    # (`tool_alias.title_of`) — ici « Actions » est le produit de CI de GitHub.
+    @mcp.tool(title="GitHub: Actions workflows")
     def github_actions(
         op: Literal["workflows", "workflow", "dispatch", "runs", "run",
                     "cancel", "rerun", "rerun_failed", "delete_run",

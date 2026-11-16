@@ -123,10 +123,10 @@ def test_catalog_exposes_auth():
 
 
 def test_le_catalogue_publie_de_quoi_filtrer_un_formulaire_a_modes():
-    """Un connecteur dont un champ SÉLECTIONNE les autres (`http` : `auth_mode`)
+    """Un connecteur dont un champ SÉLECTIONNE les autres (`api` : `auth_mode`)
     publie tout ce qu'il faut pour ne montrer que les champs qui servent — sans que
     le front connaisse le connecteur (#449)."""
-    http = {c["name"]: c for c in public_catalog()}["http"]
+    http = {c["name"]: c for c in public_catalog()}["api"]
     assert http["auth"]["field_discriminator"] == "auth_mode"
     by_name = {f["name"]: f for f in http["auth"]["fields"]}
     assert by_name["auth_mode"]["choices"][:2] == ["bearer", "header"]

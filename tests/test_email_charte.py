@@ -249,3 +249,71 @@ def test_email_send_signe_la_marque_de_l_expediteur_pas_la_notre(monkeypatch):
     assert "Pilote · pilote.test" in out["html"]
     assert "oto.cx" not in out["html"]
     assert B.marque_instance().encre not in out["html"]
+
+
+# --- La charte DÉCLARÉE du tenant primaire (`OTO_BRAND_CHARTE`, 15/11/2026) -----------
+
+_CHARTE = ('{"fond": "#f9f9fb", "surface": "#ffffff", "encre": "#1c2024", '
+           '"discret": "#60646c", "filet": "#e8e8ec", "bouton_fond": "#1c2024", '
+           '"bouton_encre": "#ffffff", "bouton_rayon": 6, '
+           '"logo": {"url": "https://media.exemple.test/logo.png", "largeur": 104, '
+           '"hauteur": 26}}')
+
+
+def test_une_charte_declaree_habille_le_primaire(monkeypatch):
+    """Les teintes du code sont celles de toute instance qui ne dit rien ; une
+    instance dont le produit ne leur ressemble pas les DÉCLARE, comme son nom."""
+    monkeypatch.setenv("OTO_BRAND_CHARTE", _CHARTE)
+    m = B.marque_instance()
+    assert (m.fond, m.encre, m.bouton_fond, m.bouton_rayon) == (
+        "#f9f9fb", "#1c2024", "#1c2024", 6)
+    html = B.page(m, "<p>corps</p>", preheader="aperçu", mention="")
+    assert "background:#f9f9fb" in html and "#faf6ec" not in html
+    assert re.search(r'<img src="https://media\.exemple\.test/logo\.png" width="104" '
+                     r'height="26" alt="oto"', html), "le logo, avec le nom en alt"
+    assert re.search(r"<td[^>]*border-radius:6px", B.bouton(m, _URL, "ouvrir"))
+
+
+def test_le_logo_remplace_le_nom_en_tete_et_son_absence_le_garde(monkeypatch):
+    monkeypatch.setenv("OTO_BRAND_CHARTE", _CHARTE)
+    avec = B.page(B.marque_instance(), "<p>corps</p>", preheader="p", mention=None)
+    monkeypatch.delenv("OTO_BRAND_CHARTE")
+    sans = B.page(B.marque_instance(), "<p>corps</p>", preheader="p", mention=None)
+    assert "<img" not in sans and "letter-spacing:-0.01em" in sans
+    assert "letter-spacing:-0.01em" not in avec, "le nom texte ne double pas le logo"
+
+
+@pytest.mark.parametrize("valeur", [
+    "pas du json",
+    "[]",
+    '{"fond": "#f9f9fb"}',
+    _CHARTE.replace('"#1c2024", "discret"', '"rouge", "discret"'),
+    _CHARTE.replace('"bouton_rayon": 6', '"bouton_rayon": "6"'),
+    _CHARTE.replace("https://media", "http://media"),
+    _CHARTE.replace("logo.png", 'logo.png\\" onerror=\\"x'),
+    _CHARTE.replace('"largeur": 104', '"largeur": 0'),
+])
+def test_une_charte_invalide_ou_partielle_refuse_le_demarrage(monkeypatch, valeur):
+    """Jamais servie à moitié, jamais remplacée en silence par celle du code : posée
+    mais illisible, elle refuse le démarrage et lève à l'envoi."""
+    monkeypatch.setenv("OTO_BRAND_CHARTE", valeur)
+    with pytest.raises(B.CharteInvalide, match="OTO_BRAND_CHARTE"):
+        B.verifier_reglages()
+    with pytest.raises(B.CharteInvalide):
+        B.marque_instance()
+
+
+def test_sans_charte_declaree_le_rendu_est_celui_du_code(monkeypatch):
+    """Une instance qui ne pose rien : teintes du code, bouton en pilule, nom en tête."""
+    monkeypatch.delenv("OTO_BRAND_CHARTE", raising=False)
+    B.verifier_reglages()
+    m = B.marque_instance()
+    assert (m.fond, m.bouton_rayon, m.logo) == ("#faf6ec", 999, ())
+    assert "<img" not in B.page(m, "<p>x</p>", preheader="p", mention="")
+
+
+def test_une_marque_de_partenaire_ignore_la_charte_de_l_instance(monkeypatch):
+    """La charte déclarée est celle du PRIMAIRE : un partenaire garde la sienne."""
+    monkeypatch.setenv("OTO_BRAND_CHARTE", _CHARTE)
+    m = B.marque("pilote")
+    assert m.fond == _PARTENAIRE.fond and m.logo == () and m.bouton_rayon == 999

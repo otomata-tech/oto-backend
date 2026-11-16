@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 from . import db, org_suspension, procedure_retiree, runner_models
-from .capabilities import _instruction, _limites_du_run, _projet_de_l_agent
+from .capabilities import _instruction, _limites_du_run, _modele, _projet_de_l_agent
 
 logger = logging.getLogger(__name__)
 
@@ -941,6 +941,14 @@ def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
         logger.warning("déclencheur %s : état de la procédure illisible (%s)", trigger_id, e)
         retiree = None
     sans_modele = runner_models.motif_sans_famille(t.get("model"))
+    # Modèle ÉTEINT par un admin de l'org : refus nommé, aucun repli sur un autre
+    # modèle. Une lecture qui échoue laisse partir la livraison : la réservation refuse
+    # alors le travail, raison écrite (`runner_jobs._avec_cle`).
+    try:
+        eteint = _modele.modele_eteint(t["org_id"], t.get("model"))
+    except Exception as e:  # noqa: BLE001 — voir ci-dessus
+        logger.warning("déclencheur %s : modèles éteints illisibles (%s)", trigger_id, e)
+        eteint = False
     # Le projet où il travaille : le sien, sinon le premier de sa procédure que lit
     # l'identité du run (24/10/2026). Lu avant la transaction, pour la même raison que la
     # suspension.
@@ -980,6 +988,14 @@ def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
                 "it will not run until a catalogued model is set." if t.get("model") else
                 "This agent declares no model: it will not run until one is set.")
                 + " The delivery is recorded and visible on its page.")
+        elif eteint:
+            db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_MODEL_DISABLED,
+                           source=source, **marque)
+            refus = HookRefus(
+                409, _modele.CODE_MODELE_ETEINT,
+                f"This agent's model (`{t.get('model')}`) is turned off by an admin of its "
+                "workspace: it will not run until the model is turned back on or the agent "
+                "declares another one. The delivery is recorded and visible on its page.")
         else:
             # ⚠️ AVANT de compter. Une rafale est concurrente par définition : sans
             # ce verrou, toutes les livraisons lisent le même compte et partent

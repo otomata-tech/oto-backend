@@ -64,6 +64,10 @@ REFUSE_NO_MODEL = "refused_no_model"
 #: l'agent) a échoué, tourne encore, ou n'a pas eu lieu. L'échéance est consommée,
 #: rien n'est enfilé ; la suivante revérifie (22/10/2026).
 REFUSE_REQUIRES = "refused_requires"
+#: Un admin de l'org a ÉTEINT le modèle de l'agent (`orgs.disabled_models`) : l'occurrence
+#: est consommée, rien n'est enfilé, aucun repli sur un autre modèle. L'agent repart
+#: quand le modèle est rallumé, ou quand il en déclare un autre (16/11/2026).
+REFUSE_MODEL_DISABLED = "refused_model_disabled"
 
 #: Ce qu'on rend du corps reçu quand on RELIT une livraison — borné parce qu'une
 #: page de livraisons en sert jusqu'à 200, et qu'un corps entier × 200 n'est plus

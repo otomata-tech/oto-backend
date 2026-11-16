@@ -106,6 +106,20 @@ class Step:
     # 60 s): the cascade passes it what is left of its budget as `timeout_s`, and skips
     # it, before any call, when too little is left (`moteur.BOUNDED_MIN_S`).
     bounded_by_deadline: bool = False
+    # Its tool reads open data and resolves NO key (`fr_get`, `fr_search`), although its
+    # connector carries one for other tools (`sirene`: the INSEE key of `fr_siret`): the
+    # connector's key mode says nothing about this step — it runs as `open`, never
+    # skipped `no_key` (the French registry was skipped in an org where it
+    # answered when called directly).
+    keyless: bool = False
+    # ONE step, SEVERAL calls (Google: one search per role — it answers an empty list to
+    # `"Acme" (a OR b OR c)`, measured, where `"Acme" "a"` finds): every argument set,
+    # sent in turn — each billed by its tool, each counted against `max_paid_steps` —
+    # until the find holds `limit` people, at most `max_calls`; their results made into
+    # one by `merge`, read once by `extract`. `build` is the FIRST set.
+    fan_out: Optional[Callable[[dict], list[dict]]] = None
+    merge: Optional[Callable[[list], object]] = None
+    max_calls: int = 1
 
 
 def _bills(step: Step) -> bool:

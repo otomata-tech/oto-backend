@@ -187,7 +187,8 @@ def _require_known_connector(name: str) -> None:
         return
     raise AuthzDenied(
         404, "unknown_connector",
-        f"Unknown connector: `{name}`. Valid slugs: `oto_connector(op='list')`.")
+        f"Unknown connector: `{name}`.{providers.refus_renomme(name)} Valid slugs: "
+        "`oto_connector(op='list')`.")
 
 
 def _require_scope(ctx: ResolvedCtx, scope: str, *, write: bool) -> None:

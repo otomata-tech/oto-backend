@@ -71,7 +71,7 @@ INSTANCES = """
 -- quatre colonnes, donne donc l'identifiant stable **sans un octet de
 -- rechiffrement**. C'est ce qui a retiré R2 (le rechiffrement) de l'équation et
 -- laissé R1 se décider sur ses vrais mérites : le modèle prévoit des instances SANS
--- secret — une instance `http` qui ne fige qu'une `base_url` et des champs (0057),
+-- secret — une instance `api` qui ne fige qu'une `base_url` et des champs (0057),
 -- une sous-instance qui ne pose qu'une **détermination** (« le compte de Jane »,
 -- 0053-D9-3). Un objet qui n'est plus un credential n'a rien à faire dans une table
 -- qui l'est.

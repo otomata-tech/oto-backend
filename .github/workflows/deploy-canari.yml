@@ -286,7 +286,10 @@ jobs:
   # des changements venus de nous).
   #
   # La liste vit dans `.github/contrat-consommateurs.json` : nom, dépôt, chemin du
-  # contrat, secret de lecture (`null` = dépôt public, lu sans clé), et depuis #1196 un
+  # contrat (ou, pour un dépôt privé qui ne doit pas être nommé, `depot_ref`/`chemin_ref` :
+  # les noms des SECRETS qui les portent, jamais des variables — voir
+  # `scripts/lire-contrat-consommateur.sh`), secret de lecture (`null` = dépôt public, lu
+  # sans clé), et depuis #1196 un
   # `chemin_admin` FACULTATIF — le contrat qu'il épingle sur la console `/api/admin/*`,
   # qui a son propre document (`build(admin=True)`), jugé avant déploiement seulement. Jusqu'au 25/09 ce
   # mécanisme était écrit au singulier — un dépôt, un chemin, un secret en dur : un
@@ -303,24 +306,52 @@ jobs:
     timeout-minutes: 5
     outputs:
       liste: ${{ steps.liste.outputs.liste }}
+      liste_code: ${{ steps.liste.outputs.liste_code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: liste
+        env:
+          # Une PR venue d'un fork ne reçoit aucun secret du dépôt (règle de GitHub).
+          EST_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -euo pipefail
           # La liste se lit dans le dépôt, donc une PR peut la modifier : chaque champ est
           # vérifié contre une forme stricte AVANT de devenir une matrice.
+          # Une entrée nomme son dépôt EN CLAIR (`depot` + `chemin`) OU par RÉFÉRENCE
+          # (`depot_ref` + `chemin_ref`, noms de secrets, dépôt privé donc `secret` requis,
+          # sans `chemin_admin`) — jamais les deux : `scripts/lire-contrat-consommateur.sh`.
           if ! jq -e 'type == "array" and length > 0 and all(.[];
+                 type == "object" and
+                 (keys - ["nom", "depot", "depot_ref", "chemin", "chemin_ref", "chemin_admin", "secret"] | length == 0) and
                  (.nom | test("^[A-Za-z0-9._-]+$")) and
-                 (.depot | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")) and
-                 (.chemin | test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")) and
-                 ((.chemin_admin // null) == null or (.chemin_admin | test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"))) and
-                 (.secret == null or (.secret | test("^[A-Z][A-Z0-9_]*$"))))' \
+                 ((has("depot") and (has("depot_ref") | not) and (has("chemin_ref") | not) and
+                   (.depot | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")) and
+                   (.chemin | test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")) and
+                   ((.chemin_admin // null) == null or (.chemin_admin | test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"))) and
+                   (.secret == null or (.secret | test("^[A-Z][A-Z0-9_]*$"))))
+                  or
+                  ((has("depot") | not) and (has("chemin") | not) and (has("chemin_admin") | not) and
+                   (.depot_ref | test("^[A-Z][A-Z0-9_]*$")) and
+                   (.chemin_ref | test("^[A-Z][A-Z0-9_]*$")) and
+                   (.secret | test("^[A-Z][A-Z0-9_]*$")))))' \
                .github/contrat-consommateurs.json > /dev/null; then
-            echo "::error title=Liste des consommateurs refusée::.github/contrat-consommateurs.json ne respecte pas la forme attendue (nom, dépôt owner/repo, chemin relatif, chemin_admin relatif facultatif, secret en MAJUSCULES ou null) — aucun contrat n'est jugé."
+            echo "::error title=Liste des consommateurs refusée::.github/contrat-consommateurs.json ne respecte pas la forme attendue (nom ; dépôt owner/repo et chemin relatif, chemin_admin relatif facultatif, secret en MAJUSCULES ou null ; OU depot_ref, chemin_ref et secret, noms de secrets en MAJUSCULES) — aucun contrat n'est jugé."
             exit 1
           fi
           echo "liste=$(jq -c . .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
+          # La garde d'avant déploiement (`contrat-front-code`) ne juge que ce qu'elle PEUT
+          # lire. Sur une PR de fork, un consommateur à secret est illisible : il quitte sa
+          # matrice, et ce retrait est DIT (annotation), jamais rendu en vert. Il est jugé,
+          # secret en main, à la poussée sur main, avant le déploiement de préproduction.
+          if [ "$EST_FORK" = "true" ]; then
+            non_juges="$(jq -r '[.[] | select(.secret != null) | .nom] | join(", ")' .github/contrat-consommateurs.json)"
+            if [ -n "$non_juges" ]; then
+              echo "::warning title=Contrat NON JUGÉ sur cette PR de fork::GitHub ne transmet aucun secret à une PR venue d'un fork : le contrat de $non_juges n'est pas confronté ici (jambes sautées). Rien à corriger côté contributeur — il est jugé à la poussée sur main, avant le déploiement de préproduction."
+            fi
+            echo "liste_code=$(jq -c '[.[] | select(.secret == null)]' .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "liste_code=$(jq -c . .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
+          fi
 
   # ─────────────────────────────────────────────────────────────────────────────
   # APRÈS la préproduction : ce qui est réellement SERVI. Un constat, pas une garde —
@@ -352,8 +383,12 @@ jobs:
         env:
           CLE_LECTURE: ${{ matrix.consommateur.secret && secrets[matrix.consommateur.secret] || '' }}
           NOM: ${{ matrix.consommateur.nom }}
-          DEPOT: ${{ matrix.consommateur.depot }}
-          CHEMIN: ${{ matrix.consommateur.chemin }}
+          # Référence indirecte : le dépôt et le chemin sont des SECRETS (masqués d'office
+          # dans l'en-tête `env:` du journal), lus par leur nom déclaré.
+          DEPOT: ${{ matrix.consommateur.depot_ref && secrets[matrix.consommateur.depot_ref] || matrix.consommateur.depot }}
+          DEPOT_REF: ${{ matrix.consommateur.depot_ref || '' }}
+          CHEMIN_REF: ${{ matrix.consommateur.chemin_ref || '' }}
+          CHEMIN: ${{ matrix.consommateur.chemin_ref && secrets[matrix.consommateur.chemin_ref] || matrix.consommateur.chemin }}
           SECRET: ${{ matrix.consommateur.secret || '' }}
         # Valeurs de la liste passées par l'environnement, jamais interpolées dans le
         # script : une PR peut modifier la liste.
@@ -411,19 +446,24 @@ jobs:
   # Mêmes règles de verdict : seule une rupture d'appel ou de lecture bloque. Un ajout
   # compatible sort en avertissement et n'empêche PAS de fusionner.
   #
-  # #823 — SANS LE SECRET, IL ROUGIT. GitHub ne transmet pas les secrets à une PR venue
-  # d'un fork : ce job y sortait VERT sans rien avoir jugé. Un « je n'ai pas pu juger »
-  # est un résultat, distinct d'un « jugé conforme » : échec nommé. Ce rouge ne bloque
-  # pas la fusion (aucun contrôle requis sur `main`) et ne demande rien au
-  # contributeur : le même job rejuge le code, secret en main, à la poussée sur le tronc.
+  # Un « je n'ai pas pu juger » n'est jamais un « jugé conforme » (#823). GitHub ne
+  # transmet aucun secret à une PR venue d'un fork : un consommateur à secret y est
+  # illisible. Il ne sort ni VERT (rien jugé) ni ROUGE (rien à voir avec le code) : il
+  # quitte la matrice (`liste_code`, filtrée par `consommateurs`, qui l'annonce en
+  # annotation), et si plus rien n'est lisible le job est SAUTÉ. Le même job rejuge le
+  # code, secret en main, à la poussée sur le tronc, avant la préproduction. Ailleurs
+  # (PR interne, poussée), un secret déclaré mais absent reste un échec nommé.
+  # ⚠️ Un job sauté compte comme réussi pour un contrôle REQUIS : ne pas rendre ce job
+  # requis sans revoir ce point.
   contrat-front-code:
     name: Contrat avant déploiement — ${{ matrix.consommateur.nom }}
     needs: [consommateurs]
+    if: needs.consommateurs.outputs.liste_code != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        consommateur: ${{ fromJSON(needs.consommateurs.outputs.liste) }}
+        consommateur: ${{ fromJSON(needs.consommateurs.outputs.liste_code) }}
     timeout-minutes: 10  # max observé 54 s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -449,10 +489,13 @@ jobs:
         id: contrat
         env:
           CLE_LECTURE: ${{ matrix.consommateur.secret && secrets[matrix.consommateur.secret] || '' }}
-          EST_FORK: ${{ github.event.pull_request.head.repo.fork }}
           NOM: ${{ matrix.consommateur.nom }}
-          DEPOT: ${{ matrix.consommateur.depot }}
-          CHEMIN: ${{ matrix.consommateur.chemin }}
+          # Référence indirecte : le dépôt et le chemin sont des SECRETS (masqués d'office
+          # dans l'en-tête `env:` du journal), lus par leur nom déclaré.
+          DEPOT: ${{ matrix.consommateur.depot_ref && secrets[matrix.consommateur.depot_ref] || matrix.consommateur.depot }}
+          DEPOT_REF: ${{ matrix.consommateur.depot_ref || '' }}
+          CHEMIN_REF: ${{ matrix.consommateur.chemin_ref || '' }}
+          CHEMIN: ${{ matrix.consommateur.chemin_ref && secrets[matrix.consommateur.chemin_ref] || matrix.consommateur.chemin }}
           SECRET: ${{ matrix.consommateur.secret || '' }}
         # Valeurs de la liste passées par l'environnement, jamais interpolées dans le
         # script : une PR peut modifier la liste.
@@ -509,9 +552,12 @@ jobs:
         if: ${{ !cancelled() && matrix.consommateur.chemin_admin }}
         env:
           CLE_LECTURE: ${{ matrix.consommateur.secret && secrets[matrix.consommateur.secret] || '' }}
-          EST_FORK: ${{ github.event.pull_request.head.repo.fork }}
           NOM: ${{ matrix.consommateur.nom }}
-          DEPOT: ${{ matrix.consommateur.depot }}
+          # Référence indirecte : le dépôt et le chemin sont des SECRETS (masqués d'office
+          # dans l'en-tête `env:` du journal), lus par leur nom déclaré.
+          DEPOT: ${{ matrix.consommateur.depot_ref && secrets[matrix.consommateur.depot_ref] || matrix.consommateur.depot }}
+          DEPOT_REF: ${{ matrix.consommateur.depot_ref || '' }}
+          CHEMIN_REF: ${{ matrix.consommateur.chemin_ref || '' }}
           CHEMIN: ${{ matrix.consommateur.chemin_admin }}
           SECRET: ${{ matrix.consommateur.secret || '' }}
         run: scripts/lire-contrat-consommateur.sh "$NOM" "$DEPOT" "$CHEMIN" "$SECRET"

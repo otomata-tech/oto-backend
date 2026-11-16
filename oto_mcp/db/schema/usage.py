@@ -372,6 +372,20 @@ CREATE TABLE IF NOT EXISTS platform_key_rate (
 );
 """
 
+USAGE_ORG = """
+-- Le compteur du jour d'une ORG sur une clé plateforme dont le quota compte par org
+-- (`Connector.grant_quota_per = 'org'`) : tous les membres de l'org tirent sur le même
+-- plafond. `tool` = le porteur de la clé, comme `usage.tool`. Lu par le refus
+-- (`quotas.platform_used_today`), débité par le règlement d'un appel. Part avec l'org.
+CREATE TABLE IF NOT EXISTS usage_org (
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    tool TEXT NOT NULL,
+    day DATE NOT NULL,
+    count BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (org_id, tool, day)
+);
+"""
+
 # #1232 (lot 1) : le palmarès quotidien des refus des limiteurs
 # (`limite_refus_top.py`). Bornée par la purge du fil d'écriture
 # (`limite_refus_top.RETENTION_JOURS`).

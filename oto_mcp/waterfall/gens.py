@@ -9,7 +9,7 @@ from typing import Optional
 from .etape import Step
 from .fournisseurs import (_APIFY_EMPLOYEES_TIMEOUT_S, _LEMLIST_EXCLUDES, _apify_items,
                            _lemlist_lead)
-from .valeurs import _get, _norm_name, _pick, _refused
+from .valeurs import _get, _norm_name, _person_key, _pick, _refused
 
 def _matches_roles(title, roles) -> bool:
     if not roles:
@@ -47,7 +47,7 @@ def _seniority_rank(title, seniority) -> int:
 
 def _people_find(people: list[dict], inputs: dict) -> Optional[dict]:
     """The people that name a person and match the roles asked, deduplicated by
-    LinkedIn URL (else name), at most `limit` — a find when at least one remains."""
+    LinkedIn profile (else name), at most `limit` — a find when at least one remains."""
     out, seen = [], set()
     # Decision-makers first: a source returns people in its own order (an engineer ahead
     # of the CTO, measured on a real company), and `limit` would cut the wrong end.
@@ -56,7 +56,7 @@ def _people_find(people: list[dict], inputs: dict) -> Optional[dict]:
         p = {k: v for k, v in p.items() if v not in (None, "", [], {})}
         if not p.get("full_name") or not _matches_roles(p.get("title"), inputs.get("roles")):
             continue
-        key = (p.get("linkedin_url") or p["full_name"]).lower()
+        key = _person_key(p)
         if key in seen:
             continue
         seen.add(key)
@@ -264,9 +264,38 @@ def _serper_people(res, inputs):
     return _people_find(rows, inputs)
 
 
-def _role_query(inputs: dict) -> str:
-    roles = inputs.get("roles") or ["director", "manager", "head", "CEO", "founder"]
-    return " OR ".join(f'"{r}"' if " " in r else r for r in roles)
+#: The most searches the Google step sends for one lookup — one per role, each one
+#: Serper search, billed; the roles past it are named on the receipt (`not_sent`).
+GOOGLE_MAX_QUERIES = 5
+
+
+def _google_roles(inputs: dict) -> list[str]:
+    """The roles asked, once each (in the caller's order)."""
+    out, seen = [], set()
+    for r in inputs.get("roles") or []:
+        r = str(r).strip().strip('"').strip()
+        if r and _norm_name(r) not in seen:
+            seen.add(_norm_name(r))
+            out.append(r)
+    return out
+
+
+def _google_queries(inputs: dict) -> list[dict]:
+    """ONE Google search per role: `"Acme" "role"` on `linkedin.com/in`. Never the roles
+    OR-ed in parentheses — Serper answers an EMPTY list to `"Acme" (a OR "b c" OR d)`
+    where `"Acme" "a"` finds (measured): the step silently missed most
+    searches. No role asked: one search on the company alone, decision-makers ranked
+    first by `_people_find`."""
+    company = inputs.get("company_name") or inputs["domain"].split(".")[0]
+    terms = [f'"{company}" "{r}"' for r in _google_roles(inputs)] or [f'"{company}"']
+    return [{"query": q, "site_filter": "linkedin.com/in", "num": 10, "country": None,
+             "language": None} for q in terms]
+
+
+def _merge_organic(results: list) -> dict:
+    """The organic results of several Google searches, as one (`_serper_people` then
+    deduplicates the profiles they share)."""
+    return {"organic": [o for r in results for o in (_get(r, "organic") or [])]}
 
 
 PEOPLE_STEPS: tuple[Step, ...] = (
@@ -294,12 +323,12 @@ PEOPLE_STEPS: tuple[Step, ...] = (
     # Then full names, by provider cost: google (a search, names + LinkedIn URLs, low
     # recall) → aiark (per profile) → the page's LinkedIn employees (an Apify run).
     Step("google", "serper_search", (("company_name",), ("domain",)),
-         lambda i: {"query": f'"{i.get("company_name") or i["domain"].split(".")[0]}" '
-                             f"({_role_query(i)})",
-                    "site_filter": "linkedin.com/in", "num": 10, "country": None,
-                    "language": None},
-         _serper_people, "1 Serper search", label="Google — LinkedIn profiles",
-         pages=("page", 1),
+         lambda i: _google_queries(i)[0],
+         _serper_people,
+         f"1 Serper search per role asked (at most {GOOGLE_MAX_QUERIES}; 1 without roles)",
+         label="Google — LinkedIn profiles",
+         pages=("page", 1), fan_out=_google_queries, merge=_merge_organic,
+         max_calls=GOOGLE_MAX_QUERIES, max_units=GOOGLE_MAX_QUERIES,
          explains=(
              "LinkedIn profiles found on Google — full names and titles, kept only when "
              "they name the company.")),

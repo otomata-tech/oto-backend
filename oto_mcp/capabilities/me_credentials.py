@@ -218,7 +218,8 @@ def _exiger_credentialable(provider: str, scope: str = "member", *,
         raise AuthzDenied(
             404, "unknown_provider",
             f"Connecteur inconnu : `{provider}` n'est pas au registre "
-            f"(`GET /api/connectors` liste les noms servis).")
+            f"(`GET /api/connectors` liste les noms servis)."
+            + providers.refus_renomme(provider))
     porteur = providers.credential_provider(provider)
     if formulaire and porteur != provider:
         raise AuthzDenied(

@@ -41,6 +41,15 @@ tableau par cet index dépassait 15 s, et la route rendait 503 à 10 s. L'index 
 l'`id` derrière le tableau : une lecture directe. Partiel sur les seuls gestes `data_*`
 qui portent un `id` — son prédicat est celui de la requête, que l'égalité sur
 `ns_id` et sur `id` implique.
+
+**`TOUR_AU_COUT`** — la CLÉ d'un tour de modèle journalisé à son coût (révision
+`20261113_1200_tours_au_cout_cle`, `tours_au_cout`). Un index UNIQUE, pas une lecture : le
+même tour rapporté deux fois en même temps (le worker rejoue un rapport resté sans
+réponse) ne s'écrit qu'une fois, et ne se débite qu'une fois au quota de la clé partagée,
+par `INSERT … ON CONFLICT DO NOTHING` (`usage.inserer_tour_au_cout`). Partiel sur les
+seuls relevés des familles au coût : il ne porte que ces lignes. ⚠️ Sans lui, l'écriture
+du tour échoue (aucune contrainte ne répond à l'`ON CONFLICT`) : le worker s'arrête, rien
+n'est servi sans dédoublonnage.
 """
 from __future__ import annotations
 
@@ -95,4 +104,23 @@ GESTES_DE_LIGNE = IndexConcurrent(
            "WHERE tool LIKE 'data\\_%' AND args->>'ns_id' IS NOT NULL "
            "AND args->>'id' IS NOT NULL"),
     revision=REVISION_GESTES_DE_LIGNE,
+)
+
+#: La révision qui pose la clé des tours au coût.
+REVISION_TOURS_AU_COUT = "20261113_1200_tours_au_cout_cle"
+
+#: Les outils (familles de modèles) dont un relevé est UNIQUE par `call_uid` : ceux que
+#: `tours_au_cout` journalise à leur coût. Domicile unique de la liste — la famille au
+#: coût et le prédicat de sa clé ne peuvent pas diverger.
+OUTILS_AU_COUT: tuple[str, ...] = ("openrouter",)
+
+#: Le prédicat de la clé, repris MOT POUR MOT par l'`ON CONFLICT` qui l'infère.
+PREDICAT_TOUR_AU_COUT = ("kind = 'settlement' AND tool IN ("
+                         + ", ".join(f"'{o}'" for o in OUTILS_AU_COUT) + ")")
+
+#: La clé d'un tour au coût (`usage.inserer_tour_au_cout`).
+TOUR_AU_COUT = IndexConcurrent(
+    nom="idx_tool_calls_tour_au_cout", table="tool_calls",
+    forme=f"(kind, tool, call_uid) WHERE {PREDICAT_TOUR_AU_COUT}",
+    revision=REVISION_TOURS_AU_COUT, unique=True,
 )

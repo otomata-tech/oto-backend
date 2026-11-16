@@ -208,7 +208,7 @@ def register(mcp: FastMCP) -> None:
           deck as a `.pptx` template, build a new deck from it, and put that back
           with op="upload" convert=true.
         - **"upload"**: Deposit a file oto fetches itself from `source` (e.g.
-          `{"kind": "http", "path": "/export.xlsx"}` through your `http` connector,
+          `{"kind": "api", "path": "/export.xlsx"}` through your `api` connector,
           `{"kind": "url", "url": …}`, `{"kind": "project_file", …}`) — the bytes
           never go through you. `name` = its name in Drive (the source's by default),
           `parent_folder_id` = its folder. `convert=true` turns it into its
@@ -249,7 +249,7 @@ def register(mcp: FastMCP) -> None:
                 0-based index (see `sheet_names`). Omit for all sheets.
             max_rows: op="download" of an .xlsx — rows per sheet (default 200,
                 max 5000).
-            source: op="upload" — the file reference oto fetches: `{"kind": "http",
+            source: op="upload" — the file reference oto fetches: `{"kind": "api",
                 "path": "/…", "params": {…}}`, `{"kind": "url", "url": …}`,
                 `{"kind": "project_file", "project_id": …, "file_id": …}`,
                 `{"kind": "drive", "file_id": …}`. ≤ 25 MB.

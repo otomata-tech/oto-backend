@@ -106,6 +106,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.credits.SPEND_BLOCKS,     # blocages du jour poussés par le commerce (limites de dépense)
     schema.runs.AGENT_CAUSES,        # le catalogue des causes de panne d'agent, une par empreinte
     schema.connectors.API_APPS,      # applications de Custom API : définition partagée par leurs clés
+    schema.runs.ORG_INCIDENTS_CAPACITE,  # les agents d'une org qu'aucun forfait ne peut faire tourner
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

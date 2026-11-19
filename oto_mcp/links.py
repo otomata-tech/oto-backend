@@ -93,7 +93,12 @@ DEFAULT_PATHS: dict[str, str] = {
 # `agent` = the page of ONE hosted agent (`/org/{org}/agents?agent={id}`), and
 # `agent_repair` = the same page opened on its repair flow — where an agent alert sends a
 # person (`alertes_slack_agents`); without them, the alert carries no such button.
-DECLARED_ONLY_KINDS = frozenset({"app", "connect", "webhook", "agent", "agent_repair"})
+# `agent_models` = an org's Agents › Models page (`/org/{org}/agents/models`), where its
+# members share a plan and add an API key — where a capacity alert sends a person
+# (`alertes_capacite`). The alert also passes `{section}` (`plans` or `key`): a pattern
+# that names it lands on that section, one that does not opens the page.
+DECLARED_ONLY_KINDS = frozenset({"app", "connect", "webhook", "agent", "agent_repair",
+                                 "agent_models"})
 
 
 class InstancePathsInvalid(ValueError):

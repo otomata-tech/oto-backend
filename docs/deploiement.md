@@ -122,8 +122,10 @@ l'extérieur ne joue deux fois le même travail**, par l'un de deux mécanismes 
   processus ne l'attend pas : il **saute son tour**, dit une fois en INFO
   (« boucle X : tour sauté, un autre processus la tient »), puis en DEBUG. Une base
   injoignable reste une erreur du tour. Boucles couvertes : `scheduler` (emails
-  programmés : le claim laisse la ligne `pending`), `alerte_agents_bloques` et
-  `alertes_slack_agents` (marque après l'envoi), `medecin_agents` (escalade lue puis
+  programmés : le claim laisse la ligne `pending`), `alerte_agents_bloques`,
+  `alertes_slack_agents` et `alertes_capacite` (marque après l'envoi ; la dernière tient
+  aussi un index unique partiel, un incident vivant par org et famille),
+  `medecin_agents` (escalade lue puis
   écrite), `billing_runner` (réconciliation, rattrapages, factures ; les échéances
   gardent en plus leur réservation `db/billing_reservation.py`) ;
 - **une réservation ligne à ligne** qui sort le travail de la file dans le même `UPDATE` :

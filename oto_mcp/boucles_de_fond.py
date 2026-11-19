@@ -33,8 +33,8 @@ la composition qui tient, c'est la base : chaque boucle tierce a SOIT une réser
 ligne à ligne qui sort le travail de la file (`transcription_worker`, `jev_jobs_worker`,
 `runner_tick`), SOIT le verrou de boucle, qui ne laisse jouer un tour qu'à un processus
 à la fois (`db/verrou_de_boucle.py` : `scheduler`, `alerte_agents_bloques`,
-`medecin_agents`, `alertes_slack_agents`, `billing_runner`). Une boucle tierce neuve
-choisit l'un ou l'autre : `tests/test_verrou_de_boucle.py` y veille.
+`medecin_agents`, `alertes_slack_agents`, `alertes_capacite`, `billing_runner`). Une
+boucle tierce neuve choisit l'un ou l'autre : `tests/test_verrou_de_boucle.py` y veille.
 """
 from __future__ import annotations
 
@@ -149,6 +149,18 @@ def _alertes_slack_agents_armee() -> bool:
     return alertes_slack_agents.actives()
 
 
+def _alertes_capacite() -> Fonction:
+    from . import alertes_capacite
+    return alertes_capacite.run_alertes_capacite_loop
+
+
+def _alertes_capacite_armee() -> bool:
+    """Le réglage d'instance des alertes de capacité (`alertes_capacite.actives`, lu par
+    `interrupteurs.oui_non` : une valeur illisible lève)."""
+    from . import alertes_capacite
+    return alertes_capacite.actives()
+
+
 def _runner_tick_arme() -> bool:
     from . import runner_tick
     return runner_tick.enabled()
@@ -243,6 +255,11 @@ BOUCLES: tuple[Boucle, ...] = (
     # l'app Slack de l'org. Éteinte tant qu'elle n'est pas déclarée.
     Boucle(nom="alertes_slack_agents", tiers=True, armee=_alertes_slack_agents_armee,
            fonction=_alertes_slack_agents),
+    # Prévient une org que ses agents ne démarrent plus faute de forfait, et le titulaire
+    # du forfait qui manque (`alertes_capacite.py`) : POSTE chez un client (Slack de
+    # l'org) et lui ÉCRIT (courriel). Éteinte tant qu'elle n'est pas déclarée.
+    Boucle(nom="alertes_capacite", tiers=True, armee=_alertes_capacite_armee,
+           fonction=_alertes_capacite),
     # Échéances d'abonnement, relances, réconciliation, factures (ADR 0043) : PRÉLÈVE
     # via Mollie. Armée par le drapeau billing ET son interrupteur propre.
     Boucle(nom="billing_runner", tiers=True,

@@ -858,3 +858,55 @@ CREATE TABLE IF NOT EXISTS agent_causes (
     vue_premiere_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
+
+ORG_INCIDENTS_CAPACITE = """
+-- Les INCIDENTS DE CAPACITÉ d'une org (`alertes_capacite`, `db/incidents_capacite.py`,
+-- 19/11/2026) : des travaux d'abonnement dus qu'AUCUN forfait ne peut servir, sans repli
+-- qui les rejoue (`runner_jobs.travaux_sans_forfait`). Une ligne par incident et par
+-- (org, famille d'abonnement).
+--   `cause`    — `plafond`, `reconnexion`, `pool_vide` (`_abonnement.cause_du_forfait`) ;
+--              `par_le_pool` : la voie dont elle vient (le texte n'est pas le même) ;
+--   `vu_at`    — la première passe qui l'a vu, `revu_at` la dernière ; `ouvert_at` —
+--              passé `DELAI_MIN` (NULL : encore un candidat, effacé s'il cède avant) ;
+--              `libre_at` — la première passe qui ne l'a plus vu ; `clos_at` — la
+--              clôture, à `libre_at` (l'heure où les agents ont repris) ;
+--   `travaux`, `agents`, `reprise_at`, `titulaires` — ce que dit la dernière passe :
+--              les travaux qui attendent, les agents allumés qu'ils font attendre,
+--              l'échéance la plus proche quand elle est connue, qui tient le forfait qui
+--              manque (les comptes à prévenir) ;
+--   `perimees` — les occurrences périmées (`expired`) de cette famille dans l'org entre
+--              `vu_at` et `libre_at`, comptées à la clôture ; `repris` — clos parce que
+--              la capacité est revenue (vrai), ou parce que plus rien n'attend alors que
+--              la cause tient encore (faux : aucune ligne de reprise ne le dit) ;
+--   `alerte_at`/`alerte_par`, `titulaires_prevenus`/`titulaires_at`, `retour_at` — ce
+--              qui est PARTI, posé après l'envoi : l'alerte (Slack, sinon courriel aux
+--              admins), le courriel à chaque titulaire de forfait, la ligne de reprise.
+-- ⚠️ Aucune FK : un incident documente un état passé, il survit à l'org qui part.
+CREATE TABLE IF NOT EXISTS org_incidents_capacite (
+    id BIGSERIAL PRIMARY KEY,
+    org_id BIGINT NOT NULL,
+    famille TEXT NOT NULL,
+    cause TEXT NOT NULL CHECK (cause IN ('plafond', 'reconnexion', 'pool_vide')),
+    par_le_pool BOOLEAN NOT NULL DEFAULT false,
+    vu_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revu_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    libre_at TIMESTAMPTZ,
+    ouvert_at TIMESTAMPTZ,
+    clos_at TIMESTAMPTZ,
+    travaux INTEGER NOT NULL DEFAULT 0,
+    agents INTEGER NOT NULL DEFAULT 0,
+    reprise_at TIMESTAMPTZ,
+    titulaires TEXT[] NOT NULL DEFAULT '{}',
+    perimees INTEGER,
+    repris BOOLEAN,
+    alerte_at TIMESTAMPTZ,
+    alerte_par TEXT CHECK (alerte_par IN ('slack', 'courriel')),
+    titulaires_prevenus TEXT[] NOT NULL DEFAULT '{}',
+    titulaires_at TIMESTAMPTZ,
+    retour_at TIMESTAMPTZ
+);
+-- Un seul incident VIVANT (candidat ou ouvert) par org et famille : deux passes, ou deux
+-- processus, rafraîchissent la même ligne, elles n'en ouvrent pas deux.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_incidents_capacite_vivant
+    ON org_incidents_capacite(org_id, famille) WHERE clos_at IS NULL;
+"""

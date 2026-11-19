@@ -278,6 +278,10 @@ CLASSEMENT: dict[str, Table] = {
     "agent_causes": instance("catalogue de la PLATEFORME des causes de panne d'agent, une "
                              "par empreinte de motif, sans org ni propriétaire : la boucle "
                              "le remplit sur la cible, un opérateur y redécide"),
+    "org_incidents_capacite": exclue(ParOrg(), "état d'exploitation de la PLATEFORME sur la "
+                                     "capacité des agents de l'org (forfaits au plafond, "
+                                     "messages partis) : la boucle le reconstruit sur la "
+                                     "cible à partir de `runner_jobs`"),
     "access_requests": possedee(ParOrg()),
     "copilot_threads": exclue(ParOrg(), "conversation de l'agent intégré : un état de travail éphémère (le journal des appels, lui, part)"),
     "copilot_undos": exclue(ParSub(), "annulation offerte, valable une heure"),

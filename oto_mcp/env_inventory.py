@@ -201,7 +201,7 @@ _IDENTITE: tuple[Variable, ...] = (
              "Chemins des liens servis vers le tableau de bord de CETTE instance, en JSON "
              "`{type: chemin}` fusionné sur `links.DEFAULT_PATHS` (ex. "
              "`{\"table\": \"/org/{org}/tables/{id}\"}`). Vide = les chemins par défaut. "
-             "Cinq types n'existent que déclarés, sans chemin par défaut "
+             "Six types n'existent que déclarés, sans chemin par défaut "
              "(`links.DECLARED_ONLY_KINDS`) : `app` (une app plein écran, ex. "
              "`\"/org/{org}/apps/{id}\"`), `connect` (la page d'UN connecteur et de son "
              "formulaire d'ajout, ex. `\"/org/{org}/connect/{connector}\"`, où "
@@ -212,10 +212,14 @@ _IDENTITE: tuple[Variable, ...] = (
              "le jeton, une fois), `agent` et `agent_repair` (la page d'UN agent hébergé, "
              "et la même ouverte sur sa réparation, ex. `\"/org/{org}/agents?agent={id}\"` "
              "et `\"/org/{org}/agents?agent={id}&fix=1\"` : les boutons d'une alerte "
-             "d'agent ; non déclarés, l'alerte part sans eux). "
+             "d'agent ; non déclarés, l'alerte part sans eux) et `agent_models` (la page "
+             "Agents › Modèles d'une org, où l'on partage un forfait et ajoute une clé "
+             "d'API, ex. `\"/org/{org}/agents/models?section={section}\"`, `section` = "
+             "`plans` ou `key` : les boutons d'une alerte de capacité ; non déclaré, "
+             "l'alerte part sans eux). "
              "Une déclaration illisible ou un type de lien inconnu refuse le démarrage "
              "(`links.verifier_reglages`).",
-             ("oto_mcp/links.py:113",)),
+             ("oto_mcp/links.py:118",)),
     Variable("OTO_INVITE_BASE_URL", Classe.IDENTITE, None,
              "Base des liens d'invitation d'une org sans front déclaré "
              "(`orgs.front_base_url` gagne quand il est posé).",
@@ -816,6 +820,14 @@ _REGLAGES: tuple[Variable, ...] = (
              "les champs `client_*` du médecin. `1`, `true`, `yes`, `on` l'allument ; "
              "absente, vide ou un non l'éteignent ; toute autre valeur lève.",
              ("oto_mcp/alertes_slack_agents.py:79",)),
+    Variable("OTO_ALERTES_CAPACITE_ENABLED", Classe.REGLAGE, "",
+             "Alertes de capacité (`alertes_capacite.py`) : la boucle qui prévient une "
+             "org que ses agents ne démarrent plus faute de forfait (sur son Slack, "
+             "sinon par courriel à un admin), écrit au titulaire du forfait qui manque "
+             "et dit la reprise — AGIT sur un tiers, donc production seulement. `1`, "
+             "`true`, `yes`, `on` l'allument ; absente, vide ou un non l'éteignent ; "
+             "toute autre valeur lève.",
+             ("oto_mcp/alertes_capacite.py:89",)),
     Variable("OTO_CATALOGUE_CAUSES_DECIDE", Classe.REGLAGE, "",
              "Le catalogue des causes de panne d'agent DÉCIDE (`medecin_agents.py`) : une "
              "cause approuvée range une panne que la regex dit `inconnu` — sa classe et son "

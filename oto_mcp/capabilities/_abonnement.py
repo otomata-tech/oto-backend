@@ -401,6 +401,67 @@ def seuil(sub: str, org_id: Optional[int], famille: str) -> float:
     return pct / 100
 
 
+#: Les trois causes pour lesquelles AUCUN forfait ne peut servir un travail d'abonnement
+#: maintenant (`cause_du_forfait`). Le diagnostic d'une péremption les nomme
+#: (`raison_de_peremption`), l'incident de capacité d'une org aussi
+#: (`alertes_capacite`, table `org_incidents_capacite`) : un seul classement.
+PLAFOND = "plafond"
+RECONNEXION = "reconnexion"
+POOL_VIDE = "pool_vide"
+CAUSES_DE_CAPACITE = (PLAFOND, RECONNEXION, POOL_VIDE)
+
+
+def cause_du_forfait(org_id: int, famille: str, sub: Optional[str], *,
+                     pool: bool) -> Optional[str]:
+    """Pourquoi AUCUN forfait ne peut servir maintenant un travail `famille` de `sub`
+    dans cette org — `PLAFOND`, `RECONNEXION`, `POOL_VIDE` —, ou None : un forfait
+    peut le servir (il attend son tour, un travail à la fois par abonnement), ou
+    l'attente est d'un autre ordre (pas ouvert ici, aucune ligne). `pool` = la voie
+    du travail (`par_le_pool`, ou celle que la réservation lit en SQL).
+
+    Sorti de `raison_de_peremption` le 19/11/2026, branche pour branche, pour que
+    l'alerte de capacité (`alertes_capacite`) et le texte d'une péremption ne
+    puissent pas classer la même attente de deux façons.
+
+    ⚠️ L'ordre est celui du diagnostic : en pool, un prêteur au plafond l'emporte sur
+    un prêteur à reconnecter (`RECONNEXION` seulement quand AUCUN prêteur n'est
+    connecté ni au plafond, `taille_du_pool_a_la_pose` nul) — un pool mêlé est en
+    PAUSE, il repartira à l'échéance."""
+    if pool:
+        # ⚠️ `taille_du_pool` compte les prêteurs SERVABLES MAINTENANT — 0 y est
+        # ambigu (personne ne prête ? ou tout le monde est au plafond ?) pour un
+        # diagnostic. `taille_totale_du_pool` compte les prêts VIVANTS sans
+        # regarder l'état : lui seul distingue les deux.
+        if not org_subscription_pool.taille_totale_du_pool(org_id, famille):
+            return POOL_VIDE
+        if org_subscription_pool.taille_du_pool(org_id, famille):
+            return None
+        # ⚠️ Aucun prêteur servable : au plafond, ou à reconnecter ? Seul le
+        # premier est une PAUSE. `taille_du_pool_a_la_pose` compte les prêteurs
+        # connectés ou au plafond : 0, c'est que tous doivent se reconnecter
+        # — l'annoncer « en pause » renverrait attendre qui doit agir.
+        if not org_subscription_pool.taille_du_pool_a_la_pose(org_id, famille):
+            return RECONNEXION
+        return PLAFOND
+    if not sub:
+        return None
+    # ⚠️ `servable()` répond FAIT EXPRÈS `True` pour un `paused_limit`, quelle que
+    # soit son échéance (l'attente vit dans la réservation, pas dans cette
+    # garde) : la réutiliser ici confondrait TOUT plafond avec une cause déjà
+    # résolue. Le diagnostic lit donc la ligne lui-même.
+    ligne = user_subscriptions.get_subscription(sub, famille) or {}
+    statut = ligne.get("statut")
+    if statut in (user_subscriptions.A_RECONNECTER, user_subscriptions.DECONNECTE):
+        return RECONNEXION
+    if statut == user_subscriptions.PLAFOND:
+        reset = echeance_utc(ligne.get("limit_reset_at"))
+        if reset and reset > datetime.now(timezone.utc):
+            return PLAFOND
+        # Échéance passée (ou inconnue) : la pause a cédé, la réservation peut
+        # servir — ce qui reste est l'attente ordinaire.
+    return None
+
+
 def raison_de_peremption(sub: Optional[str], org_id: int,
                          famille: str, etat_runner: dict,
                          modele: Optional[str] = None) -> str:
@@ -441,46 +502,32 @@ def raison_de_peremption(sub: Optional[str], org_id: int,
     if not sub:
         return (f"{base} Ce travail n'a pas de propriétaire : aucun abonnement "
                 f"`{famille}` ne peut le servir.")
-    if par_le_pool(org_id, famille, sub):
-        # ⚠️ `taille_du_pool` compte les prêteurs SERVABLES MAINTENANT — 0 y est
-        # ambigu (personne ne prête ? ou tout le monde est au plafond ?) pour un
-        # diagnostic. `taille_totale_du_pool` compte les prêts VIVANTS sans
-        # regarder l'état : lui seul distingue les deux.
-        if not org_subscription_pool.taille_totale_du_pool(org_id, famille):
+    # La cause se lit à UN endroit (`cause_du_forfait`, 19/11/2026), que l'alerte de
+    # capacité d'une org lit aussi : ce texte et cette alerte ne peuvent pas diverger.
+    pool = par_le_pool(org_id, famille, sub)
+    cause = cause_du_forfait(org_id, famille, sub, pool=pool)
+    if pool:
+        if cause == POOL_VIDE:
             return (f"{base} Le pool `{famille}` de l'organisation est vide : "
                     "personne n'y prête d'abonnement connecté.")
-        if not org_subscription_pool.taille_du_pool(org_id, famille):
-            # ⚠️ Aucun prêteur servable : au plafond, ou à reconnecter ? Seul le
-            # premier est une PAUSE. `taille_du_pool_a_la_pose` compte les prêteurs
-            # connectés ou au plafond : 0, c'est que tous doivent se reconnecter
-            # — l'annoncer « en pause » renverrait attendre qui doit agir.
-            if not org_subscription_pool.taille_du_pool_a_la_pose(org_id, famille):
-                return (f"{base} Les membres qui prêtent leur abonnement `{famille}` "
-                        "au pool de l'organisation doivent le reconnecter (Réglages › "
-                        "Fournisseurs de modèles) — il repartira tout seul.")
+        if cause == RECONNEXION:
+            return (f"{base} Les membres qui prêtent leur abonnement `{famille}` "
+                    "au pool de l'organisation doivent le reconnecter (Réglages › "
+                    "Fournisseurs de modèles) — il repartira tout seul.")
+        if cause == PLAFOND:
             return _pool_au_plafond(base, org_id, famille, modele)
         # Un prêteur EST servable maintenant : ils étaient occupés (un travail à la
         # fois par abonnement), ou la cause a cédé entre-temps.
         return (f"{base} Le pool `{famille}` de l'organisation a des prêteurs "
                 "servables, mais chacun ne sert qu'un travail à la fois : celui-ci "
                 "attendait encore son tour quand la suivante est arrivée.")
-    # ⚠️ `servable()` répond FAIT EXPRÈS `True` pour un `paused_limit`, quelle que
-    # soit son échéance (l'attente vit dans la réservation, pas dans cette
-    # garde) : la réutiliser ici confondrait TOUT plafond avec une cause déjà
-    # résolue. Le diagnostic lit donc la ligne lui-même.
-    ligne = user_subscriptions.get_subscription(sub, famille) or {}
-    statut = ligne.get("statut")
-    if statut in (user_subscriptions.A_RECONNECTER, user_subscriptions.DECONNECTE):
+    if cause == RECONNEXION:
         return (f"{base} L'abonnement `{famille}` de son propriétaire doit se "
                 "reconnecter (Réglages › Fournisseurs de modèles) — il repartira "
                 "tout seul.")
-    if statut == user_subscriptions.PLAFOND:
-        reset = echeance_utc(ligne.get("limit_reset_at"))
-        if reset and reset > datetime.now(timezone.utc):
-            return (f"{base} L'abonnement `{famille}` de son propriétaire avait "
-                    "atteint son plafond de consommation.")
-        # Échéance passée (ou inconnue) : la pause a cédé, la réservation peut
-        # servir — ce qui reste est l'attente ordinaire ci-dessous.
+    if cause == PLAFOND:
+        return (f"{base} L'abonnement `{famille}` de son propriétaire avait "
+                "atteint son plafond de consommation.")
     # L'abonnement doit être OUVERT dans cette org (08/10/2026), sinon la réservation
     # fait attendre le travail (`runner_jobs._ABONNEMENT_OUVERT_ICI`) : la cause que
     # ce diagnostic ne nommait pas, et qui renvoie au propriétaire, pas à l'exploitant.

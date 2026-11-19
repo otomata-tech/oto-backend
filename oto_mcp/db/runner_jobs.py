@@ -1582,6 +1582,123 @@ def repli_disponible(org_id: Optional[int], org_ids: Optional[list], worker_sub:
     return None
 
 
+def travaux_sans_forfait(seuil_defaut_pct: int, marge_s: int = 0) -> list[dict]:
+    """Les travaux d'ABONNEMENT dus qu'AUCUN forfait ne peut servir maintenant, et
+    qu'aucun repli ne rejouera — ce que lit l'alerte de capacité d'une org
+    (`alertes_capacite`, 19/11/2026). Une ligne par travail : `id`, `org_id`, `sub`,
+    `famille`, `trigger_id` (son agent, None sans agent), `par_le_pool` (sa voie).
+
+    **Les prédicats de la RÉSERVATION** (`claim_next_job`, `_fragments_abonnement`),
+    jamais l'âge du travail : une file d'une place derrière un forfait servable avance,
+    ce n'est pas une panne.
+
+    - la même file : `pending`, ou `claimed` au bail mort ; des tentatives restantes ;
+      une org non suspendue ; une famille d'abonnement. Et un agent ALLUMÉ (ou aucun
+      agent) : le travail d'un agent éteint n'est pas un agent qui attend ;
+    - voie du pool (`_par_le_pool`, la même que la prise) : AUCUN prêt vivant servable
+      (`PRETEUR_SERVABLE`) — sans la clause « en vol » de la prise : un prêteur
+      servable et occupé sert, la file avance ;
+    - voie personnelle : l'abonnement du demandeur est ouvert ici, et à reconnecter,
+      déconnecté ou en pause qui freine — la négation exacte de la clause de prise ;
+    - et, sans mode réglé, le pool qui COMPLÈTE (`sql_par_le_pool`) : le demandeur
+      dont l'abonnement ne sert pas ici passe par le pool dès qu'un prêteur est
+      servable, et la prise le fait ATTENDRE en voie personnelle tant qu'aucun ne l'est.
+      Des prêts vivants dont aucun ne sert, c'est le pool qui manque : rendu en voie du
+      pool (`par_le_pool` vrai), pour que la cause et les titulaires soient les siens.
+      Hors de ce cas, un abonnement pas ouvert ici, ou absent, n'est pas une panne de
+      CAPACITÉ : la remise arrête le second, le premier attend un geste d'un autre
+      ordre, que `_abonnement.raison_de_peremption` nomme.
+
+    ⚠️ Jamais `sonde` : la pause STOCKÉE, comme le repli (`_pause_pour_l_org`). Une pause
+    qu'un worker revérifie par la sonde (`VERIFICATION_S`, dix minutes) reste une pause
+    tant que la sonde ne l'a pas levée ; lue avec la sonde, l'attente s'interromprait
+    toutes les dix minutes et aucun incident ne tiendrait le quart d'heure.
+
+    `marge_s` : un travail dû dans ce délai compte comme dû. La sonde qui trouve le
+    forfait encore au plafond rend le travail à la file à +`VERIFICATION_S`
+    (`rendre_a_la_file`) : il attend toujours, il n'est pas reparti.
+
+    ⚠️ **Un travail que le repli rejouera n'est pas rendu** — les lectures de
+    `candidats_repli_abonnement` (`_jointures_de_repli`, l'interrupteur de l'org) et
+    sa clé DÉCHIFFRÉE (`_cle_ok_pour_repli`, sur le dépôt du modèle de même tier),
+    sans sa limite ni « un repli en vol par forfait » : un repli qui tourne, c'est une
+    file qui avance, et vingt-cinq travaux plus anciens ne doivent pas en cacher un."""
+    from .org_subscription_pool import (PRET_VIVANT, PRETEUR_SERVABLE,
+                                        repli_api_par_defaut, sql_propre_sert)
+    familles = sorted(_FAMILLES_ABONNEMENT)
+    if not familles:
+        return []
+
+    def _pret(clause: str) -> str:
+        return (f"EXISTS (SELECT 1 FROM user_model_subscription_loans l {PRET_VIVANT} "
+                f"WHERE l.org_id = rj.org_id AND l.famille = {_FAMILLE_RJ}{clause})")
+    un_pret, un_servable = _pret(""), _pret(f" AND {PRETEUR_SERVABLE}")
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT rj.id, rj.org_id, rj.sub, rj.payload->>'model' AS model,
+                   {_FAMILLE_RJ} AS famille,
+                   (modep.actif OR NOT b.propre_bloque) AS par_le_pool,
+                   t.id AS trigger_id,
+                   ((perso.limit_reset_at IS NOT NULL OR pool.reset_at IS NOT NULL)
+                    AND COALESCE((SELECT r.repli_api FROM org_model_subscription_modes r
+                                   WHERE r.org_id = rj.org_id
+                                     AND r.famille = {_FAMILLE_RJ}), %s))
+                       AS pause_repliable
+              FROM runner_jobs rj
+              {_jointures_de_repli(seuil_defaut_pct)}
+              -- `propre_bloque` : la voie personnelle attend l'abonnement du demandeur ;
+              -- `pool_bloque` : le pool qui complète (aucun mode réglé) a des prêts
+              -- vivants, et aucun ne sert ; `aucun_servable` : la voie du pool attend.
+              CROSS JOIN LATERAL (SELECT
+                   {_ABONNEMENT_OUVERT_ICI} AND EXISTS (
+                       SELECT 1 FROM user_model_subscriptions ab
+                        WHERE ab.sub = rj.sub AND ab.famille = {_FAMILLE_RJ}
+                          AND (ab.statut IN ('needs_login', 'disconnected')
+                               OR {user_subscriptions.pause_en_vigueur('ab')}))
+                       AS propre_bloque,
+                   (SELECT m.mode FROM org_model_subscription_modes m
+                     WHERE m.org_id = rj.org_id AND m.famille = {_FAMILLE_RJ}) IS NULL
+                   AND rj.fleet_id IS NULL
+                   AND NOT {sql_propre_sert("rj.sub", _FAMILLE_RJ, _ABONNEMENT_OUVERT_ICI)}
+                   AND {un_pret} AND NOT {un_servable} AS pool_bloque,
+                   NOT {un_servable} AS aucun_servable) b
+              LEFT JOIN runner_triggers t
+                     ON t.org_id = rj.org_id
+                    AND t.id = CASE WHEN rj.payload->>'trigger_id' ~ '^[0-9]+$'
+                                    THEN (rj.payload->>'trigger_id')::bigint END
+             WHERE rj.status IN ('pending', 'claimed')
+               AND (rj.status = 'pending' OR rj.lease_until < NOW())
+               AND rj.attempts < rj.max_attempts
+               AND rj.due_at <= NOW() + make_interval(secs => %s)
+               AND rj.org_id IS NOT NULL
+               AND {_FAMILLE_RJ} = ANY(%s)
+               AND NOT EXISTS (SELECT 1 FROM orgs o_susp WHERE o_susp.id = rj.org_id
+                                AND o_susp.suspended_at IS NOT NULL)
+               AND (t.id IS NULL OR t.enabled)
+               AND CASE WHEN modep.actif THEN b.aucun_servable
+                        ELSE b.propre_bloque OR b.pool_bloque END
+             ORDER BY rj.org_id, rj.id
+            """,
+            (repli_api_par_defaut(), int(marge_s), familles),
+        ).fetchall()
+    cles: dict[tuple[int, str], bool] = {}
+    bloques = []
+    for r in rows:
+        if r["pause_repliable"]:
+            depot = runner_models.famille(runner_models.repli_api(r["model"]))
+            if depot:
+                k = (int(r["org_id"]), depot)
+                if k not in cles:
+                    cles[k] = _cle_ok_pour_repli(*k)
+                if cles[k]:
+                    continue
+        bloques.append({"id": r["id"], "org_id": int(r["org_id"]), "sub": r["sub"],
+                        "famille": r["famille"], "par_le_pool": bool(r["par_le_pool"]),
+                        "trigger_id": r["trigger_id"]})
+    return bloques
+
+
 def _lignee_de(conn, job_id: int, org_id: int, cle: str, select: str) -> Any:
     """Ce que `select` lit des travaux dont la lignée nomme `job_id` à la clé `cle`
     (`parent_job` : ses enfants ; `root_job` : toute sa chaîne), quel que soit leur

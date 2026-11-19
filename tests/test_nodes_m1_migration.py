@@ -216,7 +216,10 @@ def test_nothing_else_touches_nodes_yet():
     allowed = {"oto_mcp/db/guides.py", "oto_mcp/db/_schema.py", "oto_mcp/db/_init.py",
                "oto_mcp/db/users.py", "oto_mcp/db/search.py", "oto_mcp/db/aux_embed.py",
                "oto_mcp/db/nodes.py", "oto_mcp/db/blocks.py", "oto_mcp/db/shell.py",
-               "oto_mcp/db/node_view.py", "oto_mcp/db/node_tables.py"}
+               "oto_mcp/db/node_view.py", "oto_mcp/db/node_tables.py",
+               # Une révision, pas une surface : elle retire des `props` la copie du
+               # jeton de lien public qu'y avait posée la recopie des pages.
+               "oto_mcp/db/migrations/versions/20261119_0630_jetons_lien_haches.py"}
     offenders = []
     for path in (_ROOT / "oto_mcp").rglob("*.py"):
         rel = str(path.relative_to(_ROOT))

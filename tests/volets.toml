@@ -533,6 +533,9 @@ tests = [
   "tests/**/test_run_*.py",
   "tests/**/test_routine*.py",
   "tests/**/test_*abonnement*.py",
+  # Le repli d'un abonnement épuisé : sur la clé de l'org, ou sur celle de la plateforme.
+  "tests/**/test_repli*.py",
+  "tests/**/test_migration_20261119_repli_plateforme.py",
   "tests/**/test_declencheur*.py",
   "tests/**/test_slack_events.py",
   "tests/**/test_slack_agent_posts_db.py",

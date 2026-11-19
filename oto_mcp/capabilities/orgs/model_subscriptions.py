@@ -15,6 +15,11 @@ l'org, flottes comprises ; `org_subscription_pool`). Réglé à part
 (`PUT …/{family}/mode`) : un plafond et un mode ne se règlent pas dans le même geste,
 et un corps partiel ne dirait pas lequel des deux on voulait laisser.
 
+Le REPLI d'un forfait épuisé, sur la même ressource et toujours réglé seul : vers la clé
+API déposée par l'org (`PUT …/{family}/api-fallback`, la porte), et — sur une instance
+qui le permet — vers la clé de PLATEFORME pour une org sans clé
+(`PUT …/{family}/platform-key-fallback`, 19/11/2026, `docs/repli-cle-plateforme.md`).
+
 Lecture = membre ; écriture = org_admin. Une déclaration → deux surfaces : REST
 `/api/orgs/{id}/model-subscriptions/{family}` ici, MCP par la console
 `oto_org_settings domain=model_subscriptions` (`org_console.py`).
@@ -38,6 +43,7 @@ _ID = {"id": "org_id"}
 _PATH = "/api/orgs/{id}/model-subscriptions/{family}"
 _PATH_MODE = "/api/orgs/{id}/model-subscriptions/{family}/mode"
 _PATH_REPLI = "/api/orgs/{id}/model-subscriptions/{family}/api-fallback"
+_PATH_REPLI_PLATEFORME = "/api/orgs/{id}/model-subscriptions/{family}/platform-key-fallback"
 
 
 class Preteur(BaseModel):
@@ -126,7 +132,26 @@ class OrgPlafond(BaseModel):
                      "pool) is EXHAUSTED replays on this org's own deposited API key, "
                      "same tier, instead of waiting for the plan to reset. `false`: those "
                      "jobs wait. Without a setting of the org, the instance's default "
-                     "applies. It never spends anyone else's key."))
+                     "applies. It never spends anyone else's key — the platform key "
+                     "only through `platform_key_fallback`."))
+    platform_key_fallback: bool = Field(
+        default=False,
+        description=("The org's own choice, set by an org admin: `true` = when "
+                     "`api_fallback` is on and the org has deposited NO API key of its "
+                     "own, an exhausted job may replay on the instance's shared "
+                     "(platform) key instead, each model call billed to the org's "
+                     "credits — but only if that key is granted to the org. In force "
+                     "only while `platform_key_fallback_permitted` is `true`; an org "
+                     "with its own key always replays on its own key."))
+    platform_key_fallback_permitted: bool = Field(
+        default=False,
+        description=("Whether this instance allows the platform-key fallback at all. "
+                     "`false`: it cannot be turned on, and an earlier `true` is "
+                     "ignored."))
+    platform_key_fallback_set_by: Optional[str] = Field(
+        default=None, description="Who last set `platform_key_fallback`; null = never set.")
+    platform_key_fallback_set_at: Optional[str] = Field(
+        default=None, description="When `platform_key_fallback` was last set.")
 
 
 class GetOrgPlafondInput(BaseModel):
@@ -157,9 +182,26 @@ class SetOrgRepliInput(BaseModel):
                      "on the org's OWN deposited API key, same tier, instead of waiting "
                      "for the plan to reset — at most one such run at a time per "
                      "subscription, each capped in tokens. Never spends anyone else's "
-                     "key: with no key deposited by this org, the jobs wait either way. "
-                     "`false`: those jobs wait for the reset. Unset, the instance's "
+                     "key: with no key deposited by this org, the jobs wait — unless "
+                     "the org also turned on `platform_key_fallback`. `false`: those "
+                     "jobs wait for the reset, whatever `platform_key_fallback` says. "
+                     "Unset, the instance's "
                      "default applies."))
+
+
+class SetOrgRepliPlateformeInput(BaseModel):
+    org_id: int
+    family: str
+    platform_key_fallback: bool = Field(
+        description=("`true`: when the subscription is exhausted, `api_fallback` is on "
+                     "and the org has deposited no API key of its own, the org's jobs "
+                     "replay on the instance's shared (platform) key, same tier, each "
+                     "model call billed to the org's credits — only if that key is "
+                     "granted to the org, at most one such run at a time per "
+                     "subscription, each capped in tokens. Refused "
+                     "(`platform_key_fallback_not_permitted`) on an instance that does "
+                     "not allow it. `false`: always accepted; those jobs wait as "
+                     "before."))
 
 
 def _exiger(org_id: int, famille: str) -> None:
@@ -172,9 +214,25 @@ def _exiger(org_id: int, famille: str) -> None:
             f"({', '.join(sorted(_abonnement.FAMILLES))}).")
 
 
+def _repli_plateforme_servi(org_id: int, famille: str) -> dict:
+    """Le réglage du repli sur la clé de PLATEFORME, tel que l'org l'a posé, et si
+    l'instance le permet (19/11/2026). Le réglage est rendu TEL QU'IL EST, même quand
+    l'instance ne le permet plus : l'écran dit les deux, plutôt qu'un « fermé » qui
+    cacherait un réglage qu'il faudrait refermer avant de rouvrir l'instance."""
+    ligne = org_subscription_pool.get_mode(org_id, famille) or {}
+    quand = ligne.get("repli_cle_plateforme_at")
+    return {"platform_key_fallback": bool(ligne.get("repli_cle_plateforme")),
+            "platform_key_fallback_permitted":
+                org_subscription_pool.repli_cle_plateforme_permis(),
+            "platform_key_fallback_set_by": ligne.get("repli_cle_plateforme_by"),
+            "platform_key_fallback_set_at":
+                quand.isoformat() if hasattr(quand, "isoformat") else quand}
+
+
 def _servi(org_id: int, famille: str, admin: bool) -> dict:
     """`admin` : le lecteur gouverne l'org — lui seul lit le plafond de chaque prêteur."""
-    repli = {"api_fallback": org_subscription_pool.repli_api_actif(org_id, famille)}
+    repli = {"api_fallback": org_subscription_pool.repli_api_actif(org_id, famille),
+             **_repli_plateforme_servi(org_id, famille)}
     ligne = org_subscription_limits.get_limite(org_id, famille)
     de_l_org = ligne["limite_pct"] if ligne else _abonnement.DEFAUT_LIMITE_PCT
     preteurs = []
@@ -265,6 +323,28 @@ def _set_repli(ctx: ResolvedCtx, inp: SetOrgRepliInput) -> dict:
     return _servi(inp.org_id, inp.family, True)
 
 
+def _set_repli_plateforme(ctx: ResolvedCtx, inp: SetOrgRepliPlateformeInput) -> dict:
+    """Le repli d'un abonnement épuisé sur la clé de PLATEFORME (19/11/2026) : le
+    second moyen, explicite, pour une org de dire « je paie » quand elle n'a pas déposé
+    de clé (`docs/repli-cle-plateforme.md`). Il choisit le PAYEUR, pas le repli :
+    `api_fallback` reste la porte, et fermée rien ne replie.
+
+    ⚠️ L'OUVRIR exige une instance qui le permet (`OTO_REPLI_CLE_PLATEFORME_PERMIS`) :
+    ailleurs, refus nommé — l'org lirait « je paie » là où personne ne facture. Le
+    REFERMER passe toujours : un réglage resté ouvert sur une instance qui ne le permet
+    plus doit pouvoir se refermer. Vaut pour le travail SUIVANT."""
+    _exiger(inp.org_id, inp.family)
+    if inp.platform_key_fallback and not org_subscription_pool.repli_cle_plateforme_permis():
+        raise AuthzDenied(
+            409, "platform_key_fallback_not_permitted",
+            "Cette instance ne permet pas le repli sur la clé de plateforme : un travail "
+            "au plafond sans clé d'org attend la réinitialisation de son forfait, ou "
+            "rejoue sur la clé que l'organisation dépose (Connecteurs).")
+    org_subscription_pool.set_repli_cle_plateforme(inp.org_id, inp.family,
+                                                   inp.platform_key_fallback, ctx.sub)
+    return _servi(inp.org_id, inp.family, True)
+
+
 _ERREURS = (
     DeclaredError(404, "unknown_org", "l'org n'existe pas"),
     DeclaredError(400, "unknown_family", "une famille qui n'est pas servie par abonnement"),
@@ -327,8 +407,34 @@ CAPABILITIES += [
                      "set by another org's tighter cap never triggers it; one replayed "
                      "run at a time per subscription, capped in tokens. It never spends "
                      "another party's key: without a key deposited BY THIS ORG the job "
-                     "waits either way. Applies from the next job; a running job is never "
+                     "waits, unless the org also turned on `platform_key_fallback` "
+                     "(`set_platform_key_fallback`). Applies from the next job; a running "
+                     "job is never "
                      "cut. Org admin."),
         rest=RestBinding("PUT", _PATH_REPLI, _ID),
+    ),
+    Capability(
+        key="org.model_subscriptions.set_platform_key_fallback",
+        handler=_set_repli_plateforme, Input=SetOrgRepliPlateformeInput,
+        authz=ORG_ADMIN_OF("org_id"), Output=OrgPlafond,
+        errors=_ERREURS + (DeclaredError(
+            409, "platform_key_fallback_not_permitted",
+            "l'instance ne permet pas le repli sur la clé de plateforme"),),
+        description=("Allow or refuse, for this org, that a job whose model subscription "
+                     "is EXHAUSTED replays on the instance's shared (platform) key when "
+                     "the org has deposited no API key of its own — the second explicit "
+                     "way for the org to say it pays, each model call billed to its "
+                     "credits. It chooses the payer, not the fallback: `api_fallback` "
+                     "must be on as well, and an org with its own key always replays "
+                     "on it. Only if the shared key is granted to the org, the replayed "
+                     "model is priced in the credit scale and the org itself (not each "
+                     "person) pays its credits — otherwise the job waits; same narrow "
+                     "case (a cap with a future reset, never a reconnection or an empty "
+                     "pool), one replayed run at a time per subscription, capped in "
+                     "tokens. Turning it on is refused "
+                     "(`platform_key_fallback_not_permitted`) on an instance that does "
+                     "not allow it; turning it off always works. Applies from the next "
+                     "job; a running job is never cut. Org admin."),
+        rest=RestBinding("PUT", _PATH_REPLI_PLATEFORME, _ID),
     ),
 ]

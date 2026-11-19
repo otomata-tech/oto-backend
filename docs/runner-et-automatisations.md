@@ -1241,9 +1241,10 @@ le connecteur déclare `platform` dans ses `auth_modes` et une clé **fermée**
 (`platform_key_open=False`) — le grant de l'org est le droit, et le retirer coupe
 l'org à la réservation suivante, ses agents compris.
 
-- **L'ordre à la remise** : repli d'abonnement (jamais sur notre clé) → clé de l'org →
-  clé partagée → refus « clés d'org seules » → garde `runner.org_key_required` → le
-  comportement d'avant. La résolution est la cascade ordinaire, au nom du demandeur et
+- **L'ordre à la remise** : repli d'abonnement (sur la clé de l'org, jamais sur notre
+  clé ; ou, payeur `cle_plateforme` stampé, sur la clé partagée refacturée, sinon
+  défait — `docs/repli-cle-plateforme.md`) → clé de l'org → clé partagée → refus « clés
+  d'org seules » → garde `runner.org_key_required` → le comportement d'avant. La résolution est la cascade ordinaire, au nom du demandeur et
   dans l'org du travail (`_cle_exigee.cle_partagee`), et seuls les rangs `tenant` et
   `platform` y comptent.
 - **Refacturée, ou pas** (20/10/2026) : seule la clé de la plateforme ou du tenant
@@ -2830,6 +2831,20 @@ modèle, au même palier, payé aux jetons sur la clé API de l'org. Le repli le
   la première version, corrigé avant mise en service). Le réglage répond à « qui peut
   tourner ? », cette fonction à « qui PAIE ? ». Sans clé d'org : le travail **attend**,
   comme avant — jamais un échec dur.
+- **Ou, sans clé d'org, la clé de PLATEFORME — si l'org l'a dit (19/11/2026).** Une
+  seconde manière, explicite, de dire « je paie » : le réglage d'org
+  `repli_cle_plateforme` (qui, quand), posé par un org_admin, sur une instance qui le
+  permet (`OTO_REPLI_CLE_PLATEFORME_PERMIS`, fermé par défaut). Il choisit le payeur, pas
+  le repli : `repli_api` reste la porte. Une org qui a sa clé paie toujours sur elle. La
+  clé de plateforme est la clé PARTAGÉE accordée à l'org, refacturée tour par tour à ses
+  crédits (`meter_usage`), jamais la clé d'environnement du worker ; sans accord, sans
+  prix du modèle replié au barème, ou pour une org qui règle les crédits de chaque
+  personne, le travail attend. Le payeur s'écrit dans `_plateforme.repli.payeur` (`cle_org` |
+  `cle_plateforme`), et la remise sert ce payeur ou défait le repli — jamais rien
+  d'autre. `oto_org_settings domain=model_subscriptions platform_key_fallback=true|false`,
+  ou `PUT /api/orgs/{id}/model-subscriptions/{family}/platform-key-fallback`. Révision
+  `20261119_1400_repli_plateforme`. Détail, bornes et preuve de facturation :
+  `docs/repli-cle-plateforme.md`.
 - **L'org le CHOISIT** : colonne `org_model_subscription_modes.repli_api`. Sans
   réglage de l'org, c'est le **défaut de l'instance** : `OTO_REPLI_API_PAR_DEFAUT`
   (décision du 08/10/2026), fermé si l'instance ne déclare rien — les clés d'org

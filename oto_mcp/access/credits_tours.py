@@ -169,6 +169,25 @@ def _lignes_du_modele(lignes: dict, fonction: Optional[str]) -> Optional[dict]:
     return None if any(v is None for v in out.values()) else out
 
 
+def modele_tarife(model: Optional[str]) -> bool:
+    """Does the scale in force price a call to `model` on its four lines — what
+    `reserver_tour` and `regler_tour` need to bill it? False for a job that names no
+    model. Raises when the scale cannot be read: the caller decides on a doubt.
+
+    Read before a hosted agent's subscription job is moved onto the platform key
+    (`capabilities.runner_jobs._cle_de_plateforme_du_repli`, 19/11/2026): in `report`,
+    an unpriced model is served and settles nothing; in `enforce`, its first turn is
+    refused and the job dies — either way, not the billed run the org chose."""
+    return _lignes_du_modele(budget._relire()["lignes"], fonction_du_modele(model)) is not None
+
+
+def payeur_du_travail(sub: Optional[str], org: Optional[int]) -> str:
+    """WHO a hosted agent's turns on a re-billed key are settled under: `org:<id>`, or
+    `user:<sub>` for an org whose payer mode is per person (`credit_payer_modes`) —
+    the same reading as `reserver_tour`. Raises when the payer modes cannot be read."""
+    return budget.payeur(sub, org, budget._relire()["personnes"])
+
+
 def reserver_tour(uid: str, sub: str, org: Optional[int], max_tokens: int,
                   model: Optional[str]) -> dict:
     """Reserves one model call to `model` before it is sent: `max_tokens` of output, at

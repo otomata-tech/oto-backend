@@ -30,7 +30,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .. import runner_models
 from . import user_subscriptions
@@ -1176,7 +1176,40 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
 #:   déclaré par l'agent) et un seul repli en vol par forfait, comme le chemin
 #:   abonnement (`_deja_en_vol`) ;
 #: - même modèle, même palier : Opus reste Opus.
+#:
+#: SECONDE manière de dire « je paie » (19/11/2026, `docs/repli-cle-plateforme.md`) :
+#: le réglage d'org `repli_cle_plateforme`, posé par un org_admin, sur une instance
+#: qui le PERMET (`org_subscription_pool.repli_cle_plateforme_permis`, fermé par
+#: défaut). Il ne remplace pas la règle ci-dessus, il en ajoute une porte, aussi
+#: explicite que la clé déposée :
+#: - il CHOISIT LE PAYEUR, pas le repli : `repli_api` (ou le défaut de l'instance)
+#:   reste la porte « se replier ou attendre », et fermée, rien ne replie ;
+#: - il ne sert qu'une org SANS clé déposée : une org qui a la sienne paie sur elle
+#:   (même illisible au coffre : elle paie déjà son fournisseur, elle ne bascule pas) ;
+#: - la clé de plateforme qu'il ouvre est la clé PARTAGÉE REFACTURÉE, celle que la
+#:   remise sert déjà, estampillée et réglée tour par tour à l'org
+#:   (`capabilities.runner_jobs._avec_cle`, `meter_usage`) — jamais la clé
+#:   d'environnement d'un worker, que rien ne mesure. Une org à qui la clé partagée
+#:   n'est pas ACCORDÉE attend, comme avant ;
+#: - même cas étroit, mêmes bornes, même stamp : le payeur s'écrit dans
+#:   `_plateforme.repli.payeur` (`PAYEUR_CLE_ORG` | `PAYEUR_CLE_PLATEFORME`).
 #: ────────────────────────────────────────────────────────────────────────────
+
+#: QUI PAIE un repli, écrit dans `_plateforme.repli.payeur` à la prise — les mots
+#: mêmes du payeur d'un travail conclu (`result.paye_par`, `jetons_des_travaux`). Un
+#: repli pris avant le champ (sans `payeur`) se lit `PAYEUR_CLE_ORG` : c'était le seul.
+PAYEUR_CLE_ORG = "cle_org"
+PAYEUR_CLE_PLATEFORME = "cle_plateforme"
+PAYEURS_DE_REPLI = (PAYEUR_CLE_ORG, PAYEUR_CLE_PLATEFORME)
+
+
+def payeur_du_repli(repli: Optional[dict]) -> Optional[str]:
+    """Le payeur stampé d'un repli (`_plateforme.repli`), `PAYEUR_CLE_ORG` pour un repli
+    d'avant le champ ; None si ce n'est pas un repli."""
+    if not isinstance(repli, dict):
+        return None
+    return repli.get("payeur") or PAYEUR_CLE_ORG
+
 
 #: Le plafond de jetons d'un run replié, quand son agent n'en déclare pas. Mesuré en
 #: prod le 28/09/2026 sur 30 jours de runs finis : `claude-sonnet-5` médiane 12 360,
@@ -1259,10 +1292,33 @@ _REPLI_EN_VOL = """SELECT 1 FROM runner_jobs vol
                       AND vol.payload->'_plateforme'->'repli'->>'forfait' = {forfait}"""
 
 
+#: Ce que l'org a CHOISI pour le repli d'un travail `rj`, et si elle a déposé une clé
+#: du dépôt d'arrivée (`%s`) : `reg_m` = sa ligne de réglage (ou NULL), `reg.deposee` =
+#: la PRÉSENCE de la ligne du coffre — la même lecture que `pool_au_plafond`. Lue par
+#: les candidats et par la prise, qui la revérifie pour le payeur plateforme.
+_REGLAGE_DE_REPLI = """
+      LEFT JOIN org_model_subscription_modes reg_m
+             ON reg_m.org_id = rj.org_id
+            AND reg_m.famille = rj.payload->>'model_family'
+      LEFT JOIN LATERAL (
+             SELECT EXISTS (SELECT 1 FROM connector_credentials c
+                             WHERE c.entity_type = 'org'
+                               AND c.entity_id = rj.org_id::text
+                               AND c.connector = %s) AS deposee
+            ) reg ON TRUE"""
+
+
 def _cle_ok_pour_repli(org_id: int, famille: str) -> bool:
     """Le repli est-il payable **par l'ORG elle-même** ? Sa propre clé déposée,
     et RIEN d'autre : pas le barreau tenant, pas la clé de plateforme, pas la clé
     d'environnement du worker.
+
+    ⚠️ Cette règle ne s'est PAS assouplie le 19/11/2026. Le repli sur la clé de
+    plateforme (`PAYEUR_CLE_PLATEFORME`) est une AUTRE porte, avec son propre « je
+    paie » explicite (le réglage `repli_cle_plateforme`, sur une instance qui le
+    permet) et sa propre lecture — celle de la remise, injectée dans
+    `repli_disponible` par la capacité. Cette fonction-ci ne répond toujours qu'à
+    « l'org paie-t-elle sur SA clé ? ».
 
     ⚠️ C'est la règle la plus STRICTE du dépôt, et c'est délibéré. La cascade
     ordinaire (`access.walk_cascade`) sert un travail que l'org a demandé sur un
@@ -1395,7 +1451,8 @@ def defaire_le_repli(job_id: int, worker_sub: str, raison: str,
 
 def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
                                familles: frozenset, depot: str, seuil_defaut_pct: int,
-                               limit: int = 25, ferme: bool = False) -> list[dict]:
+                               limit: int = 25, ferme: bool = False,
+                               plateforme: bool = False) -> list[dict]:
     """Travaux `pending` d'une famille d'ABONNEMENT que l'org PEUT replier — lecture
     SEULE, hors verrou, pour que l'appelant choisisse une cible avant le claim
     atomique (`claim_fallback_job`, qui revérifie la MÊME pause : entre les deux, une
@@ -1407,11 +1464,26 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
     ou servable, n'est PAS un pool « en pause », et n'ouvre aucun repli (l'état du
     demandeur ne compte jamais en pool : il ne paie pas).
 
-    ⚠️ L'interrupteur de l'org, la PRÉSENCE d'une clé `depot` de l'org et le forfait
-    déjà en vol se filtrent ICI, AVANT la limite : filtrés après, vingt-cinq travaux
-    plus anciens d'orgs qui ne peuvent pas payer cacheraient pour toujours celui
-    d'une org qui le peut. La clé se DÉCHIFFRE ensuite (`_cle_ok_pour_repli`) : la
-    présence de la ligne ne dit pas que le coffre la rendra.
+    Chaque candidat dit `deposee` : l'org a-t-elle une ligne de clé `depot` au coffre
+    (sa clé paiera), ou non (seule la clé de plateforme le pourrait).
+
+    ⚠️ L'interrupteur de l'org (`repli_api`), ce qui PAIE et le forfait déjà en vol se
+    filtrent ICI, AVANT la limite : filtrés après, vingt-cinq travaux plus anciens
+    d'orgs qui ne peuvent pas payer cacheraient pour toujours celui d'une org qui le
+    peut. « Ce qui paie » = la PRÉSENCE d'une clé `depot` de l'org, OU — seulement si
+    `plateforme` (l'instance le permet, l'appelant a de quoi juger la clé de
+    plateforme) — le réglage `repli_cle_plateforme` de l'org (19/11/2026). La clé de
+    l'org se DÉCHIFFRE ensuite (`_cle_ok_pour_repli`) : la présence de la ligne ne dit
+    pas que le coffre la rendra. L'ACCÈS à la clé de plateforme (l'accord, le palier
+    refacturé, le prix du modèle, les crédits) se juge aussi ensuite, candidat par
+    candidat (`repli_disponible`) : il passe par la cascade des clés, qui n'a pas
+    d'écriture SQL. D'où DEUX lectures, chacune sous sa limite : les orgs qui paient
+    sur leur clé, puis — seulement si `plateforme` — les orgs opt-in, réduites au plus
+    ancien travail par forfait, demandeur et modèle (un seul repli vole par forfait).
+    Un opt-in que la plateforme ne peut pas payer ne cache donc jamais une org qui paie
+    sur SA clé ; il peut encore, au-delà de `limit` forfaits rejetés plus anciens,
+    retarder un autre opt-in qui, lui, le pourrait. Rendus fusionnés, du plus ancien au
+    plus récent.
 
     ⚠️ Un repli vers `FAMILLE_FERME` pour une org routée vers la ferme n'est ouvert
     qu'à un worker de ferme (`ferme`) : sinon, le repli ferait passer par la boucle
@@ -1421,48 +1493,70 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
     if not familles:
         return []
     vers_ferme = "TRUE" if depot == FAMILLE_FERME else "FALSE"
-    with _connect() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT rj.id, rj.org_id, rj.sub,
+
+    def lire(payeur_sql: str, enveloppe: str) -> list[dict]:
+        base = f"""
+            SELECT rj.id, rj.org_id, rj.sub, rj.due_at,
                    rj.payload->>'model' AS model,
-                   rj.payload->>'model_family' AS model_family
+                   rj.payload->>'model_family' AS model_family,
+                   reg.deposee,
+                   {_forfait_de_repli("rj", "modep")} AS forfait
               FROM runner_jobs rj
               {_jointures_de_repli(seuil_defaut_pct)}
+              {_REGLAGE_DE_REPLI}
              WHERE (%s::bigint IS NULL OR rj.org_id = %s)
                AND (%s::bigint[] IS NULL OR rj.org_id = ANY(%s::bigint[]))
                AND rj.status = 'pending' AND rj.due_at <= NOW()
                AND rj.attempts < rj.max_attempts
                AND rj.payload->>'model_family' = ANY(%s)
                AND (perso.limit_reset_at IS NOT NULL OR pool.reset_at IS NOT NULL)
-               AND COALESCE((SELECT r.repli_api FROM org_model_subscription_modes r
-                              WHERE r.org_id = rj.org_id
-                                AND r.famille = rj.payload->>'model_family'),
-                            %s)
-               AND EXISTS (SELECT 1 FROM connector_credentials c
-                            WHERE c.entity_type = 'org'
-                              AND c.entity_id = rj.org_id::text
-                              AND c.connector = %s)
+               AND COALESCE(reg_m.repli_api, %s)
+               AND {payeur_sql}
                AND NOT EXISTS ({_REPLI_EN_VOL.format(
                    forfait=_forfait_de_repli("rj", "modep"))})
-               AND {_servi_par_ce_worker("rj", vers_ferme)}
-             ORDER BY rj.due_at
-             LIMIT %s
-            """,
-            (org_id, org_id, org_ids, org_ids, list(familles),
-             repli_api_par_defaut(), depot, bool(ferme), limit),
-        ).fetchall()
-    return [dict(r) for r in rows]
+               AND {_servi_par_ce_worker("rj", vers_ferme)}"""
+        with _connect() as conn:
+            return [dict(r) for r in conn.execute(
+                enveloppe.format(base=base),
+                (depot, org_id, org_id, org_ids, org_ids, list(familles),
+                 repli_api_par_defaut(), bool(ferme), limit)).fetchall()]
+
+    # ⚠️ DEUX lectures, chacune sous SA limite (19/11/2026). Sous une seule, les
+    # travaux d'orgs opt-in que la clé de plateforme ne peut pas payer — rejetés APRÈS
+    # la limite, à chaque sondage (pas d'accord, modèle sans prix, solde…) — cachaient
+    # pour toujours celui d'une org qui paie sur SA clé.
+    cles = lire("reg.deposee", "{base}\n ORDER BY rj.due_at\n LIMIT %s")
+    if not plateforme:
+        return cles
+    # Côté plateforme, un seul repli vole par forfait : on n'en garde que le plus
+    # ancien par forfait, demandeur et modèle — ce qui décide de la payabilité (l'accès
+    # se résout au nom du demandeur, le prix est celui du modèle replié). Trente
+    # travaux d'un même forfait rejeté n'occupent donc qu'une place.
+    plateforme_seule = lire(
+        "NOT reg.deposee AND COALESCE(reg_m.repli_cle_plateforme, FALSE)",
+        "SELECT * FROM (SELECT DISTINCT ON (c.forfait, c.sub, c.model) c.* "
+        "FROM ({base}) c ORDER BY c.forfait, c.sub, c.model, c.due_at, c.id) p "
+        "ORDER BY p.due_at, p.id LIMIT %s")
+    return sorted(cles + plateforme_seule, key=lambda r: (r["due_at"], r["id"]))
 
 
 def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: str,
                        seuil_defaut_pct: int,
-                       lease_seconds: int = _LEASE_DEFAULT_S) -> Optional[dict]:
+                       lease_seconds: int = _LEASE_DEFAULT_S,
+                       payeur: str = PAYEUR_CLE_ORG) -> Optional[dict]:
     """Réclame UN travail d'abonnement en pause pour le REJOUER sur `to_model`
     (famille `to_family`, une clé API) — revérifie la pause dans le WHERE de
     l'UPDATE, jamais celle lue par `candidats_repli_abonnement` : entre les deux, le
     porteur (ou le pool) a pu redevenir servable, et une reconnexion gagne toujours
     contre un repli en cours de décision.
+
+    `payeur` (19/11/2026) : qui paiera le run replié, stampé dans `_plateforme.repli`.
+    Pour `PAYEUR_CLE_PLATEFORME`, le WHERE revérifie AUSSI ce que l'org a choisi —
+    `repli_api` (ou le défaut de l'instance) et `repli_cle_plateforme` toujours
+    ouverts, et toujours AUCUNE clé `to_family` déposée par elle : un admin qui referme
+    le réglage, ou une org qui dépose sa clé, entre la lecture et la prise, gagne. La
+    permission de l'instance et l'accès à la clé partagée ont été jugés par l'appelant
+    juste avant (`repli_disponible`), et la remise les rejuge.
 
     Réécrit la CHARGE DU MODÈLE dans la MÊME écriture que la prise
     (`runner_models.charge(to_model)` : son effort, son plafond de sortie —
@@ -1480,8 +1574,11 @@ def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: s
 
     Le repli se STAMPE, jamais silencieusement : `_plateforme.repli` porte l'AVANT
     (`charge_avant`, rendue telle quelle par `defaire_le_repli`), l'APRÈS, le mode,
-    le forfait et l'échéance qui a déclenché le repli — visible partout où `payload`
-    l'est déjà (`runner.jobs get/list`, `op=deliveries`)."""
+    le forfait, l'échéance qui a déclenché le repli et son PAYEUR — visible partout où
+    `payload` l'est déjà (`runner.jobs get/list`, `op=deliveries`)."""
+    from .org_subscription_pool import repli_api_par_defaut
+    if payeur not in PAYEURS_DE_REPLI:
+        raise ValueError(f"payeur de repli hors contrat : {payeur!r}")
     charge_apres = json.dumps(runner_models.charge(to_model))
     with _connect() as conn:
         conn.execute("SAVEPOINT prise_repli")
@@ -1494,11 +1591,16 @@ def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: s
                        {_forfait_de_repli("rj", "modep")} AS forfait
                   FROM runner_jobs rj
                   {_jointures_de_repli(seuil_defaut_pct)}
+                  {_REGLAGE_DE_REPLI}
                  WHERE rj.id = %s AND rj.status = 'pending' AND rj.due_at <= NOW()
                    AND rj.attempts < rj.max_attempts
                    AND (perso.limit_reset_at IS NOT NULL OR pool.reset_at IS NOT NULL)
                    AND NOT EXISTS (SELECT 1 FROM orgs o_susp WHERE o_susp.id = rj.org_id
                                     AND o_susp.suspended_at IS NOT NULL)
+                   AND (%s::text <> '{PAYEUR_CLE_PLATEFORME}'
+                        OR (COALESCE(reg_m.repli_api, %s)
+                            AND COALESCE(reg_m.repli_cle_plateforme, FALSE)
+                            AND NOT reg.deposee))
                  FOR UPDATE OF rj
             )
             UPDATE runner_jobs j
@@ -1517,6 +1619,7 @@ def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: s
                               'mode', cible.mode, 'forfait', cible.forfait,
                               'reason', 'paused_limit',
                               'reset_at', to_jsonb(cible.reset_at),
+                              'payeur', %s::text,
                               'charge_avant', (
                                   SELECT COALESCE(jsonb_object_agg(k, v), '{{}}'::jsonb)
                                     FROM jsonb_each(cible.payload) AS e(k, v)
@@ -1528,8 +1631,9 @@ def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: s
             RETURNING j.id, j.kind, j.run_id, j.payload, j.attempts, j.max_attempts,
                       j.lease_until, j.sub, j.org_id
             """,
-            (job_id, worker_sub, int(lease_seconds), list(_CHARGE_DU_MODELE),
-             charge_apres, REPLI_MAX_TOKENS, to_model, to_family,
+            (to_family, job_id, payeur, repli_api_par_defaut(),
+             worker_sub, int(lease_seconds), list(_CHARGE_DU_MODELE),
+             charge_apres, REPLI_MAX_TOKENS, to_model, to_family, payeur,
              list(_CHARGE_DU_MODELE)),
         ).fetchone()
         row = dict(row) if row else None
@@ -1552,31 +1656,60 @@ def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: s
 def repli_disponible(org_id: Optional[int], org_ids: Optional[list], worker_sub: str,
                      depot: Optional[str], seuil_defaut_pct: int,
                      lease_seconds: int = _LEASE_DEFAULT_S,
-                     ferme: bool = False) -> Optional[dict]:
+                     ferme: bool = False,
+                     plateforme_paie: Optional[Callable[[dict], bool]] = None
+                     ) -> Optional[dict]:
     """Tente un repli abonnement épuisé → clé API pour le dépôt `depot` d'un worker
     de PLATEFORME (`claim_next_job` a déjà rendu `None` pour lui) : parcourt les
     candidats du PLUS ANCIEN au plus récent, s'arrête au premier repli que l'org
-    PAIE (sa clé, déchiffrée) et qui gagne la course du claim. `None` si rien n'est
-    repliable — l'appelant continue d'ATTENDRE, jamais un échec : un candidat sans
-    clé lisible, ou perdu à la course, est SAUTÉ, pas arrêté.
+    PAIE et qui gagne la course du claim. `None` si rien n'est repliable — l'appelant
+    continue d'ATTENDRE, jamais un échec : un candidat sans payeur, ou perdu à la
+    course, est SAUTÉ, pas arrêté.
+
+    Qui paie, candidat par candidat :
+    - l'org a une ligne de clé `depot` : SA clé, déchiffrée comme à la remise
+      (`_cle_ok_pour_repli`), et rien d'autre — illisible, le candidat est sauté, il
+      ne bascule JAMAIS sur la clé de plateforme (l'org paie déjà son fournisseur) ;
+    - elle n'en a pas, a ouvert `repli_cle_plateforme`, l'instance le permet, et
+      `plateforme_paie(candidat)` (19/11/2026) : la clé de PLATEFORME. Ce jugement est
+      celui de la REMISE, injecté par la capacité — la base ne remonte pas vers elle
+      (ADR 0004) : la clé partagée accordée à l'org pour son demandeur, au palier
+      refacturé, un worker qui mesure chaque appel, hors ferme, crédits et limite du
+      jour. Ce qui DÉCIDE est ce qui SERT : décider sur moins ferait prendre un
+      travail que la remise ne servirait pas, et le défaire à chaque sondage. Sans
+      `plateforme_paie` (tout autre appelant), cette porte reste fermée.
+
+    Le candidat porte `to_model` quand `plateforme_paie` le reçoit : c'est le modèle
+    replié qui se refacture, pas celui de l'abonnement.
 
     `seuil_defaut_pct` : le plafond d'une org qui n'a rien réglé
     (`_abonnement.DEFAUT_LIMITE_PCT`), passé par la capacité — la base ne remonte
     pas vers elle (ADR 0004)."""
+    from .org_subscription_pool import repli_cle_plateforme_permis
     familles = runner_models.familles_de_repli(depot)
     if not familles:
         return None
+    # Lu UNE fois par sondage, et seulement par qui sait juger la clé de plateforme :
+    # une valeur illisible lève (`interrupteurs`), comme `OTO_REPLI_API_PAR_DEFAUT`.
+    plateforme = plateforme_paie is not None and repli_cle_plateforme_permis()
     for cand in candidats_repli_abonnement(org_id, org_ids, familles, depot,
-                                           seuil_defaut_pct, ferme=ferme):
+                                           seuil_defaut_pct, ferme=ferme,
+                                           plateforme=plateforme):
         to_model = runner_models.repli_api(cand["model"])
         if not to_model or runner_models.famille(to_model) != depot:
             continue
         # La clé se lit sur le dépôt d'ARRIVÉE (c'est lui qui facture), DÉCHIFFRÉE
         # comme à la remise ; l'interrupteur de l'org est déjà filtré en SQL.
-        if not _cle_ok_pour_repli(cand["org_id"], depot):
+        if cand["deposee"]:
+            if not _cle_ok_pour_repli(cand["org_id"], depot):
+                continue
+            payeur = PAYEUR_CLE_ORG
+        elif plateforme and plateforme_paie({**cand, "to_model": to_model}):
+            payeur = PAYEUR_CLE_PLATEFORME
+        else:
             continue
         row = claim_fallback_job(cand["id"], worker_sub, to_model, depot,
-                                 seuil_defaut_pct, lease_seconds)
+                                 seuil_defaut_pct, lease_seconds, payeur=payeur)
         if row:
             return row
     return None
@@ -2368,6 +2501,13 @@ def jetons_des_travaux(org_id: int, jours: int) -> list[dict]:
     Le payeur ne filtre rien : un travail d'abonnement consomme des jetons même si
     aucun crédit n'est débité, et c'est justement ce que l'écran veut montrer.
 
+    ⚠️ Le payeur d'un travail REPLIÉ est celui que la PRISE a stampé
+    (`_plateforme.repli.payeur`, 19/11/2026), avant ce que le worker déclare : c'est
+    le serveur qui a choisi la clé et l'a remise (un repli que la remise n'a pas pu
+    payer comme prévu est défait, et sa trace passe en `repli_defait`). Sans ça, le
+    run qu'un abonnement épuisé a déplacé sur la clé de plateforme ne se lirait
+    `cle_plateforme` que si le worker le disait.
+
     ⚠️ Un poste non déclaré n'est PAS un zéro (`runner_fleets` lit de même). Le CASE
     ne somme que les nombres ; `non_mesures` compte les travaux dont l'entrée ou la
     sortie n'en est pas un (un run coupé en vol côté abonnement ne déclare pas sa
@@ -2402,7 +2542,8 @@ def jetons_des_travaux(org_id: int, jours: int) -> list[dict]:
             SELECT (rj.finished_at AT TIME ZONE 'UTC')::date AS jour,
                    CASE WHEN payload->>'trigger_id' ~ '^[0-9]+$'
                         THEN payload->>'trigger_id' END AS trigger_id,
-                   result->>'paye_par' AS paye_par,
+                   COALESCE(payload->'_plateforme'->'repli'->>'payeur',
+                            result->>'paye_par') AS paye_par,
                    COALESCE(result->>'model', payload->>'model') AS modele,
                    COUNT(*)::int AS travaux,
                    {somme('usage_input')} AS entree,

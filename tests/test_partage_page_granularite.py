@@ -4,8 +4,8 @@ Le rapport : « partager un document partage en réalité tout le PROJET qui le
 contient », avec pour conséquence l'abandon du geste (contournement : recopier le
 corps dans un e-mail) alors qu'il fait exactement ce qu'on lui demandait.
 
-Ce que le code fait vraiment, et que rien ne testait : `set_public` pose un
-`public_token` SUR LA LIGNE de la page, et la lecture publique
+Ce que le code fait vraiment, et que rien ne testait : `set_public` pose le haché
+d'un jeton (`public_token_hash`) SUR LA LIGNE de la page, et la lecture publique
 (`get_doc_by_public_token`, servie par `/api/public/docs/{token}` et `/p/d/{token}`)
 sélectionne PAR CE TOKEN — jamais par projet. Le voisinage n'est donc pas joignable.
 
@@ -62,13 +62,48 @@ def test_le_token_n_ouvre_QUE_cette_page(arbre):
     token = db.set_doc_public(arbre["partagee"], True)
     with _connect() as conn:
         porteuses = conn.execute(
-            "SELECT id FROM docs WHERE project_id = %s AND public_token IS NOT NULL",
+            "SELECT id FROM docs WHERE project_id = %s AND public_token_hash IS NOT NULL",
             (arbre["projet"],)).fetchall()
     assert [r["id"] for r in porteuses] == [arbre["partagee"]]
     # …et le contenu servi ne cite ni l'une ni l'autre.
     lu = db.get_doc_by_public_token(token)
     assert "une autre mission" not in lu["body_md"]
     assert "l'annexe" not in lu["body_md"]
+
+
+def test_le_jeton_n_est_range_que_hache(arbre):
+    """Comme une invitation : seul le haché du jeton est rangé, et la lecture d'une
+    page dit qu'elle est publique sans jamais rendre son lien."""
+    import hashlib
+    from oto_mcp import db
+    from oto_mcp.db._conn import _connect
+    token = db.set_doc_public(arbre["partagee"], True)
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM docs WHERE id = %s",
+                           (arbre["partagee"],)).fetchone()
+    assert row["public_token_hash"] == hashlib.sha256(token.encode()).hexdigest()
+    assert "public_token" not in row, "plus de colonne en clair"
+    assert token not in str(list(row.values()))
+    lue = db.get_doc_by_id(arbre["partagee"])
+    assert lue["public"] is True and token not in str(list(lue.values()))
+    assert db.get_doc_by_id(arbre["voisine"])["public"] is False
+
+
+def test_un_jeton_inconnu_n_ouvre_rien(arbre):
+    from oto_mcp import db
+    db.set_doc_public(arbre["partagee"], True)
+    assert db.get_doc_by_public_token("jeton-inconnu") is None
+
+
+def test_regenerer_emet_un_nouveau_lien_et_l_ancien_meurt(arbre):
+    """Rendre publique une page qui l'est déjà émet un lien NEUF : l'ancien n'est plus
+    connu (seul son haché l'était), c'est le geste de régénération."""
+    from oto_mcp import db
+    ancien = db.set_doc_public(arbre["partagee"], True)
+    neuf = db.set_doc_public(arbre["partagee"], True)
+    assert neuf and neuf != ancien
+    assert db.get_doc_by_public_token(ancien) is None
+    assert db.get_doc_by_public_token(neuf)["title"] == "Chiffrage — mission A"
 
 
 def test_retirer_le_partage_ferme_la_lecture(arbre):

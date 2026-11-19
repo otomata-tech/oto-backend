@@ -1050,8 +1050,26 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # DROP — un boot post-drop aurait cassé).
     # (ADR 0032 §6 / 0029, B6 : `user_datastores.schema` est posée BEAUCOUP plus
     # haut — la conversion #317 la lit avant ce point. Cf. le renvoi là-bas, #781.)
-    # gap #4a : partage public d'un doc (token de lien public, lookup indexé).
-    conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS public_token TEXT")
+    # gap #4a : partage public d'un doc — le HACHÉ du jeton de lien public, lookup
+    # indexé. Base existante : la révision `20261119_0630_jetons_lien_haches` remplit
+    # le haché des liens d'avant et retire la colonne en clair `public_token`.
+    conn.execute("ALTER TABLE docs ADD COLUMN IF NOT EXISTS public_token_hash TEXT")
+    # Le partage d'une procédure par lien range de même le HACHÉ de son jeton
+    # (`process_shares.token_hash`). Base existante : la colonne en clair `token`
+    # (NOT NULL) reste jusqu'à la même révision ; le code neuf ne l'écrit plus, d'où
+    # sa contrainte levée ici — sous garde de catalogue, aucun verrou une fois faite.
+    conn.execute("ALTER TABLE process_shares ADD COLUMN IF NOT EXISTS token_hash TEXT")
+    conn.execute("""
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = current_schema() AND table_name = 'process_shares'
+                       AND column_name = 'token' AND is_nullable = 'NO') THEN
+            ALTER TABLE process_shares ALTER COLUMN token DROP NOT NULL;
+          END IF;
+        END $$""")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_process_shares_token_hash "
+                 "ON process_shares(token_hash)")
     # ADR 0032 (« stop using slug ») : id surrogate stable + globalement unique pour
     # les guides. `org_instructions` garde (org_id, slug) comme clé naturelle
     # interne ; l'`id` devient l'identité PUBLIQUE (URL, project_links, runs). Backfill
@@ -1196,7 +1214,7 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
         WHERE target_type = 'connecteur' AND identity_ref IS NULL
           AND COALESCE(config->>'identity_id', '') <> ''
     """)
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_docs_public_token ON docs(public_token) WHERE public_token IS NOT NULL")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_docs_public_token_hash ON docs(public_token_hash) WHERE public_token_hash IS NOT NULL")
     # ADR 0032 §5/§6 (B3) : un run est rattaché au projet actif gelé à son ouverture.
     conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id BIGINT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id, started_at DESC)")

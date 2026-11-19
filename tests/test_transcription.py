@@ -199,7 +199,7 @@ def monde(monkeypatch):
                               "parent_id": kw.get("parent_id"), "title": title,
                               "body_md": kw.get("body_md"), "kind": kw.get("kind"),
                               "description": None, "position": 16,
-                              "public_token": None, "created_at": "t",
+                              "public": False, "created_at": "t",
                               "updated_at": "t"})
         return etat["pages"][-1]["id"]
 

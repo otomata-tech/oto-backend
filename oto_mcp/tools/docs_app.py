@@ -133,13 +133,10 @@ def register(mcp: FastMCP) -> None:
                 return _message_card("Page not found",
                                      f"No accessible page #{doc_id}.")
             meta = f"{row.get('kind') or 'doc'} · updated {str(row.get('updated_at') or '')[:16]}"
-            tok = row.get("public_token")
             title = str(row.get("title") or f"#{doc_id}")
             body = row.get("body_md") or "*(empty page)*"
-            lien = None
-            if tok:
-                from ..capabilities.docs.view import public_doc_url
-                lien = f"public link: {public_doc_url(tok)}"
+            # Le lien public est rangé haché : on dit qu'il existe, pas son adresse.
+            lien = "shared by public link" if row.get("public") else None
             with Card() as card:
                 with Column(gap=4):
                     Heading(title)

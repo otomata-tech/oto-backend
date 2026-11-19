@@ -25,12 +25,12 @@ Toutes les routes à jeton dans le chemin ne sont pas concernées :
 
 Restent les deux jetons LONGS, les SECTIONS de ce script :
 
-    docs         `docs.public_token` — le lien public d'une page (`/p/d/…`,
-                 `/api/public/docs/…`), SANS échéance et rangé en clair. Aucune date
-                 d'émission : tout lien public vivant est tenu pour exposé. Le geste
-                 est celui du produit (`db.set_doc_public`) : retirer puis rendre
-                 public = un NOUVEAU lien ; l'ancien répond 404. `--sans-reemission`
-                 laisse la page privée.
+    docs         le lien public d'une page (`/p/d/…`, `/api/public/docs/…`), SANS
+                 échéance. Aucune date d'émission : tout lien public vivant est tenu
+                 pour exposé. Le geste est celui du produit (`db.set_doc_public`) : le
+                 lien est retiré, l'ancien répond 404. Aucune réémission : le lien est
+                 rangé haché (`docs.public_token_hash`) et ne se montre qu'à qui
+                 l'émet — c'est au propriétaire de rendre la page publique à nouveau.
     invitations  `org_invitations` en attente, émises AVANT la bascule — 7 jours de
                  vie (`OTO_MCP_INVITE_TTL_DAYS`), seul son hash est rangé. Le geste est
                  celui du produit (`org_store.revoke_invitation` et ses deux voisins).
@@ -57,68 +57,37 @@ BASCULE = datetime.datetime(2026, 9, 29, 9, 4, tzinfo=datetime.timezone.utc)
 
 # ── docs ────────────────────────────────────────────────────────────────────
 
-def _masque_mesurable() -> bool:
-    """Sans le secret de l'instance, `journal_secrets.mask` prend une clé de PROCESSUS :
-    le masque calculé ici ne serait jamais celui du journal, et le compte vaudrait 0
-    — un zéro crédible et faux. On le dit plutôt que de le rendre."""
-    import os
-    return bool(os.environ.get("OTO_MCP_OAUTH_STATE_SECRET")
-                or os.environ.get("OTO_MCP_MASTER_KEY"))
-
-
-def _consultations_depuis(cur, jeton: str) -> int:
-    """Lectures REST du lien DEPUIS la bascule, par le masque que le journal d'appels
-    range pour ce jeton (`journal_secrets.route_and_secrets`) — le jeton ne sort pas
-    de la mémoire. La page servie (`/p/d/…`) n'est pas dans ce journal."""
-    from oto_mcp import journal_secrets
-    cur.execute("SELECT count(*) AS n FROM tool_calls WHERE kind = 'rest' "
-                "AND created_at >= %s AND tool = 'GET /api/public/docs/:token' "
-                "AND args->>'token' = %s", (BASCULE, journal_secrets.mask(jeton)))
-    return int(cur.fetchone()["n"])
-
-
-def docs(cur, rapport: dict, avant: list, appliquer: bool,
-         reemettre: bool = True) -> None:
+def docs(cur, rapport: dict, avant: list, appliquer: bool) -> None:
     from oto_mcp import db
-    cur.execute("SELECT d.id, d.project_id, d.public_token, p.owner_type, p.owner_id "
+    cur.execute("SELECT d.id, d.project_id, d.public_token_hash, p.owner_type, p.owner_id "
                 "FROM docs d LEFT JOIN projects p ON p.id = d.project_id "
-                "WHERE d.public_token IS NOT NULL ORDER BY d.id")
+                "WHERE d.public_token_hash IS NOT NULL ORDER BY d.id")
     lignes = [dict(r) for r in cur.fetchall()]
     c = rapport.setdefault("docs", Counter())
     orgs, proprietaires = set(), set()
-    mesurable = _masque_mesurable()
-    if lignes and not mesurable:
-        c["  lectures depuis la bascule : NON MESURÉES (secret absent)"] = 0
     for d in lignes:
         c["liens publics vivants (tous tenus pour exposés)"] += 1
         proprietaires.add((d["owner_type"], d["owner_id"]))
         if d["owner_type"] == "org":
             orgs.add(d["owner_id"])
-        if mesurable and _consultations_depuis(cur, d["public_token"]):
-            c["  dont lus par l'API depuis la bascule"] += 1
         avant.append({"section": "docs", "id": d["id"], "project_id": d["project_id"],
                       "etait_public": True})
         rapport.setdefault("_liste", []).append(("doc public", d["id"], d["owner_type"]))
         if not appliquer:
             continue
-        # Conditionnel sur le jeton lu : un lien retiré ou refait entre-temps par son
+        # Conditionnel sur le lien lu : un lien retiré ou refait entre-temps par son
         # propriétaire n'est pas touché.
-        cur.execute("SELECT public_token FROM docs WHERE id = %s", (d["id"],))
+        cur.execute("SELECT public_token_hash FROM docs WHERE id = %s", (d["id"],))
         r = cur.fetchone()
-        if not r or r["public_token"] != d["public_token"]:
+        if not r or r["public_token_hash"] != d["public_token_hash"]:
             c["  a bougé entre les deux passes (laissé)"] += 1
             continue
         db.set_doc_public(d["id"], False)
-        if reemettre:
-            db.set_doc_public(d["id"], True)
-            c["  nouveau lien émis"] += 1
-        else:
-            c["  rendus privés"] += 1
+        c["  rendus privés"] += 1
         if d["project_id"] is not None:
             db.log_project_activity(
                 d["project_id"], None, "doc.rotate_public_token",
-                "lien public refait (rotation de sécurité du 29/09/2026)" if reemettre
-                else "partage public retiré (rotation de sécurité du 29/09/2026)")
+                "partage public retiré (rotation de sécurité du 29/09/2026)")
     c["propriétaires distincts"] = len(proprietaires)
     c["orgs touchées"] = len(orgs)
 
@@ -142,8 +111,7 @@ def _revoquer(inv: dict) -> bool:
     return False
 
 
-def invitations(cur, rapport: dict, avant: list, appliquer: bool,
-                reemettre: bool = True) -> None:
+def invitations(cur, rapport: dict, avant: list, appliquer: bool) -> None:
     cur.execute("SELECT id, org_id, group_id, email, org_role, group_role, invited_by, "
                 "source, created_at, expires_at FROM org_invitations "
                 "WHERE accepted_at IS NULL AND declined_at IS NULL "
@@ -175,15 +143,12 @@ def main(argv: list[str]) -> int:
                     help="ÉCRIT en base. Sans lui : à blanc, rien n'est modifié.")
     ap.add_argument("--seulement", choices=SECTIONS, action="append",
                     help="Une section (répétable). Défaut : les deux.")
-    ap.add_argument("--sans-reemission", action="store_true",
-                    help="docs : retirer le lien public sans en émettre un nouveau.")
     ap.add_argument("--sauvegarde", default="/opt/oto-mcp/sauvegardes",
                     help="Où écrire l'état AVANT, dans le même geste que l'écriture.")
     ap.add_argument("--details", action="store_true",
                     help="Liste aussi les lignes visées (identifiants seuls).")
     args = ap.parse_args(argv[1:])
     sections = args.seulement or list(SECTIONS)
-    reemettre = not args.sans_reemission
 
     from oto_mcp.db._conn import _connect
 
@@ -192,7 +157,7 @@ def main(argv: list[str]) -> int:
     # Première passe : LIRE et compter, rien n'est écrit.
     with _connect() as conn, conn.cursor() as cur:
         for s in sections:
-            globals()[s](cur, rapport, avant, False, reemettre)
+            globals()[s](cur, rapport, avant, False)
 
     if args.appliquer and avant:
         rep = pathlib.Path(args.sauvegarde)
@@ -207,7 +172,7 @@ def main(argv: list[str]) -> int:
         rapport = {}
         with _connect() as conn, conn.cursor() as cur:
             for s in sections:
-                globals()[s](cur, rapport, [], True, reemettre)
+                globals()[s](cur, rapport, [], True)
 
     mode = "APPLIQUÉ" if args.appliquer else "À BLANC — rien n'a été écrit"
     print(f"=== {mode} === (bascule : {BASCULE:%d/%m/%Y %H:%M} UTC)")
@@ -220,8 +185,7 @@ def main(argv: list[str]) -> int:
         for quoi, ident, info in rapport["_liste"]:
             print(f"  {quoi:<14} {ident:<10} {info}")
     if not args.appliquer:
-        print("\n  Pour écrire : --appliquer (docs : --sans-reemission pour ne pas "
-              "refaire de lien).")
+        print("\n  Pour écrire : --appliquer.")
     return 0
 
 

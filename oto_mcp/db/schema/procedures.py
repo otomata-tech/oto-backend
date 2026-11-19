@@ -124,12 +124,16 @@ CREATE INDEX IF NOT EXISTS idx_doctrine_library_category ON doctrine_library(cat
 # par un schéma FERMÉ : énumérations et slugs seulement, aucun texte libre ne
 # peut y entrer. `shape_version` = la version de procédure dont elle vient ; la
 # vitrine ne la sert que si elle égale la version courante.
+#
+# `token_hash` = le HACHÉ (SHA-256, comme `org_invitations.token_hash`) du jeton du
+# lien ; le jeton n'est rangé nulle part et ne se montre qu'à sa création. Son index
+# unique naît dans `_init`, après l'ADD COLUMN d'une base existante.
 PROCESS_SHARES = """
 CREATE TABLE IF NOT EXISTS process_shares (
     id BIGSERIAL PRIMARY KEY,
     instruction_id BIGINT NOT NULL,
     org_id BIGINT REFERENCES orgs(id) ON DELETE CASCADE,
-    token TEXT NOT NULL UNIQUE,
+    token_hash TEXT,
     show_readers BOOLEAN NOT NULL DEFAULT TRUE,
     preview_shape JSONB,
     shape_version INTEGER,

@@ -114,7 +114,7 @@ La règle qui remplace la forme, source unique `oto_mcp/journal_secrets.py` :
 **Le journal d'accès d'uvicorn** (journald) écrivait lui aussi le chemin en clair jusqu'à
 la v1.391.0 : `journal_secrets.MasqueCheminAcces` y pose le même masque depuis. Réparer
 un journal système ne suffit pas — un jeton lu pendant la fenêtre doit cesser d'ouvrir
-quoi que ce soit : `scripts/rotation_jetons_journal.py` (à blanc par défaut) refait le
+quoi que ce soit : `scripts/rotation_jetons_journal.py` (à blanc par défaut) retire le
 lien public des pages et révoque les invitations en attente émises avant la bascule.
 Les jetons courts (upload, 15 min) ont expiré d'eux-mêmes ; ceux de désinscription
 n'ouvrent qu'une désinscription et ne se révoquent qu'en changeant le secret d'instance.

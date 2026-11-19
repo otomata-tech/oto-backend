@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS process_shares (
 id BIGSERIAL PRIMARY KEY,
 instruction_id BIGINT NOT NULL,
 org_id BIGINT REFERENCES orgs(id) ON DELETE CASCADE,
-token TEXT NOT NULL UNIQUE,
+token_hash TEXT,
 show_readers BOOLEAN NOT NULL DEFAULT TRUE,
 preview_shape JSONB,
 shape_version INTEGER,

@@ -384,7 +384,7 @@ def test_unshare_ferme_la_lecture_tout_de_suite(monde):
 def test_partager_la_page_ne_la_rend_pas_publique(monde):
     _partage(monde, email=f"{DEST}@exemple.test")
     try:
-        assert db.get_doc_by_id(monde["recap"])["public_token"] is None
+        assert db.get_doc_by_id(monde["recap"])["public"] is False
         # Sans compte, rien : ni par `oto_doc`, ni par la porte de lecture.
         assert _doc(None, None, op="get", doc_id=monde["recap"])[:2] == ("refus", 404)
         from oto_mcp.capabilities.docs import common

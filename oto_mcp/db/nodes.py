@@ -222,10 +222,8 @@ PURGE_PROJECT_NODES_SQL = f"""
 # pas d'où il vient. Les confondre rendrait la provenance structurante — et
 # rappellerait le `kind='guide'` que M1 a précisément dissous.
 #
-# `public_token` voyage tel quel (**une seule page en porte un** en production,
-# relevé du 11/08). Savoir s'il DEVIENT un accès du modèle de 0053 se tranchera
-# quand la chaîne de grants sera vivante : décider maintenant, ce serait calibrer un
-# modèle d'accès sur une population de un — l'erreur exacte qui a produit #282.
+# Le lien public d'une page ne voyage pas : seul son haché est rangé
+# (`docs.public_token_hash`), et il reste sur la page.
 CONVERT_DOCS_TO_NODES_SQL = f"""
     INSERT INTO nodes (public_id, kind, owner_type, owner_id, position, props,
                        created_at, updated_at)
@@ -237,7 +235,6 @@ CONVERT_DOCS_TO_NODES_SQL = f"""
                'description', d.description,
                'body_md', COALESCE(d.body_md, ''),
                'doc_kind', d.kind,
-               'public_token', d.public_token,
                'project_id', d.project_id,
                'created_by', d.created_by)),
            d.created_at, d.updated_at

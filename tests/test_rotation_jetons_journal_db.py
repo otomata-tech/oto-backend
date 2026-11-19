@@ -73,27 +73,28 @@ def test_a_blanc_rien_ne_bouge_et_rien_ne_fuit(monde, script, capsys, tmp_path):
     assert not list(tmp_path.iterdir()), "à blanc, aucune sauvegarde n'est écrite"
 
 
-def test_applique_refait_le_lien_et_revoque_l_invitation_d_avant(monde, script,
-                                                                 capsys, tmp_path):
+def test_applique_retire_le_lien_et_revoque_l_invitation_d_avant(monde, script,
+                                                                  capsys, tmp_path):
+    """Le lien est retiré sans réémission : rangé haché, un lien neuf ne serait montré
+    à personne — c'est au propriétaire de rendre la page publique à nouveau."""
     from oto_mcp import db
     assert script.main(["x", "--appliquer", "--sauvegarde", str(tmp_path)]) == 0
     sortie = capsys.readouterr().out
     assert db.get_doc_by_public_token(monde["lien"]) is None, "l'ancien lien est mort"
-    neuf = db.get_doc_by_id(monde["doc"])["public_token"]
-    assert neuf and neuf != monde["lien"], "la page reste publique, sous un NOUVEAU lien"
+    assert db.get_doc_by_id(monde["doc"])["public"] is False
     assert _invitations(monde["org"]) == {monde["apres"]}, \
         "seule l'invitation émise AVANT la bascule est révoquée"
-    assert neuf not in sortie and monde["lien"] not in sortie
+    assert monde["lien"] not in sortie
     texte = next(tmp_path.iterdir()).read_text()
-    assert monde["lien"] not in texte and neuf not in texte, \
+    assert monde["lien"] not in texte, \
         "la sauvegarde ne garde aucun lien : restaurer un lien exposé défait la rotation"
     assert {e["section"] for e in json.loads(texte)} == {"docs", "invitations"}
 
 
-def test_sans_reemission_la_page_devient_privee(monde, script, tmp_path):
+def test_seulement_docs_ne_touche_pas_aux_invitations(monde, script, tmp_path):
     from oto_mcp import db
-    assert script.main(["x", "--appliquer", "--seulement", "docs", "--sans-reemission",
+    assert script.main(["x", "--appliquer", "--seulement", "docs",
                         "--sauvegarde", str(tmp_path)]) == 0
-    assert db.get_doc_by_id(monde["doc"])["public_token"] is None
+    assert db.get_doc_by_id(monde["doc"])["public"] is False
     assert _invitations(monde["org"]) == {monde["avant"], monde["apres"]}, \
         "--seulement docs ne touche pas aux invitations"

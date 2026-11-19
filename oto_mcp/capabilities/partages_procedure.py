@@ -24,8 +24,12 @@ glissé pour sortir par là.
 
 ⚠️ **Publier ne sort pas d'une conversation** (`_publication.refuser_si_agent`) : le
 corps devient lisible par quiconque se crée un compte, ce qui équivaut à une ouverture
-au web. `op=share_publish` est refusé à un agent ; retirer, régler et lire les lecteurs
-lui restent ouverts.
+au web. `op=share_publish` est refusé à un agent (et `op=regenerate`, sa face REST) ;
+retirer, régler et lire les lecteurs lui restent ouverts.
+
+⚠️ **Le jeton du lien est rangé HACHÉ** (`process_shares.token_hash`, le même
+`_hash_token` que les invitations) : il n'est servi qu'à son émission — `publish` qui
+crée le partage, `regenerate` qui le remplace. `share.get` ne le rend plus.
 
 La bibliothèque publique (`guide_library`) n'est PAS touchée : elle reste une vitrine
 éditée par la plateforme (30a1ada5). Un partage n'y entre jamais et n'est listé nulle
@@ -109,9 +113,11 @@ def valider_forme(raw) -> dict:
 # ── Sorties ────────────────────────────────────────────────────────────────────
 
 class ShareView(BaseModel):
-    """Le partage actif d'une procédure, vu par son propriétaire."""
-    token: str
-    url: str
+    """Le partage actif d'une procédure, vu par son propriétaire. `token` et `url` ne
+    sont servis qu'à l'émission du lien (`publish` qui le crée, `regenerate`) : seul
+    leur haché est rangé, comme pour une invitation."""
+    token: Optional[str] = None
+    url: Optional[str] = None
     show_readers: bool
     created_at: str
     shape_version: Optional[int] = None
@@ -193,7 +199,7 @@ class ShareSlugInput(BaseModel):
 
 class ShareWriteInput(BaseModel):
     slug: str
-    op: Literal["publish", "unpublish", "set"]
+    op: Literal["publish", "unpublish", "set", "regenerate"]
     show_readers: Optional[bool] = None
     preview_shape: Optional[dict] = None
     shape_version: Optional[int] = None
@@ -227,10 +233,12 @@ def _url(org_id: Optional[int], created_by: str, token: str) -> str:
     return f"{base.rstrip('/')}/p/{token}"
 
 
-def _share_view(share: dict, instr: dict) -> dict:
+def _share_view(share: dict, instr: dict, jeton: Optional[str] = None) -> dict:
+    """`jeton` = celui qui vient d'être émis ; sinon ni jeton ni adresse : le lien
+    n'est plus connu, seul son haché est rangé."""
     return {
-        "token": share["token"],
-        "url": _url(share.get("org_id"), share["created_by"], share["token"]),
+        "token": jeton,
+        "url": _url(share.get("org_id"), share["created_by"], jeton) if jeton else None,
         "show_readers": bool(share["show_readers"]),
         "created_at": _iso(share["created_at"]),
         "shape_version": share.get("shape_version"),
@@ -324,17 +332,26 @@ def _share_write(ctx: ResolvedCtx, inp: ShareWriteInput) -> dict:
         if inp.shape_version is None:
             raise _forme_refusee("`shape_version` requis avec `preview_shape` : la "
                                  "version de procédure dont la forme est tirée.")
-    if inp.op == "publish":
+    if inp.op in ("publish", "regenerate"):
         _publication.refuser_si_agent(
             ctx, "this procedure",
             "It is published from the app, with the procedure's “Share” button.")
-        share, cree = db_partages.publier(
+    if inp.op == "publish":
+        share, jeton = db_partages.publier(
             instr["id"], ctx.org_id, ctx.sub,
             show_readers=True if inp.show_readers is None else inp.show_readers,
             preview_shape=forme, shape_version=inp.shape_version if forme else None)
-        if not cree and (inp.show_readers is not None or forme is not None):
+        if jeton is None and (inp.show_readers is not None or forme is not None):
             share = _regler(instr, inp, forme) or share
-        return {"share": _share_view(share, instr)}
+        return {"share": _share_view(share, instr, jeton)}
+    if inp.op == "regenerate":
+        neuf = db_partages.regenerer(instr["id"], ctx.sub)
+        if neuf is None:
+            raise AuthzDenied(404, "no_share", "Cette procédure n'est pas publiée.")
+        share, jeton = neuf
+        if inp.show_readers is not None or forme is not None:
+            share = _regler(instr, inp, forme) or share
+        return {"share": _share_view(share, instr, jeton)}
     share = _regler(instr, inp, forme)
     if share is None:
         raise AuthzDenied(404, "no_share", "Cette procédure n'est pas publiée.")
@@ -379,7 +396,7 @@ def _read(ctx: ResolvedCtx, inp: TokenInput) -> dict:
         accueilli = profil.get("onboarded_at") or profil.get("onboarding_skipped_at")
         if not profil.get("acquired_via") and not accueilli:
             db.update_account_profile(ctx.sub, {"acquired_via": {
-                "kind": "process_share", "token": share["token"],
+                "kind": "process_share", "share_id": int(share["id"]),
                 "at": datetime.now(timezone.utc).isoformat()}})
     copie = _copie_vivante(instr["id"], ctx.sub)
     return {**vitrine(share, instr), "body_md": instr["body_md"],
@@ -445,9 +462,11 @@ CAPABILITIES += [
     Capability(
         key="org.instruction.share.get", handler=_share_get, Input=ShareSlugInput,
         authz=ORG_ADMIN_OPT("org"), Output=ShareEnvelope,
-        description=("The web link of one of your org's procedures (org_admin): token, "
-                     "url, whether readers are recorded, and whether the stored graph "
-                     "shape matches the current version. `share` is null when the "
+        description=("The web link of one of your org's procedures (org_admin): whether "
+                     "readers are recorded, and whether the stored graph shape matches "
+                     "the current version. `token` and `url` are null here: the link is "
+                     "stored hashed and shown only when it is issued (`op=publish` "
+                     "creating it, or `op=regenerate`). `share` is null when the "
                      "procedure is not published."),
         errors=(_NOT_FOUND,),
         rest=RestBinding("GET", "/api/me/instructions/{slug}/share"),
@@ -456,17 +475,25 @@ CAPABILITIES += [
         key="org.instruction.share.write", handler=_share_write, Input=ShareWriteInput,
         authz=ORG_ADMIN_OPT("org"), Output=ShareEnvelope,
         description=("Publish (`op=publish`, idempotent), revoke (`op=unpublish`: the "
-                     "link stops working; publishing again issues a NEW token) or adjust "
-                     "(`op=set`) the web link of a procedure (org_admin). Anyone with the "
+                     "link stops working; publishing again issues a NEW token), replace "
+                     "(`op=regenerate`: a NEW token, the previous link stops working, "
+                     "settings and readers kept) or adjust (`op=set`) the web link of a "
+                     "procedure (org_admin). The link is stored hashed: `token` and `url` "
+                     "are returned only when a token is issued — by `op=publish` when it "
+                     "creates the share, and by `op=regenerate` — and null otherwise. "
+                     "Anyone with the "
                      "link sees its overview without an account; signed-in readers see "
                      "the body. `show_readers` records who reads it. `preview_shape` + "
                      "`shape_version` = the graph SHAPE shown behind the sign-up gate "
                      "(closed schema: trigger kind, then per step its kind and "
-                     "connectors — no text). Publishing is refused to an agent."),
+                     "connectors — no text). Publishing and regenerating are refused to "
+                     "an agent."),
         errors=(_NOT_FOUND, _FORME,
-                DeclaredError(404, "no_share", "`op=set` sur une procédure non publiée"),
+                DeclaredError(404, "no_share",
+                              "`op=set` ou `op=regenerate` sur une procédure non publiée"),
                 DeclaredError(403, "publication_reservee_a_l_humain",
-                              "`op=publish` demandé depuis une conversation d'agent")),
+                              "`op=publish` ou `op=regenerate` demandé depuis une "
+                              "conversation d'agent")),
         rest=RestBinding("POST", "/api/me/instructions/{slug}/share"),
     ),
     Capability(

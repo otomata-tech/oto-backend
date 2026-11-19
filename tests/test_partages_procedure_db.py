@@ -49,9 +49,9 @@ def _ctx(sub, org_id=None, channel="rest"):
     return ResolvedCtx(sub=sub, org_id=org_id, channel=channel)
 
 
-def _ecrire(m, op, **kw):
+def _ecrire(m, op, channel="rest", **kw):
     from oto_mcp.capabilities import partages_procedure as P
-    return P._share_write(_ctx(m["owner"], m["org_a"]),
+    return P._share_write(_ctx(m["owner"], m["org_a"], channel=channel),
                           P.ShareWriteInput(slug=m["slug"], op=op, **kw))
 
 
@@ -90,10 +90,64 @@ def _client():
 def test_publier_est_idempotent_et_le_lien_vit_sur_le_front(monde):
     m = monde
     a = _publier(m)
-    b = _publier(m)
-    assert a["token"] == b["token"] and len(a["token"]) >= 10
+    assert len(a["token"]) >= 10
     assert a["url"] == f"https://front.example.test/p/{a['token']}"
     assert a["show_readers"] is True and a["shape_fresh"] is False
+    # Republier rend le MÊME partage, sans son lien : seul son haché est rangé.
+    b = _publier(m)
+    assert b["token"] is None and b["url"] is None and b["created_at"] == a["created_at"]
+    assert _client().get(f"/api/public/process-shares/{a['token']}").status_code == 200
+
+
+def test_le_jeton_n_est_range_que_hache(monde):
+    import hashlib
+    from oto_mcp.capabilities import partages_procedure as P
+    from oto_mcp.db._conn import _connect
+    m = monde
+    token = _publier(m)["token"]
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM process_shares WHERE token_hash = %s",
+            (hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
+    assert row is not None and token not in str(dict(row).values())
+    assert "token" not in row, "plus de colonne en clair"
+    vue = P._share_get(_ctx(m["owner"], m["org_a"]), P.ShareSlugInput(slug=m["slug"]))
+    assert vue["share"]["token"] is None and vue["share"]["url"] is None
+
+
+def test_un_jeton_inconnu_ne_mene_a_rien(monde):
+    from oto_mcp.capabilities._types import AuthzDenied
+    m = monde
+    _publier(m)
+    for geste in (_lire, _copier):
+        with pytest.raises(AuthzDenied) as e:
+            geste(m, m["lecteurs"][0], "jeton-inconnu-0000000")
+        assert e.value.code == "not_found"
+    assert _client().get("/api/public/process-shares/jeton-inconnu-0000000").status_code == 404
+
+
+def test_regenerer_emet_un_nouveau_lien_et_l_ancien_meurt(monde):
+    from oto_mcp.capabilities._types import AuthzDenied
+    m = monde
+    ancien = _publier(m, show_readers=False)["token"]
+    _lire(m, m["lecteurs"][0], ancien)
+    neuf = _ecrire(m, "regenerate")["share"]
+    assert neuf["token"] and neuf["token"] != ancien
+    assert neuf["url"] == f"https://front.example.test/p/{neuf['token']}"
+    assert neuf["show_readers"] is False, "les réglages suivent le lien neuf"
+    for geste in (_lire, _copier):
+        with pytest.raises(AuthzDenied) as e:
+            geste(m, m["lecteurs"][0], ancien)
+        assert e.value.code == "not_found"
+    assert _client().get(f"/api/public/process-shares/{ancien}").status_code == 404
+    assert _lire(m, m["lecteurs"][0], neuf["token"])["body_md"] == _CORPS
+
+
+def test_regenerer_sans_partage_est_un_404_nomme(monde):
+    from oto_mcp.capabilities._types import AuthzDenied
+    with pytest.raises(AuthzDenied) as e:
+        _ecrire(monde, "regenerate")
+    assert e.value.code == "no_share"
 
 
 def test_retirer_puis_republier_change_de_jeton_et_l_ancien_meurt(monde):
@@ -138,8 +192,11 @@ def test_un_agent_ne_publie_pas_mais_peut_retirer(monde):
         C._dispatch_procedure(ctx, C.ProcedureInput(op="share_publish", slug=m["slug"]))
     assert e.value.code == "publication_reservee_a_l_humain"
     _publier(m)
-    assert C._dispatch_procedure(ctx, C.ProcedureInput(
-        op="share_get", slug=m["slug"]))["share"]["token"]
+    vue = C._dispatch_procedure(ctx, C.ProcedureInput(op="share_get", slug=m["slug"]))
+    assert vue["share"] and vue["share"]["token"] is None, "le lien n'est pas relu"
+    with pytest.raises(AuthzDenied) as e:
+        _ecrire(m, "regenerate", channel="mcp")
+    assert e.value.code == "publication_reservee_a_l_humain"
     assert C._dispatch_procedure(ctx, C.ProcedureInput(
         op="share_unpublish", slug=m["slug"])) == {"share": None}
 
@@ -260,7 +317,11 @@ def test_lire_connecte_rend_le_corps_et_note_le_lecteur(monde):
     assert row["reads"] == 2
     profil = db.get_account_profile(lecteur)["profile"]
     assert profil["acquired_via"]["kind"] == "process_share"
-    assert profil["acquired_via"]["token"] == token
+    assert "token" not in profil["acquired_via"], "le jeton n'est rangé nulle part"
+    from oto_mcp import org_store
+    from oto_mcp.db import partages_procedure as db_partages
+    instr = org_store.get_instruction("org", m["org_a"], m["slug"])
+    assert profil["acquired_via"]["share_id"] == db_partages.actif(instr["id"])["id"]
 
 
 def test_un_compte_deja_accueilli_qui_lit_n_est_pas_acquis_par_le_partage(monde):
@@ -392,7 +453,8 @@ def test_le_lien_de_desinscription_coupe_le_resume(monde, mails, monkeypatch):
     from oto_mcp import digest_lecteurs, outreach_optout
     m = monde
     monkeypatch.setenv("OTO_DIGEST_LECTEURS", "1")
-    _lire(m, m["lecteurs"][0], _publier(m)["token"])
+    token = _publier(m)["token"]
+    _lire(m, m["lecteurs"][0], token)
     lien = outreach_optout.lien_lecteurs(m["owner"])
     jeton = lien.rsplit("/", 1)[1]
     assert outreach_optout.verify_digest(jeton) is None, "jamais le jeton d'un autre canal"
@@ -402,7 +464,7 @@ def test_le_lien_de_desinscription_coupe_le_resume(monde, mails, monkeypatch):
     assert [e for e in mails if e["to"] == f"{m['owner']}@northwind.example"] != []
     # Le POST de sa page, lui, coupe le résumé.
     mails.clear()
-    _lire(m, m["lecteurs"][1], _publier(m)["token"])
+    _lire(m, m["lecteurs"][1], token)
     assert _client().post(f"/o/r/{jeton}").status_code == 200
     digest_lecteurs.balayer()
     assert [e for e in mails if e["to"] == f"{m['owner']}@northwind.example"] == []

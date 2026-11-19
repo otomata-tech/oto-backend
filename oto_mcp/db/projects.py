@@ -18,6 +18,7 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 from ._conn import _connect
+from .tokens import _hash_token
 from ._partage_vivant import PARTAGE_VIVANT, PARTAGE_VIVANT_G
 from . import backlinks as _backlinks
 from . import favoris as _favoris
@@ -968,7 +969,10 @@ def projets_des_procedures(org_id: int, slugs: list[str]) -> dict[str, list[int]
 
 # --- Docs (pages markdown arborescentes d'un projet, incrément 3) -------------
 # `archived_at`, `verified_at`, `verified_by` : `db/doc_archivage.py` (signal #1087).
-_DOC_COLS = ("id, project_id, parent_id, title, description, position, body_md, kind, public_token, "
+# `public` : la page a un lien public. Seul le HACHÉ du jeton est rangé
+# (`public_token_hash`, comme `org_invitations.token_hash`) et il ne sort jamais d'ici.
+_DOC_COLS = ("id, project_id, parent_id, title, description, position, body_md, kind, "
+             "(public_token_hash IS NOT NULL) AS public, "
              "created_by, created_at, updated_at, updated_by, archived_at, verified_at, verified_by")
 
 
@@ -1006,17 +1010,18 @@ def get_doc_by_id(doc_id: int) -> Optional[dict]:
 
 
 def set_doc_public(doc_id: int, public: bool) -> Optional[str]:
-    """Active/retire le partage public d'un doc (gap #4a). Renvoie le `public_token`
-    (généré à l'activation, conservé si déjà public ; None si retiré)."""
+    """Ouvre ou ferme le lien public d'un doc (gap #4a).
+
+    `public=True` émet TOUJOURS un jeton neuf et le rend : seul son haché est rangé
+    (`_hash_token`, celui des invitations), le lien ne se montre donc qu'ici. Sur une
+    page déjà publique, c'est la régénération : l'ancien lien cesse de répondre.
+    `public=False` retire le lien et rend None."""
     import secrets as _secrets
+    token = _secrets.token_urlsafe(16) if public else None
     with _connect() as conn:
-        if not public:
-            conn.execute("UPDATE docs SET public_token = NULL WHERE id = %s", (doc_id,))
-            return None
-        cur = conn.execute("SELECT public_token FROM docs WHERE id = %s", (doc_id,)).fetchone()
-        token = (cur or {}).get("public_token") or _secrets.token_urlsafe(16)
-        conn.execute("UPDATE docs SET public_token = %s WHERE id = %s", (token, doc_id))
-        return token
+        conn.execute("UPDATE docs SET public_token_hash = %s WHERE id = %s",
+                     (_hash_token(token) if token else None, doc_id))
+    return token
 
 
 def get_doc_by_public_token(token: str) -> Optional[dict]:
@@ -1037,8 +1042,8 @@ def get_doc_by_public_token(token: str) -> Optional[dict]:
         row = conn.execute(
             "SELECT d.title, d.body_md, d.updated_at, p.owner_type, p.owner_id "
             "FROM docs d LEFT JOIN projects p ON p.id = d.project_id "
-            "WHERE d.public_token = %s",
-            (token,),
+            "WHERE d.public_token_hash = %s",
+            (_hash_token(token),),
         ).fetchone()
         return dict(row) if row else None
 

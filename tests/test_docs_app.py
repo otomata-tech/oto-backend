@@ -97,11 +97,11 @@ def _install_prefab_stub(monkeypatch):
 
 DOCS = [
     {"id": 1, "project_id": 7, "parent_id": None, "title": "Racine", "kind": "doc",
-     "updated_at": "2026-07-01 10:00:00", "body_md": "# Racine", "public_token": None},
+     "updated_at": "2026-07-01 10:00:00", "body_md": "# Racine", "public": False},
     {"id": 2, "project_id": 7, "parent_id": 1, "title": "Enfant", "kind": "note",
-     "updated_at": "2026-07-02 10:00:00", "body_md": "corps **gras**", "public_token": None},
+     "updated_at": "2026-07-02 10:00:00", "body_md": "corps **gras**", "public": False},
     {"id": 3, "project_id": 7, "parent_id": None, "title": "Autre racine", "kind": "doc",
-     "updated_at": "2026-07-03 10:00:00", "body_md": "", "public_token": None},
+     "updated_at": "2026-07-03 10:00:00", "body_md": "", "public": False},
 ]
 
 

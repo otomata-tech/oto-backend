@@ -19,10 +19,30 @@ org par un lien. Le lien sert trois publics :
 | Visiteur sans compte | `GET /api/public/process-shares/{token}` (écrite main, `api/public.py`) | la **vitrine** |
 | Lecteur connecté | `GET /api/me/process-shares/{token}` (`me.process_share.read`, `SUB_ONLY`) | vitrine + corps ; il est noté lecteur |
 | Lecteur connecté | `POST /api/me/process-shares/{token}/copy` (`me.process_share.copy`) | une copie v1 dans son espace |
-| Propriétaire | `GET/POST /api/me/instructions/{slug}/share`, `GET …/share/readers` ; `oto_procedure op=share_*` | le lien, ses réglages, ses lecteurs |
+| Propriétaire | `GET/POST /api/me/instructions/{slug}/share`, `GET …/share/readers` ; `oto_procedure op=share_*` | le lien à son émission, ses réglages, ses lecteurs |
 
 Le code : `capabilities/partages_procedure.py` (règles et formes servies),
 `db/partages_procedure.py` (store), `digest_lecteurs.py` (résumé quotidien).
+
+## Le jeton est stocké haché
+
+Comme celui d'une invitation : seule l'empreinte du jeton est rangée
+(`process_shares.token_hash`, la fonction des invitations `db.tokens._hash_token`,
+SHA-256), et un lien présenté se résout par elle. Le jeton n'est donc servi qu'à son
+émission :
+
+| Geste (`POST …/share`, `op=`) | `token` et `url` rendus |
+|---|---|
+| `publish` qui crée le partage | oui |
+| `publish` sur un partage déjà actif (idempotent) | non (`null`) |
+| `regenerate` | oui, un lien NEUF : l'ancien cesse de répondre ; réglages, forme et vues suivent, les lecteurs restent à la procédure |
+| `set`, `GET …/share`, `oto_procedure op=share_get` | non (`null`) |
+
+`regenerate` sur une procédure non publiée répond 404 `no_share` ; comme `publish`, il
+est refusé à un agent. Base existante : le démarrage pose `token_hash` et son index
+unique, et lève la contrainte `NOT NULL` de l'ancienne colonne ; la révision
+`20261119_0630_jetons_lien_haches` (après le tag) remplit l'empreinte des liens d'avant,
+qui continuent de répondre, puis retire la colonne en clair `token`.
 
 ## Ce qui reste caché
 
@@ -49,7 +69,7 @@ La liste du propriétaire agrège tous les liens de la procédure (un lien retir
 republié porte un autre jeton, pas une autre procédure), et exclut aussi les membres
 devenus membres depuis.
 
-La première lecture d'un compte pose `acquired_via = {kind: "process_share", token, at}`
+La première lecture d'un compte pose `acquired_via = {kind: "process_share", share_id, at}`
 sur sa fiche (`user_account_profile.profile`) si elle est vide — c'est ce qui mesure les
 comptes nés d'un partage.
 
@@ -85,7 +105,8 @@ coupe ni les relances ni le digest de signaux.
 
 ## Tables
 
-Fragment `db/schema/procedures.py::PROCESS_SHARES`, révision `0036_partages_de_procedure`.
+Fragment `db/schema/procedures.py::PROCESS_SHARES`, révision `0036_partages_de_procedure`
+(retirée au squash), puis `20261119_0630_jetons_lien_haches` (le jeton haché).
 `process_shares.instruction_id` est un lien **logique** vers `org_instructions.id` (cette
 colonne naît dans `_init`, après l'assemblage : une FK échouerait sur une base vierge) ;
 une procédure supprimée ou archivée rend son lien introuvable (404).
@@ -95,4 +116,4 @@ une procédure supprimée ou archivée rend son lien introuvable (404).
 La vitrine est bornée par IP avec le seau des projets publiés sans login
 (`subdomain_project._check_bucket`, réglages `OTO_ANON_RATE_*`, clé `(ip, 0)`), répond
 `no-store` / `no-referrer`, et le jeton (20 caractères aléatoires) est masqué au journal
-par son nom de paramètre (`journal_secrets`).
+par son nom de paramètre (`journal_secrets`) ; en base, seule son empreinte est rangée.

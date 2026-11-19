@@ -21,17 +21,21 @@ from typing import Any, Optional
 from psycopg.types.json import Jsonb
 
 from ._conn import _connect
+from .tokens import _hash_token
 
 #: Fenêtre gardée du compteur quotidien des vues de vitrine.
 VUES_JOURS = 90
 
-_COLONNES = ("id, instruction_id, org_id, token, show_readers, preview_shape, "
+# Le jeton n'est pas une colonne : seul son haché est rangé (`token_hash`, celui des
+# invitations, `_hash_token`), et il ne sort jamais de ce module.
+_COLONNES = ("id, instruction_id, org_id, show_readers, preview_shape, "
              "shape_version, preview_views, created_by, created_at, updated_at, revoked_at")
 
 
 def _jeton() -> str:
     """Un jeton d'URL : 15 octets aléatoires, 20 caractères url-safe. Il EST le
-    secret du lien — jamais dérivé du slug ni de l'id."""
+    secret du lien — jamais dérivé du slug ni de l'id. Rangé haché, il n'est rendu
+    qu'à l'appelant qui vient de l'émettre (`publier`, `regenerer`)."""
     return secrets.token_urlsafe(15)
 
 
@@ -52,36 +56,65 @@ def par_jeton(token: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
             f"SELECT {_COLONNES} FROM process_shares "
-            "WHERE token = %s AND revoked_at IS NULL", (token,)
+            "WHERE token_hash = %s AND revoked_at IS NULL", (_hash_token(token),)
         ).fetchone()
     return dict(row) if row else None
 
 
 def publier(instruction_id: int, org_id: Optional[int], created_by: str, *,
             show_readers: bool = True, preview_shape: Optional[dict] = None,
-            shape_version: Optional[int] = None) -> tuple[dict, bool]:
+            shape_version: Optional[int] = None) -> tuple[dict, Optional[str]]:
     """Pose le partage actif de la procédure. Idempotent : un partage déjà actif est
     rendu tel quel (ses réglages ne bougent pas — c'est `regler` qui les change).
-    Rend `(partage, cree)`."""
+    Rend `(partage, jeton)` : le jeton du lien s'il vient d'être émis, None si le
+    partage existait déjà — son jeton n'est plus connu (`regenerer` en émet un neuf)."""
+    jeton = _jeton()
     with _connect() as conn:
         row = conn.execute(
             f"""INSERT INTO process_shares
-                    (instruction_id, org_id, token, show_readers, preview_shape,
+                    (instruction_id, org_id, token_hash, show_readers, preview_shape,
                      shape_version, created_by)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (instruction_id) WHERE revoked_at IS NULL DO NOTHING
                 RETURNING {_COLONNES}""",
-            (instruction_id, org_id, _jeton(), show_readers,
+            (instruction_id, org_id, _hash_token(jeton), show_readers,
              Jsonb(preview_shape) if preview_shape is not None else None,
              shape_version, created_by),
         ).fetchone()
     if row:
-        return dict(row), True
+        return dict(row), jeton
     existant = actif(instruction_id)
     if existant is None:  # retiré entre les deux lectures : on réessaie une fois
         return publier(instruction_id, org_id, created_by, show_readers=show_readers,
                        preview_shape=preview_shape, shape_version=shape_version)
-    return existant, False
+    return existant, None
+
+
+def regenerer(instruction_id: int, created_by: str) -> Optional[tuple[dict, str]]:
+    """Remplace le lien du partage actif par un lien neuf : l'ancien est retiré (il
+    cesse de répondre), le neuf reprend ses réglages et son compteur de vues. Une
+    seule transaction. Rend `(partage, jeton)`, ou None si rien n'est publié."""
+    jeton = _jeton()
+    with _connect() as conn:
+        ancien = conn.execute(
+            "UPDATE process_shares SET revoked_at = NOW(), updated_at = NOW() "
+            "WHERE instruction_id = %s AND revoked_at IS NULL "
+            "RETURNING org_id, show_readers, preview_shape, shape_version, preview_views",
+            (instruction_id,),
+        ).fetchone()
+        if ancien is None:
+            return None
+        row = conn.execute(
+            f"""INSERT INTO process_shares
+                    (instruction_id, org_id, token_hash, show_readers, preview_shape,
+                     shape_version, preview_views, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING {_COLONNES}""",
+            (instruction_id, ancien["org_id"], _hash_token(jeton), ancien["show_readers"],
+             Jsonb(ancien["preview_shape"]) if ancien["preview_shape"] is not None else None,
+             ancien["shape_version"], Jsonb(ancien["preview_views"] or {}), created_by),
+        ).fetchone()
+    return dict(row), jeton
 
 
 def retirer(instruction_id: int) -> bool:

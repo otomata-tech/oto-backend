@@ -87,9 +87,9 @@ def view(row: dict, sub: Optional[str] = None) -> dict:
     # rev = ETag de contenu : à relire par le client et repasser en `expected_rev`
     # sur op=update pour détecter un écrasement concurrent (oto/#6).
     out["rev"] = db.doc_rev(row.get("title"), row.get("body_md"))
-    tok = row.get("public_token")
-    out["public"] = bool(tok)
-    out["public_url"] = public_doc_url(tok, sub) if tok else None
+    # Le lien public n'est rangé que haché : la lecture dit s'il existe, jamais son
+    # adresse — servie une seule fois, par `op=set_public` qui l'émet.
+    out["public"] = bool(row.get("public"))
     return out
 
 

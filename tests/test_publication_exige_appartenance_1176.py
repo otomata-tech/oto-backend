@@ -152,7 +152,7 @@ def test_gerant_exterieur_ne_rend_pas_une_page_publique(depublie):
     m = depublie
     assert _doc(EXTERNE, m, op="set_public", doc_id=m["page"], public=True) == (
         "refus", 403, CODE)
-    assert not db.get_doc_by_id(m["page"]).get("public_token")
+    assert not db.get_doc_by_id(m["page"]).get("public")
 
 
 def test_gerant_exterieur_ne_rend_pas_un_fichier_public(depublie, monkeypatch):
@@ -199,9 +199,9 @@ def test_gerant_membre_publie_et_l_exterieur_depublie(depublie):
 def test_page_le_membre_ouvre_l_exterieur_referme(depublie):
     m = depublie
     assert _doc(MEMBRE, m, op="set_public", doc_id=m["page"], public=True)[0] == "ok"
-    assert db.get_doc_by_id(m["page"]).get("public_token")
+    assert db.get_doc_by_id(m["page"]).get("public")
     assert _doc(EXTERNE, m, op="set_public", doc_id=m["page"], public=False)[0] == "ok"
-    assert not db.get_doc_by_id(m["page"]).get("public_token")
+    assert not db.get_doc_by_id(m["page"]).get("public")
 
 
 # ── 4. Le gérant extérieur garde le reste ─────────────────────────────────────

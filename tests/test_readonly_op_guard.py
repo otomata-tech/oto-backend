@@ -113,7 +113,7 @@ ECRITURES = {
                         "unlink", "lend", "unlend", "default_sharing"},
     "runs.thread": {"append"},
     "usage.notify_reporters": {"send"},
-    "org.instruction.share.write": {"publish", "set", "unpublish"},
+    "org.instruction.share.write": {"publish", "regenerate", "set", "unpublish"},
 }
 
 # Capacités dont l'`op` est un texte LIBRE (pas un `Literal`) : leurs ops ne se lisent

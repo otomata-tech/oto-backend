@@ -77,8 +77,8 @@ def test_la_lecture_par_jeton_remonte_le_PROPRIETAIRE(live):
                   "ON CONFLICT (id) DO NOTHING")
         c.execute("INSERT INTO projects (id, name, owner_type, owner_id) "
                   "VALUES (888, 'P', 'org', '777') ON CONFLICT (id) DO NOTHING")
-        c.execute("INSERT INTO docs (id, project_id, title, body_md, public_token) "
-                  "VALUES (999, 888, 'Notes', 'x', 'jeton-test') "
+        c.execute("INSERT INTO docs (id, project_id, title, body_md, public_token_hash) "
+                  "VALUES (999, 888, 'Notes', 'x', encode(sha256('jeton-test'::bytea), 'hex')) "
                   "ON CONFLICT (id) DO NOTHING")
         c.commit()
 

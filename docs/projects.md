@@ -607,6 +607,29 @@ ainsi ne le lirait plus.
 ⚠️ `can_access` ne change pas : la règle déplace la propriété, elle n'invente pas d'état
 « à l'org mais caché ».
 
+## Lien public d'une page — le jeton est stocké haché (2026-11-19)
+
+`oto_doc op=set_public public=true` ouvre UNE page au web par un lien `/p/d/<jeton>`
+(lecture publique : `db.get_doc_by_public_token`, servie par `/api/public/docs/{token}` et
+`/p/d/{token}`). Le jeton est stocké haché, comme celui d'une invitation : seule son
+empreinte est rangée (`docs.public_token_hash`, la fonction des invitations
+`db.tokens._hash_token`, SHA-256), et un lien présenté se résout par cette empreinte.
+
+Ce que cela fixe côté produit :
+
+- **le lien ne se montre qu'à son émission** : `public_url` n'est rendu que par
+  `op=set_public public=true`. Une lecture de page (`op=get`, la carte de l'app MCP) dit
+  `public: true|false`, jamais l'adresse ;
+- **rendre publique une page qui l'est déjà émet un lien NEUF** et l'ancien cesse de
+  répondre : c'est le geste de régénération. `public=false` retire le lien ;
+- le jeton ne voyage nulle part ailleurs : ni dans la fiche d'un nœud, ni dans la
+  lecture d'une page. L'export de périmètre emporte l'empreinte, si bien qu'un lien
+  continue de répondre sur l'instance qui importe.
+
+Base existante : le démarrage pose `public_token_hash` et son index unique ; la révision
+`20261119_0630_jetons_lien_haches` (après le tag) remplit l'empreinte des liens d'avant,
+qui continuent donc de répondre, puis retire la colonne en clair `public_token`.
+
 ## Dossier d'affichage d'un projet — `folder` (2026-10-16)
 
 **Le besoin.** Une org de conseil tient un projet par client ; à quinze projets, la

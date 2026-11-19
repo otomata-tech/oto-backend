@@ -118,10 +118,11 @@ CREATE TABLE IF NOT EXISTS docs (
     -- curé de la fratrie (entiers espacés ×16, réindexés atomiquement au move).
     description TEXT,
     position INTEGER,
-    -- Partage public (gap #4a) : NULL = privé ; sinon un token aléatoire qui sert
-    -- de lien public en lecture seule (/api/public/docs/{token}). Index unique créé
-    -- dans `_init` après l'ADD COLUMN (jamais ici — table docs préexistante).
-    public_token TEXT,
+    -- Partage public (gap #4a) : NULL = privé ; sinon le HACHÉ (SHA-256, comme
+    -- `org_invitations.token_hash`) du jeton qui sert de lien public en lecture seule
+    -- (/api/public/docs/{token}) — le jeton lui-même n'est rangé nulle part. Index
+    -- unique créé dans `_init` après l'ADD COLUMN (jamais ici — table docs préexistante).
+    public_token_hash TEXT,
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

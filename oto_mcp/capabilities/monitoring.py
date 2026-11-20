@@ -348,12 +348,53 @@ def _call(ctx: ResolvedCtx, inp: CallInput) -> dict:
     return {"call": row}
 
 
+# ── l'archive quotidienne du journal tourne-t-elle ? ─────────────────────────
+
+#: Au-delà, l'archive est EN RETARD. Le travail est quotidien : 48 h, c'est un passage
+#: manqué ou en échec, et le suivant aussi — pas un tir décalé de quelques minutes.
+ARCHIVE_RETARD_MAX = timedelta(hours=48)
+ARCHIVE_EN_RETARD = "journal_archive_late"
+
+
+def etat_archive_journal(lu: dict) -> dict:
+    """L'état de l'archive du journal, depuis ses passages (`db.journal_archive_passages`).
+
+    Lève `journal_archive_late` quand aucun passage n'a réussi depuis
+    `ARCHIVE_RETARD_MAX`, y compris quand il n'y en a JAMAIS eu : une archive qui ne
+    tourne pas ne se voyait nulle part (le registre `journal_archives` ne trace qu'un
+    mois archivé, et son `archived_at` vieillit normalement de 30 à 60 jours). Une
+    erreur et non un champ : une lecture distraite ne peut pas la prendre pour un état
+    sain. Son message porte les deux dates et la dernière cause d'échec."""
+    succes, echec = lu["last_success_at"], lu["last_failure_at"]
+    etat = {
+        "last_success_at": succes.isoformat() if succes else None,
+        "last_failure_at": echec.isoformat() if echec else None,
+        "last_failure_detail": lu["last_failure_detail"],
+        "retard_max_heures": int(ARCHIVE_RETARD_MAX.total_seconds() // 3600),
+    }
+    if succes is None or lu["maintenant"] - succes > ARCHIVE_RETARD_MAX:
+        depuis = (f"aucun passage réussi depuis {etat['last_success_at']}" if succes
+                  else "aucun passage réussi, jamais")
+        cause = (f" ; dernier échec {etat['last_failure_at']} : "
+                 f"{etat['last_failure_detail']}" if echec else " ; aucun échec tracé : "
+                 "le travail planifié ne tourne pas, ou n'atteint pas la base")
+        raise AuthzDenied(
+            503, ARCHIVE_EN_RETARD,
+            f"Archive du journal en retard : {depuis} (seuil "
+            f"{etat['retard_max_heures']} h){cause}. Lire l'unité "
+            "`oto-journal-archive` de la box (statut du timer, journal du service).",
+            details={"etat": "en_retard", **etat})
+    # Réussi dans le délai, mais un échec PLUS RÉCENT : le prochain tir dira s'il passe.
+    etat["etat"] = "echec_recent" if echec and echec > succes else "a_jour"
+    return etat
+
+
 # ── console MCP consolidée `oto_admin_monitoring(op=…)` (pattern ADR 0047) ───
 
 class MonitoringInput(BaseModel):
     op: Literal["summary", "rest", "rest_calls", "connectors", "transport", "funnel",
                 "calls", "call", "runs", "run", "gaps", "tool_quality", "agents_en_echec",
-                "connecteurs_orphelins"]
+                "connecteurs_orphelins", "journal_archive"]
     days: Optional[int] = None            # fenêtre (défaut : 7 ; funnel/gaps/tool_quality : 30)
     limit: Optional[int] = None           # calls/rest_calls (défaut = plafond 200) / runs (défaut 100)
     sub: Optional[str] = None             # summary/rest/rest_calls/calls : appelant (email ou sub)
@@ -405,6 +446,8 @@ _CHAMPS_LUS: dict[str, set[str]] = {
     "agents_en_echec": {"days", "org_id"},
     # Un état présent de la base, pas une fenêtre : aucun filtre (#905).
     "connecteurs_orphelins": set(),
+    # Un état présent, pas une fenêtre : aucun filtre.
+    "journal_archive": set(),
 }
 
 
@@ -472,6 +515,8 @@ def _monitoring(ctx: ResolvedCtx, inp: MonitoringInput) -> dict:
         return usage._gaps(ctx, usage.DaysInput(days=inp.days or 30))
     if inp.op == "connecteurs_orphelins":
         return connecteurs_orphelins.constat()
+    if inp.op == "journal_archive":
+        return etat_archive_journal(db.journal_archive_passages())
     return usage._tool_quality(ctx, usage.DaysInput(days=inp.days or 30))  # tool_quality
 
 
@@ -559,7 +604,13 @@ CAPABILITIES += [
             "and per name (`lignes`). Such a row resolves nothing: an installation that "
             "mounts no tool, a key nobody reads. Every table is listed, an empty one "
             "included, so a zero reads as checked; `total` = 0 is the healthy state. "
-            "Read only: nothing is moved or deleted here. "
+            "Read only: nothing is moved or deleted here. / journal_archive (no "
+            "filter): is the daily cold archive of the call journal running? Returns "
+            "`last_success_at`, `last_failure_at`, `last_failure_detail` and `etat` "
+            "(`a_jour`, or `echec_recent` when a failure followed the last success). "
+            "⚠️ Fails with error `journal_archive_late` when no run succeeded for more "
+            "than 48 h, including when none ever did: that IS the alert, not a read "
+            "failure. "
             "For raw signals use oto_admin_signal."),
         mcp="oto_admin_monitoring",
     ),

@@ -145,7 +145,7 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
   n'est pas un droit à obtenir · ⚠️ **une colonne peut EXIGER sa provenance** (`required_layers: ["comment"]`, oto#75) : la valeur non
   vide ne s'écrit pas sans la couche, sur les deux faces — capacité livrée, **aucun tableau n'exige de couche**
   (quatre la déclarent VIDE, ce qui n'exige rien et **reste accepté à la pose**) · ⚠️ **un tableau s'adresse par son
-  NUMÉRO** (`ns_id`) : le nom résout encore jusqu'au 08/11/2026 et chaque réponse obtenue par lui le dit, mais les remises (réservation, écriture,
+  NUMÉRO** (`ns_id`) : un nom est REFUSÉ depuis le 08/11/2026 (`400 datastore_by_name`, `datastore/errors.TableauParNom`, aucun repli) ; les remises (réservation, écriture,
   libération, page, schéma) portent le numéro et `namespace` y est le nom CANONIQUE, plus l'écho de l'adresse reçue
   (`docs/datastore.md`).
 - **Browser & cookie-bound** (ADR 0026) : aucun browser sur la box — **Browserbase** pour l'API privée cookie-bound,

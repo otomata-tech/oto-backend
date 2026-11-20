@@ -196,6 +196,7 @@ chemins = [
   "oto_mcp/org_origin.py",
   "oto_mcp/account_suspension.py",
   "oto_mcp/org_suspension.py",
+  "oto_mcp/db/etat_abonnement.py",
   "oto_mcp/project_exposure.py",
   "oto_mcp/mfa_mirror.py",
   "oto_mcp/tool_alias.py",

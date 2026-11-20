@@ -13,13 +13,9 @@ faces diverge, and what a response does not say.
 ## 0. Addressing a table: by its NUMBER
 
 A table carries a **number** (`ns_id`, e.g. `174`) and a **name** (`edition-vivier`).
-Until 2026-11-08 (8 November 2026), both resolve, with the same visibility check —
-`datastore: 174` and `datastore: "edition-vivier"` designate the same table.
-
-**Use the number.** A table name will be **REFUSED from 2026-11-08 (8 November 2026)**: it
-is only unique per owner, it changes on rename, and the number is what the
-platform records. Until then, every response obtained through a name says so at the top, with
-the number to pass.
+**Only the number addresses it**: `datastore: 174`. A table name is **refused** (since
+2026-11-08) — `datastore_by_name`, and nothing is read or written: a name is only unique
+per owner, it changes on rename, and the number is what the platform records.
 
 Where to find it: `data_list_datastores` gives it under **both names** (`ns_id`, and `id`
 — the same number, kept for the dashboard's links), creation and renaming
@@ -606,7 +602,7 @@ applies.
 | history of a row | `data_row_history` | `GET …/rows/{row_id}/history` |
 | activity | — | `GET …/activity` ; `GET …/rows/{row_id}/activity` |
 
-`{tableau}` is the **number** of the table (its name still works, being retired —
+`{tableau}` is the **number** of the table (a name is refused, `400 datastore_by_name` —
 see §0); `slot:<nom>` is understood on both sides. The
 complete description (inputs, responses, codes) is `GET /api/openapi.json`, without auth;
 the REST face is called with the same token as `/mcp`, or an API token.

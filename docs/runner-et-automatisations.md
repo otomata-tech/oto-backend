@@ -3679,6 +3679,20 @@ rapport, plafond) restent en Python. `time_saved.formes_des_runs` est la référ
 mémoire, et `tests/test_temps_gagne_borne_live.py` prouve la parité et la borne
 (`docs/event-loop-perf.md`).
 
+⚠️ **Calculé HORS de la requête** (`capabilities/_temps_gagne_borne.py`, 20/11/2026) :
+sur une org chargée, relire les appels de chaque run va au disque et dure des minutes.
+Fait dans la requête de la page, sans borne, à chaque ouverture, ce calcul tenait une
+connexion du pool par ouverture jusqu'à le vider (`PoolTimeout` sur toutes les routes).
+Il tourne désormais dans un fil de fond : borné (`statement_timeout` 60 s par requête),
+un seul calcul en vol par clé (org, fenêtre, agents vus), deux au plus pour tout le
+processus, résultat en cache 10 min, échec retenté après 30 min (une lecture trop lourde pour la borne ne se relance pas à chaque ouverture). La page attend au plus
+2 s ; sans résultat (ni frais ni périmé), elle sort sans le temps gagné et le dit
+(`time_saved_status: "pending"`, sinon `"ready"`, déclaré dans `JobsOut`). Cache par
+processus : vidé au redémarrage, chaque couleur d'une bascule calcule de son côté. Les
+calculs tournent dans des fils DÉMONS (un `ThreadPoolExecutor` viderait sa file avant de
+laisser le processus s'arrêter) et au plus 32 clés sont en vol ou en queue ; au-delà, la
+page sort sans le temps gagné. Bancs : `tests/test_temps_gagne_borne.py`.
+
 **Revu sur des agents réels (17/10/2026)**, qui surcomptaient :
 - un balayage qui ne PRODUIT rien de neuf ne gagne rien — sa recherche ne compte que
   dans un run productif ;

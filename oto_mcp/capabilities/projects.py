@@ -20,8 +20,10 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from .. import (config, db, deprecations, group_store, org_store, output_projection,
-                ownership, roles, session_org, url_perimeter)
+from .. import (config, db, group_store, org_store, output_projection, ownership, roles,
+                session_org, url_perimeter)
+from ..datastore.errors import est_un_nom_de_tableau
+from .datastore.common import refus_nom_de_tableau
 from ._authz import SUB_ONLY, refus_hors_vue
 from . import _liens_prives, _portee, _publication
 from ._dossier import FOLDER_MAX, dossier_valide
@@ -586,11 +588,14 @@ def _tableau_owner_candidates(row: dict) -> list[tuple[str, str]]:
 
 
 def _resolve_tableau_id(row: dict, ref: str) -> Optional[str]:
-    """Réf de tableau → l'ID NUMÉRIQUE stable du namespace (comme les procédures). Accepte
-    un id (chiffres, renvoyé tel quel) OU un nom de namespace, résolu contre les scopes du
-    projet (`_tableau_owner_candidates`). Renvoie None si un nom ne résout nulle part — le
-    caller décide (erreur au link, ref brute conservée à l'unlink). Stocker l'id garde la
-    résolution cohérente (audit, list_project_links, share_ui l'attendent numérique)."""
+    """Réf de tableau STOCKÉE → l'ID NUMÉRIQUE stable du namespace. Un id (chiffres) est
+    renvoyé tel quel ; un NOM — celui d'un lien posé avant que `link` ne range l'id —
+    est résolu contre les scopes du projet (`_tableau_owner_candidates`). None s'il ne
+    résout nulle part.
+
+    ⚠️ Pour les réfs STOCKÉES seulement (`_ref_canonizer` : retrouver un lien d'avant
+    sous son id) : un nom passé par l'APPELANT est refusé avant (`datastore_by_name`,
+    08/11/2026)."""
     ref = str(ref or "").strip()
     if not ref or ref.isdigit():
         return ref or None
@@ -1308,18 +1313,13 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                          "(ses paliers, son org, tes procédures personnelles). Passe "
                          "son `guide_id` (rendu par `oto_procedure op=list`) en `target_ref`.", 404)
         elif inp.target_type == "tableau":
-            # Normalise nom→id (le datastore du propriétaire du projet). Stocker l'id garde
-            # la résolution cohérente ; un nom introuvable au LINK = erreur (pas de lien mort
-            # silencieux), mais un unlink d'une réf legacy/supprimée passe avec la réf brute.
-            resolved = _resolve_tableau_id(row, target_ref)
-            if resolved is not None:
-                if deprecations.adresse_par_nom(target_ref, resolved):
-                    session_org.noter_avis(
-                        deprecations.avis_nom_de_tableau(str(target_ref), int(resolved)))
-                target_ref = resolved
-            elif inp.op == "link":
-                _require(False, "unknown_tableau",
-                         f"Aucun tableau nommé « {target_ref} » dans le datastore du projet.", 404)
+            # Un tableau se désigne par son NUMÉRO : un nom est refusé depuis le
+            # 08/11/2026, au link comme à l'unlink, sans rien résoudre. Un lien posé par
+            # nom avant le retrait se retrouve sous son numéro (`_ref_canonizer`).
+            target_ref = str(target_ref).strip()
+            if est_un_nom_de_tableau(target_ref):
+                raise refus_nom_de_tableau(target_ref)
+            session_org.noter_forme_tableau(session_org.REF_NUMBER)
         elif inp.target_type == "connecteur":
             # L'identité est la clé du BINDING (#57). Fin du doublon : on la sort de
             # config.identity_id vers `identity_ref`. `identity_ref` explicite (front B4 /
@@ -1909,7 +1909,9 @@ CAPABILITIES += [
             "unarchive (puts an archived project back; `was_archived_at` echoes what it "
             "undid; find archived ones with op=list `archived=true`) / link & unlink "
             "(attach an entity: "
-            "target_type tableau|procedure|connecteur + target_ref = its id/slug/name, "
+            "target_type tableau|procedure|connecteur + target_ref = its id (a tableau by its "
+            "NUMBER only — a table name is refused, `datastore_by_name`) or a procedure's "
+            "slug, "
             "optional label + optional "
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "
@@ -1949,11 +1951,11 @@ CAPABILITIES += [
             "type in lists — `position` (lower first, fractions allowed) or "
             "`clear_position=true`; it changes nothing else: no `updated_at`, no activity "
             "line, label/role/slot/config untouched; `link_not_found` when no such link. "
-            "Give the `target_ref` as op=get renders it: an older "
-            "link may still carry the NAME of its tableau (or the SLUG of its procedure) "
-            "instead of the id. link and unlink both recognize either spelling: link "
-            "rewrites that older link to the id (`rewritten_from` = the old spelling) "
-            "instead of adding a second one, unlink takes back every spelling. "
+            "An older link may still carry the NAME of its tableau (or the SLUG of its "
+            "procedure) instead of the id: give the id anyway — link and unlink recognize "
+            "that older link under it, link rewrites it to the id (`rewritten_from` = the "
+            "old spelling) instead of adding a second one, unlink takes back every "
+            "spelling. "
             "get/link return each link's role + slot + config + `position` (its rank, "
             "set by rank_link; null = unranked) + a derived `cross_project` flag (the same entity is linked by another project → avoid brutal "
             "edits / ask); a tableau link also returns its resolved `datastore` (the NAME, a "
@@ -2008,7 +2010,11 @@ CAPABILITIES += [
                               "op=archive sur un projet qui porte un brief ou une "
                               "procédure liée, sans `confirm=true` — rien n'a été "
                               "archivé ; `details.unreachable` dit ce qui l'aurait été"),
-                _publication.REFUS_HORS_ORG),
+                _publication.REFUS_HORS_ORG,
+                DeclaredError(400, "datastore_by_name",
+                              "op=link ou op=unlink d'un tableau désigné par son NOM "
+                              "(refusé depuis le 08/11/2026) : `target_ref` est son "
+                              "numéro — rien n'a été modifié")),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),
     ),

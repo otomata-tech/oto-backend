@@ -795,11 +795,13 @@ contrôles se font par noms ou par code retour. Sur la box, en root. `<r>` = `pr
     `systemd-run --pipe --wait --quiet --collect -p WorkingDirectory=/opt/oto-mcp-<couleur> -p
     EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env -p
     LoadCredential=scw:/etc/oto-mcp/scw.key /opt/oto-mcp-<couleur>/.venv/bin/python
-    /opt/oto-mcp-<couleur>/deploy/lanceur_secrets.py maintenance check-boot`. L'archive du journal se
-    pose à la main (le déploiement ne la pose pas) : `test -f /opt/oto-mcp/deploy/lanceur_secrets.py`
-    (l'arbre bleu doit porter le lanceur), `install -m 0644 <arbre>/deploy/oto-journal-archive.service
-    /etc/systemd/system/`, `systemctl daemon-reload`, essai `… lanceur_secrets.py --script
-    deploy/archive_tool_calls.py --dry-run` avec les mêmes `-p` que ci-dessus.
+    /opt/oto-mcp-<couleur>/deploy/lanceur_secrets.py maintenance check-boot`. L'archive du journal est
+    posée de même par le déploiement (`install_timers`, `oto-journal-archive.{service,timer}`, arbre
+    de la couleur qui sert écrit à la pose ; avant, posée à la main sur `/opt/oto-mcp`, un arbre fixe
+    en retard sur le tag servi) : contrôler `systemctl cat oto-journal-archive.service | grep
+    ExecStart`, essai `… lanceur_secrets.py --script deploy/archive_tool_calls.py --dry-run` avec les
+    mêmes `-p` que ci-dessus. ⚠️ `install_timers` vit dans `/opt/deploy/oto-backend.sh`, une COPIE
+    posée à la main : la recopier depuis l'arbre du tag avant le déploiement qui l'attend.
 
 ### Retour arrière, par rôle
 

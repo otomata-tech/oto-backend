@@ -71,13 +71,14 @@ def tenu_par_le_run(sub: Optional[str], datastore: str) -> Optional[dict]:
 
 
 def ou_existe(sub: str, datastore: str) -> list[tuple[int, Optional[str]]]:
-    """`(org_id, nom)` des orgs DU sub qui possèdent un tableau de ce nom exact —
-    la recherche des deux faces (REST : `X-Oto-Org` ; MCP : `_org=`)."""
+    """`(org_id, nom)` des orgs DU sub qui possèdent le tableau de ce NUMÉRO — la
+    recherche des deux faces (REST : `X-Oto-Org` ; MCP : `_org=`). Un tableau ne se
+    désigne plus par son nom (08/11/2026) : c'est le numéro qui est cherché."""
     orgs = {int(o["org_id"]): o.get("name") for o in org_store.list_orgs_for_user(sub)}
     owners = [("org", str(i)) for i in orgs]
     return [(int(n["owner_id"]), orgs.get(int(n["owner_id"])))
             for n in db.list_datastores_for_owners(owners)
-            if n["datastore"] == datastore]
+            if str(n["id"]) == str(datastore).strip()]
 
 
 def _nom(org_id: int) -> str:

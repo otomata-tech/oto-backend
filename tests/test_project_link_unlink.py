@@ -107,12 +107,14 @@ def _refs(out, target_type):
 
 # --- (b) la ref indélogeable ------------------------------------------------------
 
-def test_unlink_dun_tableau_stocke_sous_son_nom_retire_la_ligne(surface):
-    """Le cas d'Alexis, mot pour mot : ref demandée = le nom, ligne = le nom, et une
-    résolution nom→id entre les deux."""
-    out = _unlink(target_type="tableau", target_ref="suivi-commercial-index")
-    assert "suivi-commercial-index" not in _refs(out, "tableau")
-    assert out["removed"] == 1
+def test_unlink_par_le_nom_d_un_tableau_est_refuse(surface):
+    """Depuis le 08/11/2026 un tableau se désigne par son numéro, à l'unlink aussi : le
+    nom est refusé (`datastore_by_name`) et rien n'est retiré — la ligne stockée sous
+    son nom se défait par son numéro (test suivant)."""
+    with pytest.raises(AuthzDenied) as e:
+        _unlink(target_type="tableau", target_ref="suivi-commercial-index")
+    assert (e.value.status, e.value.code) == (400, "datastore_by_name")
+    assert len(surface["links"]) == 5 and surface["activite"] == []
 
 
 def test_unlink_par_id_atteint_la_ligne_stockee_sous_son_nom(surface):
@@ -133,7 +135,7 @@ def test_unlink_dune_procedure_stockee_sous_son_slug(surface):
 
 def test_un_tableau_encore_lie_survit_a_lunlink_de_son_voisin(surface):
     """Le rattrapage ne déborde pas : délier l'un ne déliera pas l'autre."""
-    out = _unlink(target_type="tableau", target_ref="suivi-commercial-index")
+    out = _unlink(target_type="tableau", target_ref="108")
     assert _refs(out, "tableau") == ["12"]
 
 
@@ -141,7 +143,7 @@ def test_un_tableau_encore_lie_survit_a_lunlink_de_son_voisin(surface):
 
 def test_unlink_sans_cible_refuse_au_lieu_de_repondre_ok(surface):
     with pytest.raises(AuthzDenied) as e:
-        _unlink(target_type="tableau", target_ref="jamais-lie")
+        _unlink(target_type="tableau", target_ref="999")
     assert e.value.code == "link_not_found" and e.value.status == 404
     # La face MCP ne rend que le MESSAGE : il doit donc porter le fait ET la suite.
     assert "RIEN n'a été retiré" in e.value.message
@@ -150,7 +152,7 @@ def test_unlink_sans_cible_refuse_au_lieu_de_repondre_ok(surface):
 
 def test_un_unlink_refuse_ne_touche_ni_les_liens_ni_le_journal(surface):
     with pytest.raises(AuthzDenied):
-        _unlink(target_type="tableau", target_ref="jamais-lie")
+        _unlink(target_type="tableau", target_ref="999")
     assert len(surface["links"]) == 5
     assert surface["activite"] == []          # pas d'entrée « project.unlink » fantôme
 
@@ -208,7 +210,7 @@ def test_link_dun_tableau_deja_stocke_par_id_ne_reecrit_rien(surface, monkeypatc
     désigne — rien à réécrire, rien à signaler."""
     vu = _link_capture(monkeypatch)
     out = P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="tableau",
-                                         target_ref="linkedin-feed", role="flux"))
+                                         target_ref="12", role="flux"))
     assert vu["rewrite_from"] is None
     assert "duplicate_refs" not in out
 

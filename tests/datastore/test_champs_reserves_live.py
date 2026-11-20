@@ -38,6 +38,7 @@ def table(live):
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", "sub-test", ns)
+    ns = str(ns_id)
     st = _store()
     pose = st.set_schema(ns, SCHEMA)
     # ⚠️ `origine` a quitté cette liste le 08/09/2026 : `origine: "system"` est
@@ -82,6 +83,7 @@ def terrain(live):
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", "sub-test", ns)
+    ns = str(ns_id)
     st = _store()
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"},

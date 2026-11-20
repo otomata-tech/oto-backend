@@ -55,8 +55,8 @@ def _store():
 
 def _table(ligne: dict | None = None, rid: str = "r1") -> tuple[str, int]:
     from oto_mcp import db
-    ns = "conc-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "conc-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     db.set_datastore_schema(ns_id, SCHEMA)
     db.datastore_insert_row(ns_id, rid, dict(ligne or {}))
     return ns, ns_id

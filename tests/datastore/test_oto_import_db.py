@@ -21,8 +21,8 @@ def _sql(requete: str, *params):
 def table(live):
     from oto_mcp import db
     db.upsert_user(SUB, email=f"{SUB}@import.invalid", name=SUB)
-    ns = "imp-" + uuid.uuid4().hex[:6]
-    return ns, db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "imp-" + uuid.uuid4().hex[:6])
+    return str(ns_id), ns_id
 
 
 @pytest.fixture

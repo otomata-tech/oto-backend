@@ -48,7 +48,10 @@ def _ddl_reel() -> list[str]:
                       _schema._SCHEMA).group(0)
     registre = re.search(r"^CREATE TABLE IF NOT EXISTS journal_archives \(.*?^\);",
                          _schema._SCHEMA, re.S | re.M).group(0)
-    return [table, index, registre]
+    # Chaque passage y laisse sa trace (`test_archive_passages.py`).
+    passages = re.search(r"^CREATE TABLE IF NOT EXISTS journal_archive_passages \(.*?^\);",
+                         _schema._SCHEMA, re.S | re.M).group(0)
+    return [table, index, registre, passages]
 
 
 class FauxS3:
@@ -86,7 +89,7 @@ def base(pg_module_dsn, monkeypatch):
     psycopg = pytest.importorskip("psycopg")
     from psycopg.rows import dict_row
     with psycopg.connect(pg_module_dsn, row_factory=dict_row, autocommit=True) as c:
-        c.execute("DROP TABLE IF EXISTS journal_archives, tool_calls")
+        c.execute("DROP TABLE IF EXISTS journal_archive_passages, journal_archives, tool_calls")
         for ddl in _ddl_reel():
             c.execute(ddl)
         debut = datetime(2025, 3, 1, tzinfo=timezone.utc)

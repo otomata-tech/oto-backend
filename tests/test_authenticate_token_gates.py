@@ -173,28 +173,23 @@ def test_missing_bearer_is_still_a_401():
 
 # ── Portée par IDENTIFIANT (oto#158, lot 0 du retrait des noms) ──────────────
 
-def test_un_NOM_dans_le_chemin_est_juge_sur_l_identifiant_qu_il_resout(token_row, monkeypatch):
-    """Le temps du préavis, une URL par nom passe si le nom résout — pour le PORTEUR —
-    un tableau de la portée ; sinon, refus comme un tableau voisin."""
-    from oto_mcp.api import base
-    vus = []
-    monkeypatch.setattr(base, "_id_du_tableau",
-                        lambda sub, nom: vus.append((sub, nom)) or {"leads": 7}.get(nom))
+def test_un_NOM_dans_le_chemin_est_refuse_sans_rien_resoudre(token_row):
+    """Depuis le retrait du 08/11/2026, un nom de tableau dans le chemin est refusé pour
+    un jeton porté avec le code de la route elle-même (`datastore_by_name`), pas en
+    « hors portée » : rien n'est résolu sous ce nom."""
     token_row["row"] = {"sub": "u-1", "scopes": {"namespaces": {"7": "read"}}}
-    assert _auth(_req("GET", "/api/datastores/leads/rows")) == ("u-1", None)
-    sub, err = _auth(_req("GET", "/api/datastores/autre/rows"))
-    assert sub is None and _body(err)["error"] == "token_scope_forbidden"
-    assert vus == [("u-1", "leads"), ("u-1", "autre")]
+    sub, err = _auth(_req("GET", "/api/datastores/leads/rows"))
+    assert sub is None and err.status_code == 400
+    corps = _body(err)
+    assert corps["error"] == "datastore_by_name"
+    assert "`leads` is a table NAME" in corps["detail"]
 
 
-def test_un_numero_dans_le_chemin_ne_resout_rien(token_row, monkeypatch):
-    from oto_mcp.api import base
-
-    def _interdit(*_a):
-        raise AssertionError("un numéro ne se résout pas")
-    monkeypatch.setattr(base, "_id_du_tableau", _interdit)
+def test_un_numero_dans_le_chemin_est_juge_sur_la_portee(token_row):
     token_row["row"] = {"sub": "u-1", "scopes": {"namespaces": {"7": "read"}}}
     assert _auth(_req("GET", "/api/datastores/7/rows")) == ("u-1", None)
+    sub, err = _auth(_req("GET", "/api/datastores/8/rows"))
+    assert sub is None and _body(err)["error"] == "token_scope_forbidden"
 
 
 def test_une_portee_encore_par_NOM_est_refusee_en_le_disant(token_row):

@@ -23,6 +23,7 @@ from pydantic import BaseModel, model_validator
 from ... import deprecations, ownership
 from ...datastore import hors_org
 from ...datastore.core import DatastoreNotFound, make_store
+from ...datastore.errors import est_un_nom_de_tableau, refus_tableau_par_nom
 from .._types import AuthzDenied
 
 # Phrase unique du champ de date des sorties datastore (cf. l'avertissement ci-dessus).
@@ -44,7 +45,16 @@ def ns_not_found(sub: Optional[str], datastore: str) -> AuthzDenied:
 
     Rend l'exception au lieu de la lever — l'appelant écrit `raise ns_not_found(…)`, ce
     qui garde le `raise` visible sur la ligne du chemin d'erreur.
+
+    Un NOM de tableau n'est pas « introuvable » : il est refusé comme forme d'adresse
+    (`refus_nom_de_tableau`), et le refus le dit.
     """
+    if est_un_nom_de_tableau(datastore):
+        return refus_nom_de_tableau(datastore)
+    if ownership.vue_bornee() is not None:
+        # Vue bornée (oto#270) : rien d'une autre org ne sort, pas même son indice —
+        # la même règle que la face MCP (`DatastorePg._trouver`).
+        return AuthzDenied(404, "datastore_not_found")
     try:
         # La recherche est celle de la face MCP (#631) ; seul le remède diffère.
         elsewhere = hors_org.ou_existe(sub, datastore)
@@ -61,6 +71,15 @@ def ns_not_found(sub: Optional[str], datastore: str) -> AuthzDenied:
     return AuthzDenied(404, "datastore_not_found")
 
 
+def refus_nom_de_tableau(datastore: Any) -> AuthzDenied:
+    """Le 400 servi quand un tableau est désigné par son NOM (refusé depuis le
+    08/11/2026) : le même code et la même phrase sur toutes les routes et tous les
+    outils des capacités datastore, et ailleurs (lien de projet, automatisation, portée
+    d'un jeton). Le code est écrit en littéral pour que le relevé des refus déclarés le
+    voie ; c'est `errors.CODE_TABLEAU_PAR_NOM`."""
+    return AuthzDenied(400, "datastore_by_name", refus_tableau_par_nom(datastore))
+
+
 def govern_ns(sub: Optional[str], datastore: str) -> int:
     """Résout le datastore par nom + vérifie le droit de GOUVERNANCE de l'acteur
     (owner ∪ escalade `roles.py`, ADR 0030 — jamais un simple rôle d'org).
@@ -70,6 +89,8 @@ def govern_ns(sub: Optional[str], datastore: str) -> int:
     qui suggère « rejoue avec X-Oto-Org » n'aurait pas de sens sur un geste que
     l'acteur n'a de toute façon pas le droit de faire ailleurs.
     """
+    if est_un_nom_de_tableau(datastore):
+        raise refus_nom_de_tableau(datastore)
     try:
         ns_id = make_store(sub).resolve_ns_id(datastore)
     except DatastoreNotFound:

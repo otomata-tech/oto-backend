@@ -180,7 +180,11 @@ Les vitrines anonymes `/api/guide-library[/{slug}]` (marché) et `/api/guides/li
 qui n'y menaient plus que vers un 404 (otomata-tech/oto#84). La face authentifiée
 `/api/me/guide-library` reste.
 
-### Une adresse : le NOM d'un tableau (lot 0 du retrait, 29/09/2026)
+### Une adresse : le NOM d'un tableau (lot 0 du retrait, 29/09/2026) — RETIRÉ
+
+⚠️ **Retiré** : un nom de tableau est refusé, sans repli, sur toutes les faces (`400
+datastore_by_name`, `datastore/errors.TableauParNom`) — décision d'Alexis, prise alors que
+le journal montrait encore quelques appels par nom. Ce qui suit est l'histoire.
 
 **Sa propre date : un nom de tableau est refusé à partir du 08/11/2026**
 (`deprecations.RETRAIT_NOM_DE_TABLEAU` = `RETRAIT_DATASTORE`, décision d'Alexis : un seul

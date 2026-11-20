@@ -81,8 +81,7 @@ def _tableau(lignes: list[dict]):
     banc pose ensuite le format qu'il éprouve sur l'existant."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-479", ns)
+    ns = str(db.create_datastore("user", "sub-479", "t-" + uuid.uuid4().hex[:6]))
     st = make_store("sub-479")
     st.set_schema(ns, {"fields": [{"key": k} for k in sorted({k for l in lignes
                                                                for k in l})]})
@@ -148,8 +147,7 @@ def test_rien_a_juger_ne_rend_pas_de_releve(live):
     """Tableau vide, ou schéma qui n'arme rien : pas examiné, donc pas de clé."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-479", ns)
+    ns = str(db.create_datastore("user", "sub-479", "t-" + uuid.uuid4().hex[:6]))
     out = make_store("sub-479").set_schema(ns, {"fields": [{"key": "n",
                                                             "type": "number"}]})
     assert "existing_violations" not in out

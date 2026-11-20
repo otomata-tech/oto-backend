@@ -45,6 +45,7 @@ from .datastore_ns import (  # noqa: F401
     AdresseAmbigue,
     best_resource_grants,
     count_datastore_rows_for_ns,
+    count_datastore_rows_for_ns_ids,
     create_datastore,
     datastore_name_taken,
     delete_datastore_by_id,

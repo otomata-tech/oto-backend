@@ -7,9 +7,9 @@ remplacement de masse sur des données de clients ne se lance pas par accident.
 
 ## Pourquoi ce script existe
 
-Un tableau s'adresse par son numéro (`ns_id`), et un nom sera REFUSÉ à partir de
-`deprecations.RETRAIT_NOM_DE_TABLEAU` (lot 0 du retrait, 29/09/2026). Quatre endroits
-de la base gardent encore un NOM, et chacun casserait ce jour-là :
+Un tableau s'adresse par son numéro (`ns_id`), et un nom est REFUSÉ depuis le
+08/11/2026 (`datastore/errors.TableauParNom`). Quatre endroits de la base pouvaient
+garder un NOM :
 
     flottes    `runner_fleets.namespace` — les automatisations déclarées avant #1067
     liens      `project_links.target_ref` d'un lien `tableau` posé par nom

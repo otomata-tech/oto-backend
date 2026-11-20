@@ -29,6 +29,9 @@ from oto_mcp import server, tenancy
 def env(monkeypatch):
     monkeypatch.setenv("LOGTO_ENDPOINT", "https://auth.oto.ninja")
     monkeypatch.delenv("LOGTO_ENDPOINT_ALT", raising=False)
+    # Le préfixe d'outils du primaire n'est pas l'objet ici : sans base, il lèverait
+    # (`PrefixeOutilsIndetermine`), ce que `test_tool_alias_par_tenant` couvre.
+    monkeypatch.setattr(tenancy, "load_primary_tool_prefix", lambda: "")
 
 
 @pytest.fixture

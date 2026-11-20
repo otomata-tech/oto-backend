@@ -245,7 +245,8 @@ def _registry_and_issuers() -> "tuple[tenancy.IssuerRegistry, dict]":
     alt = os.environ.get("LOGTO_ENDPOINT_ALT", "").strip().rstrip("/")
     drains = [f"{alt}/oidc"] if alt else []
     registry = tenancy.IssuerRegistry(
-        tenancy.build(issuer, drain_issuers=drains, tenants=tenancy.load_tenants()))
+        tenancy.build(issuer, drain_issuers=drains, tenants=tenancy.load_tenants(),
+                      primary_tool_prefix=tenancy.load_primary_tool_prefix()))
     by_issuer: dict = {}
     for entry in registry.entries():
         if entry.issuer == issuer:

@@ -208,7 +208,7 @@ def test_rest_patch_turns_a_text_column_into_a_select(monkeypatch):
     monkeypatch.setattr(dcc, "make_store", lambda sub: store)
     status, corps = call(
         "me.datastore.patch_schema",
-        path_params={"datastore": "vivier"},
+        path_params={"datastore": "160"},
         body={"fields": [{"key": "statut", "type": "enum",
                           "options": ["ouvert", "gagné", "perdu"]}]},
     )
@@ -216,10 +216,10 @@ def test_rest_patch_turns_a_text_column_into_a_select(monkeypatch):
     assert corps["updated"] == ["statut"]
     f = next(x for x in corps["schema"]["fields"] if x["key"] == "statut")
     assert f["type"] == "enum" and f["options"] == ["ouvert", "gagné", "perdu"]
-    # le path param NOMME le tableau — jamais le corps (voir call() ci-dessus,
+    # le path param DÉSIGNE le tableau — jamais le corps (voir call() ci-dessus,
     # qui ne poste pas `datastore`) : le champ ne s'y confond pas avec la clé
     # métier `key` de `PatchSchemaInput`, prise ici pour ce qu'elle est.
-    assert store.calls[0][0] == "vivier"
+    assert store.calls[0][0] == "160"
 
 
 def test_rest_patch_refuses_an_unknown_field_rather_than_dropping_it(monkeypatch):
@@ -229,7 +229,7 @@ def test_rest_patch_refuses_an_unknown_field_rather_than_dropping_it(monkeypatch
     monkeypatch.setattr(dcc, "make_store", lambda sub: store)
     status, corps = call(
         "me.datastore.patch_schema",
-        path_params={"datastore": "vivier"},
+        path_params={"datastore": "160"},
         body={"type": "enum"},  # forme fautive : `type` n'est pas un champ d'Input
     )
     assert status == 400

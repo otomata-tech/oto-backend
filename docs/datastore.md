@@ -294,17 +294,58 @@ un sous-ensemble de clés (`op=inventory`, `oto_use_project`, `share_ui`, cascad
 Banc : `tests/test_designation_par_identifiant.py` (la reproduction y est le faux
 résolveur qui rejoue l'`ORDER BY` : le même nom, deux demandeurs, deux tableaux).
 
-⚠️ **Un nom de tableau sera REFUSÉ à partir du 08/11/2026** (lot 0 du retrait, 29/09/2026 ;
-la date vit dans `deprecations.RETRAIT_NOM_DE_TABLEAU`, alignée sur le retrait de
-`namespace`). D'ici là le nom résout encore, partout, avec le même contrôle de visibilité
-(`db.resolve_datastore_ns`), et **rien ne l'accepte en silence** : une réponse MCP obtenue
-par un nom porte en tête l'avis qui donne le numéro et la date (`session_org.noter_avis`,
-posé par `middleware.rappel_contexte`) — `data_*`, `oto_project op=link`, `oto_fleet
-op=create` —, une route REST adressée par un nom répond avec `Deprecation` / `Sunset`, et
-la portée d'un jeton range ses tableaux par numéro (`auth/token_scopes`, oto#158). Les
-données qui gardent un nom (automatisations, liens de projet, portées de jetons,
-procédures `datastore="…"`) se migrent par `scripts/tableaux_par_numero.py`, à blanc par
-défaut.
+⚠️ **Un nom de tableau est REFUSÉ depuis le 08/11/2026** (préavis servi du 07/09 au
+08/11/2026, lot 0 du 29/09/2026). Rien n'est cherché sous un nom, aucun repli :
+`DatastorePg._trouver` lève `datastore/errors.TableauParNom` (sous-classe de
+`DatastoreNotFound`, donc refusé partout), et les faces le DISENT avec un code propre —
+`400 datastore_by_name` sur toute route `/api/datastores/{datastore}/…` (adaptateur REST,
+et la garde des jetons portés), par `ns_not_found` dans les capacités datastore, dans les
+outils `data_*`, à `oto_project op=link|unlink`, `oto_fleet op=create`, l'émission d'un
+jeton et `oto_upload_url`. Seuls le numéro et `slot:<nom>` (résolu en numéro) désignent.
+Restent résolus par nom, parce que ce sont des DONNÉES écrites avant et non une adresse
+reçue : les liens de projet posés par nom (`db.list_project_links`, et `_ref_canonizer`
+pour les retrouver sous leur numéro) et les automatisations d'avant #1067
+(`_lignes_reservables._cle_heritee`). Elles se migrent par
+`scripts/tableaux_par_numero.py`, à blanc par défaut.
+
+**Les désignations se COMPTENT** (17/11/2026). Le journal cite le tableau résolu (`ns_id`,
+nom canonique) : `957` et `slot:vivier` y laissaient la même trace. Il porte aussi la
+FORME de la désignation, `args.ref_kind` ∈ `number` | `slot` | `name` — jamais le nom —,
+notée là où l'adresse reçue est jugée : `access.resolve_datastore_ref` pour `slot:`, les
+résolutions par numéro (le store `_resolve`, `oto_project op=link`, `oto_fleet op=create`,
+la portée d'un jeton) pour `number`, et le refus d'un nom (`errors.refus_tableau_par_nom`,
+par où passent toutes les faces) pour `name` : une ligne `name` est un appel REFUSÉ. Plusieurs
+tableaux dans un appel : la forme la plus dépréciée l'emporte (`name` > `slot` > `number`).
+- Face MCP : la ligne de l'appel (`kind='mcp'`, la cible d'un `oto_call` sur SA ligne),
+  par le relevé d'appel (`server._TRACED_ARGS`).
+- Face REST : la ligne de ROUTE (`kind='rest'`, `api.routes.RestCallLogger`), une par
+  requête, lectures comprises, par un holder posé autour de la requête
+  (`session_org.set_ref_rest`). Pas le relevé MCP : posé en REST, il ferait lire
+  `key_mode`/`quantity` aux gardes de crédit. Les lignes de geste (`datastore/journal.record`,
+  `data_write`…) ne la portent pas : la ligne de route couvre déjà la même requête, et une
+  seconde ligne compterait l'écriture deux fois.
+
+La mesure, en lecture seule, servie par l'index partiel `idx_tool_calls_ref_nom`
+(`db/index_releve.TABLEAU_PAR_NOM`, révision `20261120_2210_tableau_par_nom`, geste
+manuel sur la base servie, `docs/migrations-versionnees.md` §5.1) — la requête est
+`index_releve.MESURE_TABLEAU_PAR_NOM` :
+
+```sql
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '15s';
+SELECT kind AS face, org_id, sub, token_kind, token_id, count(*) AS appels,
+       min(created_at) AS premier, max(created_at) AS dernier
+FROM tool_calls
+WHERE args->>'ref_kind' = 'name'
+  AND created_at >= now() - make_interval(days => 7)
+GROUP BY kind, org_id, sub, token_kind, token_id
+ORDER BY appels DESC;
+ROLLBACK;
+```
+
+La mesure dit qui se heurte encore au refus du nom (face, org, compte, jeton), pour le
+prévenir. Des chiffres désignent toujours un numéro (`errors.est_un_nom_de_tableau`).
+
 Ce qui a changé est ce qu'on MONTRE — descriptions de `data_claim_next`/`data_write`/
 `data_release`/`data_rows`/`data_get_schema`, instruction de flotte
 (`capabilities/_instruction.py`), guide `datastore-semantics` §0 — parce qu'un agent

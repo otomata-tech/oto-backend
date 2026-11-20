@@ -248,10 +248,12 @@ def reuse_connection() -> Iterator[None]:
     appelants, et
     quatre seuls pour lesquels ces deux propriétés sont vérifiées : `status_for`,
     `connectors.me` (#1148), qui l'englobe, `org.list` (`GET /api/me/orgs`) et la liste
-    des tableaux (`GET /api/datastores`) — un banc relève chaque requête de leur chemin
+    des tableaux (`GET /api/datastores`), et l'enrichissement de `op=list` des tableaux
+    par `resources` — un banc relève chaque requête de leur chemin
     et rougit sur une écriture (`tests/test_connecteurs_me_une_connexion_1148.py`,
     `tests/orgs/test_list_orgs_lectures_groupees.py`,
-    `tests/datastore/test_liste_tableaux_lectures_groupees.py`).
+    `tests/datastore/test_liste_tableaux_lectures_groupees.py`,
+    `tests/test_resources_liste_en_lot_live.py`).
 
     Ré-entrant : un `reuse_connection()` imbriqué dans un autre ne fait rien (la
     connexion déjà empruntée par le bloc englobant sert aux deux).

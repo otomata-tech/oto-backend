@@ -98,6 +98,7 @@ def table(live, request):
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    ns = str(ns_id)
     st = make_store(SUB)
     st.set_schema(ns, SCHEMA_FLOTTE if request.param == "schema_flotte"
                   else SCHEMA_COLONNES)

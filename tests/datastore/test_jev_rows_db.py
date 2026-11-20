@@ -71,8 +71,8 @@ def monte(compte, monkeypatch):
 def _table(n: int) -> tuple[str, int, list[str]]:
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = f"jev-rows-{uuid.uuid4().hex[:6]}"
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, f"jev-rows-{uuid.uuid4().hex[:6]}")
+    ns = str(ns_id)
     store = make_store(SUB)
     store.set_schema(ns, SCHEMA)
     ids = [store.append_row(ns, {"company": f"Co {i}"})["_id"] for i in range(n)]
@@ -142,8 +142,7 @@ async def test_missing_columns_are_created_on_a_real_schema(monte):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     m, _, _ = monte
-    ns = f"jev-rows-{uuid.uuid4().hex[:6]}"
-    db.create_datastore("user", SUB, ns)
+    ns = str(db.create_datastore("user", SUB, f"jev-rows-{uuid.uuid4().hex[:6]}"))
     store = make_store(SUB)
     store.set_schema(ns, {"fields": [{"key": "company", "type": "text"}]})
     store.append_row(ns, {"company": "Co"})

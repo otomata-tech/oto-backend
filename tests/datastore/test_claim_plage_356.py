@@ -47,7 +47,7 @@ def _table():
     from oto_mcp.datastore.core import make_store
 
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-356", ns)
+    ns = str(db.create_datastore("user", "sub-356", ns))
     st = make_store("sub-356")
     st.set_schema(ns, {"key": "ref", "fields": [{"key": "ref", "type": "text"},
                                                 {"key": "score", "type": "number"}]})
@@ -103,7 +103,7 @@ def test_le_perimetre_du_TABLEAU_passe_toujours_devant(live):
     from oto_mcp.datastore.core import make_store
 
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-356", ns)
+    ns = str(db.create_datastore("user", "sub-356", ns))
     st = make_store("sub-356")
     st.set_schema(ns, {"key": "ref", "fields": [
         {"key": "ref", "type": "text"},

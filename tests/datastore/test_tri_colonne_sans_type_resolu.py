@@ -52,8 +52,7 @@ def tableau(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
 
-    ns = "t-tri-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", SUB, ns)
+    ns = str(db.create_datastore("user", SUB, "t-tri-" + uuid.uuid4().hex[:6]))
     st = make_store(SUB)
     st.set_schema(ns, {"fields": [
         {"key": "code", "type": "text"},
@@ -182,8 +181,7 @@ def tableau_lacunaire(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
 
-    ns = "t-tri-lac-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", SUB, ns)
+    ns = str(db.create_datastore("user", SUB, "t-tri-lac-" + uuid.uuid4().hex[:6]))
     st = make_store(SUB)
     st.set_schema(ns, {"fields": [
         {"key": "code", "type": "text"},

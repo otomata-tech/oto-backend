@@ -81,8 +81,8 @@ def test_une_table_qui_n_est_pas_un_objet_garde_son_refus():
 def _table(schema=None):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-o63", ns)
+    ns_id = db.create_datastore("user", "sub-o63", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store("sub-o63")
     if schema is not None:
         st.set_schema(ns, schema)
@@ -90,7 +90,7 @@ def _table(schema=None):
 
 
 def test_la_pose_et_le_patch_refusent_par_la_surface(live):
-    st, ns, _ = _table()
+    st, ns, ns_id = _table()
     with pytest.raises(ValueError, match=r'\{"neuf": \["fait"\]\}'):
         st.set_schema(ns, _schema({"neuf": "fait"}))
     st.set_schema(ns, _schema({"neuf": ["fait"]}))
@@ -100,16 +100,9 @@ def test_la_pose_et_le_patch_refusent_par_la_surface(live):
     st.patch_schema(ns, fields=[{"key": "statut",
                                  "lifecycle": {"transitions": {"fait": ["perdu"]}}}])
     from oto_mcp import db
-    tr = db.get_datastore_by_id(_table_id(ns))["schema"]["fields"][1]["lifecycle"][
+    tr = db.get_datastore_by_id(ns_id)["schema"]["fields"][1]["lifecycle"][
         "transitions"]
     assert tr == {"neuf": ["fait"], "fait": ["perdu"]}
-
-
-def _table_id(ns: str) -> int:
-    from oto_mcp.db._conn import _connect
-    with _connect() as conn:
-        return conn.execute("SELECT id FROM user_datastores WHERE namespace = %s",
-                            (ns,)).fetchone()["id"]
 
 
 # ── 2. la lecture d'un bloc stocké hors forme ────────────────────────────────

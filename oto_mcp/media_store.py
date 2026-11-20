@@ -599,6 +599,28 @@ def delete_by_key(key: str) -> None:
         pass
 
 
+def client_et_seau():
+    """(client S3, seau) de l'instance — pour un travail de fond qui lit et réécrit des
+    objets privés hors des gestes ci-dessus (la réécriture des archives du journal par
+    l'effacement d'une org)."""
+    return _get_client(), _bucket()
+
+
+def supprimer_objet(key: str) -> None:
+    """Supprime un objet par sa clé et LÈVE (`MediaError`) s'il n'est pas supprimé —
+    le pendant strict de `delete_by_key`, pour l'effacement d'une org : un objet resté
+    est une donnée que l'effacement promettait d'avoir retirée. Un objet déjà absent
+    n'est pas un refus (S3 rend 204 sur une clé inconnue)."""
+    if not key:
+        return
+    try:
+        _get_client().delete_object(Bucket=_bucket(), Key=key)
+    except MediaError:
+        raise
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "delete_failed", str(e))
+
+
 def make_public(key: str) -> str:
     """Bascule un objet DURABLE existant en `public-read` et renvoie son URL
     publique permanente (ADR 0032 §3 — un « Autre document » partagé publiquement)."""

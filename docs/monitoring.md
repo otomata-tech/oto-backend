@@ -911,6 +911,17 @@ L'export lui-même refuse d'écrire sur un objet existant, et un refus d'accès 
 n'est jamais pris pour une absence. Une inscription ne se réécrit plus (elle se posait
 en `ON CONFLICT DO UPDATE`). Bancs : `tests/deploy/test_archive_journal_reprise_1197.py`.
 
+**Chaque passage laisse une trace, et son absence est une erreur.** Le registre
+`journal_archives` ne dit pas si le travail tourne : son `archived_at` vieillit
+normalement de 30 à 60 jours. Le script écrit donc, à la fin de chaque passage, une ligne
+dans `journal_archive_passages` (révision `20261120_2220_archive_passages` ; début, fin,
+`ok`, mois archivés, détail) : un passage sans mois éligible est réussi, un refus
+`ArchiveIncoherente` ou une exception est en échec avec sa cause ; le verrou pris, le
+passage à blanc et `--export-only` n'écrivent rien. `oto_admin_monitoring
+op=journal_archive` rend `last_success_at`, `last_failure_at` et l'état, et lève
+`journal_archive_late` quand aucun passage n'a réussi depuis plus de 48 h, y compris
+quand il n'y en a jamais eu. Bancs : `tests/deploy/test_archive_passages.py`.
+
 **La suppression avance par l'index** (#1197). Son prédicat
 `to_char(date_trunc('month', created_at), 'YYYY-MM') = mois` ne servait aucun index :
 chaque lot de 20 000 relisait la table depuis son début (ou toute la table, selon le plan)

@@ -58,8 +58,7 @@ def capa(compte, monkeypatch):
 def _table() -> str:
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = f"recettes-capa-{uuid.uuid4().hex[:6]}"
-    db.create_datastore("user", SUB, ns)
+    ns = str(db.create_datastore("user", SUB, f"recettes-capa-{uuid.uuid4().hex[:6]}"))
     make_store(SUB).set_schema(ns, SCHEMA)
     return ns
 
@@ -290,7 +289,8 @@ def test_les_appels_de_la_recette_suivent_l_org_de_la_recette(capa):
     from oto_mcp import session_org
     jeton = session_org.set_call_org(cible)
     try:
-        make_store(SUB).set_schema(nom, SCHEMA)
+        make_store(SUB).set_schema(str(ns_id), SCHEMA)
+
     finally:
         session_org.reset_call_org(jeton)
     ctx = ResolvedCtx(sub=SUB, org_id=cible)

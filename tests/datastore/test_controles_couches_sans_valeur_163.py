@@ -61,11 +61,12 @@ def live(pg_dsn):
 
 @pytest.fixture
 def tableau(live):
-    """Un tableau neuf, sans schéma, portant les cinq lignes — `(store, nom, ns_id, ids)`."""
+    """Un tableau neuf, sans schéma, portant les cinq lignes — `(store, adresse, ns_id, ids)`,
+    l'adresse étant le numéro en texte."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t163-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "t163-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     ids = {}
     for nom, data in LIGNES.items():
         ids[nom] = "r-" + nom

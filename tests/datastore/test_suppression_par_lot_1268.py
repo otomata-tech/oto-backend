@@ -22,8 +22,8 @@ def _store():
 
 def _table(n: int = 4) -> tuple[str, int]:
     from oto_mcp import db
-    ns = "p1268-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "p1268-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     _store().set_schema(ns, {"fields": [{"key": "titre", "type": "text"}]})
     for i in range(1, n + 1):
         db.datastore_insert_row(ns_id, f"r{i}", {"titre": f"t{i}"})

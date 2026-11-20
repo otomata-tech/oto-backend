@@ -163,8 +163,7 @@ def test_une_liste_SANS_of_key_se_juge_en_bloc():
 def _table(schema_initial: dict):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-test", ns)
+    ns = str(db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6]))
     st = make_store("sub-test")
     st.set_schema(ns, schema_initial)
     return st, ns

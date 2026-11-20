@@ -11,7 +11,11 @@ posé au bord MCP et au bord REST pour un travail hébergé), un agent qui a `ot
 sa liste élargirait la sienne — une injection de prompt suffirait —, ou créerait un agent
 plus outillé que lui, qui tournerait ensuite avec ces outils. Élargir reste un geste de
 personne ; réduire, reposer la même liste, ou créer un agent qui n'a que des outils du
-travail appelant reste permis."""
+travail appelant reste permis.
+
+**Un opérateur, pour un outil d'opérateur.** Un `oto_admin_*` réservé au rôle plateforme
+n'entre dans la liste d'un agent ou d'une campagne que par un opérateur plateforme
+(`exiger_outils_d_admin_a_sa_portee`)."""
 from __future__ import annotations
 
 import logging
@@ -63,6 +67,30 @@ def exiger_aucun_outil_hors_du_travail(outils: list[str]) -> None:
     if verrou is None:
         return
     _refuser_l_elargissement(outils, outils_du_travail.permis_du_travail(verrou.job_id))
+
+
+def exiger_outils_d_admin_a_sa_portee(sub: str, outils: list[str],
+                                      actuels: Optional[list] = None) -> None:
+    """`op=create`/`op=update` d'un agent ou d'une campagne : refuse
+    `admin_tools_operator_only` quand une personne qui n'est pas opérateur plateforme
+    AJOUTE à sa liste (`outils` hors de `actuels`, au canonique) un `oto_admin_*`
+    réservé au rôle plateforme — le plancher que déclare son autorisation, celui qui le
+    masque à son `tools/list` (`session_visibility._hors_de_portee_plateforme`). On
+    n'outille pas un agent de ce qu'on ne peut pas appeler soi-même. Un `oto_admin_*`
+    qu'un rôle d'org suffit à appeler (`oto_admin_org_member`) passe ; reposer une
+    liste qui le portait déjà, ou la réduire, aussi."""
+    deja = {deprecations.tool_canonique(n) for n in (actuels or []) if isinstance(n, str)}
+    ajoutes = {c for c in (deprecations.tool_canonique(n) for n in outils
+                           if isinstance(n, str))
+               if c and c.startswith(verrou_org.PREFIXE_ADMIN) and c not in deja}
+    if not ajoutes or access.is_platform_operator(sub):
+        return
+    from .. import session_visibility
+    reserves = sorted(session_visibility._hors_de_portee_plateforme(ajoutes, "member"))
+    if reserves:
+        raise AuthzDenied(403, "admin_tools_operator_only",
+                          f"{', '.join(reserves)} : outils réservés à un opérateur "
+                          "plateforme. Seul un opérateur les ajoute à la liste d'un agent.")
 
 
 def exiger_un_lancement_sans_role_plateforme(org_id: int, trigger_id: int,

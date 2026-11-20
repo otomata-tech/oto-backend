@@ -143,8 +143,7 @@ def test_rien_de_declare_rien_d_inerte():
 def _table(sub: str):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", sub, ns)
+    ns = str(db.create_datastore("user", sub, "t-" + uuid.uuid4().hex[:6]))
     make_store(sub).set_schema(ns, SCHEMA)
     return ns
 

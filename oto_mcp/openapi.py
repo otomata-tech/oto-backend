@@ -171,7 +171,8 @@ laquelle un client décide), `detail` (la phrase, actionnable) et parfois `detai
 structurée). Les 4xx listés sur une opération sont ceux qu'elle DÉCLARE, chacun rejoué par
 un test ; la liste n'est pas exhaustive : tout appel peut rendre `400 invalid_input` /
 `unknown_fields` / `invalid_json` / `invalid_body` (validation de la requête par
-l'adaptateur), `401` et `403`.
+l'adaptateur), `401` et `403` ; et tout appel qui désigne un tableau, `400
+datastore_by_name` quand il le désigne par son NOM — un tableau se désigne par son numéro.
 
 ## Ce que ce document ne dit pas encore
 

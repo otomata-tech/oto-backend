@@ -52,6 +52,7 @@ def _tableau(n: int, schema: dict = LIBRE) -> tuple:
     from oto_mcp import db
     ns = "file-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", "sub-agent", ns)
+    ns = str(ns_id)
     st = _store()
     st.set_schema(ns, schema)
     for i in range(n):

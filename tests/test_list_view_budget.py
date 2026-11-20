@@ -40,6 +40,9 @@ def docs_seam(monkeypatch):
     def _list(pid, rows=_pages(37)):
         return rows
     monkeypatch.setattr(db, "list_docs_for_project", _list)
+    # La liste par défaut lit l'arbre de TRAVAIL et compte les sources laissées (12/11/2026).
+    monkeypatch.setattr(db, "list_working_docs_for_project", _list)
+    monkeypatch.setattr(db, "count_live_sources", lambda pid: 0)
     monkeypatch.setattr(db, "doc_rev", lambda t, b: "rev")
 
 

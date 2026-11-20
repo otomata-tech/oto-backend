@@ -109,6 +109,7 @@ def fiche(live):
 
     ns = "vivier-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    ns = str(ns_id)
     make_store(SUB).set_schema(ns, SCHEMA)
     row = make_store(SUB).append_row(
         ns, {"siren": "552032534", "contacts": ["a@exemple.invalid"], "statut": "nouveau"})
@@ -264,6 +265,7 @@ def test_un_vide_sur_une_colonne_DEJA_vide_passe_et_ne_dit_rien(client, live):
 
     ns = "neuve-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    ns = str(ns_id)
     make_store(SUB).set_schema(ns, SCHEMA)
     rid = make_store(SUB).append_row(ns, {"siren": "552032534"})["_id"]
     r = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
@@ -283,6 +285,7 @@ def test_un_LOT_qui_porte_la_cle_metier_ne_casse_pas_et_la_liste_vide_remplace(l
 
     ns = "lot-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    ns = str(ns_id)
     store = make_store(SUB)
     store.set_schema(ns, {"key": "siren", "fields": [{"key": "siren", "type": "text"},
                                                      {"key": "contacts"}]})

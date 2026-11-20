@@ -80,7 +80,9 @@ montée : `docs/instance-cible.md`.
 | **instance** | rien : la cible naît avec les siennes | aucune ; une raison écrite |
 | **exclue** | rien, mais le manifeste **compte** ce qui n'est pas parti | une règle et une raison (notre commerce, nos documents légaux, nos relances) |
 
-⚠️ **Ajouter une table au schéma, c'est la classer dans le même commit.**
+⚠️ **Ajouter une table au schéma, c'est la classer dans le même commit** — et, si
+elle est `exclue` ou `instance`, trancher son EFFACEMENT (`effacement/disposition.py`,
+`docs/effacement-d-org.md`) : l'effacement d'une org s'appuie sur ce même classement.
 `decouverte.verifier_classement` refuse, en listant **toutes** les anomalies d'un coup :
 une table non classée, une entrée sans table, une colonne nommée qui n'existe pas, un
 `Via fk=True` sans la clé étrangère correspondante, un héritage d'une table qui ne part

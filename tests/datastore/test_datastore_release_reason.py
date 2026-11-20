@@ -130,7 +130,7 @@ def test_REST_porte_la_meme_raison(monkeypatch):
     monkeypatch.setattr(dsr.datastore_journal, "record", lambda *a, **k: None)
     monkeypatch.setattr(dsr.access, "resolve_datastore_ref", lambda ns: ns)
     _, corps = H.call("me.datastore.release_claim",
-                      path_params={"datastore": "vivier", "row_id": "r1"},
+                      path_params={"datastore": "7", "row_id": "r1"},
                       body={"worker": WORKER})
     assert corps["released"] is False
     assert corps["reason"] == "held_by_other"

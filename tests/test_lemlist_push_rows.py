@@ -56,8 +56,7 @@ def banc(live, monkeypatch):
 def _table(rows=_GENS) -> tuple[str, list[str]]:
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "leads-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", SUB, ns)
+    ns = str(db.create_datastore("user", SUB, "leads-" + uuid.uuid4().hex[:6]))
     st = make_store(SUB)
     st.set_schema(ns, {"fields": [{"key": c, "type": "text"} for c in _COLONNES]})
     return ns, [str(st.append_row(ns, dict(r))["_id"]) for r in rows]
@@ -240,6 +239,6 @@ def test_un_tableau_inconnu_est_un_refus_nomme(banc):
     from oto_mcp.mcp_errors import McpError
     fn, client = banc
     with pytest.raises(McpError) as e:
-        fn(datastore="n-existe-pas", campaign_id="cam_X", field_mapping=_MAPPING,
+        fn(datastore="999999999", campaign_id="cam_X", field_mapping=_MAPPING,
            row_ids=["1"])
     assert e.value.error.data["code"] == "datastore_not_found"

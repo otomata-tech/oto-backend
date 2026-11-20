@@ -239,6 +239,15 @@ def _org_active_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _temps_gagne_sans_cache() -> None:
+    """Le temps gagné de la page Agents est mis en cache par PROCESSUS
+    (`_temps_gagne_borne`) : chaque banc repart d'un cache vide, sinon il lirait le
+    résultat calculé par le précédent pour la même org."""
+    from oto_mcp.capabilities import _temps_gagne_borne
+    _temps_gagne_borne.vider()
+
+
+@pytest.fixture(autouse=True)
 def _aucune_limite_d_envoi_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sans base, aucun compte LinkedIn n'a de limite d'envoi et rien ne se compte
     (`unipile_limites.garde`, lue à chaque invitation, message et visite de profil). Un

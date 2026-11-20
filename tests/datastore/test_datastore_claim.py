@@ -264,7 +264,7 @@ def _call(monkeypatch, store, body, *, no_body=False):
     monkeypatch.setattr(dsr, "make_store", lambda sub: store)
     monkeypatch.setattr(dsr.datastore_journal, "record", lambda *a, **k: None)
     return call("me.datastore.release_claim",
-                path_params={"datastore": "vivier", "row_id": "r1"},
+                path_params={"datastore": "174", "row_id": "r1"},
                 body=body, no_body=no_body)
 
 

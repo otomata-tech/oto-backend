@@ -423,8 +423,7 @@ def _tableau(lignes: list[dict]) -> tuple[str, list[str]]:
 
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "prospects-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", _SUB, ns)
+    ns = str(db.create_datastore("user", _SUB, "prospects-" + uuid.uuid4().hex[:6]))
     st = make_store(_SUB)
     # Les colonnes des lignes et celles où les numéros s'écrivent, déclarées.
     colonnes = sorted({k for r in lignes for k in r} | {"phone", "tel"})

@@ -288,6 +288,16 @@ _REGLAGES: tuple[Variable, ...] = (
              "(poste de dev, tests) : rien n'engage un tiers. Une valeur hors des "
              "deux lève `EnvironnementAmbigu`.",
              ("oto_mcp/config.py:108",)),
+    Variable("OTO_TOOL_PREFIX", Classe.REGLAGE, None,
+             "Repli du préfixe d'outils du tenant primaire (`tenants.tool_prefix` de "
+             "sa ligne, qui fait foi) : lu seulement si la base est illisible quand le "
+             "registre d'émetteurs se construit (boot, rechargement à chaud). Même "
+             "forme que la colonne (`[a-z][a-z0-9]{1,23}`, sans `_`). Absente ou vide "
+             "avec une base illisible ⟹ `PrefixeOutilsIndetermine` : le boot s'arrête, "
+             "un rechargement garde le registre d'avant — jamais `oto_*` par défaut. "
+             "Posée et différente de la ligne ⟹ la ligne gagne, l'écart est alerté. "
+             "Une instance dont le primaire déclare un préfixe la pose à cette valeur.",
+             ("oto_mcp/tenancy.py:577",)),
     Variable("OTO_FUNCTIONS_SANDBOX_DIR", Classe.REGLAGE, "",
              "Répertoire du bac à sable des fonctions (ADR 0073), posé par "
              "`scripts/installer_bac_a_sable.py`. Absente : `<arbre>/.bac-a-sable`, que le "
@@ -389,15 +399,16 @@ _REGLAGES: tuple[Variable, ...] = (
              "(défaut) refuse toute résolution du porteur hors de l'org de son travail, "
              "`report` la journalise et la laisse passer, `off` le coupe. Une valeur "
              "inconnue vaut `enforce`.",
-             ("oto_mcp/verrou_org.py:141",)),
-    Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "report",
+             ("oto_mcp/verrou_org.py:142",)),
+    Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "enforce",
              "Verrou des rôles PLATEFORME des jetons de délégation (`verrou_org.py`) : "
-             "`enforce` lit `member` le porteur `admin`/`super_admin` d'un travail du "
-             "runner (aucune garde plateforme, aucun `oto_admin_*` — sauf, pendant leur "
-             "appel, ceux que son agent nomme : `platform_tools`), `report` (défaut) "
-             "journalise ce qui serait retiré et ne retire rien, `off` le coupe. Une "
-             "valeur inconnue vaut `report`. Indépendant d'`OTO_VERROU_ORG_DELEGATION`.",
-             ("oto_mcp/verrou_org.py:226",)),
+             "`enforce` (défaut) lit `member` le porteur `admin`/`super_admin` d'un "
+             "travail du runner (aucune garde plateforme, aucun `oto_admin_*` — sauf, "
+             "pendant leur appel, ceux que son agent nomme : `platform_tools`), `report` "
+             "(posé explicitement) journalise ce qui serait retiré et ne retire rien, "
+             "`off` le coupe. Une valeur inconnue vaut `enforce`. Indépendant "
+             "d'`OTO_VERROU_ORG_DELEGATION`.",
+             ("oto_mcp/verrou_org.py:227",)),
     Variable("OTO_COPILOT_SUBS", Classe.REGLAGE, "",
              "L'agent intégré à l'application (`capabilities/copilot`, docs/copilot.md) : "
              "les `sub` autorisés, séparés par des virgules. Vide (défaut) = personne — les "
@@ -890,6 +901,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "d'une procédure partagée par lien qui a de nouveaux lecteurs visibles. "
              "Absente (ou autre que 1/true/on) : le travail compte ce qu'il enverrait, "
              "n'envoie ni ne marque rien.", ("oto_mcp/digest_lecteurs.py:34",)),
+    Variable("OTO_EFFACEMENTS", Classe.REGLAGE, "",
+             "Ouvre le travail `effacements` (docs/effacement-d-org.md) : la purge des "
+             "orgs dont l'effacement est confirmé et le délai de grâce échu — base, "
+             "stockage, sièges Unipile, comptes Logto, archives du journal. Absente "
+             "(ou autre que 1/true/yes/on) : le travail liste ce qu'il ferait, n'écrit "
+             "rien. Prod seulement : la préprod partage la base.",
+             ("oto_mcp/effacement/travail.py:43",)),
     Variable("OTO_UNIPILE_FIN_DE_DROIT_DELAI_JOURS", Classe.REGLAGE, "7",
              "Jours entre le premier constat de la perte du droit `unipile` et la "
              "suppression du compte chez unipile. Entier ≥ 1, sinon le travail lève.",

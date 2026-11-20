@@ -1242,10 +1242,8 @@ déploiement : **`docs/version-servie.md`**.
   - La table des routes autorisées (`auth.token_scopes._ALLOWED`) est la **seule** porte : une
     route ajoutée demain est refusée sans qu'on ait à y penser.
   - La portée nomme le tableau par son **identifiant** (oto#158, 29/09/2026) : un renommage
-    ne déplace plus ce que le jeton atteint. L'émission accepte encore un nom et le range
-    sous son identifiant (la réponse rend la portée rangée ; un nom porté par deux tableaux
-    visibles → `400 ambiguous_namespace`). Une URL qui adresse le tableau par son nom est
-    jugée sur l'identifiant que ce nom résout pour le porteur, jusqu'au 08/11/2026. ⚠️ Une
+    ne déplace plus ce que le jeton atteint. Depuis le 08/11/2026, un nom de tableau est
+    refusé à l'émission comme dans une URL (`400 datastore_by_name`), sans rien résoudre. ⚠️ Une
     portée émise avant qui nomme encore un tableau par son nom n'ouvre plus rien :
     `403 token_scope_by_name`, qui les liste — elle se migre
     (`scripts/tableaux_par_numero.py --seulement jetons`) ou se réémet.

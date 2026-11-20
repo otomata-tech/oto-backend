@@ -82,10 +82,10 @@ def test_un_corps_libre_atterrit_entier_dans_le_champ_declare():
         "test.append",
         (_RowInput, RestBinding(verb="POST", path="/api/x/{datastore}/rows",
                                 body_field="row")),
-        method="POST", path_params={"datastore": "vivier"},
+        method="POST", path_params={"datastore": "4217"},
         body={"societe": "ACME", "statut": "à traiter", "n'importe quoi": 1})
     assert code == 200
-    assert vus[0].datastore == "vivier"
+    assert vus[0].datastore == "4217"
     assert vus[0].row == {"societe": "ACME", "statut": "à traiter", "n'importe quoi": 1}
 
 
@@ -95,7 +95,7 @@ def test_la_garde_de_champ_inconnu_couvre_toujours_la_query_string():
         "test.append",
         (_RowInput, RestBinding(verb="POST", path="/api/x/{datastore}/rows",
                                 body_field="row")),
-        method="POST", path_params={"datastore": "vivier"},
+        method="POST", path_params={"datastore": "4217"},
         body={"societe": "ACME"}, query=b"scope=org")
     assert (code, corps["error"]) == (400, "unknown_fields")
     assert "scope" in corps["detail"]
@@ -107,7 +107,7 @@ def test_sans_body_field_le_corps_se_fusionne_comme_avant():
     code, corps, _ = _exercise(
         "test.plain",
         (_EmailInput, RestBinding(verb="POST", path="/api/x/{datastore}/share")),
-        method="POST", path_params={"datastore": "vivier"},
+        method="POST", path_params={"datastore": "4217"},
         body={"email": "a@b.c", "permission": "write"})
     assert (code, corps["error"]) == (400, "unknown_fields")
 
@@ -119,7 +119,7 @@ def test_le_code_de_creation_est_celui_du_binding():
         "test.create",
         (_EmailInput, RestBinding(verb="POST", path="/api/x/{datastore}/share",
                                   status=201)),
-        method="POST", path_params={"datastore": "vivier"}, body={})
+        method="POST", path_params={"datastore": "4217"}, body={})
     assert code == 201
 
 
@@ -127,7 +127,7 @@ def test_le_defaut_reste_200():
     code, _, _ = _exercise(
         "test.create",
         (_EmailInput, RestBinding(verb="POST", path="/api/x/{datastore}/share")),
-        method="POST", path_params={"datastore": "vivier"}, body={})
+        method="POST", path_params={"datastore": "4217"}, body={})
     assert code == 200
 
 
@@ -137,7 +137,7 @@ def test_un_delete_ne_lit_pas_de_corps_par_defaut():
     _, _, vus = _exercise(
         "test.unshare",
         (_EmailInput, RestBinding(verb="DELETE", path="/api/x/{datastore}/share")),
-        method="DELETE", path_params={"datastore": "vivier"}, body={"email": "a@b.c"})
+        method="DELETE", path_params={"datastore": "4217"}, body={"email": "a@b.c"})
     assert vus[0].email == "", "le corps d'un DELETE ne se lit que sur demande"
 
 
@@ -146,7 +146,7 @@ def test_un_delete_lit_son_corps_quand_le_binding_le_declare():
         "test.unshare",
         (_EmailInput, RestBinding(verb="DELETE", path="/api/x/{datastore}/share",
                                   reads_body=True)),
-        method="DELETE", path_params={"datastore": "vivier"}, body={"email": "a@b.c"})
+        method="DELETE", path_params={"datastore": "4217"}, body={"email": "a@b.c"})
     assert vus[0].email == "a@b.c"
 
 

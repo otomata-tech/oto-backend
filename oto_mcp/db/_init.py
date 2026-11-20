@@ -815,6 +815,13 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
         conn.execute(_paths.DDL_FONCTION_VALEURS_TEXTE)
     for index in _search.INDEX_VALEURS:
         index_concurrent.poser_au_demarrage(conn, index)
+    # Les pages de travail à part des sources brutes (`docs.kind`) : leurs index
+    # partiels sous le même verdict — construits ici sur une base neuve seulement ; une
+    # base servie les reçoit de la révision `20261120_2240_docs_par_genre`.
+    from . import projects as _projects
+    for index in (*_search.INDEX_PAGES_DE_TRAVAIL, _projects.INDEX_TRAVAIL_PAR_PROJET,
+                  _projects.INDEX_SOURCES_RECENTES):
+        index_concurrent.poser_au_demarrage(conn, index)
     # Le texte des valeurs servies MATÉRIALISÉ par ligne (16/10/2026) : colonnes,
     # déclencheur qui les remplit à chaque écriture de `data` (ancien code compris,
     # bleu/vert sur base partagée), et leurs deux GIN sous le même verdict CONCURRENTLY.
@@ -1263,6 +1270,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # La clé d'un tour au coût (dédoublonnage d'un rapport rejoué) : même régime,
     # révision 20261113_1200_tours_au_cout_cle ou à la main.
     index_concurrent.poser_au_demarrage(conn, index_releve.TOUR_AU_COUT)
+    # Les désignations d'un tableau par son nom (mesure avant le retrait du nom) : même
+    # régime, révision 20261120_2210_tableau_par_nom ou à la main.
+    index_concurrent.poser_au_demarrage(conn, index_releve.TABLEAU_PAR_NOM)
     # Application OAuth cliente porteuse du grant (`azp` du JWT — claude.ai,
     # Claude Code, ChatGPT…) : axe de télémétrie par surface, extension OTO-LOCALE.
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS client_id TEXT")

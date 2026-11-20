@@ -108,6 +108,9 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.runs.AGENT_CAUSES,        # le catalogue des causes de panne d'agent, une par empreinte
     schema.connectors.API_APPS,      # applications de Custom API : définition partagée par leurs clés
     schema.runs.AGENT_HEALTH_SETTINGS,  # la réparation automatique des agents d'une org (coupée sans ligne)
+    schema.usage.JOURNAL_ARCHIVE_PASSAGES,  # passages de l'archive du journal : date du dernier réussi
+    schema.orgs.SUBSCRIPTION_STATES,  # état d'abonnement d'une org, poussé par le commerce
+    schema.effacements.EFFACEMENTS,  # demandes d'effacement d'une org, et leur reçu
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

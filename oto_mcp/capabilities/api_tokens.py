@@ -60,7 +60,7 @@ from typing import Any, Optional, Union
 from pydantic import BaseModel, Field
 
 from .. import (access, credentials_store, db, org_origin, org_store, ownership,
-                providers, roles)
+                providers, roles, session_org)
 from ..auth import token_scopes
 from ._authz import SUB_ONLY, SUPER_ADMIN
 from ._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
@@ -463,8 +463,11 @@ def _par_identifiant(sub: str, scopes: Optional[dict]) -> Optional[dict]:
     for cle, droit in vises.items():
         if cle.isdigit() and cle in ids:
             ranges[cle] = droit
+            session_org.noter_forme_tableau(session_org.REF_NUMBER)
         elif len(par_nom.get(cle, ())) == 1:
             ranges[next(iter(par_nom[cle]))] = droit
+            # Rangé sous son identifiant, mais DÉSIGNÉ par son nom : le journal le compte.
+            session_org.noter_forme_tableau(session_org.REF_NAME)
         elif par_nom.get(cle):
             ambigus.append(cle)
         else:

@@ -265,6 +265,7 @@ def declares() -> tuple[IndexConcurrent, ...]:
                    search, valeurs_servies)
     return (index_releve.RELEVE, *index_releve.OUVERTURES, index_releve.GESTES_DE_LIGNE,
             index_releve.OUVERTURE_PAR_RUN, index_releve.TOUR_AU_COUT,
+            index_releve.TABLEAU_PAR_NOM,
             *search.INDEX_VALEURS, access_shadow.CLE_ORIGINE,
             *(cle.index for cle in contraintes_create_table.CLES),
             *valeurs_servies.INDEX, runner_jobs.INDEX_DECLENCHEURS,

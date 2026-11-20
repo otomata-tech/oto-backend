@@ -305,6 +305,46 @@ la portée d'un jeton range ses tableaux par numéro (`auth/token_scopes`, oto#1
 données qui gardent un nom (automatisations, liens de projet, portées de jetons,
 procédures `datastore="…"`) se migrent par `scripts/tableaux_par_numero.py`, à blanc par
 défaut.
+
+**L'usage du nom se COMPTE** (17/11/2026). Le journal cite le tableau résolu (`ns_id`,
+nom canonique) : `957`, `slot:vivier` et `mes_leads` y laissaient la même trace. Il porte
+aussi la FORME de la désignation, `args.ref_kind` ∈ `number` | `slot` | `name` — jamais le
+nom —, notée là où l'adresse reçue est résolue : `access.resolve_datastore_ref` pour
+`slot:`, `session_org.noter_adresse_de_tableau` pour le numéro et le nom (le store
+`_resolve`, `oto_project op=link`, `oto_fleet op=create` ; c'est aussi lui qui pose l'avis
+daté), et le rangement d'une portée de jeton. Plusieurs tableaux dans un appel : la forme
+la plus dépréciée l'emporte (`name` > `slot` > `number`).
+- Face MCP : la ligne de l'appel (`kind='mcp'`, la cible d'un `oto_call` sur SA ligne),
+  par le relevé d'appel (`server._TRACED_ARGS`).
+- Face REST : la ligne de ROUTE (`kind='rest'`, `api.routes.RestCallLogger`), une par
+  requête, lectures comprises, par un holder posé autour de la requête
+  (`session_org.set_ref_rest`). Pas le relevé MCP : posé en REST, il ferait lire
+  `key_mode`/`quantity` aux gardes de crédit. Les lignes de geste (`datastore/journal.record`,
+  `data_write`…) ne la portent pas : la ligne de route couvre déjà la même requête, et une
+  seconde ligne compterait l'écriture deux fois.
+
+La mesure, en lecture seule, servie par l'index partiel `idx_tool_calls_ref_nom`
+(`db/index_releve.TABLEAU_PAR_NOM`, révision `20261120_2210_tableau_par_nom`, geste
+manuel sur la base servie, `docs/migrations-versionnees.md` §5.1) — la requête est
+`index_releve.MESURE_TABLEAU_PAR_NOM` :
+
+```sql
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '15s';
+SELECT kind AS face, org_id, sub, token_kind, token_id, count(*) AS appels,
+       min(created_at) AS premier, max(created_at) AS dernier
+FROM tool_calls
+WHERE args->>'ref_kind' = 'name'
+  AND created_at >= now() - make_interval(days => 7)
+GROUP BY kind, org_id, sub, token_kind, token_id
+ORDER BY appels DESC;
+ROLLBACK;
+```
+
+Zéro ligne sur la fenêtre voulue, l'index posé et valide : plus personne ne désigne un
+tableau par son nom. Un nom en chiffres (« 2024 ») compte comme un nom : c'est le
+résultat qui juge (`deprecations.adresse_par_nom`), pas la forme.
+
 Ce qui a changé est ce qu'on MONTRE — descriptions de `data_claim_next`/`data_write`/
 `data_release`/`data_rows`/`data_get_schema`, instruction de flotte
 (`capabilities/_instruction.py`), guide `datastore-semantics` §0 — parce qu'un agent

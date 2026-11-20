@@ -198,11 +198,16 @@ def cle_de_plateforme_posee(fournisseur: str) -> Optional[bool]:
 
 
 def raison_sans_acces(fournisseur: str) -> str:
-    return (f"cette organisation n'a pas déposé de clé `{fournisseur}`, et la clé partagée "
-            "de la plateforme ne lui est pas ouverte — jamais accordée, ou retirée. Deux "
-            "issues : déposer sa propre clé (Connecteurs), ou demander l'accès à qui "
-            "administre la clé partagée de cette instance. L'agent repartira à sa "
-            "prochaine échéance.")
+    # ⚠️ La CAUSE en tête : le motif est tronqué à 80 caractères dans les lentilles
+    # (`db.usage._MOTIF_TETE`), et c'est cette tête que l'org lit. Le cas le plus
+    # fréquent est la facturation qui retire l'accord quand les crédits de l'org sont
+    # épuisés ; mais une org qui n'en a jamais acheté, ou dont l'accès a été retiré à
+    # la main, arrive ici aussi, et rien ne les distingue à la réservation. La tête
+    # nomme donc les crédits sans affirmer qu'ils ont été consommés.
+    return (f"crédits épuisés ou absents : la clé partagée `{fournisseur}` n'est pas "
+            "ouverte à cette organisation. Rechargez des crédits (Facturation), déposez "
+            "votre propre clé (Connecteurs), ou demandez l'accès à qui administre la clé "
+            "partagée ; l'agent repartira à sa prochaine échéance.")
 
 
 RAISON_FERME = (

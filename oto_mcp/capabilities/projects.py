@@ -20,7 +20,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from .. import (config, db, deprecations, group_store, org_store, output_projection,
+from .. import (config, db, group_store, org_store, output_projection,
                 ownership, roles, session_org, url_perimeter)
 from ._authz import SUB_ONLY, refus_hors_vue
 from . import _liens_prives, _portee, _publication
@@ -1313,9 +1313,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             # silencieux), mais un unlink d'une réf legacy/supprimée passe avec la réf brute.
             resolved = _resolve_tableau_id(row, target_ref)
             if resolved is not None:
-                if deprecations.adresse_par_nom(target_ref, resolved):
-                    session_org.noter_avis(
-                        deprecations.avis_nom_de_tableau(str(target_ref), int(resolved)))
+                session_org.noter_adresse_de_tableau(target_ref, resolved)
                 target_ref = resolved
             elif inp.op == "link":
                 _require(False, "unknown_tableau",

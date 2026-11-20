@@ -283,6 +283,8 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     ("GET", "/api/me/projects/{id}/export"): None,
     ("POST", "/api/me/docs"): frozenset({
         "get", "list", "revisions", "backlinks", "search", "shared_with_me"}),
+    # Les commentaires d'une page : le droit de LECTURE de la page.
+    ("GET", "/api/me/docs/{doc_id}/comments"): None,
     ("GET", "/api/me/nodes/{node_id}"): None,
     ("GET", "/api/me/nodes/{node_id}/rows"): None,
     ("POST", "/api/me/functions"): frozenset({"list", "get", "versions"}),
@@ -304,6 +306,7 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     ("GET", "/api/datastores/{datastore}/rows/{row_id}/history"): None,
     ("GET", "/api/datastores/{datastore}/rows/{row_id}/activity"): None,
     ("GET", "/api/datastores/{datastore}/rows/{row_id}/comments"): None,
+    ("GET", "/api/datastores/{datastore}/columns/{column}/comments"): None,
     ("GET", "/api/datastores/{datastore}/comments/counts"): None,
     ("GET", "/api/datastores/{datastore}/schema"): None,
     ("GET", "/api/datastores/{datastore}/activity"): None,

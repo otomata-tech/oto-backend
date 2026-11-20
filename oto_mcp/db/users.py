@@ -677,6 +677,8 @@ _SUB_COLUMNS = [
     # - qui a écrit un commentaire de ligne : une signature d'auteur (`mine`, le droit
     #   de retirer le sien se lisent par elle), hors PK, indexée, UPDATE nu.
     ("datastore_row_comments", "auteur_sub"),
+    # - qui a écrit un commentaire de page : même signature, même UPDATE nu.
+    ("doc_comments", "auteur_sub"),
     # - qui a demandé un accès, et qui l'a décidé : des signatures (la boîte « envoyées »
     #   se lit par la première), hors PK, indexées. Le demandeur est sous index unique
     #   partiel : dédoublonné d'abord par `_UNIQUE_INDEX_SUB_TABLES`, puis repointé ici.

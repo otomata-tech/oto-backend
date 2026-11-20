@@ -194,8 +194,8 @@ data_patch_schema	-	cb244f7dd97f2849
 data_release	-	c42b3c4f79a17b43
 data_rename_datastore	-	4ed65d83f9291ae4
 data_review_app	-	ac8f71aa556b94d9
-data_row_comment	-	168d546a6d0423bd
-data_row_comments	-	3e3ab72f89690a32
+data_row_comment	-	cbdc964f07e458cb
+data_row_comments	-	cce92849c99689e0
 data_row_history	-	0825bbf68ab909c6
 data_rows	-	2a6a1188e9026069
 data_set_schema	-	c73fd901556af0aa

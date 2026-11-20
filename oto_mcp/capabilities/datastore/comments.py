@@ -1,5 +1,15 @@
 """Capacité « commentaires d'une ligne » : ce que les personnes disent d'une ligne, à
-côté de ses valeurs (`docs/datastore.md` §Commentaires).
+côté de ses valeurs (`docs/datastore.md` §Commentaires) — et, depuis le 20/11/2026,
+d'une CELLULE (la ligne + `column`) ou d'une COLONNE entière
+(`/api/datastores/{datastore}/columns/{column}/comments`).
+
+**Cellule.** Un commentaire de cellule EST un commentaire de sa ligne qui nomme une
+colonne : le fil de la ligne le rend (avec `column`), `?column=` ne garde que cette
+cellule, et le compte de la ligne le compte. **Colonne.** Sans ligne : ni le fil d'une
+ligne ni son compte ne le rendent ; ses routes à elle, et `columns` dans les comptes.
+Une colonne se nomme par sa clé : déclarée au schéma, ou présente dans les données
+(un tableau sans schéma complet a des colonnes non déclarées). Une colonne retirée du
+schéma garde ses commentaires, toujours servis : rien ne se détruit en silence.
 
 `GET|POST /api/datastores/{datastore}/rows/{row_id}/comments`, `DELETE
 …/comments/{comment_id}` ; sur la face agent `data_row_comments` (lire) et
@@ -48,6 +58,9 @@ class _Ligne(EntreeDatastore):
 
 
 class RowCommentsInput(_Ligne):
+    column: Optional[str] = Field(default=None, description=(
+        "Keep only the comments of this CELL (the row's value in this column). Omitted: "
+        "the row's comments AND its cells'."))
     limit: int = Field(default=LIMITE_DEFAUT, description=(
         f"Comments per page, the most recent page first ({LIMITE_MAX} at most)."))
     before_id: Optional[int] = Field(default=None, description=(
@@ -56,6 +69,9 @@ class RowCommentsInput(_Ligne):
 
 class RowCommentInput(_Ligne):
     body: str = Field(description=f"The comment, plain text, 1 to {LONGUEUR_MAX} characters.")
+    column: Optional[str] = Field(default=None, description=(
+        "Comment on one CELL: the column key (declared in the schema or present in the "
+        "row). Omit to comment on the whole row."))
 
     @field_validator("body", mode="after")
     @classmethod
@@ -74,6 +90,9 @@ class DeleteRowCommentInput(_Ligne):
 
 class Comment(BaseModel):
     id: int
+    column: Optional[str] = Field(default=None, description=(
+        "The column this comment is about: with a row, a CELL; null = the whole row "
+        "(on a column's own thread, always that column)."))
     author: Optional[str] = Field(default=None, description="The author's sub.")
     author_email: Optional[str] = Field(default=None, description=(
         "Resolved at read time; absent for an unknown account."))
@@ -87,6 +106,40 @@ class RowComments(BaseModel):
     datastore: Optional[str] = None
     ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
     row_id: str
+    comments: list[Comment] = Field(description="Oldest first within the page.")
+    next_before_id: Optional[int] = Field(default=None, description=(
+        "Pass as `before_id` to read the older page. `null` = nothing older."))
+
+
+class _Colonne(EntreeDatastore):
+    datastore: Adresse
+    column: str = Field(description="The column key.")
+
+
+class ColumnCommentsInput(_Colonne):
+    limit: int = Field(default=LIMITE_DEFAUT, description=(
+        f"Comments per page, the most recent page first ({LIMITE_MAX} at most)."))
+    before_id: Optional[int] = Field(default=None, description=(
+        "Read the next (older) page: the previous answer's `next_before_id`."))
+
+
+class ColumnCommentInput(_Colonne):
+    body: str = Field(description=f"The comment, plain text, 1 to {LONGUEUR_MAX} characters.")
+
+    @field_validator("body", mode="after")
+    @classmethod
+    def _corps(cls, v: str) -> str:
+        return RowCommentInput._corps(v)
+
+
+class DeleteColumnCommentInput(_Colonne):
+    comment_id: int
+
+
+class ColumnComments(BaseModel):
+    datastore: Optional[str] = None
+    ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
+    column: str
     comments: list[Comment] = Field(description="Oldest first within the page.")
     next_before_id: Optional[int] = Field(default=None, description=(
         "Pass as `before_id` to read the older page. `null` = nothing older."))
@@ -135,6 +188,12 @@ class CommentCounts(BaseModel):
     total: int
     latest: dict[str, LatestComment] = Field(description=(
         "`{row_id: comment}` each counted row's newest live comment."))
+    cells: dict[str, dict[str, int]] = Field(default_factory=dict, description=(
+        "`{row_id: {column: n}}` live CELL comments of the requested rows (also counted "
+        "in `counts`); cells without any are omitted."))
+    columns: dict[str, int] = Field(default_factory=dict, description=(
+        "`{column: n}` live comments on each column itself, for the whole table; "
+        "columns without any are omitted."))
 
 
 class Deleted(BaseModel):
@@ -157,11 +216,46 @@ def _ligne(ctx: ResolvedCtx, inp: _Ligne, *, ecrire: bool = False):
     return store, ns, ns_id, row_id, gouverne, absente
 
 
+def _tableau(ctx: ResolvedCtx, datastore: str):
+    """Le tableau, sous l'accès de LECTURE de l'appelant : `(store, ns, ns_id, gouverne)`."""
+    ns, _ = _adresse(datastore)
+    store = make_store(ctx.sub)
+    try:
+        ns_id = store.resolve_ns_id(ns)
+    except DatastoreNotFound:
+        raise ns_not_found(ctx.sub, ns)
+    gouverne = ownership.can_govern(ctx.sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id))
+    return store, ns, ns_id, gouverne
+
+
+def _colonne_connue(ns_id: int, colonne: str, donnees: Optional[dict] = None) -> str:
+    """La clé de colonne, si le tableau la connaît : déclarée au schéma, présente dans la
+    ligne visée (`donnees`), ou, pour une colonne, dans les données du tableau. Sinon
+    `400 unknown_column` — un commentaire sur une colonne qui n'existe pas ne se
+    retrouverait jamais."""
+    cle = (colonne or "").strip()
+    if cle:
+        tableau = db.get_datastore_by_id(ns_id) or {}
+        declarees = {f.get("key") for f in ((tableau.get("schema") or {}).get("fields") or [])
+                     if isinstance(f, dict)}
+        if cle in declarees:
+            return cle
+        if donnees is not None:
+            if cle in donnees:
+                return cle
+        elif cle in db.datastore_row_keys(ns_id):
+            return cle
+    raise AuthzDenied(400, "unknown_column", (
+        f"No column `{colonne}` in this table: name a column key declared in its schema "
+        "(or present in its data)."))
+
+
 def _servi(c: dict, sub: Optional[str], gouverne: bool, emails: dict) -> dict:
     auteur = c["auteur_sub"]
     a_moi = auteur is not None and auteur == sub
     return {
         "id": c["id"],
+        "column": c.get("column_key"),
         "author": auteur,
         "author_email": emails.get(auteur),
         "body": c["body"],
@@ -174,8 +268,8 @@ def _servi(c: dict, sub: Optional[str], gouverne: bool, emails: dict) -> dict:
 def _row_comments(ctx: ResolvedCtx, inp: RowCommentsInput) -> dict:
     store, ns, ns_id, row_id, gouverne, absente = _ligne(ctx, inp)
     limit = max(1, min(LIMITE_MAX, inp.limit))
-    lus = db.datastore_commentaires.lister(ns_id, row_id, avant_id=inp.before_id,
-                                           limit=limit)
+    lus = db.datastore_commentaires.lister(ns_id, row_id, colonne=inp.column,
+                                           avant_id=inp.before_id, limit=limit)
     # Comme l'historique : une ligne absente sans rien à montrer est une ligne
     # inconnue, pas une ligne sans commentaire.
     if absente and not lus and inp.before_id is None:
@@ -200,6 +294,9 @@ def _comment_counts(ctx: ResolvedCtx, inp: CommentCountsInput) -> dict:
         raise ns_not_found(ctx.sub, ns)
     lignes = db.datastore_commentaires.comptes(ns_id, inp.row_ids)
     emails = db.emails_by_subs([l["auteur_sub"] for l in lignes])
+    cellules: dict[str, dict[str, int]] = {}
+    for c in db.datastore_commentaires.comptes_cellules(ns_id, inp.row_ids):
+        cellules.setdefault(c["row_id"], {})[c["column_key"]] = int(c["n"])
     return {
         **identite.de_releve(store.dernier_tableau, ns),
         "counts": {l["row_id"]: int(l["n"]) for l in lignes},
@@ -209,13 +306,55 @@ def _comment_counts(ctx: ResolvedCtx, inp: CommentCountsInput) -> dict:
             "author": l["auteur_sub"],
             "author_email": emails.get(l["auteur_sub"]), "at": l["created_at"],
         } for l in lignes},
+        "cells": cellules,
+        "columns": db.datastore_commentaires.comptes_colonnes(ns_id),
     }
 
 
 def _row_comment(ctx: ResolvedCtx, inp: RowCommentInput) -> dict:
     _, _, ns_id, row_id, gouverne, _ = _ligne(ctx, inp, ecrire=True)
-    c = db.datastore_commentaires.ajouter(ns_id, row_id, auteur_sub=ctx.sub, body=inp.body)
+    colonne = None
+    if inp.column is not None:
+        colonne = _colonne_connue(ns_id, inp.column,
+                                  (db.datastore_get_row(ns_id, row_id) or {}).get("data") or {})
+    c = db.datastore_commentaires.ajouter(ns_id, row_id, auteur_sub=ctx.sub, body=inp.body,
+                                          colonne=colonne)
     return _servi(c, ctx.sub, gouverne, db.emails_by_subs([ctx.sub]))
+
+
+def _column_comments(ctx: ResolvedCtx, inp: ColumnCommentsInput) -> dict:
+    store, ns, ns_id, gouverne = _tableau(ctx, inp.datastore)
+    limit = max(1, min(LIMITE_MAX, inp.limit))
+    lus = db.datastore_commentaires.lister_colonne(ns_id, inp.column, avant_id=inp.before_id,
+                                                   limit=limit)
+    suite = lus[limit - 1]["id"] if len(lus) > limit else None
+    page = list(reversed(lus[:limit]))
+    emails = db.emails_by_subs([c["auteur_sub"] for c in page])
+    return {
+        **identite.de_releve(store.dernier_tableau, ns),
+        "column": inp.column,
+        "comments": [_servi(c, ctx.sub, gouverne, emails) for c in page],
+        "next_before_id": suite,
+    }
+
+
+def _column_comment(ctx: ResolvedCtx, inp: ColumnCommentInput) -> dict:
+    _, _, ns_id, gouverne = _tableau(ctx, inp.datastore)
+    colonne = _colonne_connue(ns_id, inp.column)
+    c = db.datastore_commentaires.ajouter(ns_id, None, auteur_sub=ctx.sub, body=inp.body,
+                                          colonne=colonne)
+    return _servi(c, ctx.sub, gouverne, db.emails_by_subs([ctx.sub]))
+
+
+def _delete_column_comment(ctx: ResolvedCtx, inp: DeleteColumnCommentInput) -> dict:
+    _, _, ns_id, gouverne = _tableau(ctx, inp.datastore)
+    c = db.datastore_commentaires.lire_colonne(ns_id, inp.column, inp.comment_id)
+    if c is None:
+        raise AuthzDenied(404, "comment_not_found")
+    if not gouverne and (ctx.sub is None or c["auteur_sub"] != ctx.sub):
+        raise AuthzDenied(403, "comment_not_yours")
+    db.datastore_commentaires.retirer(c["id"])
+    return {"deleted": True}
 
 
 def _delete_row_comment(ctx: ResolvedCtx, inp: DeleteRowCommentInput) -> dict:
@@ -230,6 +369,10 @@ def _delete_row_comment(ctx: ResolvedCtx, inp: DeleteRowCommentInput) -> dict:
 
 
 _CHEMIN = "/api/datastores/{datastore}/rows/{row_id}/comments"
+_CHEMIN_COLONNE = "/api/datastores/{datastore}/columns/{column}/comments"
+_COLONNE_INCONNUE = DeclaredError(400, "unknown_column",
+                                  "aucune colonne de cette clé dans ce tableau (schéma ou "
+                                  "données)")
 _TABLEAU_INCONNU = DeclaredError(404, "datastore_not_found",
                                  "le tableau ne se voit pas depuis l'org de l'appel")
 
@@ -251,7 +394,8 @@ CAPABILITIES += [
             _JETON_MAL_PLACE,
         ),
         description=(
-            "Read the comments people left on ONE datastore row, oldest first within a "
+            "Read the comments people left on ONE datastore row and its cells (each "
+            "tagged with its `column`; `column` keeps one cell), oldest first within a "
             "page; `before_id` (= the previous `next_before_id`) reads older ones. "
             "Comments are not row values: they never change the row or its history."
         ),
@@ -286,11 +430,13 @@ CAPABILITIES += [
             DeclaredError(404, "row_not_found",
                           "aucune ligne de cet `_id` dans ce tableau (une ligne "
                           "supprimée ne se commente plus)"),
+            _COLONNE_INCONNUE,
             _JETON_MAL_PLACE,
         ),
         description=(
-            "Add a comment to ONE datastore row, as the caller. Anyone who can read the "
-            "row can comment. It does not change the row: to change a value, write it."
+            "Add a comment to ONE datastore row, or to one of its cells (`column`), as the "
+            "caller. Anyone who can read the row can comment. It does not change the row: "
+            "to change a value, write it."
         ),
     ),
     Capability(
@@ -311,5 +457,48 @@ CAPABILITIES += [
             _JETON_MAL_PLACE,
         ),
         description="Remove one comment from a datastore row (its author or the table's governor).",
+    ),
+    # Les commentaires d'une COLONNE entière : REST seule, comme les comptes — l'écran
+    # du tableau les montre dans l'en-tête de colonne ; aucun outil agent de plus.
+    Capability(
+        key="me.datastore.column_comments",
+        handler=_column_comments,
+        Input=ColumnCommentsInput,
+        Output=ColumnComments,
+        authz=SUB_ONLY,
+        rest=RestBinding(verb="GET", path=_CHEMIN_COLONNE, provisoire=True),
+        errors=(_TABLEAU_INCONNU, _JETON_MAL_PLACE),
+        description=("Read the comments people left on ONE column of a datastore (the column "
+                     "itself, not its cells), oldest first within a page."),
+    ),
+    Capability(
+        key="me.datastore.column_comment",
+        handler=_column_comment,
+        Input=ColumnCommentInput,
+        Output=Comment,
+        authz=SUB_ONLY,
+        rest=RestBinding(verb="POST", path=_CHEMIN_COLONNE, status=201, provisoire=True),
+        errors=(_TABLEAU_INCONNU, _COLONNE_INCONNUE, _JETON_MAL_PLACE),
+        description=("Add a comment to ONE column of a datastore, as the caller. Anyone who "
+                     "can read the table can comment. It does not change the table."),
+    ),
+    Capability(
+        key="me.datastore.delete_column_comment",
+        handler=_delete_column_comment,
+        Input=DeleteColumnCommentInput,
+        Output=Deleted,
+        authz=SUB_ONLY,
+        rest=RestBinding(verb="DELETE", path=_CHEMIN_COLONNE + "/{comment_id}",
+                         provisoire=True),
+        errors=(
+            _TABLEAU_INCONNU,
+            DeclaredError(404, "comment_not_found",
+                          "aucun commentaire vivant de cet `id` sur cette colonne"),
+            DeclaredError(403, "comment_not_yours",
+                          "seuls son auteur et qui gouverne le tableau retirent un "
+                          "commentaire"),
+            _JETON_MAL_PLACE,
+        ),
+        description="Remove one comment from a datastore column (its author or the table's governor).",
     ),
 ]

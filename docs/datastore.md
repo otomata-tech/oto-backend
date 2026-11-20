@@ -3970,3 +3970,28 @@ du front y montre un fil. `GET|POST /api/datastores/{datastore}/rows/{row_id}/co
   sonde d'index par ligne (`LATERAL … ORDER BY id DESC LIMIT 1`), jamais une
   agrégation du tableau entier — une seule agrégation, lue par le front une fois par chargement de tableau.
 - Surface REST **provisoire** (`x-oto-provisoire`) tant que le front n'a pas tranché.
+
+### Cellules et colonnes (20/11/2026)
+
+Un commentaire vise la LIGNE (`row_id`), une CELLULE (`row_id` + `column_key`) ou une
+COLONNE entière (`column_key` seul) — contrainte `datastore_row_comments_cible` : jamais
+ni l'un ni l'autre. Chaque commentaire servi porte `column` (`null` = la ligne).
+
+- **Cellule** = un commentaire de sa ligne qui nomme une colonne : `POST …/rows/{row_id}/
+  comments` avec `"column"`. Le fil de la ligne le rend ; `GET …?column=<clé>` ne garde
+  que cette cellule ; le compte de la ligne (`counts`) le compte ; il se retire par la
+  route de la ligne. Les outils `data_row_comment(s)` prennent `column`.
+- **Colonne** : `GET|POST /api/datastores/{datastore}/columns/{column}/comments`,
+  `DELETE …/comments/{comment_id}` (REST seule). Mêmes règles d'accès et de retrait que
+  la ligne. Ni le fil ni le compte d'une ligne ne le rendent.
+- **Une colonne connue** : déclarée au schéma ; sinon présente dans les données (la ligne
+  visée pour une cellule, un échantillon du tableau pour une colonne) — une colonne
+  retirée du schéma dont les lignes portent encore la clé. Autre clé : `400
+  unknown_column`. Une colonne ne se renomme pas (un renommage est une clé nouvelle) :
+  rien à repointer. Une colonne retirée du schéma garde ses commentaires, toujours
+  servis.
+- **Comptes** : `GET …/comments/counts` ajoute `cells` (`{row_id: {colonne: n}}`, pour
+  les lignes demandées qui existent encore) et `columns` (`{colonne: n}`, les
+  commentaires de colonne de tout le tableau, par l'index partiel
+  `idx_datastore_row_comments_colonne`).
+- Révision `20261120_1215_doc_cell_comments` (le démarrage pose les mêmes ordres).

@@ -5,7 +5,10 @@
 2. commenter n'écrit pas la ligne : sa `rev` et son journal ne bougent pas ;
 3. l'accès : un LECTEUR lit et écrit ; retirer = l'auteur ou qui gouverne ; une ligne
    supprimée ne se lit que par qui gouverne et ne se commente plus ;
-4. la face agent : les deux outils sont les mêmes capacités.
+4. la face agent : les deux outils sont les mêmes capacités ;
+5. CELLULES et COLONNES (20/11/2026) : un commentaire de cellule est un commentaire de
+   sa ligne qui nomme une colonne ; une colonne a son propre fil ; les comptes rendent
+   `cells` et `columns` ; une clé inconnue est refusée.
 """
 from __future__ import annotations
 
@@ -288,3 +291,131 @@ def test_les_outils_sont_les_memes_capacites():
         assert cap.mcp == mcp
         assert [(b.verb, b.path.split("{row_id}")[1]) for b in cap.rest_bindings()] \
             == chemins
+
+
+# ── 5. cellules et colonnes ────────────────────────────────────────────────────
+
+def _col_url(ns, col) -> str:
+    return f"/api/datastores/{ns}/columns/{col}/comments"
+
+
+def test_un_commentaire_de_cellule_est_dans_le_fil_de_sa_ligne(rest):
+    ns, ns_id, rid = _table_et_ligne(rest)
+    _poster(rest, ns, rid, "sur la ligne")
+    r = rest.post(_url(ns, rid), headers=_h(), json={"body": "sur la cellule", "column": "n"})
+    assert r.status_code == 201, r.text
+    assert (r.json()["column"], r.json()["body"]) == ("n", "sur la cellule")
+    fil = rest.get(_url(ns, rid), headers=_h()).json()["comments"]
+    assert [(x["body"], x["column"]) for x in fil] == [("sur la ligne", None),
+                                                       ("sur la cellule", "n")]
+    cellule = rest.get(_url(ns, rid), headers=_h(), params={"column": "n"}).json()["comments"]
+    assert [x["body"] for x in cellule] == ["sur la cellule"]
+    # Retirée par la route de la ligne, comme tout commentaire de la ligne.
+    cid = r.json()["id"]
+    assert rest.delete(f"{_url(ns, rid)}/{cid}", headers=_h()).status_code == 200
+    assert rest.get(_url(ns, rid), headers=_h(), params={"column": "n"}).json()["comments"] == []
+
+
+def test_une_cle_inconnue_est_refusee_une_cle_des_donnees_acceptee(rest):
+    ns, ns_id, rid = _table_et_ligne(rest)
+    r = rest.post(_url(ns, rid), headers=_h(), json={"body": "x", "column": "inconnue"})
+    assert (r.status_code, r.json()["error"]) == (400, "unknown_column")
+    r = rest.post(_col_url(ns, "inconnue"), headers=_h(), json={"body": "x"})
+    assert (r.status_code, r.json()["error"]) == (400, "unknown_column")
+    # Une clé restée dans les DONNÉES sans être déclarée (une colonne retirée du schéma
+    # après coup) vaut encore une colonne : ses lignes la portent toujours.
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute("INSERT INTO datastore_rows (ns_id, row_id, data) VALUES (%s, 'vieille', "
+                     "'{\"n\": 2, \"libre\": \"v\"}'::jsonb)", (ns_id,))
+    assert rest.post(_url(ns, "vieille"), headers=_h(),
+                     json={"body": "x", "column": "libre"}).status_code == 201
+    assert rest.post(_col_url(ns, "libre"), headers=_h(), json={"body": "x"}).status_code == 201
+    r = rest.post(_url(ns, rid), headers=_h(), json={"body": "x", "column": "libre"})
+    assert (r.status_code, r.json()["error"]) == (400, "unknown_column"), \
+        "une cellule se juge sur SA ligne : `libre` n'y est pas"
+
+
+def test_une_colonne_a_son_propre_fil(rest):
+    ns, ns_id, rid = _table_et_ligne(rest)
+    _partager(ns_id, B)
+    r = rest.post(_col_url(ns, "n"), headers=_h(), json={"body": "  la colonne  "})
+    assert r.status_code == 201, r.text
+    c = r.json()
+    assert (c["column"], c["body"], c["mine"], c["can_delete"]) == ("n", "la colonne", True, True)
+    rb = rest.post(_col_url(ns_id, "n"), headers=_h(B), json={"body": "du lecteur"})
+    assert rb.status_code == 201, rb.text
+    lu = rest.get(_col_url(ns, "n"), headers=_h()).json()
+    assert ([x["body"] for x in lu["comments"]], lu["column"], lu["ns_id"]) == (
+        ["la colonne", "du lecteur"], "n", ns_id)
+    # Pas dans le fil d'une ligne.
+    assert rest.get(_url(ns, rid), headers=_h()).json()["comments"] == []
+    # Retrait : le sien, ou qui gouverne.
+    r = rest.delete(f"{_col_url(ns_id, 'n')}/{c['id']}", headers=_h(B))
+    assert (r.status_code, r.json()["error"]) == (403, "comment_not_yours")
+    assert rest.delete(f"{_col_url(ns, 'n')}/{rb.json()['id']}", headers=_h()).status_code == 200
+    r = rest.delete(f"{_col_url(ns, 'n')}/{rb.json()['id']}", headers=_h())
+    assert (r.status_code, r.json()["error"]) == (404, "comment_not_found")
+    # Un commentaire de ligne ne se retire pas par la route d'une colonne.
+    lc = _poster(rest, ns, rid, "de ligne").json()
+    r = rest.delete(f"{_col_url(ns, 'n')}/{lc['id']}", headers=_h())
+    assert (r.status_code, r.json()["error"]) == (404, "comment_not_found")
+
+
+def test_colonne_hors_perimetre_est_un_tableau_inconnu(rest):
+    ns, ns_id, _ = _table_et_ligne(rest)
+    cid = rest.post(_col_url(ns, "n"), headers=_h(), json={"body": "à moi"}).json()["id"]
+    for r in (rest.get(_col_url(ns_id, "n"), headers=_h(C)),
+              rest.post(_col_url(ns_id, "n"), headers=_h(C), json={"body": "intrus"}),
+              rest.delete(f"{_col_url(ns_id, 'n')}/{cid}", headers=_h(C))):
+        assert (r.status_code, r.json()["error"]) == (404, "datastore_not_found"), r.text
+
+
+def test_les_comptes_rendent_cellules_et_colonnes(rest):
+    ns, ns_id, r1 = _table_et_ligne(rest)
+    r2 = rest.post(f"/api/datastores/{ns}/rows", headers=_h(), json={"n": 2}).json()["_id"]
+    _poster(rest, ns, r1, "ligne")
+    for _ in range(2):
+        rest.post(_url(ns, r1), headers=_h(), json={"body": "cellule", "column": "n"})
+    rest.post(_url(ns, r2), headers=_h(), json={"body": "cellule 2", "column": "n"})
+    rest.post(_col_url(ns, "n"), headers=_h(), json={"body": "colonne"})
+    out = _comptes(rest, ns, [r1]).json()
+    assert out["counts"] == {r1: 3}, "le compte d'une ligne compte ses cellules"
+    assert out["cells"] == {r1: {"n": 2}}
+    assert out["columns"] == {"n": 1}
+    vide = _comptes(rest, ns, ["pas-une-ligne"]).json()
+    assert (vide["counts"], vide["cells"], vide["columns"]) == ({}, {}, {"n": 1})
+
+
+def test_une_cellule_d_une_ligne_supprimee_ne_se_compte_plus(rest):
+    ns, ns_id, rid = _table_et_ligne(rest)
+    rest.post(_url(ns, rid), headers=_h(), json={"body": "cellule", "column": "n"})
+    assert rest.delete(f"/api/datastores/{ns}/rows/{rid}", headers=_h()).status_code == 200
+    out = _comptes(rest, ns, [rid]).json()
+    assert (out["counts"], out["cells"]) == ({}, {})
+
+
+def test_la_base_refuse_un_commentaire_sans_cible(live):
+    import psycopg
+    from oto_mcp import db
+    from oto_mcp.db._conn import _connect
+    ns_id = db.create_datastore("user", A, f"sans-cible-{uuid.uuid4().hex[:6]}")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with _connect() as conn:
+            conn.execute("INSERT INTO datastore_row_comments (ns_id, auteur_sub, body) "
+                         "VALUES (%s, %s, 'x')", (ns_id, A))
+
+
+def test_les_outils_agent_prennent_la_colonne_et_les_routes_de_colonne_sont_rest_seules():
+    from oto_mcp.capabilities import registry
+    from oto_mcp.capabilities.datastore import comments as dc
+    assert "column" in dc.RowCommentInput.model_fields
+    assert "column" in dc.RowCommentsInput.model_fields
+    for cle, (verbe, fin) in {
+            "me.datastore.column_comments": ("GET", "/comments"),
+            "me.datastore.column_comment": ("POST", "/comments"),
+            "me.datastore.delete_column_comment": ("DELETE", "/comments/{comment_id}")}.items():
+        cap = registry.by_key(cle)
+        assert cap.mcp is None
+        assert [(b.verb, b.path.split("{column}")[1]) for b in cap.rest_bindings()] == [
+            (verbe, fin)]

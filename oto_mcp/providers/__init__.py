@@ -319,6 +319,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "claap",
     # Same family (sales calls, transcripts, AI summaries) — wired 2026-10-12.
     "modjo",
+    # Same family (recorded sales calls, transcripts, AI notes), read only and
+    # served by the generic reader of its description.
+    "demodesk",
     # Neighbour of `linear`: Productlane's roadmap is BACKED by Linear
     # (projects and issues are born there, then mirrored). The two cards
     # read together.

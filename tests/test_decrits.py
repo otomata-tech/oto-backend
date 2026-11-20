@@ -5,7 +5,8 @@ On a described connector of test (`_decrit_d_essai`), against a fake vendor (the
 mounted on an adapter, no network): the pair and its schemas, the call with the caller's key, the named refusal,
 `strip` and `projection`, the pages, the probe, the effects and batches derived (`effect: send` and `destroy`
 included), recipes and the call log, the inscription that changes nothing else; then the real Search Console
-description, its service account key and its probe; then the real SE Ranking description, a key and its act side.
+description, its service account key and its probe; then the real SE Ranking description, a key and its act side;
+then the real Demodesk description, read only.
 """
 from __future__ import annotations
 
@@ -1004,3 +1005,81 @@ def test_dataforseo_old_tool_names_refuse_naming_the_new_call():
         message = outils_retires.retrait(r.ancien).message
         assert f'`{r.outil}(op="{r.op}"' in message and "11/11/2026" in message, r
     assert outils_retires.retrait("dataforseo") is None
+
+
+# --- Demodesk: one key, read only, the signed video link never served --------------------------------------------
+
+
+_DEMODESK_LIT = ["get_current_user", "list_users", "list_meetings", "list_recordings", "get_recording",
+                 "get_transcript", "get_transcripts", "list_summaries", "list_scorecards"]
+
+
+@pytest.fixture
+def demodesk(vendeur, monkeypatch):
+    """The real description mounted as the registry inscribes it, the caller's key resolved by `resolve_api_key`."""
+    monkeypatch.setattr(decrits.access, "resolve_api_key", lambda nom, *a, **k: (f"key-of-{nom}", False))
+    outils = {t.name: t for t in decrits.monter(FastMCP("demodesk"), "demodesk", descriptions.charger("demodesk"))}
+    yield outils
+    connector_verify._REGISTRY.pop("demodesk", None)
+    connector_verify._COUVERTURE.pop("demodesk", None)
+
+
+def test_demodesk_is_inscribed_with_the_customers_key():
+    c = providers.REGISTRY["demodesk"]
+    assert (c.namespaces, c.auth_modes, c.secret_kind, c.keyed, c.decrit) == (
+        ("demodesk",), frozenset({"byo_user", "byo_org"}), "api_key", True, True)
+    assert [(f.name, f.secret) for f in c.secret_fields] == [("key", True)]
+    assert descriptions.refus_de_montage(descriptions.charger("demodesk")) == []
+
+
+def test_demodesk_serves_one_reading_tool_and_no_act(demodesk):
+    assert set(demodesk) == {"demodesk"}
+    assert demodesk["demodesk"].parameters["properties"]["op"]["enum"] == _DEMODESK_LIT
+    assert demodesk["demodesk"].annotations == LECTURE
+    assert "demodesk_act" not in effets.EFFETS
+    assert effets_recette.classer("demodesk", "get_transcript") == "lire"
+
+
+def test_demodesk_filters_recordings_with_the_bearer_key(demodesk, vendeur):
+    vendeur.answers.append((200, {"data": [{"recordingToken": "d0584dc4e31be4a0", "name": "Discovery call",
+                                            "temporaryDirectUrl": "https://media.example.test/v.mp4?token=t"}],
+                                  "meta": {"hasNext": False, "limit": 100, "nextCursor": None}}))
+    rendu = _appel(demodesk["demodesk"], op="list_recordings", hosts=["me"], attendee_domains=["example.com"],
+                   postprocessing_statuses=["done"])
+    assert "media.example.test" not in json.dumps(rendu) and "Discovery call" in json.dumps(rendu)
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == ("GET", "https://demodesk.com/api/v2/recordings")
+    assert envoi["query"] == [("filter[host_in][]", "me"), ("filter[attendee_domain_in][]", "example.com"),
+                              ("filter[postprocessing_status_in][]", "done")]
+    assert envoi["headers"]["authorization"] == "Bearer key-of-demodesk"
+
+
+def test_demodesk_reads_transcripts_in_one_batch(demodesk, vendeur):
+    vendeur.answers.append((200, {"data": [{"recordingToken": "d0584dc4e31be4a0", "status": "ready",
+                                            "transcript": {"language": "en", "text": "Host:\nHello."}}],
+                                  "meta": {"requestedCount": 1}}))
+    rendu = _appel(demodesk["demodesk"], op="get_transcripts", tokens=["d0584dc4e31be4a0"], format="plaintext")
+    assert rendu["data"][0]["transcript"]["text"] == "Host:\nHello."
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == ("POST", "https://demodesk.com/api/v2/transcripts/batch")
+    assert envoi["body"] == {"recordingTokens": ["d0584dc4e31be4a0"], "format": "plaintext"}
+
+
+def test_demodesk_names_a_refused_key_and_a_hidden_recording(demodesk, vendeur):
+    e = _refus(demodesk["demodesk"], vendeur, (401, {"error": {"code": "unauthorized", "message": "Invalid"}}),
+               op="get_current_user")
+    assert e.code == "key_refused" and error_taxonomy.credential_rejected_in_chain(e)
+    e = _refus(demodesk["demodesk"], vendeur, (404, {"error": {"code": "not_found", "message": "Not found"}}),
+               op="get_recording", token="d0584dc4e31be4a0")
+    assert (e.code, e.status_code) == ("not_found", 404) and not error_taxonomy.credential_rejected_in_chain(e)
+
+
+def test_demodesk_probe_reads_who_the_key_is(demodesk, vendeur):
+    sonde = connector_verify.probe_for("demodesk")
+    vendeur.answers.append((200, {"data": {"id": "1", "email": "rep@example.test"}}))
+    sonde({"key": "k"}, {})
+    envoi = essai.envoyee(vendeur.requests[-1])
+    assert (envoi["url"], envoi["headers"]["authorization"]) == ("https://demodesk.com/api/v2/me", "Bearer k")
+    vendeur.answers.append((401, {"error": {"message": "Invalid"}}))
+    with pytest.raises(connector_verify.NonAutorise):
+        sonde({"key": "k"}, {})

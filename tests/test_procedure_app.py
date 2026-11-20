@@ -254,14 +254,14 @@ def test_un_bundle_qui_n_est_pas_un_script_est_refuse(monkeypatch):
     assert procedure_diagram.indice_du_graphe("s", "veille") is None
 
 
-def _appeler(monkeypatch, procedures, slug, **stub):
+def _appeler(monkeypatch, procedures, slug, nom="oto_procedure_app", **stub):
     pa = _module(monkeypatch)
     m = _banc(monkeypatch, pa)
     _stub_backend(monkeypatch, procedures, **stub)
 
     async def appel():
         async with Client(m) as c:
-            return await c.call_tool("oto_procedure_app", {"slug": slug}, raise_on_error=False)
+            return await c.call_tool(nom, {"slug": slug}, raise_on_error=False)
 
     r = asyncio.run(appel())
     return r, "".join(getattr(b, "text", "") for b in r.content)
@@ -320,7 +320,10 @@ def test_la_consigne_de_dessin_ne_se_joue_qu_une_fois(monkeypatch):
 def test_les_outils_cites_portent_le_nom_du_produit(monkeypatch):
     pytest.importorskip("fastmcp.apps")
     monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
-    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose", prefix="acme")
+    # Appelé sous le nom MONTRÉ : sous l'ancien `oto_procedure_app`, un compte du primaire
+    # à préfixe reçoit en tête l'avis qui nomme cet ancien nom (`tool_alias.avis_d_appel_ancien_nom`).
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose",
+                        nom="acme_procedure_app", prefix="acme")
     assert "acme_guide op=read" in texte and "acme_procedure op=set" in texte
     assert "acme_procedure_app slug=prose again" in texte
     assert "oto_procedure" not in texte

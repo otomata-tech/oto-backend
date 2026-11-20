@@ -290,8 +290,15 @@ l'administrons) est une autre décision non prise (`tenancy.ForeignTenantDirecto
 >   toujours None pour le primaire). Déclaré ⟹ noms, prose et `serverInfo.name` suivent,
 >   `title` = `OTO_BRAND_NAME` ; rien de déclaré ⟹ l'octet d'avant, `title` compris
 >   (plus strict qu'un tiers sans préfixe). Travaux du runner : canoniques, comme partout.
->   ⚠️ **Tous les comptes** d'une instance dont le primaire déclare un préfixe voient
->   leurs noms d'outils changer (les deux noms restent acceptés à l'appel).
+>   **Les deux noms sont LISTÉS** pour un compte du primaire (21/11/2026) : `<préfixe>_x`
+>   et l'ancien `oto_x`, appelables tous deux et menant au même outil ; l'ancien porte
+>   « ⚠️ Ancien nom, utiliser `<préfixe>_x` » en tête de sa description et de chaque
+>   réponse, sans date de retrait (`tool_alias.sert_aussi_l_ancien_nom`,
+>   `docs/alias-deprecies.md`). Seuls les `oto_*` sont doublés ; `data_*`, `run_*`,
+>   `feedback` et les connecteurs gardent un nom unique. Un client qui a approuvé
+>   `oto_*` n'a rien à réapprouver. Un tenant TIERS n'est pas doublé : il n'a jamais
+>   été servi sous `oto_*`, et sa liste reste `<préfixe>_*` seul (appel sous les deux
+>   noms, comme avant).
 >   **Base illisible** (`tenancy.load_primary_tool_prefix`) : repli sur la variable
 >   d'instance `OTO_TOOL_PREFIX`, qui redit la valeur de la ligne ;
 >   absente ⟹ `PrefixeOutilsIndetermine` (le boot s'arrête, un rechargement garde le

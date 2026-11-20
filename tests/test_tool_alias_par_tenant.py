@@ -30,6 +30,7 @@ import re
 import mcp.types as mt
 import pytest
 from fastmcp.server.middleware import MiddlewareContext
+from fastmcp.tools.tool import ToolResult
 
 from oto_mcp import instructions, providers, server, tenancy, tool_alias
 from oto_mcp.middleware.alias import ToolAliasMiddleware
@@ -91,10 +92,13 @@ async def _nom_recu_par_le_serveur(monkeypatch, sub, demande):
 
     async def _suivant(c):
         vus.append(c.message.name)
-        return "ok"
+        return _OK
 
-    assert await ToolAliasMiddleware().on_call_tool(ctx, _suivant) == "ok"
+    assert await ToolAliasMiddleware().on_call_tool(ctx, _suivant) is not None
     return vus[0]
+
+
+_OK = ToolResult(content=[mt.TextContent(type="text", text="ok")])
 
 
 # ── 1. Inertie ───────────────────────────────────────────────────────────────
@@ -608,11 +612,93 @@ def test_sans_declaration_lentree_du_primaire_est_celle_davant():
 async def test_le_primaire_qui_declare_un_prefixe_liste_les_noms_du_produit(
         primaire_avec_prefixe, monkeypatch):
     noms = {t.name for t in await _liste_servie(monkeypatch, _SUB_PLATEFORME)}
-    assert "initech_doc" in noms and "oto_doc" not in noms
+    # Les deux noms : le nouveau, et l'ancien `oto_*` gardé pour ce qui le cite déjà.
+    assert "initech_doc" in noms and "oto_doc" in noms
     assert "data_write" in noms and "run_start" in noms and "feedback" in noms
     # Le tiers garde SON préfixe : le primaire ne déteint pas.
     noms_acme = {t.name for t in await _liste_servie(monkeypatch, _SUB_TENANT)}
     assert "acme_doc" in noms_acme and "initech_doc" not in noms_acme
+
+
+@pytest.mark.asyncio
+async def test_le_primaire_voit_l_ancien_nom_marque_deprecie_sans_date(
+        primaire_avec_prefixe, monkeypatch):
+    from oto_mcp import deprecations
+    """`oto_<x>` reste listé à côté de `initech_<x>`, son avis en tête, SANS date de
+    retrait ; seuls les outils renommés sont doublés (`data_*`, `run_*`, `feedback` et
+    les connecteurs gardent un nom unique), et la prose de l'ancien cite le nouveau."""
+    servis = await _liste_servie(monkeypatch, _SUB_PLATEFORME)
+    par_nom = {t.name: t for t in servis}
+    assert len(par_nom) == len(servis), "deux outils sous un même nom"
+    ancien, nouveau = par_nom["oto_doc"], par_nom["initech_doc"]
+    assert ancien.description.startswith("⚠️ Ancien nom, utiliser `initech_doc`. ")
+    assert ancien.description.endswith(nouveau.description)
+    assert not re.search(r"\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2}",
+                         ancien.description.split(". ")[0])
+    assert ancien.title != nouveau.title, "l'annuaire les afficherait comme un seul"
+    assert not nouveau.description.startswith("⚠️")
+    canoniques = {t.name for t in await _test_mcp().list_tools(run_middleware=False)}
+    for nom in par_nom:
+        if nom.startswith("oto_"):
+            assert "initech" + nom[3:] in par_nom, f"{nom} servi sans son nouveau nom"
+        elif not nom.startswith("initech_"):
+            assert nom in canoniques or nom in deprecations.TOOLS, \
+                f"{nom} n'est ni un outil monté ni un alias daté"
+    # Les anciens noms dépréciés de la plateforme ne sont pas redoublés.
+    assert not any(n.startswith("oto_") and n in deprecations.TOOLS for n in par_nom)
+
+
+@pytest.mark.asyncio
+async def test_une_instance_sans_prefixe_sert_la_liste_d_avant_a_l_octet(
+        tenant_avec_prefixe, monkeypatch):
+    """Primaire muet : la liste servie est exactement celle d'avant ce lot (les outils
+    montés plus les seuls alias dépréciés datés), noms, titres et descriptions."""
+    brut = await _test_mcp().list_tools(run_middleware=False)
+    attendu = ToolAliasMiddleware._avec_alias_deprecies(brut)
+    servis = await _liste_servie(monkeypatch, _SUB_PLATEFORME)
+    assert [t.model_dump() for t in servis] == [t.model_dump() for t in attendu]
+
+
+@pytest.mark.asyncio
+async def test_lappel_sous_l_ancien_nom_mene_au_meme_outil_et_le_dit(
+        primaire_avec_prefixe, monkeypatch):
+    """`oto_doc` et `initech_doc` atteignent le MÊME outil, canonique en aval (journal,
+    toggles, `<tool:slug>`) ; l'ancien nom porte l'avis en tête de sa réponse et est
+    compté au journal comme nom ancien."""
+    from oto_mcp import session_org
+    _comme(monkeypatch, _SUB_PLATEFORME)
+    vus = []
+
+    async def _suivant(c):
+        vus.append((c.message.name, session_org.nom_deprecie_de_l_appel()))
+        return _OK
+
+    reponses = {}
+    for demande in ("initech_doc", "oto_doc"):
+        ctx = MiddlewareContext(
+            message=mt.CallToolRequestParams(name=demande, arguments={}),
+            method="tools/call")
+        reponses[demande] = await ToolAliasMiddleware().on_call_tool(ctx, _suivant)
+    assert vus == [("oto_doc", None), ("oto_doc", "oto_doc")]
+    assert [c.text for c in reponses["initech_doc"].content] == ["ok"]
+    assert reponses["oto_doc"].content[0].text.startswith(
+        "⚠️ `oto_doc` est un ancien nom, utiliser `initech_doc`")
+
+
+@pytest.mark.asyncio
+async def test_le_tiers_a_prefixe_ne_voit_pas_l_ancien_nom(primaire_avec_prefixe,
+                                                           monkeypatch):
+    """Le doublon est propre au primaire : un tiers n'a jamais été servi sous `oto_*`.
+    Il garde sa liste d'avant (seulement `acme_*`) et l'appel sous les deux noms."""
+    noms = {t.name for t in await _liste_servie(monkeypatch, _SUB_TENANT)}
+    assert "acme_doc" in noms and not any(n.startswith("oto_") for n in noms)
+    assert await _nom_recu_par_le_serveur(monkeypatch, _SUB_TENANT, "oto_doc") == "oto_doc"
+
+
+@pytest.mark.asyncio
+async def test_le_stockage_reste_canonique_sous_le_primaire(primaire_avec_prefixe):
+    assert tool_alias.canonical_names(["initech_doc", "oto_doc", "data_write"],
+                                      _SUB_PLATEFORME) == ["oto_doc", "oto_doc", "data_write"]
 
 
 @pytest.mark.asyncio

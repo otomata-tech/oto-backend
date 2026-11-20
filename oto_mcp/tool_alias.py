@@ -208,6 +208,43 @@ def prefix_for(sub: Optional[str]) -> str:
     return prefix
 
 
+def sert_aussi_l_ancien_nom(sub: Optional[str]) -> bool:
+    """Le compte reçoit-il AUSSI l'ancien nom `oto_<x>` à côté de `<préfixe>_<x>` ?
+
+    Oui pour un compte du tenant PRIMAIRE dont la ligne déclare un préfixe : ses
+    procédures, guides, allowlists et réglages de client citent `oto_*` depuis
+    toujours, et le client a déjà approuvé ces noms. Lui retirer `oto_*` du jour au
+    lendemain ferait redemander chaque permission. L'ancien nom reste donc LISTÉ et
+    appelable, marqué déprécié (`avis_ancien_nom`) — sans date de retrait : il part
+    quand les consommateurs ont suivi, rien de daté (règle du 25/09/2026).
+
+    Non pour un tenant tiers : il n'a jamais été servi sous `oto_*` (son préfixe est
+    appliqué depuis sa déclaration), et lui lister `oto_*` réintroduirait la marque de
+    la plateforme dans son produit. Il garde l'appel sous les deux noms, comme avant.
+    Non pour un travail du runner (`prefix_for` lui rend `""`). Fail-open : False."""
+    if not prefix_for(sub):
+        return False
+    try:
+        from . import tenancy
+        return tenancy.current().tenant_of(sub) == tenancy.primary_slug()
+    except Exception:  # noqa: BLE001 — un doublon d'affichage ne casse pas une liste
+        logger.warning("tenant du compte illisible : ancien nom non servi (fail-open)",
+                       exc_info=True)
+        return False
+
+
+def avis_ancien_nom(nom_public: str) -> str:
+    """L'avis en tête de la DESCRIPTION de l'ancien nom `oto_<x>`. Sans date : aucune
+    n'est fixée."""
+    return f"⚠️ Ancien nom, utiliser `{nom_public}`. "
+
+
+def avis_d_appel_ancien_nom(ancien: str, nom_public: str) -> str:
+    """L'avis en tête de la RÉPONSE d'un appel fait sous l'ancien nom `oto_<x>`."""
+    return (f"⚠️ `{ancien}` est un ancien nom, utiliser `{nom_public}` (même outil, "
+            "mêmes arguments).")
+
+
 def server_identity_for(sub: Optional[str]) -> tuple[str, str]:
     """`(name, title)` que le handshake `initialize` doit annoncer — `("", "")` =
     inchangé (compte de la plateforme, tenant sans déclaration, erreur).

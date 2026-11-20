@@ -138,11 +138,36 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
                 if desc != (t.description or ""):
                     maj["description"] = desc
                 out.append(t.model_copy(update=maj) if maj else t)
+            if tool_alias.sert_aussi_l_ancien_nom(current_user_sub_from_token()):
+                out += self._anciens_noms(tools, out, prefix)
             return out
         except Exception:
             logger.warning("renommage des outils échoué (fail-open, noms canoniques)",
                            exc_info=True)
             return tools
+
+    @staticmethod
+    def _anciens_noms(avant, servis, prefix):
+        """L'ancien nom `oto_<x>` d'un outil servi sous `<préfixe>_<x>`, À CÔTÉ du
+        nouveau (`tool_alias.sert_aussi_l_ancien_nom`). Seuls les outils RENOMMÉS sont
+        doublés : `data_*`, `run_*`, `feedback` et les connecteurs gardent leur nom
+        unique. Un alias déprécié (`deprecations.TOOLS`) n'est pas redoublé. Dérivé de
+        la liste servie : l'ancien nom hérite du filtrage de visibilité de son outil.
+        La description est celle du nouveau nom (prose au préfixe), l'avis en tête."""
+        pris = {t.name for t in servis}
+        out = []
+        for t, public in zip(avant, servis):
+            if public.name == t.name or t.name in pris or t.name in deprecations.TOOLS:
+                continue
+            pris.add(t.name)
+            titre = f"{tool_alias.titre_pose(public)} (deprecated name: {t.name})"
+            out.append(public.model_copy(update={
+                "name": t.name,
+                "description": (tool_alias.avis_ancien_nom(public.name)
+                                + (public.description or "")),
+                **tool_alias.champs_titre(public, titre),
+            }))
+        return out
 
     async def on_initialize(self, context, call_next):
         """`serverInfo` au nom du PRODUIT — le dernier recoin de la classe de défaut
@@ -192,6 +217,14 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
         # compte l'usage de l'alias, et la réponse le dit en tête — même place que les
         # avis de l'appel (`session_org.noter_avis`).
         ancien = plateforme if canonical != plateforme else None
+        # Appelé sous l'ancien nom `oto_<x>` d'un outil servi sous `<préfixe>_<x>` :
+        # même outil, la réponse le dit et le journal compte l'usage de l'ancien nom.
+        avis = deprecations.avis_d_appel(ancien) if ancien else None
+        if ancien is None and prefix and name == canonical \
+                and tool_alias.public(name, prefix) != name \
+                and tool_alias.sert_aussi_l_ancien_nom(current_user_sub_from_token()):
+            ancien = name
+            avis = tool_alias.avis_d_appel_ancien_nom(name, tool_alias.public(name, prefix))
         jeton = session_org.set_nom_deprecie(ancien) if ancien else None
         try:
             result = await call_next(context)
@@ -203,7 +236,7 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
             if jeton is not None:
                 session_org.reset_nom_deprecie(jeton)
         if ancien:
-            return avec_lignes_en_tete(result, [deprecations.avis_d_appel(ancien)])
+            return avec_lignes_en_tete(result, [avis])
         return result
 
     @staticmethod

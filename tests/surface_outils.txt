@@ -630,7 +630,7 @@ oto_connector_activation	clear list set	7596a92524e0e798
 oto_connector_app	-	d015e84398cf40a2
 oto_context	-	fd3168d48576c83d
 oto_disable_tool	-	1149380513abd0af
-oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_public shared_with_me unarchive update verify	ee93f6ed6a49cc89
+oto_doc	archive backlinks bulk_create create delete get list move outline patch revert revisions search set_owner set_public shared_with_me unarchive update verify	bc54fee182ea6bd7
 oto_doc_app	-	380bde4997dd0aa4
 oto_enable_tool	-	1149380513abd0af
 oto_fleet	ack_stop beat create get launch list state stop take update	5c192086a0806dea

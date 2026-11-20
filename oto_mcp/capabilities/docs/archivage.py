@@ -1,4 +1,5 @@
-"""`archive` / `unarchive` / `verify` — l'état d'une page, posé par un geste (#1087).
+"""`archive` / `unarchive` / `verify` / `set_owner` — l'état d'une page, posé par un geste
+(#1087 ; le responsable : `db/responsables`).
 
 Une page périmée remontait dans `oto_search` à égalité avec une page fraîche, et la seule
 sortie était `op=delete`, irréversible. Deux gestes, chacun explicite :
@@ -18,6 +19,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ... import db
+from ...db import responsables
 from . import common
 from .common import require
 
@@ -65,6 +67,24 @@ def unarchive(sub: Optional[str], inp, row: dict, pid: int) -> dict:
         db.log_project_activity(pid, sub, "doc.unarchive", row.get("title"))
     return {"ok": True, "id": inp.doc_id, "unarchived": bool(n),
             "was_archived_at": row.get("archived_at"), "descendants": max(0, n - 1)}
+
+
+def set_owner(sub: Optional[str], inp, row: dict, pid: int) -> dict:
+    """Confie la page à `owner_sub` — la personne à qui s'adresser (`db/responsables`).
+
+    Même droit que les autres gestes de page (`write` sur le projet). Le responsable
+    doit pouvoir LIRE la page par son projet : nommer quelqu'un qui ne la voit pas
+    enverrait les questions à une personne qui ne peut pas y répondre."""
+    require(common.can(sub, pid, "write"), "forbidden", "Write refused.", 403)
+    cible = (inp.owner_sub or "").strip()
+    require(cible, "missing_owner", "`owner_sub` is required: the account to name.")
+    require(common.can(cible, pid, "read"), "owner_cannot_read",
+            "That account cannot read this page's project: name someone who can.", 422)
+    fait = responsables.poser_responsable_de_page(int(inp.doc_id), cible)
+    require(fait, "unknown_doc", f"Unknown doc #{inp.doc_id}.", 404)
+    db.log_project_activity(pid, sub, "doc.set_owner", row.get("title"))
+    return {"ok": True, "id": inp.doc_id, "owner_sub": cible,
+            "previous_owner_sub": row.get("owner_sub") or row.get("created_by")}
 
 
 def verify(sub: Optional[str], inp, row: dict, pid: int) -> dict:

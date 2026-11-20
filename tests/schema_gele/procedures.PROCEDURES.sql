@@ -11,6 +11,7 @@ version INTEGER NOT NULL DEFAULT 1,
 set_by TEXT,
 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+owner_sub TEXT,
 CONSTRAINT org_instructions_owner_pkey PRIMARY KEY (owner_type, owner_id, slug)
 );
 CREATE INDEX IF NOT EXISTS idx_org_instructions_org ON org_instructions(org_id);

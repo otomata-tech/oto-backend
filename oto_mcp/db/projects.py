@@ -969,11 +969,13 @@ def projets_des_procedures(org_id: int, slugs: list[str]) -> dict[str, list[int]
 
 # --- Docs (pages markdown arborescentes d'un projet, incrément 3) -------------
 # `archived_at`, `verified_at`, `verified_by` : `db/doc_archivage.py` (signal #1087).
+# `owner_sub` : la personne à qui s'adresser au sujet de la page (`db/responsables.py`).
 # `public_token_enc` : le lien public, chiffré (`db/jetons_de_lien.py`) — rendu sous
 # `public_token`, rouvert, par `_page` ; l'enveloppe ne sort pas d'ici.
 _DOC_COLS = ("id, project_id, parent_id, title, description, position, body_md, kind, "
              "public_token_enc, "
-             "created_by, created_at, updated_at, updated_by, archived_at, verified_at, verified_by")
+             "created_by, created_at, updated_at, updated_by, archived_at, verified_at, verified_by, "
+             "owner_sub")
 
 
 def create_doc(project_id: int, title: str, *, parent_id: Optional[int] = None,

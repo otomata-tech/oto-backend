@@ -608,6 +608,10 @@ _SUB_COLUMNS = [
     ("usage_signals", "resolved_by"), ("docs", "created_by"),
     ("project_files", "created_by"),
     ("doc_change_requests", "requested_by"), ("doc_change_requests", "resolved_by"),
+    # Le RESPONSABLE d'une page ou d'une procédure (`db/responsables.py`) : la personne à
+    # qui s'adresser. La fusion donne un nouvel identifiant à la MÊME personne — elle
+    # reste responsable de ce qu'on lui avait confié.
+    ("docs", "owner_sub"), ("org_instructions", "owner_sub"),
     ("scheduled_emails", "created_by"), ("connector_credentials", "set_by"),
     ("connector_account_grants", "granted_by"),
     # Le pendant GROUPE (oto#40). Colonne d'AUTEUR, hors PK et SANS FK : elle

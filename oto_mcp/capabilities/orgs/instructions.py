@@ -34,6 +34,7 @@ from starlette.concurrency import run_in_threadpool
 from ... import (access, db, deprecations, group_store, guide_store, org_store,
                 ownership, procedure_diagram, procedure_empreinte, procedure_retrait, roles,
                 slots as slots_mod, tool_alias, tool_registry)
+from ...db import responsables
 from .._auteurs import nommer_l_auteur, nommer_les_auteurs
 from .._lecture_bornee import bornee
 from .._authz import (BY_OP, ORG_ADMIN, ORG_ADMIN_OF, ORG_ADMIN_OPT, ORG_MEMBER,
@@ -338,6 +339,19 @@ class InstructionView(BaseModel):
     scope: Optional[Literal["org", "user"]] = Field(default=None, description=_SCOPE_ECHO)
     other_scopes: Optional[list[OtherScope]] = Field(default=None, description=_OTHER_SCOPES)
     shadow_warning: Optional[str] = Field(default=None, description=_SHADOW_WARNING)
+    owner_sub: Optional[str] = Field(default=None, description=(
+        "The person to ask about this procedure: the account someone named "
+        "(`POST …/{slug}/owner`), else the author of its first version; null when nobody "
+        "is known. A name, not a permission. Served on the current version only."))
+
+
+class InstructionOwnerSet(BaseModel):
+    """Le responsable d'une procédure, posé (`db/responsables`). `previous_owner_sub` est
+    celui qu'on lisait avant le geste — posé ou déduit de l'auteur."""
+    ok: bool
+    slug: str
+    owner_sub: str
+    previous_owner_sub: Optional[str] = None
 
 
 class InstructionUnarchived(BaseModel):
@@ -808,6 +822,15 @@ class InstrDescribeInput(BaseModel):
     # #662 : même verrou optimiste que `set`. La version LUE par le client ; différente
     # de la courante ⟹ 409 `version_conflict`, la correction n'a pas lieu.
     expected_version: Optional[int] = None
+
+
+class InstrOwnerInput(BaseModel):
+    """CONFIER une procédure à une personne : son responsable, à qui s'adresser.
+    Un NOM, pas un droit — la version, le corps et la vitrine sont intacts."""
+    slug: str
+    owner_sub: str
+    # #69 : idem set — org explicite optionnelle (None = org active).
+    org: Optional[int] = None
 
 
 class GuideDeleteInput(BaseModel):
@@ -1708,6 +1731,28 @@ def _describe_instruction(ctx: ResolvedCtx, inp) -> dict:
             "title": cur.get("title") or "", "description": cur.get("description") or ""}
 
 
+def _set_instruction_owner(ctx: ResolvedCtx, inp: InstrOwnerInput) -> dict:
+    """Confie la procédure à `owner_sub` (`db/responsables`). Même droit que l'écriture
+    du corps (org_admin) : qui peut réécrire la procédure peut dire à qui s'adresser.
+    Le responsable doit être MEMBRE de l'org : y nommer quelqu'un d'ailleurs enverrait
+    les questions à une personne qui ne la voit pas. Ne monte pas la version."""
+    owner = _owner_of(ctx, inp)
+    norm = org_store.normalize_slug(inp.slug)
+    if not norm or norm == _BASE:
+        raise AuthzDenied(400, "invalid_slug", "slug invalide (attendu [a-z0-9_-]).")
+    cible = (inp.owner_sub or "").strip()
+    if not cible:
+        raise AuthzDenied(400, "missing_owner", "`owner_sub` requis : le compte à nommer.")
+    if not responsables.est_membre_de_l_org(int(owner[1]), cible):
+        raise AuthzDenied(422, "owner_not_member",
+                          "Ce compte n'est pas membre de l'org : nomme quelqu'un qui "
+                          "voit la procédure.")
+    avant = responsables.responsable_de_procedure(*owner, norm)
+    if not responsables.poser_responsable_de_procedure(*owner, norm, cible):
+        raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente.")
+    return {"ok": True, "slug": norm, "owner_sub": cible, "previous_owner_sub": avant}
+
+
 def _delete_instruction(ctx: ResolvedCtx, inp) -> dict:
     owner = _owner_of(ctx, inp)
     norm = org_store.normalize_slug(inp.slug)
@@ -1925,6 +1970,10 @@ def _instruction_get(ctx: ResolvedCtx, inp: InstrGetInput) -> dict:
         **_paliers_du_slug(ctx, instr["slug"], owner, "lecture",
                            instr.get("archived_at")),
         **({"scope": inp.scope} if inp.scope else {}),
+        # Le responsable, sur la version COURANTE seulement : une version gardée n'en a
+        # pas, la procédure en a un.
+        **({"owner_sub": responsables.responsable_de_procedure(*owner, instr["slug"])}
+           if inp.version is None else {}),
     }
 
 
@@ -2155,6 +2204,20 @@ CAPABILITIES += [
                               "`expected_version` fourni et ≠ version courante — la "
                               "correction n'a pas eu lieu")),
         rest=RestBinding("PATCH", "/api/me/instructions/{slug}"),
+    ),
+    # Le RESPONSABLE (`db/responsables`) : à qui s'adresser au sujet d'une procédure.
+    Capability(
+        key="org.instruction.set_owner", handler=_set_instruction_owner,
+        Input=InstrOwnerInput, authz=ORG_ADMIN_OPT("org"), Output=InstructionOwnerSet,
+        description=("Name the person to ask about a procedure (org_admin) — its owner, "
+                     "returned as `owner_sub` by every read; until someone sets it, the "
+                     "author of its first version. A name, not a permission: nothing "
+                     "about who can read or edit changes, and the version does not move. "
+                     "The account must be a member of the org."),
+        errors=(DeclaredError(422, "owner_not_member",
+                              "le compte n'est pas membre de l'org — rien n'a été posé"),
+                _ABSENTE),
+        rest=RestBinding("POST", "/api/me/instructions/{slug}/owner"),
     ),
     Capability(
         key="org.instruction.delete", handler=_delete_instruction, Input=PalierSlugInput,

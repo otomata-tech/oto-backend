@@ -79,6 +79,10 @@ def view(row: dict, sub: Optional[str] = None) -> dict:
     # (test_list_view_budget), et l'absence dit « jamais archivée / jamais vérifiée ».
     out.update({k: row[k] for k in ("archived_at", "verified_at", "verified_by")
                 if row.get(k)})
+    # `owner_sub` : la personne à qui s'adresser au sujet de la page (`db/responsables`),
+    # sinon son auteur. TOUJOURS servi, `null` compris (personne de connu) : son absence
+    # dit au client « ce serveur ne connaît pas les responsables », pas « aucun ».
+    out["owner_sub"] = row.get("owner_sub") or row.get("created_by")
     # `updated_by` (oto#274) : le compte de la dernière modification, avec sa date —
     # un identifiant, que l'écran résout en nom ; `null` = inconnu (page déplacée
     # depuis, écrivain anonyme), jamais deviné.

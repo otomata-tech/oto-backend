@@ -140,7 +140,10 @@ CREATE TABLE IF NOT EXISTS docs (
     -- explicite. Base existante : révision `20261024_0900_docs_archivage`.
     archived_at TIMESTAMPTZ,
     verified_at TIMESTAMPTZ,
-    verified_by TEXT
+    verified_by TEXT,
+    -- La personne à qui s'adresser au sujet de la page (`db/responsables.py`) : un NOM,
+    -- pas un droit. NULL = son auteur (`created_by`), lu comme tel.
+    owner_sub TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_docs_project ON docs(project_id);
 CREATE INDEX IF NOT EXISTS idx_docs_parent ON docs(parent_id);

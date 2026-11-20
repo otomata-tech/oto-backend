@@ -410,6 +410,8 @@ POST /api/me/instructions -> _handler
 OPTIONS /api/me/instructions -> options_handler
 PATCH /api/me/instructions/{slug} -> _handler
 OPTIONS /api/me/instructions/{slug} -> options_handler
+POST /api/me/instructions/{slug}/owner -> _handler
+OPTIONS /api/me/instructions/{slug}/owner -> options_handler
 DELETE /api/me/instructions/{slug} -> _handler
 OPTIONS /api/me/instructions/{slug} -> options_handler
 POST /api/me/instructions/{slug}/archive -> _handler

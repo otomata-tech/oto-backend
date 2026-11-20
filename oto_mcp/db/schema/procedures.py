@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS org_instructions (
     set_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- La personne à qui s'adresser au sujet de la procédure (`db/responsables.py`) :
+    -- un NOM, pas un droit, distinct du palier propriétaire (owner_type/owner_id).
+    -- NULL = l'auteur de sa première version, lu comme tel.
+    owner_sub TEXT,
     -- PK NOMMÉE : le DROP de la PK legacy (org_id, slug) dans _init cible
     -- `org_instructions_pkey` — un nom distinct protège l'install fraîche.
     CONSTRAINT org_instructions_owner_pkey PRIMARY KEY (owner_type, owner_id, slug)

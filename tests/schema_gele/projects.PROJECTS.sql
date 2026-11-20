@@ -54,7 +54,8 @@ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 updated_by TEXT,
 archived_at TIMESTAMPTZ,
 verified_at TIMESTAMPTZ,
-verified_by TEXT
+verified_by TEXT,
+owner_sub TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_docs_project ON docs(project_id);
 CREATE INDEX IF NOT EXISTS idx_docs_parent ON docs(parent_id);

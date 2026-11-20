@@ -29,7 +29,7 @@ from .common import require
 class DocInput(BaseModel):
     op: Literal["create", "bulk_create", "list", "search", "get", "update", "patch",
                 "delete", "move", "revisions", "revert", "set_public", "backlinks",
-                "shared_with_me", "outline", "archive", "unarchive", "verify"]
+                "shared_with_me", "outline", "archive", "unarchive", "verify", "set_owner"]
     project_id: Optional[int] = None   # create / list / search
     doc_id: Optional[int] = None       # get / update / delete / move
     query: Optional[str] = None        # search : termes recherchés dans titre + corps
@@ -63,6 +63,8 @@ class DocInput(BaseModel):
         "(or, when you are not a member of the project's organization, to your active "
         "one). Omitted = both, "
         "across all your organizations. Served in any organization."))
+    # set_owner : le compte de la personne à qui confier la page (`db/responsables`).
+    owner_sub: Optional[str] = None
     # list (#1087) : True = remontre aussi les pages ARCHIVÉES (retirées par défaut).
     include_archived: Optional[bool] = None
     # delete (#657) : True = ne supprime RIEN, rend seulement ce que la suppression
@@ -202,6 +204,9 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
 
     if inp.op == "verify":
         return archivage.verify(sub, inp, row, pid)
+
+    if inp.op == "set_owner":
+        return archivage.set_owner(sub, inp, row, pid)
 
     if inp.op == "revisions":
         return history.revisions(sub, inp, pid)
@@ -360,7 +365,11 @@ CAPABILITIES += [
             "op=list — `include_archived: true` lists them — but stay readable with op=get; "
             "nothing is destroyed; unarchive undoes that same gesture) / verify (doc_id → "
             "stamps `verified_at`/`verified_by` = re-read and still true; body, "
-            "`updated_at` and versions untouched) "
+            "`updated_at` and versions untouched) / set_owner (doc_id + owner_sub → names the "
+            "person to ask about this page; every page read returns `owner_sub`, its "
+            "author until someone sets it. A name, not a permission: whoever writes the "
+            "page still can, and can hand it to someone else. The new owner must be able "
+            "to read the page, or 422 `owner_cannot_read`) "
             "/ set_public (public: true → shareable public read-only link to THIS PAGE "
             "ALONE: the reader gets its title and body, and nothing else — not the "
             "project, not the sibling pages, not this page's own sub-pages, which each "

@@ -710,6 +710,13 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `20261024_0900_docs_archivage` : ordre indifférent entre elles.
     if any(_colonne_absente(conn, "docs", c) for c in doc_archivage.COLONNES):
         conn.execute(doc_archivage.DDL_COLONNES)
+    # Le responsable d'une page et d'une procédure (`db/responsables.py`) — les mêmes que
+    # pose la révision `20261120_1108_responsables` : ordre indifférent.
+    from . import responsables
+    if _colonne_absente(conn, "docs", responsables.COLONNE):
+        conn.execute(responsables.DDL_COLONNE_PAGES)
+    if _colonne_absente(conn, "org_instructions", responsables.COLONNE):
+        conn.execute(responsables.DDL_COLONNE_PROCEDURES)
     # Le partage par défaut d'une org — la même que pose la révision
     # `20261024_1101_default_sharing` : ordre indifférent entre elles.
     if _colonne_absente(conn, "orgs", runner_triggers.COLONNE_PARTAGE_PAR_DEFAUT):

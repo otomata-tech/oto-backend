@@ -169,10 +169,10 @@ def test_la_face_REST_passe_key_required_au_store(monkeypatch):
     store = _Store()
     monkeypatch.setattr(dcc, "make_store", lambda sub: store)
     status, corps = call("me.datastore.patch_schema",
-                         path_params={"datastore": "vivier"},
+                         path_params={"datastore": "160"},
                          body={"new_rows": "reject"})
     assert status == 200, corps
-    assert store.calls == [("vivier", {"fields": None, "remove": None, "remove_attrs": None,
+    assert store.calls == [("160", {"fields": None, "remove": None, "remove_attrs": None,
                                        "key": None, "new_rows": "reject"})]
     assert corps["schema"]["new_rows"] == "reject"
     assert "new_rows" in corps["enforced"]

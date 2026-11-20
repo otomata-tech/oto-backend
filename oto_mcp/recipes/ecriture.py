@@ -211,12 +211,15 @@ def _ouvrir_tableau(datastore: Any, *, ecrire: bool) -> tuple[Any, str, dict]:
     AVANT tout appel au connecteur ; chaque refus nommé."""
     from ..datastore import jetons
     from ..datastore.core import DatastoreNotFound
+    from ..datastore.errors import TableauParNom
     datastore = str(datastore)
     try:
         store, adresse = pr.tableau(datastore, ecrire=ecrire)
         return store, adresse, store.get_schema(adresse) or {}
     except jetons.JetonMalPlace as e:
         raise TableauIndisponible("invalid_datastore", str(e))
+    except TableauParNom as e:
+        raise TableauIndisponible("datastore_by_name", f"{e.indice} Nothing was called.")
     except DatastoreNotFound:
         raise TableauIndisponible("datastore_not_found",
                                   f"Table `{datastore}` not found. Nothing was called.")

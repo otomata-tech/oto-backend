@@ -1263,6 +1263,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # La clé d'un tour au coût (dédoublonnage d'un rapport rejoué) : même régime,
     # révision 20261113_1200_tours_au_cout_cle ou à la main.
     index_concurrent.poser_au_demarrage(conn, index_releve.TOUR_AU_COUT)
+    # Les désignations d'un tableau par son nom (mesure avant le retrait du nom) : même
+    # régime, révision 20261120_2210_tableau_par_nom ou à la main.
+    index_concurrent.poser_au_demarrage(conn, index_releve.TABLEAU_PAR_NOM)
     # Application OAuth cliente porteuse du grant (`azp` du JWT — claude.ai,
     # Claude Code, ChatGPT…) : axe de télémétrie par surface, extension OTO-LOCALE.
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS client_id TEXT")

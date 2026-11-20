@@ -41,8 +41,8 @@ def table(live):
     """Une colonne-tableau, et une ligne dont un élément porte une couche."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store("sub-test")
     st.set_schema(ns, SCHEMA)
     row = st.append_row(ns, {"siren": "377768379", "contacts": [

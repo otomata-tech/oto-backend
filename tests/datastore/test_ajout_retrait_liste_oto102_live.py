@@ -84,6 +84,7 @@ def _table(**data) -> tuple:
     from oto_mcp.datastore.core import make_store
     ns = "t102-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    ns = str(ns_id)
     st = make_store(SUB)
     st.set_schema(ns, SCHEMA)
     rid = st.append_row(ns, {"siren": "552032534", **data})["_id"]
@@ -254,6 +255,7 @@ def test_les_dates_ajoutees_et_retirees_se_normalisent(base):
     from oto_mcp.datastore.core import make_store
     ns = "t102d-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    ns = str(ns_id)
     st = make_store(SUB)
     st.set_schema(ns, schema_dates)
     rid = st.append_row(ns, {"jours[+]": ["04/10/2026", "2026-10-05"]})["_id"]

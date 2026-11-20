@@ -559,11 +559,14 @@ def preparer(datastore: Any, *, questions: dict, state_fields: list, output: dic
     from ..datastore import jetons
     from ..datastore import par_reference as pr
     from ..datastore.core import DatastoreNotFound, DatastoreReadOnly
+    from ..datastore.errors import TableauParNom
     try:
         store, adresse = pr.tableau(datastore, ecrire=not dry_run)
         schema = store.get_schema(adresse)
     except jetons.JetonMalPlace as e:
         raise _bad(str(e))
+    except TableauParNom as e:
+        raise _bad(f"{e.indice} Nothing sent.")
     except DatastoreNotFound:
         raise _bad(f"Table `{datastore}` not found. Nothing sent.")
     except DatastoreReadOnly:

@@ -47,11 +47,11 @@ def test_le_geste_conseille_passe_sur_chaque_type(live, ftype):
     from oto_mcp.datastore.core import make_store
     sub = "usr_rien_trouve_140"
     db.upsert_user(sub, email=f"{sub}@t.invalid", name=sub)
-    ns = "t140-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", sub, ns)
+    nom = "t140-" + uuid.uuid4().hex[:6]
+    ns = str(db.create_datastore("user", sub, nom))
     st = make_store(sub)
     # Un lien vise un tableau que l'auteur lit : la cible est née avec la colonne.
-    cible = db.create_datastore("user", sub, ns + "-cible") if ftype == "ref" else 1
+    cible = db.create_datastore("user", sub, nom + "-cible") if ftype == "ref" else 1
     st.set_schema(ns, {"fields": [_colonne(ftype, cible)]})
     rid = st.append_row(ns, {"c": {"valeur": "@empty", "comment": "annuaire : rien"}})["_id"]
     assert st.get_row(ns, rid, layers="nested")["c"]["comment"] == "annuaire : rien"

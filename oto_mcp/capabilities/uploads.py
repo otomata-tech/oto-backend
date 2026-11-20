@@ -136,6 +136,10 @@ def _datastore_target(sub: str, inp, fmt: str) -> dict:
     if not (inp.datastore and inp.datastore.strip()):
         raise AuthzDenied(400, "missing_datastore", "`datastore` requis.")
     ns = inp.datastore.strip()
+    from ..datastore.errors import est_un_nom_de_tableau
+    if est_un_nom_de_tableau(ns):
+        from .datastore.common import refus_nom_de_tableau
+        raise refus_nom_de_tableau(ns)
     from ..datastore import core as ds  # lazy : évite tout cycle d'import au boot
     store = ds.make_store(sub)
     try:

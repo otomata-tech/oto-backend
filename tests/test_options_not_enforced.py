@@ -98,8 +98,8 @@ def _table(st, schema):
     import uuid
 
     from oto_mcp import db
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-test", ns)
+    ns = str(db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6]))
+
     out = st.set_schema(ns, schema)
     return ns, out
 

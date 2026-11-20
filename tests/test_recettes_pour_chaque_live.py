@@ -84,9 +84,9 @@ def _tableau(schema: dict, lignes: list[dict] = (), nom: str = "") -> int:
     nom = nom or f"fe-{uuid.uuid4().hex[:6]}"
     ns_id = db.create_datastore("user", SUB, nom)
     store = make_store(SUB)
-    store.set_schema(nom, schema)
+    store.set_schema(str(ns_id), schema)
     if lignes:
-        store.write_rows(nom, list(lignes))
+        store.write_rows(str(ns_id), list(lignes))
     return ns_id
 
 
@@ -388,17 +388,6 @@ def test_des_appels_rates_comptent_dans_la_depense(serveur, monkeypatch):
     assert recu["stopped"] == "spend_cap" and len(vus) == 2 and recu["units"] == 2
 
 
-def test_le_parent_ne_peut_pas_etre_la_cible_meme_par_son_nom(serveur):
-    from oto_mcp.recipes import moteur
-    m, appels = serveur
-    nom = f"fe-{uuid.uuid4().hex[:6]}"
-    parents = _tableau({"key": "slug", "fields": [{"key": "slug", "type": "text"}]},
-                       [{"slug": "acme"}], nom=nom)
-    with pytest.raises(moteur.RecetteRefusee) as e:
-        _executer(m, _corps(parents), nom)
-    assert e.value.code == "for_each_same_table" and appels == []
-
-
 def test_une_epreuve_courte_ne_surveille_rien():
     from oto_mcp.recipes import moteur
     assert moteur.surveillees({"fill": {"name": 1.0}, "rows_built": 1}) == []
@@ -430,15 +419,15 @@ def test_un_filtre_refuse_ne_declare_pas_la_colonne_d_etat(serveur):
     from oto_mcp.datastore.core import make_store
     from oto_mcp.recipes import moteur
     m, appels = serveur
-    nom = f"fe-{uuid.uuid4().hex[:6]}"
     parents = _tableau({"key": "slug", "fields": [{"key": "slug", "type": "text"}]},
-                       [{"slug": "acme"}], nom=nom)
+                       [{"slug": "acme"}])
     corps = _corps(parents, for_each={"datastore": parents, "status_column": "people_status",
                                       "filter": {"slug": {"regex": "a.*"}}})
     with pytest.raises(moteur.RecetteRefusee) as e:
         _executer(m, corps, _tableau(CIBLE))
     assert e.value.code == "invalid_filter" and appels == []
-    cles = {f["key"] for f in make_store(SUB).get_schema(nom).get("fields") or []}
+    cles = {f["key"] for f in make_store(SUB).get_schema(str(parents)).get("fields") or []}
+
     assert "people_status" not in cles
 
 

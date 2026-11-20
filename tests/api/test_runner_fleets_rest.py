@@ -142,7 +142,7 @@ def flotte(client, org):
     """Une flotte déclarée PAR LA ROUTE — pas insérée en base à la main."""
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "model": MODELE_SERVI, "label": "passage d'essai", "procedure": "enrichissement",
-        "tools": ["oto_kb"], "namespace": "un-tableau", "row_filter": {"lot": "a"},
+        "tools": ["oto_kb"], "namespace": str(org["ns"]), "row_filter": {"lot": "a"},
         # Un modèle du CATALOGUE : depuis le 12/09/2026 il part avec les travaux,
         # donc une chaîne libre est refusée à la déclaration.
         "model": "claude-sonnet-5",
@@ -230,7 +230,7 @@ def test_armer_n_ecrit_ni_ne_sert_plus_le_denominateur(client, org):
     h = _h(org["membre"])
     fid = client.post(ROUTE, headers=h, json={
         "op": "create", "model": MODELE_SERVI, "label": "sans-denominateur", "procedure": "p",
-        "tools": ["oto_kb"], "namespace": "un-tableau"}).json()["fleet"]["id"]
+        "tools": ["oto_kb"], "namespace": str(org["ns"])}).json()["fleet"]["id"]
     with _connect() as c:
         c.execute("UPDATE runner_fleets SET rows_at_launch = 12 WHERE id = %s", (fid,))
         c.commit()
@@ -289,19 +289,20 @@ def test_la_cible_est_gardee_par_son_identifiant_sur_la_route(flotte, org):
     assert flotte["namespace"] == str(org["ns"])
 
 
-def test_une_cible_introuvable_ou_ambigue_est_refusee_sur_la_route(client, org):
+def test_une_cible_introuvable_ou_par_nom_est_refusee_sur_la_route(client, org):
     """#1067 : la cible se résout une fois, à la déclaration, dans la portée du
-    déclarant — rien qui y réponde, ou deux tableaux au même rang, est refusé."""
+    déclarant — un numéro sans tableau est introuvable, et un nom est refusé, même
+    porté par deux tableaux."""
     from oto_mcp import db, group_store
     base = {"op": "create", "model": MODELE_SERVI, "label": "x", "procedure": "p", "tools": ["oto_kb"]}
-    assert _refus(client, org, {**base, "namespace": "nulle-part"}
+    assert _refus(client, org, {**base, "namespace": "999999999"}
                   ) == (404, "datastore_not_found")
     for i in (1, 2):
         g = group_store.create_group(org["id"], f"equipe-doublon-{i}")
         group_store.add_group_member(g, org["membre"])
         db.create_datastore("group", str(g), "doublon")
     assert _refus(client, org, {**base, "namespace": "doublon"}
-                  ) == (409, "datastore_ambigu")
+                  ) == (400, "datastore_by_name")
 
 
 def test_un_perimetre_sans_tableau_est_refuse_sur_la_route(client, org):

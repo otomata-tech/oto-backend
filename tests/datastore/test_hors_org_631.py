@@ -76,8 +76,8 @@ def _outil(nom: str):
 
 def _table(org_id: int) -> tuple[str, int]:
     from oto_mcp import db
-    ns = "copie-eval-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("org", str(org_id), ns)
+    ns_id = db.create_datastore("org", str(org_id), "copie-eval-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     db.set_datastore_schema(ns_id, {"fields": [{"key": "siren"}, {"key": "statut"}]})
     for i in range(2):
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"5511100{i}", "statut": "a_faire"})
@@ -195,8 +195,7 @@ def test_sans_reservation_le_refus_nomme_les_deux_orgs_et_l_axe(surface):
 
 def test_un_nom_qui_n_existe_nulle_part_reste_un_refus_nu(surface):
     """On ne suggère que le tableau DEMANDÉ — pas une org au hasard."""
-    msg = _refus({"datastore": "n-existe-pas-" + uuid.uuid4().hex[:6],
-                  "row": {"siren": "999"}})
+    msg = _refus({"datastore": "999999999", "row": {"siren": "999"}})
     assert "unknown" in msg and "_org=" not in msg, msg
 
 

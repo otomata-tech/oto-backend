@@ -117,7 +117,7 @@ def test_un_homonyme_apparu_apres_la_declaration_ne_detourne_pas_l_automatisatio
     compte, l'état et le travail suivent le tableau déclaré, pas l'homonyme."""
     nom = f"vivier_{monde['u']}"
     ns_org = _tableau(("org", monde["org"]), nom, 2)
-    f = _declarer(monde, nom)
+    f = _declarer(monde, str(ns_org))
 
     ns_perso = _tableau(("user", monde["moi"]), nom, 5)
     assert ns_perso != ns_org
@@ -131,21 +131,23 @@ def test_un_homonyme_apparu_apres_la_declaration_ne_detourne_pas_l_automatisatio
     assert f["namespace"] == str(ns_org), "gardée par son identifiant"
 
 
-def test_un_nom_ambigu_a_la_declaration_est_refuse_et_rien_n_est_ecrit(monde):
+def test_un_nom_a_la_declaration_est_refuse_et_rien_n_est_ecrit(monde):
+    """Même partagé par deux tableaux, un nom ne se résout plus : refus déclaré avant
+    toute résolution, qui dit de passer le numéro."""
     from oto_mcp import db
     nom = f"doublon_{monde['u']}"
     for e in monde["equipes"]:
         _tableau(("group", e), nom, 1)
     with pytest.raises(AuthzDenied) as e:
         _declarer(monde, nom)
-    assert (e.value.status, e.value.code) == (409, "datastore_ambigu")
+    assert (e.value.status, e.value.code) == (400, "datastore_by_name")
     assert nom in e.value.message
     assert db.list_fleets(monde["org"]) == []
 
 
 def test_un_tableau_introuvable_a_la_declaration_est_refuse(monde):
     with pytest.raises(AuthzDenied) as e:
-        _declarer(monde, f"nulle_part_{monde['u']}")
+        _declarer(monde, "999999999")
     assert (e.value.status, e.value.code) == (404, "datastore_not_found")
 
 

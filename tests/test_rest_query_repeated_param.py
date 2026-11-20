@@ -219,8 +219,9 @@ async def test_data_rows_un_filters_repete_est_refuse_pas_tronque(autz_sans_base
     cap = next(c for c in CAPABILITIES if c.key == "me.datastore.list_rows")
     binding = cap.rest_bindings()[0]
     code, corps = await _get(
-        _handler_de(cap, binding), "/api/me/data/vivier/rows",
+        _handler_de(cap, binding), "/api/me/data/12/rows",
         'filters=[{"field":"a","op":"eq","value":1}]&filters=[{"field":"b","op":"eq","value":2}]',
-        {"datastore": "vivier"})
+        {"datastore": "12"})
+
     assert code == 400 and corps["error"] == "repeated_scalar", corps
     assert "filters" in corps["detail"]

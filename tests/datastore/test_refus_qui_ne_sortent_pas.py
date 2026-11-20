@@ -137,8 +137,7 @@ def test_une_forme_non_prevue_de_transitions_est_un_REFUS(live, forme):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
 
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-refus", ns)
+    ns = str(db.create_datastore("user", "sub-refus", "t-" + uuid.uuid4().hex[:6]))
     st = make_store("sub-refus")
 
     with pytest.raises(ValueError) as e:
@@ -155,8 +154,7 @@ def test_la_forme_JUSTE_passe_toujours(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
 
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-refus", ns)
+    ns = str(db.create_datastore("user", "sub-refus", "t-" + uuid.uuid4().hex[:6]))
     st = make_store("sub-refus")
     _pose(st, ns, {"a": ["b"]})
 
@@ -169,8 +167,7 @@ def test_les_refus_DEJA_bons_du_lifecycle_ne_sont_pas_touches(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
 
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-refus", ns)
+    ns = str(db.create_datastore("user", "sub-refus", "t-" + uuid.uuid4().hex[:6]))
     st = make_store("sub-refus")
 
     for schema, attendu in (

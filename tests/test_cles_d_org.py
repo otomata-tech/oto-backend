@@ -94,7 +94,7 @@ def _cree(body):
 
 
 def test_la_cle_est_portee_par_le_compte_de_l_org_et_verrouillee(admin):
-    code, out = _cree({"label": "crm", "scopes": {"namespaces": {"clients": "write"}}})
+    code, out = _cree({"label": "crm", "scopes": {"namespaces": {"12": "write"}}})
     assert code == 201, out
     assert out["token"] == "oto_CLE" and out["scopes"] == {"namespaces": {"12": "write"}}
     _, sub, kw = admin[-1]
@@ -107,7 +107,7 @@ def test_la_cle_est_portee_par_le_compte_de_l_org_et_verrouillee(admin):
 def test_la_portee_se_range_dans_l_org_de_la_cle(admin):
     """Quelle que soit l'org active de l'admin : le store voit le compte de l'org,
     verrouillé sur elle, et le verrou ne survit pas à l'émission."""
-    _cree({"scopes": {"namespaces": {"clients": "read"}}})
+    _cree({"scopes": {"namespaces": {"12": "read"}}})
     (vus_store,) = [e[1] for e in admin if e[0] == "store"]
     assert vus_store == [("org-2", verrou_org.Verrou(sub="org-2", org_id=2))]
     assert verrou_org.courant() is None
@@ -115,7 +115,7 @@ def test_la_portee_se_range_dans_l_org_de_la_cle(admin):
 
 @pytest.mark.parametrize("scopes,erreur", [
     (None, "scopes_required"), ({"runner": True}, "invalid_scopes"),
-    ({"namespaces": {"inconnu": "read"}}, "unknown_namespace")])
+    ({"namespaces": {"999": "read"}}, "unknown_namespace")])
 def test_une_cle_d_org_est_toujours_portee(admin, scopes, erreur):
     code, out = _cree({"scopes": scopes})
     assert code == 400 and out["error"] == erreur, out
@@ -256,12 +256,12 @@ def test_archiver_l_org_revoque_ses_cles(base):
 def test_une_cle_d_org_sans_echeance_recoit_le_plafond(admin):
     """Une clé d'org confiée à une intégration naissait non expirante ; elle reçoit
     désormais 90 jours, rendus ET écrits."""
-    code, out = _cree({"scopes": {"namespaces": {"clients": "read"}}})
+    code, out = _cree({"scopes": {"namespaces": {"12": "read"}}})
     assert code == 201 and out["ttl_days"] == 90, out
     assert [e for e in admin if e[0] == "create"][-1][2]["ttl_days"] == 90
 
 
 def test_une_cle_d_org_au_dela_du_plafond_est_refusee(admin):
-    code, out = _cree({"scopes": {"namespaces": {"clients": "read"}}, "ttl_days": 365})
+    code, out = _cree({"scopes": {"namespaces": {"12": "read"}}, "ttl_days": 365})
     assert code == 400 and out["error"] == "token_ttl_too_long", out
     assert not [e for e in admin if e[0] == "create"]

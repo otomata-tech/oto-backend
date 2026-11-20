@@ -316,3 +316,56 @@ def fermer_sessions(sub: str) -> dict:
                    if _appel("DELETE", f"{compte}/grants/{quote(gid, safe='')}")
                    is not None)
     return {"sessions": fermees, "grants": revoques}
+
+
+class SuppressionInachevee(RuntimeError):
+    """Logto n'a pas supprimé le compte. Levée telle quelle, jamais avalée : l'effacement
+    d'org qui l'appelle reste à refaire (`docs/effacement-d-org.md`)."""
+
+
+def supprimer_compte(sub: str) -> bool:
+    """Supprime le compte `sub` de NOTRE annuaire (Management API `DELETE /api/users/{id}`).
+    Rend True s'il a été supprimé, False s'il n'existait déjà plus (404 : l'état voulu
+    est atteint). Lève `SuppressionInachevee` sur tout autre refus.
+
+    Le seul appelant est l'effacement d'une org, pour les comptes dont c'était la SEULE
+    org (décision du 12/11/2026) : un geste irréversible, posé après la confirmation du
+    titulaire et le délai de grâce — jamais un raccourci de « mise en pause »
+    (`docs/comptes-en-pause.md`)."""
+    import requests
+    from urllib.parse import quote
+
+    from ..tenancy import require_primary_tenant
+    require_primary_tenant(sub, "suppression d'un compte Logto")
+    try:
+        tok = _mgmt_token()
+        r = requests.delete(f"{_logto_base()}/api/users/{quote(sub, safe='')}",
+                            headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
+                            timeout=_DELAI_REQUETE_S)
+    except (RuntimeError, requests.RequestException) as e:
+        raise SuppressionInachevee(f"suppression du compte {sub} : {e}") from e
+    if r.status_code == 404:
+        return False
+    if r.status_code >= 400:
+        raise SuppressionInachevee(f"suppression du compte {sub} : DELETE → {r.status_code}")
+    return True
+
+
+def supprimer_organisation(logto_org_id: str) -> bool:
+    """Supprime l'organisation Logto miroir d'une org (`mfa_mirror`). False = déjà
+    partie (404). Lève `SuppressionInachevee` sur tout autre refus."""
+    import requests
+    from urllib.parse import quote
+    try:
+        tok = _mgmt_token()
+        r = requests.delete(f"{_logto_base()}/api/organizations/{quote(logto_org_id, safe='')}",
+                            headers={"Authorization": f"Bearer {tok}", "User-Agent": _UA},
+                            timeout=_DELAI_REQUETE_S)
+    except (RuntimeError, requests.RequestException) as e:
+        raise SuppressionInachevee(f"suppression de l'organisation {logto_org_id} : {e}") from e
+    if r.status_code == 404:
+        return False
+    if r.status_code >= 400:
+        raise SuppressionInachevee(
+            f"suppression de l'organisation {logto_org_id} : DELETE → {r.status_code}")
+    return True

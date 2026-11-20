@@ -66,7 +66,8 @@ Paliers `member < admin < super_admin` ; clé résolue à chaque appel par le **
 (`docs/roles-and-resolution.md`, `docs/connector-vault.md`) · ⚠️ `connector_settings` est en clair et **refuse toute clé
 de forme secret** : un secret d'application OAuth de l'instance va au coffre (`auth/app_instance`, `docs/connector-vault.md`).
 **Mettre un compte en pause** (03/09/2026) : le cran qui manquait entre « vivant » et « supprimé » — et **la
-suppression n'existe pas** comme geste de produit, le seul `DELETE FROM users` étant l'étape 4 de `migrate_sub`. Un
+suppression d'un compte n'existe pas** comme geste à part : hors l'étape 4 de `migrate_sub`, un compte ne part
+qu'avec l'**effacement de sa seule org** (`org.erasure`, `docs/effacement-d-org.md`). Un
 compte en pause ne peut plus rien faire **dès la requête suivante, jeton déjà émis compris** (les deux branches
 d'`api.base._authenticate`, la levée d'`upsert_user`, et un middleware MCP sur **`on_request`** — pas `on_call_tool`,
 sinon un compte sorti lirait encore les instructions d'org du handshake) · ⚠️ **rien n'est détruit ni détaché** :
@@ -145,7 +146,7 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
   n'est pas un droit à obtenir · ⚠️ **une colonne peut EXIGER sa provenance** (`required_layers: ["comment"]`, oto#75) : la valeur non
   vide ne s'écrit pas sans la couche, sur les deux faces — capacité livrée, **aucun tableau n'exige de couche**
   (quatre la déclarent VIDE, ce qui n'exige rien et **reste accepté à la pose**) · ⚠️ **un tableau s'adresse par son
-  NUMÉRO** (`ns_id`) : le nom résout encore jusqu'au 08/11/2026 et chaque réponse obtenue par lui le dit, mais les remises (réservation, écriture,
+  NUMÉRO** (`ns_id`) : un nom est REFUSÉ depuis le 08/11/2026 (`400 datastore_by_name`, `datastore/errors.TableauParNom`, aucun repli) ; les remises (réservation, écriture,
   libération, page, schéma) portent le numéro et `namespace` y est le nom CANONIQUE, plus l'écho de l'adresse reçue
   (`docs/datastore.md`).
 - **Browser & cookie-bound** (ADR 0026) : aucun browser sur la box — **Browserbase** pour l'API privée cookie-bound,
@@ -244,6 +245,9 @@ sur un tiers (`boucles_de_fond.py`, `config.est_la_production()`) · **détails 
 - `limites-de-depense.md` — les limites de dépense du jour (org, équipe, personne) : le commerce décide, le cœur
   applique la liste poussée aux seules clés refacturées (`daily_spend_limit`), fail-open, et rend au commerce la
   personne de chaque appel
+- `effacement-d-org.md` — EFFACER une org (RGPD art. 17) : demande, lien au titulaire, 7 j de grâce, purge
+  hors processus par le classement de l'export + une décision écrite par table qu'il laisse (refus sinon),
+  pierre tombale pour les pièces comptables, comptes dont c'était la seule org, archives froides réécrites
 - `contributions-forks.md` — recevoir une PR de fork : trois pièges, pin oto-core sur le tronc
 - `deploiement.md` — le modèle tronc unique : main = tronc (CI seule), tag = prod, garde « tronc vert », domaines servis, pièges du tag, gestes d'exploitation
 - `namespace-fr.md` — sources `fr_`, deux stocks SIRENE, `dirigeants` vide à trois lectures, `data.oto.zone`

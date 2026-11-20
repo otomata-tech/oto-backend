@@ -33,8 +33,8 @@ portée nommait le tableau par son nom, comparé littéralement au chemin : un
 renommage — ou un tableau qui reprenait un nom libéré — déplaçait ce que le jeton
 atteignait. L'identifiant ne bouge pas. L'émission reçoit encore un nom et le range
 sous son identifiant (`capabilities/api_tokens`) ; une URL qui adresse le tableau par
-son nom se juge sur l'identifiant que ce nom résout (`api.base`), le temps du
-préavis (`deprecations.RETRAIT_NOM_DE_TABLEAU`). ⚠️ Une portée déjà émise qui nomme
+son nom est refusée depuis le 08/11/2026 (`api.base`, `datastore_by_name`), sans rien
+résoudre. ⚠️ Une portée déjà émise qui nomme
 encore un tableau par son NOM n'ouvre rien et le DIT (`noms_de_tableau`) : elle se
 migre (`scripts/tableaux_par_numero.py`), elle ne se devine pas.
 """
@@ -358,14 +358,13 @@ def projects(scopes: Optional[dict]) -> frozenset:
     return frozenset((scopes.get(PROJECTS) or {}).keys())
 
 
-def authorize(scopes: Optional[dict], method: str, path: str,
-              id_du_tableau: Optional[int] = None) -> bool:
+def authorize(scopes: Optional[dict], method: str, path: str) -> bool:
     """La requête `(method, path)` est-elle dans la portée ? Fail-closed.
 
     `scopes` None ⇒ jeton non porté ⇒ True (le gate ne s'applique qu'aux jetons
-    portés ; les droits du sub restent seuls juges en aval). `id_du_tableau` : ce que
-    RÉSOUT le nom de tableau écrit dans le chemin (`tableau_du_chemin`), résolu par
-    l'appelant — un nom qui ne résout rien n'ouvre rien.
+    portés ; les droits du sub restent seuls juges en aval). Un tableau se juge sur
+    l'identifiant écrit dans le chemin : un NOM n'ouvre rien (l'appelant le refuse
+    avant, `api.base`).
     """
     if scopes is None:
         return True
@@ -396,9 +395,6 @@ def authorize(scopes: Optional[dict], method: str, path: str,
         if not m:
             continue
         res = unquote(m.group("res"))
-        if family == NAMESPACES and not res.isdigit():
-            # Un NOM dans le chemin : c'est l'identifiant qu'il résout qui est jugé.
-            res = str(id_du_tableau) if id_du_tableau is not None else ""
         granted = ((scopes or {}).get(family) or {}).get(res)
         return granted is not None and needed in _IMPLIES[granted]
     return False

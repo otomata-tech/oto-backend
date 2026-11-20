@@ -89,11 +89,11 @@ def _outil(nom: str):
 
 def _table(org_id: int) -> tuple[str, int]:
     from oto_mcp import db
-    ns = "campagne-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("org", str(org_id), ns)
+    ns_id = db.create_datastore("org", str(org_id), "campagne-" + uuid.uuid4().hex[:6])
     db.set_datastore_schema(ns_id, {"fields": [{"key": "siren"}, {"key": "statut"}]})
     db.datastore_insert_row(ns_id, "r0", {"siren": "551110001", "statut": "a_faire"})
-    return ns, ns_id
+    return str(ns_id), ns_id
+
 
 
 def _run(org_id, sub: str = SUB) -> str:

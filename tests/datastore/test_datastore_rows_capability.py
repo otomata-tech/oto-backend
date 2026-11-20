@@ -27,8 +27,8 @@ from _datastore_rest import Boom, call, cap, stub_authz
 from oto_mcp.capabilities.datastore import rows as dsr
 from oto_mcp.datastore.core import DatastoreNotFound, DatastoreReadOnly, RowNotFound
 
-NS = {"datastore": "vivier"}
-ROW = {"datastore": "vivier", "row_id": "r1"}
+NS = {"datastore": "174"}
+ROW = {"datastore": "174", "row_id": "r1"}
 
 
 class _Store:
@@ -287,7 +287,7 @@ def test_une_colonne_qui_sappelle_comme_un_champ_dapi_reste_une_donnee(store):
     call("me.datastore.append_row", path_params=NS,
          body={"datastore": "pas le tableau", "limit": 3})
     _, args, _ = store.calls[0]
-    assert args[0] == "vivier"                       # le chemin gagne
+    assert args[0] == "174"                          # le chemin gagne
     assert args[1] == {"datastore": "pas le tableau", "limit": 3}
 
 

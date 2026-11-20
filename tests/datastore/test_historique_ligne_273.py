@@ -66,8 +66,8 @@ LIBRE = {"fields": [{"key": k} for k in ("n", "nom", "a", "b")]}
 
 def _table(schema: dict | None = None) -> tuple[str, int]:
     from oto_mcp import db
-    ns = f"historique-{uuid.uuid4().hex[:6]}"
-    ns_id = db.create_datastore("user", A, ns)
+    ns_id = db.create_datastore("user", A, f"historique-{uuid.uuid4().hex[:6]}")
+    ns = str(ns_id)
     db.set_datastore_schema(ns_id, schema or LIBRE)
     return ns, ns_id
 

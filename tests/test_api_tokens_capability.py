@@ -33,7 +33,7 @@ from oto_mcp.capabilities import _rest_adapter, api_tokens as at
 _JETONS = [{"id": 7, "label": "cli", "created_at": "2026-08-01", "last_used_at": None,
             "expires_at": None, "scopes": None, "revoked_at": None,
             "revoked_by": None, "revoked_reason": None, "parent_id": None}]
-_PORTEE = {"namespaces": {"clients": "read"}}
+_PORTEE = {"namespaces": {"12": "read"}}
 
 
 # --- 1. LA garde : un jeton ne fabrique pas de jeton ------------------------
@@ -161,33 +161,31 @@ def test_un_tableau_que_le_PORTEUR_ne_voit_pas_est_refuse(monkeypatch, socle,
                                                           super_admin, cle, pp):
     """Un tableau que le porteur ne voit pas est refusé : sinon le jeton serait muet
     et on le croirait branché. Depuis oto#158 le palier admin aussi : la portée se
-    RANGE par identifiant, dans le catalogue du porteur — pas de l'émetteur — et un
-    nom qui n'y désigne rien n'a pas d'identifiant à ranger."""
-    portee = {"namespaces": {"inconnu": "read"}}
+    RANGE par identifiant, dans le catalogue du porteur — pas de l'émetteur."""
+    portee = {"namespaces": {"999": "read"}}
     code, out = call(cle, path_params=pp, body={"scopes": portee})
     assert code == 400 and out["error"] == "unknown_namespace"
-    assert "inconnu" in out["detail"]
+    assert "999" in out["detail"]
 
 
-def test_un_nom_est_RANGE_sous_son_identifiant_et_la_reponse_le_rend(monkeypatch, socle):
+def test_un_identifiant_est_range_tel_quel_et_la_reponse_le_rend(monkeypatch, socle):
     """oto#158 : la portée nomme un tableau par son identifiant — un renommage ne
-    déplace plus ce que le jeton atteint. L'émission accepte encore un nom le temps du
-    préavis, et rend la portée RANGÉE : c'est ce que l'appelant doit envoyer ensuite."""
+    déplace plus ce que le jeton atteint. La réponse rend la portée RANGÉE."""
     stub_authz(monkeypatch)
-    code, out = call("me.token.create",
-                     body={"scopes": {"namespaces": {"clients": "read"}}})
+    code, out = call("me.token.create", body={"scopes": {"namespaces": {"12": "read"}}})
     assert code == 201, out
     assert out["scopes"] == {"namespaces": {"12": "read"}}
     assert socle[-1][4] == out["scopes"], "la portée rangée est celle qui est stockée"
-    code, out = call("me.token.create", body={"scopes": {"namespaces": {"12": "read"}}})
-    assert code == 201 and out["scopes"] == {"namespaces": {"12": "read"}}
 
 
-def test_un_nom_que_portent_DEUX_tableaux_est_refuse_jamais_tranche(monkeypatch, socle):
+@pytest.mark.parametrize("nom", ["clients", "doublon"])
+def test_un_NOM_de_tableau_est_refuse_sans_rien_resoudre(monkeypatch, socle, nom):
+    """Depuis le 08/11/2026 un nom de tableau est refusé à l'émission, même s'il désigne
+    un seul tableau visible : `datastore_by_name`, aucun jeton émis."""
     stub_authz(monkeypatch)
-    code, out = call("me.token.create",
-                     body={"scopes": {"namespaces": {"doublon": "read"}}})
-    assert code == 400 and out["error"] == "ambiguous_namespace"
+    code, out = call("me.token.create", body={"scopes": {"namespaces": {nom: "read"}}})
+    assert code == 400 and out["error"] == "datastore_by_name", out
+    assert f"`{nom}` is a table NAME" in out["detail"]
     assert socle == []
 
 

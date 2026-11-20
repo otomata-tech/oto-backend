@@ -1202,7 +1202,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_admin_key_grant": {"lire": "list", "envoyer": "grant", "detruire": "revoke"},
     "oto_admin_legal_proof": "lire",
     "oto_admin_model_spend": "lire",
-    "oto_admin_monitoring": {"lire": "summary rest rest_calls connectors transport funnel calls call runs run gaps tool_quality agents_en_echec connecteurs_orphelins"},
+    "oto_admin_monitoring": {"lire": "summary rest rest_calls connectors transport funnel calls call runs run gaps tool_quality agents_en_echec connecteurs_orphelins journal_archive"},
     "oto_admin_org": {"lire": "list get entitlements", "ecrire": "create", "detruire": "archive"},
     "oto_admin_org_member": {"lire": "list connectors events", "envoyer": "add", "detruire": "remove set_role"},
     "oto_admin_platform_balances": "lire",

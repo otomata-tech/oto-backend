@@ -247,8 +247,8 @@ def _bail(ns_id, row_id) -> dict:
 
 def test_la_ligne_liberee_a_t1_se_reserve_a_nouveau_a_t2(surface):
     from oto_mcp import db
-    ns = "file-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "file-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     db.datastore_insert_row(ns_id, "r0", {"siren": "551110000", "statut": "a_enrichir"})
 
     _jobs(op="enqueue", kind="start",

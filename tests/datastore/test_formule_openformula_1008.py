@@ -404,9 +404,9 @@ def test_poser_une_formule_marque_puis_le_backfill_recalcule(live):
     """Depuis oto-backend#1008 v2 (backfill asynchrone, mesuré au-delà du délai
     client MCP sur un tableau de 8910 lignes) : `set_schema` ne recalcule plus
     SYNCHRONE — il marque `formula_dirty`, et rend. Le worker de fond draine."""
-    ns = "t-" + uuid.uuid4().hex[:6]
     from oto_mcp import db
-    ns_id = db.create_datastore("user", "sub-test-1008", ns)
+    ns_id = db.create_datastore("user", "sub-test-1008", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = _store_1008()
     st.set_schema(ns, {"fields": [{"key": "code", "type": "text"}]})
     r1 = st.append_row(ns, {"code": "AA001"})
@@ -431,9 +431,9 @@ def test_poser_une_formule_marque_puis_le_backfill_recalcule(live):
 
 
 def test_backfill_ne_touche_jamais_la_couche_origine(live):
-    ns = "t-" + uuid.uuid4().hex[:6]
     from oto_mcp import db
-    ns_id = db.create_datastore("user", "sub-test-1008", ns)
+    ns_id = db.create_datastore("user", "sub-test-1008", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = _store_1008()
     st.set_schema(ns, {"fields": [
         {"key": "code", "type": "text"}, {"key": "zone", "type": "text"}]})
@@ -449,9 +449,9 @@ def test_backfill_ne_touche_jamais_la_couche_origine(live):
 
 
 def test_modifier_le_texte_de_la_formule_recalcule_a_nouveau(live):
-    ns = "t-" + uuid.uuid4().hex[:6]
     from oto_mcp import db
-    ns_id = db.create_datastore("user", "sub-test-1008", ns)
+    ns_id = db.create_datastore("user", "sub-test-1008", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = _store_1008()
     st.set_schema(ns, _schema_zones())
     row = st.append_row(ns, {"code": "AA001"})
@@ -470,9 +470,8 @@ def test_modifier_le_texte_de_la_formule_recalcule_a_nouveau(live):
 
 
 def test_reposer_la_meme_formule_ne_recalcule_rien(live):
-    ns = "t-" + uuid.uuid4().hex[:6]
     from oto_mcp import db
-    db.create_datastore("user", "sub-test-1008", ns)
+    ns = str(db.create_datastore("user", "sub-test-1008", "t-" + uuid.uuid4().hex[:6]))
     st = _store_1008()
     st.set_schema(ns, _schema_zones())
     st.append_row(ns, {"code": "AA001"})
@@ -489,9 +488,8 @@ def test_get_schema_dit_le_statut_du_backfill_en_cours(live):
     from oto_mcp.capabilities.datastore import schema as CAP
     from oto_mcp.capabilities._types import ResolvedCtx
 
-    ns = "t-" + uuid.uuid4().hex[:6]
     from oto_mcp import db
-    db.create_datastore("user", "sub-test-1008", ns)
+    ns = str(db.create_datastore("user", "sub-test-1008", "t-" + uuid.uuid4().hex[:6]))
     st = _store_1008()
     st.set_schema(ns, {"fields": [{"key": "code", "type": "text"}]})
     st.append_row(ns, {"code": "AA001"})
@@ -608,9 +606,9 @@ def test_le_scalaire_en_vide_assume_reste_vide():
 def test_counta_de_bout_en_bout_sur_ce_que_le_store_range(live):
     """Les deux cas rapportés (`@empty` nu, `@empty` en cellule à couches), écrits
     par la voie normale : le store range l'enveloppe, puis la formule la lit."""
-    ns = "t-" + uuid.uuid4().hex[:6]
     from oto_mcp import db
-    ns_id = db.create_datastore("user", "sub-test-1008-counta", ns)
+    ns_id = db.create_datastore("user", "sub-test-1008-counta", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = __import__("oto_mcp.datastore.core", fromlist=["make_store"]).make_store(
         "sub-test-1008-counta")
     st.set_schema(ns, {"fields": CHAMPS_HAS_TEL + [

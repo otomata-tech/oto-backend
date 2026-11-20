@@ -26,8 +26,8 @@ import pytest
 @pytest.fixture
 def table(live):
     from oto_mcp import db
-    ns = "q-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "q-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     # `societe` déclarée : une colonne non déclarée est refusée (oto#124).
     _store().set_schema(ns, {"fields": [{"key": "societe", "type": "text"}]})
     for i in range(3):
@@ -369,17 +369,10 @@ def test_a_free_row_hears_nothing_either(table):
 # titulaires légitimes refusés sur le chemin principal, sans un banc pour le dire.
 
 def _table_a_cle(ns_id: int) -> None:
-    _store().set_schema(_ns_of(ns_id), {"key": "siren",
-                                        "fields": [{"key": "siren", "type": "text"},
-                                                   {"key": "societe", "type": "text"}]})
+    _store().set_schema(str(ns_id), {"key": "siren",
+                                     "fields": [{"key": "siren", "type": "text"},
+                                                {"key": "societe", "type": "text"}]})
 
-
-def _ns_of(ns_id: int) -> str:
-    from oto_mcp.db._conn import _connect
-    with _connect() as conn:
-        r = conn.execute("SELECT namespace AS datastore FROM user_datastores WHERE id = %s",
-                         (ns_id,)).fetchone()
-    return dict(r)["datastore"]
 
 
 def test_the_holder_MERGES_freely_through_its_run(table):

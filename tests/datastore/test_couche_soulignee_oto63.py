@@ -165,8 +165,8 @@ def test_la_reservation_rend_la_forme_qu_on_ECRIT(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
 
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-c63", ns)
+    ns_id = db.create_datastore("user", "sub-c63", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store("sub-c63")
     st.set_schema(ns, {"key": "ref", "fields": [{"key": "ref", "type": "text"},
                                                 {"key": "effectif", "type": "text"}]})

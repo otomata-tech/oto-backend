@@ -196,6 +196,7 @@ chemins = [
   "oto_mcp/org_origin.py",
   "oto_mcp/account_suspension.py",
   "oto_mcp/org_suspension.py",
+  "oto_mcp/db/etat_abonnement.py",
   "oto_mcp/project_exposure.py",
   "oto_mcp/mfa_mirror.py",
   "oto_mcp/tool_alias.py",
@@ -293,6 +294,7 @@ chemins = [
   "oto_mcp/db/spend_blocks.py",
   "oto_mcp/capabilities/service_credits.py",
   "oto_mcp/credits_echeances.py",
+  "oto_mcp/db/schema/effacements.py",
   "oto_mcp/db/schema/entitlements.py",
   "oto_mcp/db/schema/grants.py",
   "oto_mcp/db/schema/nodes.py",
@@ -581,6 +583,11 @@ tests = ["tests/**/test_transcri*.py"]
 nom = "export de périmètre"
 sources = ["oto_mcp/export_perimetre/**", "oto_mcp/tenant_migration.py"]
 tests = ["tests/export_perimetre/test_*.py", "tests/**/test_export*.py", "tests/**/test_migrate*.py"]
+
+[[volet]]
+nom = "effacement d'org"
+sources = ["oto_mcp/effacement/**", "oto_mcp/capabilities/org_erasure.py"]
+tests = ["tests/effacement/test_*.py", "tests/export_perimetre/test_*.py", "tests/test_org_suspension.py"]
 
 [[volet]]
 nom = "données publiques (fod)"

@@ -44,7 +44,7 @@ from .core import (
     RowValidationError,
     make_store,
 )
-from .errors import RevisionConflict
+from .errors import RevisionConflict, TableauParNom
 from .outils import _current_run
 
 logger = logging.getLogger(__name__)
@@ -152,6 +152,8 @@ def ouvrir(datastore: Any, *, row_ids: Optional[list], filter: Optional[dict],
                                      limit=limite)
     except jetons.JetonMalPlace as e:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+    except TableauParNom as e:
+        raise refus("datastore_by_name", f"{e.indice} Rien n'a été envoyé.")
     except DatastoreNotFound as e:
         indice = getattr(e, "indice", None)
         raise refus("datastore_not_found", f"tableau `{datastore}` inconnu"

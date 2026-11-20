@@ -276,3 +276,26 @@ CREATE INDEX IF NOT EXISTS idx_org_favorites_cible ON org_favorites(kind, ref_id
 CREATE INDEX IF NOT EXISTS idx_org_favorites_added_by ON org_favorites(added_by)
     WHERE added_by IS NOT NULL;
 """
+
+# L'ÉTAT D'ABONNEMENT d'une org, poussé par le commerce (`service.org.subscription_state`,
+# `db/etat_abonnement.py`) : le commerce facture, le cœur le SERT tel quel (fiche d'admin
+# d'org, bloc `billing`) et n'agit pas dessus. Une ligne par org, remplacée à chaque envoi.
+# `status = 'none'` = le commerce n'a AUCUN abonnement pour l'org : un fait poussé, à ne
+# pas confondre avec l'absence de ligne (« jamais poussé »), que la fiche refuse.
+# `block_code` / `block_since` : l'échéance que le commerce ne peut pas débiter, et depuis
+# quand. `emitted_at` = l'instant où le commerce a lu l'état : un envoi plus ancien que
+# celui déjà reçu est refusé (deux envois croisés ne remontent pas le temps).
+SUBSCRIPTION_STATES = """
+CREATE TABLE IF NOT EXISTS subscription_states (
+    org_id BIGINT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('none', 'incomplete', 'active', 'past_due', 'canceled')),
+    block_code TEXT,
+    block_since TIMESTAMPTZ,
+    current_period_end TIMESTAMPTZ,
+    grace_until TIMESTAMPTZ,
+    canceled_at TIMESTAMPTZ,
+    emitted_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((block_code IS NULL) = (block_since IS NULL))
+);
+"""

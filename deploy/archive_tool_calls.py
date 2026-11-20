@@ -49,6 +49,16 @@ travail tourne chaque jour ; un jour sans mois éligible ne fait rien. Pour chaq
 (suspendu), et réécrire un mois avec le reste d'une suppression interrompue effaçait
 pour de bon les lignes déjà supprimées.
 
+**Chaque passage laisse sa trace** (`journal_archive_passages`, une ligne à la fin du
+passage). Sans elle, un travail planifié qui ne tourne plus ne se voyait nulle part : le
+registre ne trace qu'un mois archivé, et son `archived_at` vieillit normalement de 30 à
+60 jours. Un passage sans mois éligible est RÉUSSI ; un refus (`ArchiveIncoherente`) ou
+une exception est un ÉCHEC, noté avec sa cause, puis relevé tel quel. Ne laissent aucune
+trace : le passage qui trouve le verrou pris (un autre tourne), le passage à blanc et
+`--export-only` (des exercices à la main, qui ne purgent pas). La lecture :
+`oto_admin_monitoring op=journal_archive`, en erreur `journal_archive_late` passé 48 h
+sans passage réussi.
+
 **Ce que coûte la suppression.** Elle avance par PLAGE de `created_at` (index
 `idx_tool_calls_created_at`) avec un curseur : chaque lot lit les 20 000 lignes suivantes
 du mois, jamais la table ni ce qui est déjà purgé. Le prédicat d'avant
@@ -462,6 +472,60 @@ def _delete_month(conn: psycopg.Connection, mois: str, pause_s: float = DELETE_P
     return total
 
 
+# La cause d'un échec, telle que la trace la garde : assez pour savoir quoi lire dans le
+# journal de l'unité, pas un second journal.
+DETAIL_MAX = 2000
+
+
+def _noter_passage(conn: psycopg.Connection, debut: datetime, *, ok: bool,
+                   mois: list[str], detail: str) -> None:
+    """Trace le passage dans `journal_archive_passages` (cf. l'en-tête). Aucune exception
+    n'est rattrapée : un passage réussi qu'on ne sait pas tracer échoue, pour que l'unité
+    le dise, plutôt que de laisser la lecture le croire en retard sans raison visible."""
+    conn.execute(
+        "INSERT INTO journal_archive_passages (started_at, ok, mois_archives, detail) "
+        "VALUES (%s, %s, %s, %s)",
+        (debut, ok, len(mois), detail[:DETAIL_MAX]),
+    )
+    log.info("passage tracé : %s, %s mois archivés", "réussi" if ok else "en échec", len(mois))
+
+
+def _passage(conn: psycopg.Connection, bucket: str, args: argparse.Namespace,
+             faits: list[str]) -> None:
+    """Le passage lui-même, sous le verrou. Ajoute à `faits` chaque mois archivé PUIS
+    purgé, au fil de l'eau : un échec au troisième mois laisse les deux premiers comptés."""
+    mois_list = _months_to_archive(conn, args.retention_days)
+    if not mois_list:
+        log.info("rien à archiver : aucun mois entièrement sorti de la fenêtre.")
+        return
+    if args.dry_run:
+        log.info("à blanc : %s mois partiraient (%s)", len(mois_list),
+                 ", ".join(m for m, _ in mois_list))
+        return
+
+    s3 = _s3_client()
+    for mois, restantes in mois_list:
+        key = _cle(mois)
+        inscription = _inscription(conn, mois)
+        taille = _objet_present(s3, bucket, key)
+        if inscription is None and taille is None:
+            _export_month(conn, s3, bucket, mois)
+            _verify_archive(s3, bucket, key, restantes)
+            lignes = restantes
+        else:
+            lignes = _reprendre(conn, s3, bucket, mois, inscription, taille)
+        if args.export_only:
+            log.info("%s : %s lignes archivées dans %s — suppression NON demandée",
+                     mois, lignes, key)
+            continue
+        if inscription is None:
+            _record_archive(conn, mois, key, lignes)
+        supprimees = _delete_month(conn, mois, args.pause)
+        faits.append(mois)
+        log.info("%s : %s lignes archivées dans %s, %s supprimées de la base",
+                 mois, lignes, key, supprimees)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
@@ -488,35 +552,35 @@ def main() -> int:
             log.warning("une autre exécution tient le verrou — abandon (rien n'a été touché)")
             return 0
         try:
-            mois_list = _months_to_archive(conn, args.retention_days)
-            if not mois_list:
-                log.info("rien à archiver : aucun mois entièrement sorti de la fenêtre.")
-                return 0
-            if args.dry_run:
-                log.info("à blanc : %s mois partiraient (%s)", len(mois_list),
-                         ", ".join(m for m, _ in mois_list))
-                return 0
-
-            s3 = _s3_client()
-            for mois, restantes in mois_list:
-                key = _cle(mois)
-                inscription = _inscription(conn, mois)
-                taille = _objet_present(s3, bucket, key)
-                if inscription is None and taille is None:
-                    _export_month(conn, s3, bucket, mois)
-                    _verify_archive(s3, bucket, key, restantes)
-                    lignes = restantes
-                else:
-                    lignes = _reprendre(conn, s3, bucket, mois, inscription, taille)
-                if args.export_only:
-                    log.info("%s : %s lignes archivées dans %s — suppression NON demandée",
-                             mois, lignes, key)
-                    continue
-                if inscription is None:
-                    _record_archive(conn, mois, key, lignes)
-                supprimees = _delete_month(conn, mois, args.pause)
-                log.info("%s : %s lignes archivées dans %s, %s supprimées de la base",
-                         mois, lignes, key, supprimees)
+            # Un exercice à la main (à blanc, `--export-only`) ne purge pas : il ne dit
+            # rien de la santé du travail planifié, il ne laisse donc pas de trace.
+            trace = not (args.dry_run or args.export_only)
+            if trace and conn.execute(
+                    "SELECT to_regclass('journal_archive_passages')").fetchone()[0] is None:
+                # Comme pour le registre : AVANT toute suppression. Un passage qui purge
+                # sans pouvoir le tracer laisserait l'alerte dire « en retard » alors que
+                # l'archive a tourné (schéma plus ancien que le script : migration non
+                # jouée, retour arrière de couleur).
+                raise SystemExit("table journal_archive_passages absente : jouer "
+                                 "`oto-mcp migrer upgrade head` — rien n'a été touché")
+            debut = conn.execute("SELECT now()").fetchone()[0]
+            faits: list[str] = []
+            try:
+                _passage(conn, bucket, args, faits)
+            except (Exception, SystemExit) as exc:
+                if trace:
+                    cause = f"{type(exc).__name__}: {exc}"
+                    try:
+                        _noter_passage(conn, debut, ok=False, mois=faits, detail=cause)
+                    except Exception:
+                        # L'échec du passage reste l'erreur relevée ; celui de sa trace
+                        # est dit ici, et la lecture le verra en retard.
+                        log.exception("trace de l'échec impossible")
+                raise
+            if trace:
+                _noter_passage(conn, debut, ok=True, mois=faits, detail=(
+                    "mois archivés : " + ", ".join(faits) if faits
+                    else "aucun mois éligible"))
         finally:
             conn.execute("SELECT pg_advisory_unlock(%s)", (LOCK_KEY,))
 

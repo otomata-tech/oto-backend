@@ -247,8 +247,8 @@ def _store():
 
 def _table():
     from oto_mcp import db
-    ns = "rl75-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "rl75-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     _store().set_schema(ns, _SCHEMA)
     return ns, ns_id
 
@@ -368,8 +368,8 @@ def test_store_une_pose_portant_la_liste_VIDE_passe(live):
     propriétaire de tableau, et c'est lui qui refusait."""
     from oto_mcp import db
 
-    ns = "rl75v-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "rl75v-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     out = _store().set_schema(ns, _VIDE)
     assert out["schema"]["fields"][1]["required_layers"] == []
 
@@ -381,8 +381,8 @@ def test_store_un_patch_sur_une_AUTRE_colonne_d_un_schema_qui_porte_la_liste_vid
     8 900 lignes, ce refus n'a aucune cause visible pour son auteur."""
     from oto_mcp import db
 
-    ns = "rl75p-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "rl75p-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     _store().set_schema(ns, _VIDE)
 
     out = _store().patch_schema(ns, fields=[{"key": "libre", "type": "text",
@@ -398,8 +398,8 @@ def test_store_une_ecriture_sur_la_colonne_a_liste_vide_n_exige_RIEN(live, face_
     puisse pas dériver vers « la liste vide exige tout »."""
     from oto_mcp import db
 
-    ns = "rl75w-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "rl75w-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     _store().set_schema(ns, _VIDE)
     _appeler(face_outil, datastore=ns, rows=[{"ref": "r1", "qualif": "PME"}])
     (ligne,) = _lignes(ns_id)
@@ -414,8 +414,8 @@ def test_store_une_pose_illisible_reste_REFUSEE_en_nommant_la_colonne(live, mauv
     alors qu'elle ne l'est pas."""
     from oto_mcp import db
 
-    ns = "rl75r-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "rl75r-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     with pytest.raises(ValueError) as capture:
         _store().set_schema(ns, {"fields": [
             {"key": "ref", "type": "text"},

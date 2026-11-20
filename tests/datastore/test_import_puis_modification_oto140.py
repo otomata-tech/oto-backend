@@ -39,8 +39,8 @@ def _blob(ns_id: int, row_id: str) -> dict:
 
 def _table_contacts():
     from oto_mcp import db
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = _store()
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"},
@@ -125,8 +125,7 @@ def test_une_cle_metier_ANNOTEE_designe_la_MEME_ligne(live):
     500 opaque sur le geste que ce lot encourage."""
     from oto_mcp import db
     st = _store()
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-test", ns)
+    ns = str(db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6]))
     st.set_schema(ns, {"key": "code", "fields": [
         {"key": "code", "type": "text"}, {"key": "v", "type": "text"}]})
 
@@ -144,8 +143,7 @@ def test_le_LOT_aussi_apparie_sur_une_cle_annotee(live):
     doublon coûte le plus cher."""
     from oto_mcp import db
     st = _store()
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-test", ns)
+    ns = str(db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6]))
     st.set_schema(ns, {"key": "code", "fields": [
         {"key": "code", "type": "text"}, {"key": "v", "type": "text"}]})
 

@@ -170,8 +170,7 @@ def tableaux(serveur, monkeypatch):
 def _table() -> str:
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = f"recettes-pont-{uuid.uuid4().hex[:6]}"
-    db.create_datastore("user", SUB, ns)
+    ns = str(db.create_datastore("user", SUB, f"recettes-pont-{uuid.uuid4().hex[:6]}"))
     make_store(SUB).set_schema(ns, SCHEMA)
     return ns
 
@@ -226,7 +225,7 @@ def test_data_rows_du_pont_est_un_appel_journalise_et_son_refus_aussi(tableaux):
     page = _de_recette(tableaux, ns, "data_rows", {"datastore": ns, "limit": 10})
     assert page["ok"] and [r["slug"] for r in page["result"]["rows"]] == ["a"]
     assert [r["ok"] for r in _journal("data_rows", ns)] == [True]
-    absent = f"absent-{uuid.uuid4().hex[:6]}"
+    absent = "999999999"
     refus = _de_recette(tableaux, ns, "data_rows", {"datastore": absent})
     assert refus["ok"] is False
     assert [r["ok"] for r in _journal("data_rows", absent)] == [False]
@@ -609,8 +608,7 @@ def test_via_d_une_recette_est_prouve_par_ses_propres_appels(tableaux):
     with _connect() as conn:
         cases = conn.execute(
             "SELECT c.champ, c.outil FROM datastore_cell_sources c "
-            "JOIN user_datastores u ON u.id = c.ns_id WHERE u.namespace = %s "
-            "ORDER BY 1", (ns,)).fetchall()
+            "WHERE c.ns_id = %s ORDER BY 1", (int(ns),)).fetchall()
     assert [(c["champ"], c["outil"]) for c in cases] == [
         ("name", "acme_people"), ("slug", "acme_people")]
 
@@ -633,6 +631,7 @@ def test_via_d_une_recette_sans_geste_en_cours_attribue_quand_meme(tableaux):
     assert asyncio.run(scenario())["ok"]
     with _connect() as conn:
         outils = {r["outil"] for r in conn.execute(
-            "SELECT c.outil FROM datastore_cell_sources c JOIN user_datastores u "
-            "ON u.id = c.ns_id WHERE u.namespace = %s", (ns,)).fetchall()}
+            "SELECT c.outil FROM datastore_cell_sources c "
+            "WHERE c.ns_id = %s", (int(ns),)).fetchall()}
+
     assert outils == {"acme_people"}

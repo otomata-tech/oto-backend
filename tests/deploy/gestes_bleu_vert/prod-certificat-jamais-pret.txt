@@ -189,6 +189,10 @@ date +%H:%M:%S
 blue
 --- /opt/oto-mcp-blue/deploy/lanceur_secrets.py
 # lanceur du tag
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur blue
 --- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur blue
 --- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.timer
@@ -203,6 +207,10 @@ dependencies = [
 {"ref": "v1.2.3", "commit": "0123456789abcdef0123456789abcdef01234567", "deployed_at": "2026-09-29T12:00:00+02:00"}
 --- /opt/oto-mcp-green/deploy/lanceur_secrets.py
 # lanceur du tag
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur green
 --- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur green
 --- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer

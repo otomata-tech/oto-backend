@@ -51,8 +51,9 @@ def _store():
 def table(live):
     """Un tableau `key` + `strict`, et UNE ligne témoin déjà posée."""
     from oto_mcp import db
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
+
     st = _store()
     st.set_schema(ns, SCHEMA)
     row = st.append_row(ns, {"siren": "552032534", "raison_sociale": "TEMOIN"})

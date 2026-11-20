@@ -255,7 +255,8 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
             # Le lanceur est DANS le tag ; rien n'est propagé d'une couleur à l'autre.
             (arbre / "deploy" / "lanceur_secrets.py").write_text("# lanceur du tag\n")
         if not variantes.get("BANC_SANS_MAINTENANCE"):
-            for u in ("oto-mcp-maintenance.service", "oto-mcp-maintenance.timer"):
+            for u in ("oto-mcp-maintenance.service", "oto-mcp-maintenance.timer",
+                      "oto-journal-archive.service", "oto-journal-archive.timer"):
                 (arbre / "deploy" / u).write_text(f"# {u} de la couleur {couleur}\n")
     doublures = racine / "banc-bin"
     doublures.mkdir()

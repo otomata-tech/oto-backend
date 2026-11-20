@@ -45,8 +45,8 @@ def compte(live):
 
 def _table(nom: str = "estampille") -> tuple[str, int]:
     from oto_mcp import db
-    ns = f"{nom}-{uuid.uuid4().hex[:6]}"
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, f"{nom}-{uuid.uuid4().hex[:6]}")
+    ns = str(ns_id)
     # `n` déclarée : une colonne non déclarée est refusée à l'écriture (oto#124).
     db.set_datastore_schema(ns_id, {"fields": [{"key": "n", "type": "number"}]})
     return ns, ns_id

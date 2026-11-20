@@ -92,8 +92,7 @@ def store(live):
     from oto_mcp.datastore.core import make_store
 
     db.upsert_user(SUB, email=f"{SUB}@deprecies.invalid", name=SUB)
-    ns = "tdep-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", SUB, ns)
+    ns = str(db.create_datastore("user", SUB, "tdep-" + uuid.uuid4().hex[:6]))
     st = make_store(SUB)
     st.set_schema(ns, {"fields": [{"key": "nom", "type": "text"},
                                   {"key": "site", "type": "text"}]})

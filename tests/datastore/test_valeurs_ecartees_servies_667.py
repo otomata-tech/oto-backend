@@ -39,8 +39,8 @@ def _store():
 
 def _table():
     from oto_mcp import db
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = _store()
     st.set_schema(ns, {"key": "siren",
                        "fields": [

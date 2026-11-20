@@ -194,6 +194,12 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         # prolongerait sous un autre nom un bail que son run a pris sous l'ancien —
         # et `claimed_run`, qui le justifie, ne suit pas.
         ("datastore_rows", "claimed_by"), ("nodes", "claimed_by"),
+        # La PREUVE d'une demande d'effacement d'org (`docs/effacement-d-org.md`) : qui
+        # l'a demandée, qui devait la confirmer, qui l'a annulée — tels qu'ils étaient au
+        # moment du geste ; on ne réécrit pas une preuve. Une fusion pendant les 72 h du
+        # lien le rend inutilisable (`confirm_sub` ne correspond plus) : on redemande.
+        ("org_erasures", "requested_by"), ("org_erasures", "confirm_sub"),
+        ("org_erasures", "cancelled_by"),
     }
     couvertes = (set(_SUB_COLUMNS)
                  | {(t, c) for t, c, _ in _PK_SUB_TABLES}
@@ -512,6 +518,11 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("portee_elargissements", "destinataires"),
         # Un transfert de solde entre deux comptes fusionnés nomme les deux payeurs.
         ("credit_movements", "meta"),
+        # L'effacement d'une org : son plan et son reçu ne portent que des comptes par
+        # table et des dates ; son périmètre figé (`snapshot`) est REVU au début de la
+        # purge, qui écarte des partants un sub devenu alias (`perimetre.rafraichir`).
+        ("org_erasures", "plan"), ("org_erasures", "receipt"),
+        ("org_erasures", "snapshot"),
     }
     # L'application de Custom API : son adresse, son mode, ses actions — aucune personne.
     applications = {("api_apps", "connection"), ("api_apps", "definition")}

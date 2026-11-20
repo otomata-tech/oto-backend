@@ -194,8 +194,8 @@ def data_write(live, monkeypatch):
 def _table(schema=SCHEMA, lignes=()):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     store = make_store(SUB)
     store.set_schema(ns, schema)
     ids = [store.append_row(ns, dict(ligne))["_id"] for ligne in lignes]

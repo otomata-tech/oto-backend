@@ -40,8 +40,8 @@ def compte(live):
 
 def _table(proprietaire: str = SUB) -> tuple[str, int]:
     from oto_mcp import db
-    ns = f"sources-{uuid.uuid4().hex[:6]}"
-    ns_id = db.create_datastore("user", proprietaire, ns)
+    ns_id = db.create_datastore("user", proprietaire, f"sources-{uuid.uuid4().hex[:6]}")
+    ns = str(ns_id)
     db.set_datastore_schema(ns_id, {"fields": [
         {"key": "nom", "type": "text"}, {"key": "email", "type": "text"}]})
     return ns, ns_id

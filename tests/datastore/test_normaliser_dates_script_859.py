@@ -79,9 +79,9 @@ def base(live):
     st = make_store(SUB)
     ns_noms = [f"nd859-{uuid.uuid4().hex[:6]}" for _ in range(2)]
     ns = [db.create_datastore("user", SUB, n) for n in ns_noms]
-    st.set_schema(ns_noms[0], SCHEMA)
+    st.set_schema(str(ns[0]), SCHEMA)
     # Le second tableau a sa CLÉ MÉTIER sur une date : deux formes du même instant.
-    st.set_schema(ns_noms[1], {"key": "k", "fields": [{"key": "k", "type": "datetime"}]})
+    st.set_schema(str(ns[1]), {"key": "k", "fields": [{"key": "k", "type": "datetime"}]})
     lignes = {
         (ns[0], "a"): {"d": "2026-09-04T12:00:00+02:00", "t": "x"},
         (ns[0], "b"): {"d": "2026-09-04T10:00:00Z", "j": "2026-09-04T10:00:00Z"},

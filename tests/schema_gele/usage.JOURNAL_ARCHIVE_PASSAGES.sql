@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS journal_archive_passages (
+id BIGSERIAL PRIMARY KEY,
+started_at TIMESTAMPTZ NOT NULL,
+finished_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ok BOOLEAN NOT NULL,
+mois_archives INTEGER NOT NULL,
+detail TEXT NOT NULL
+);

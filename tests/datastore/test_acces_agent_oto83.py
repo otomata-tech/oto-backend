@@ -436,6 +436,7 @@ def _table(sub="sub-a83"):
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", sub, ns)
+    ns = str(ns_id)
     st = make_store(sub)
     # La tête n'admet pas `claimable` (01/10/2026) : posé là, il n'était lu par aucun
     # moteur — c'est la fixture que le rinçage de `schema_servi` éprouve à part.
@@ -461,7 +462,7 @@ def test_bout_en_bout_l_agent_ne_voit_ni_n_ecrit_la_colonne(live):
         # (b) le schéma servi non plus…
         assert "suivi_commercial" not in {f["key"] for f in st.get_schema(ns)["fields"]}
         # …ni le catalogue, second chemin par lequel un schéma complet sort.
-        entree = next(e for e in st.list_datastores() if e["datastore"] == ns)
+        entree = next(e for e in st.list_datastores() if e["id"] == ns_id)
         assert "suivi_commercial" not in {f["key"] for f in entree["schema"]["fields"]}
         # (c) l'écriture est refusée — sur les DEUX gestes qu'un agent enchaîne : le
         # patch par identifiant et le lot par clé métier.

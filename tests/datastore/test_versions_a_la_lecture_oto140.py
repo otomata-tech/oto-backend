@@ -39,8 +39,8 @@ def _blob(ns_id: int, row_id: str) -> dict:
 
 def _table():
     from oto_mcp import db
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = _store()
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"}, {"key": "raison_sociale", "type": "text"}]})
@@ -263,8 +263,7 @@ def test_le_refus_REST_NOMME_le_parametre():
 def _table_de(sub: str):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", sub, ns)
+    ns = str(db.create_datastore("user", sub, "t-" + uuid.uuid4().hex[:6]))
     st = make_store(sub)
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"}, {"key": "raison_sociale", "type": "text"}]})
@@ -406,8 +405,7 @@ def test_a_PLAT_l_origine_d_un_item_demandee_revient_a_toute_profondeur():
 def _table_liste(sub: str) -> tuple:
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", sub, ns)
+    ns = str(db.create_datastore("user", sub, "t-" + uuid.uuid4().hex[:6]))
     st = make_store(sub)
     # Les colonnes déclarées : une colonne non déclarée est refusée (oto#124).
     st.set_schema(ns, {"fields": [{"key": "siren", "type": "text"},

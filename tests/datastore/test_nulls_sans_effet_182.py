@@ -74,8 +74,8 @@ def test_un_null_hors_du_declare_efface_la_valeur_en_place():
 def _table():
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t182n-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "t182n-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store("sub-test")
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"}, {"key": "raison", "type": "text"},

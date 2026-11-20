@@ -2521,9 +2521,19 @@ pas (absent de `list`, 404 sur `get`, même 404 qu'un agent inconnu).
   people: n}` sur `list`/`get`/`create` (`db.visibilites_d_agents`, une lecture pour
   toute la liste). `org=null, people=0` = privé (propriétaire et admins seuls) ; le front
   l'affiche sur chaque ligne, comme les tableaux.
-- **Les agents d'avant restent ouverts** : la révision `0035_agents_partages_a_l_org`
-  a posé un partage `editor` à l'org sur chaque agent existant au 02/10/2026 ; son
-  propriétaire le retire depuis l'écran.
+- **Les agents d'avant restent visibles, plus modifiables par toute l'org** : la révision
+  `0035_agents_partages_a_l_org` a posé un partage `editor` à l'org sur chaque agent
+  existant au 02/10/2026, sans geste d'une personne ; le GESTE
+  `oto-mcp maintenance partages-office --appliquer` le rabat en `viewer`
+  (`db/partages_office.py`, sous sa propre marque, retour arrière exact par `--retablir`).
+  Les membres gardent la vue, l'écriture se confie nommément (`op=share`) ; le propriétaire
+  et les admins de l'org n'y perdent rien. Un partage reposé par une personne avait perdu la
+  marque et ne bouge pas. ⚠️ Un geste sur décision, jamais une révision ni le démarrage
+  (`migrer upgrade head` se joue après chaque tag) : d'abord l'aperçu par org,
+  `oto-mcp maintenance partages-office --dry-run` (lecture seule, `statement_timeout` 15 s,
+  même choix de lignes), lu en prod ; puis, sur décision, `--appliquer`. Une fois joué,
+  plus aucun partage d'org ne porte la marque 0035 en écriture : `MARQUES_D_ORG_EN_POOL`
+  n'ouvre plus rien.
 - **La file de l'org reste lisible, pas ce qu'un agent exécute** : `runner.jobs`
   (`list`, `get`) sert toujours les travaux de toute l'org, mais la charge d'un travail
   enfilé par un agent que l'appelant ne peut pas MODIFIER est réduite à de quoi le
@@ -3678,6 +3688,20 @@ enregistrement (par agent et par jour) et rend les **formes** des runs (actions,
 rapport, plafond) restent en Python. `time_saved.formes_des_runs` est la référence en
 mémoire, et `tests/test_temps_gagne_borne_live.py` prouve la parité et la borne
 (`docs/event-loop-perf.md`).
+
+⚠️ **Calculé HORS de la requête** (`capabilities/_temps_gagne_borne.py`, 20/11/2026) :
+sur une org chargée, relire les appels de chaque run va au disque et dure des minutes.
+Fait dans la requête de la page, sans borne, à chaque ouverture, ce calcul tenait une
+connexion du pool par ouverture jusqu'à le vider (`PoolTimeout` sur toutes les routes).
+Il tourne désormais dans un fil de fond : borné (`statement_timeout` 60 s par requête),
+un seul calcul en vol par clé (org, fenêtre, agents vus), deux au plus pour tout le
+processus, résultat en cache 10 min, échec retenté après 30 min (une lecture trop lourde pour la borne ne se relance pas à chaque ouverture). La page attend au plus
+2 s ; sans résultat (ni frais ni périmé), elle sort sans le temps gagné et le dit
+(`time_saved_status: "pending"`, sinon `"ready"`, déclaré dans `JobsOut`). Cache par
+processus : vidé au redémarrage, chaque couleur d'une bascule calcule de son côté. Les
+calculs tournent dans des fils DÉMONS (un `ThreadPoolExecutor` viderait sa file avant de
+laisser le processus s'arrêter) et au plus 32 clés sont en vol ou en queue ; au-delà, la
+page sort sans le temps gagné. Bancs : `tests/test_temps_gagne_borne.py`.
 
 **Revu sur des agents réels (17/10/2026)**, qui surcomptaient :
 - un balayage qui ne PRODUIT rien de neuf ne gagne rien — sa recherche ne compte que

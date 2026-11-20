@@ -102,8 +102,8 @@ def tableau(base):
     du geste d'écriture, qui a ses propres bancs plus bas."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t204r-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "t204r-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store(SUB)
     st.set_schema(ns, SCHEMA)
     rid = st.append_row(ns, {"raison": "ACME", "fonction": "DG",
@@ -214,8 +214,8 @@ ALICE = {"raison": "ACME", "fonction": "@empty",
 def _table(schema: dict = SCHEMA) -> tuple:
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t204w-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "t204w-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     make_store(SUB).set_schema(ns, schema)
     return ns, ns_id
 

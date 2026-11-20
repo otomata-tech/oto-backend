@@ -49,6 +49,8 @@ def sources(monkeypatch):
     monkeypatch.setattr(S, "_stamp_origins", lambda *a, **k: None)
     monkeypatch.setattr(db, "project_labels", lambda ids: {})
     monkeypatch.setattr(db, "taille_du_pool", lambda: 24)
+    # La sonde des sources brutes (`search._sources_non_parcourues`) : aucune ici.
+    monkeypatch.setattr(db, "sources_presentes", lambda pids: False)
     return monkeypatch
 
 

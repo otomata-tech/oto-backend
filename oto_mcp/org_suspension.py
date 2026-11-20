@@ -82,6 +82,10 @@ OUVERTES = frozenset({
     "me.unipile.status", "me.unipile.disconnect",
     "me.federation.google.status", "me.federation.google.revoke",
     "me.model_subscriptions.list", "me.model_subscriptions.remove",
+    # EFFACER l'org (`org.erasure`) : la confirmation la suspend, et c'est suspendue
+    # qu'un admin doit pouvoir suivre ou annuler ; une org arrêtée en fin d'essai est
+    # aussi la première à vouloir être effacée. Le geste retire, il n'ouvre rien.
+    "org.erasure", "org.erasure_confirm",
 })
 
 
@@ -144,7 +148,19 @@ def etat(org_id: Optional[int]) -> Optional[dict]:
     return org_store.get_org_suspension(int(org_id))
 
 
+#: Le motif que pose la confirmation d'un effacement (`capabilities/org_erasure.py`).
+MOTIF_EFFACEMENT = "effacement confirmé"
+
+
 def message(org_id: int) -> str:
+    pause = org_store.get_org_suspension(int(org_id)) or {}
+    if (pause.get("suspended_reason") or "").startswith(MOTIF_EFFACEMENT):
+        # Pendant le délai de grâce d'un effacement, payer ne rouvre rien : le seul
+        # geste est de RESTAURER l'espace (annuler l'effacement) depuis ses réglages.
+        return (f"L'espace #{org_id} est en cours de suppression (effacement confirmé) : "
+                "il ne peut plus agir. Un administrateur peut le restaurer depuis les "
+                "réglages de l'espace tant que la suppression n'a pas commencé ; d'ici là, "
+                "agis dans un autre espace (oto_list_orgs, puis `_org`).")
     return (f"L'espace #{org_id} est suspendu : il ne peut plus agir tant qu'il n'a pas "
             "d'abonnement. Rien n'a été supprimé. Un administrateur de l'espace peut "
             "choisir un plan depuis l'app ; d'ici là, agis dans un autre espace "

@@ -45,6 +45,9 @@ def _stub_empty(monkeypatch, **over):
                         lambda *a: [])
     monkeypatch.setattr(S.db, "project_labels", lambda ids: {1: {
         "name": "Projet X", "owner_type": "org", "owner_id": "7", "context_org_id": None}})
+    # La sonde des sources brutes non parcourues (12/11/2026) : aucune par défaut.
+    monkeypatch.setattr(S.db, "sources_presentes",
+                        lambda pids: over.get("sources_presentes", False))
 
 
 def test_rrf_interleaves_sources(monkeypatch):
@@ -255,3 +258,57 @@ def test_la_capacite_cherche_les_apps_que_la_liste_rend(monkeypatch):
     assert apps == [] and len(vus) == 1
     _, apps = CAP._preparer(ctx, CAP.SearchInput(q="inbox", scope="project", project=3))
     assert apps == []
+
+
+# ── Les sources brutes, un genre à la demande (12/11/2026) ─────────────────────────
+
+
+def _stub_sources(monkeypatch, appels):
+    """`search_docs_fts` doublé AVEC son genre : la page de travail, ou la source."""
+    def fts(q, pids, limit, sources=False):
+        appels.append(sources)
+        if sources:
+            return [{"id": 90, "project_id": 1, "title": "Appel", "headline": "<b>x</b>"}]
+        return [{"id": 10, "project_id": 1, "title": "Page A", "headline": "<b>x</b>"}]
+    monkeypatch.setattr(S.db, "search_docs_fts", fts)
+
+
+def test_le_defaut_ne_parcourt_pas_les_sources_et_le_dit(monkeypatch):
+    _stub_empty(monkeypatch, sources_presentes=True)
+    appels: list = []
+    _stub_sources(monkeypatch, appels)
+    out = S.search("u1", 7, "xx")
+    assert appels == [False], "le défaut ne cherche que les pages de travail"
+    assert {h["kind"] for h in out["hits"]} == {"page"}
+    assert out["sources_skipped"] is True and "kinds=['source']" in out["hint_sources"]
+
+
+def test_sans_source_dans_le_perimetre_pas_de_signal(monkeypatch):
+    _stub_empty(monkeypatch, sources_presentes=False)
+    _stub_sources(monkeypatch, [])
+    out = S.search("u1", 7, "xx")
+    assert "sources_skipped" not in out and "hint_sources" not in out
+
+
+def test_source_demandee_cherche_les_sources_sans_signal(monkeypatch):
+    _stub_empty(monkeypatch, sources_presentes=True)
+    appels: list = []
+    _stub_sources(monkeypatch, appels)
+    out = S.search("u1", 7, "xx", kinds=["source"])
+    assert appels == [True]
+    assert [(h["kind"], h["ref"]) for h in out["hits"]] == [("source", 90)]
+    assert "sources_skipped" not in out
+
+
+def test_un_genre_sans_pages_ne_signale_rien(monkeypatch):
+    """Les sources ne manquent qu'à une recherche de PAGES : pas de bruit ailleurs."""
+    _stub_empty(monkeypatch, sources_presentes=True)
+    out = S.search("u1", 7, "xx", kinds=["procedure"])
+    assert "sources_skipped" not in out
+
+
+def test_source_est_un_genre_valide_hors_du_defaut():
+    assert "source" not in S.KINDS and "source" in S.GENRES
+    assert CAP.SearchInput(q="xx", kinds="page,source").kinds == ["page", "source"]
+    with pytest.raises(Exception):
+        CAP.SearchInput(q="xx", kinds=["sources"])

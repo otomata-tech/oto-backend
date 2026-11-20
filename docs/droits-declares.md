@@ -391,6 +391,24 @@ elle est servie dans la fiche d'org ; le cœur n'agit pas dessus. Ce que le comm
 accorde pendant un essai, et ce qu'il fait à sa fin, relèvent du commerce. L'étiquette
 de source `trial` reste acceptée par l'API de service.
 
+**L'état d'abonnement.** Même canal : le commerce pousse, à chaque changement de statut
+ou de blocage, l'état de l'abonnement d'une org (`service.org.subscription_state`,
+`PUT /api/service/orgs/{id}/subscription-state`, table `subscription_states`) : `status`
+(`none` = aucun abonnement au commerce), `block_code` + `block_since` (l'échéance qu'il ne
+peut pas débiter ; l'abonnement reste `active` pendant ce temps), fin de période, grâce,
+résiliation, et `emitted_at`, l'instant où il a lu l'état — un envoi plus ancien que
+celui déjà reçu est refusé (`409 stale_subscription_state`). La fiche d'admin d'org
+(`oto_admin_org op=get`, bloc `billing`, `source: commerce`) le sert, et ne lit plus la
+table de facturation du cœur, figée depuis la bascule : `state: pushed` et l'état reçu ;
+`state: missing` + `code: subscription_state_missing` tant que rien n'a été poussé pour
+l'org — la fiche reste servie entière (des services la lisent), l'absence est nommée,
+rien n'est deviné. La route de service est toujours montée ; seule l'identité de service
+du commerce l'ouvre. Tout lecteur passe
+par `db.etat_abonnement.lire_etat(conn, org_id)`, qui LÈVE `EtatJamaisPousse` faute
+d'état (à l'appelant de dire ce que vaut l'absence),
+et `preleve_encore(etat)` pour « le commerce prélève encore ». La fiche d'un membre
+(`org.get`) lit encore l'ancien bloc.
+
 ## Ce qu'on ne fait pas
 
 - **Pas de clé libre** : un producteur ne pose que ce que le catalogue connaît.

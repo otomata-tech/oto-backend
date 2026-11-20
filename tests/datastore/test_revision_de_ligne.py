@@ -39,8 +39,8 @@ _OU = " WHERE ns_id = %s AND row_id = 'r1'"
 
 def _table(ligne: dict | None = None) -> tuple[str, int]:
     from oto_mcp import db
-    ns = "rev-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "rev-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     ligne = dict(ligne or {"statut": "a_faire"})
     # Les colonnes que les bancs écrivent, déclarées (oto#124).
     db.set_datastore_schema(ns_id, {"fields": [{"key": k}

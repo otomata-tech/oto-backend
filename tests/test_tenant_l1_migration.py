@@ -100,6 +100,11 @@ _LECTEURS_ADMIS = {
     # visibilité n'en dépend. Les deux lectures restent dans ce fichier : un nouveau
     # lecteur ailleurs tombe ici. (`orgs.suspended_tenant_id`, l'ORIGINE d'une
     # suspension, est une autre colonne : le mot entier ne l'attrape pas.)
+    #
+    # L'effacement d'une org (`docs/effacement-d-org.md`) NOMME la colonne parmi celles
+    # que la pierre tombale de la ligne `orgs` GARDE (`PIERRE_TOMBALE_GARDE`) : il ne la
+    # lit pas et n'en dérive rien — le tenant n'est jamais du périmètre effacé.
+    "effacement/disposition.py",
 }
 
 # L'AXE gardé : la colonne `tenant_id`, en mot ENTIER — `suspended_tenant_id` (l'origine

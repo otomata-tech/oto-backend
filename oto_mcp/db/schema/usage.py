@@ -256,6 +256,27 @@ CREATE TABLE IF NOT EXISTS journal_archives (
 );
 """
 
+# Les PASSAGES de l'archive du journal — fragment séparé : la révision Alembic
+# `20261120_2220_archive_passages` l'exécute tel quel (une seule écriture du DDL).
+JOURNAL_ARCHIVE_PASSAGES = """
+-- Un passage de `deploy/archive_tool_calls.py`, une ligne, écrite à sa FIN. Le registre
+-- `journal_archives` ne trace qu'un mois archivé, et `archived_at` y vieillit normalement
+-- de 30 à 60 jours : une archive quotidienne qui ne tourne plus ne s'y voit pas. Ici, la
+-- date du dernier passage réussi, lue par `oto_admin_monitoring op=journal_archive`.
+-- `ok` : un passage sans mois éligible est réussi ; un refus (`ArchiveIncoherente`) ou
+-- une exception est un échec, avec son `detail`. Un passage qui trouve le verrou pris,
+-- un passage à blanc ou `--export-only` n'écrivent rien. Une ligne par jour : aucune
+-- rétention. Table neuve, née entière (aucune colonne posée par ALTER).
+CREATE TABLE IF NOT EXISTS journal_archive_passages (
+    id BIGSERIAL PRIMARY KEY,
+    started_at TIMESTAMPTZ NOT NULL,
+    finished_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ok BOOLEAN NOT NULL,
+    mois_archives INTEGER NOT NULL,           -- mois archivés puis purgés par ce passage
+    detail TEXT NOT NULL                      -- mois traités, ou la cause de l'échec
+);
+"""
+
 # Occurrences d'un signal d'usage (oto-backend : signaux rattachés) — fragment séparé :
 # la révision Alembic `0043_signal_occurrences` l'exécute tel quel (une seule écriture
 # du DDL), et le démarrage d'une base neuve le pose avec le reste.

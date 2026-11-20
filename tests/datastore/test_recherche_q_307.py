@@ -146,8 +146,8 @@ def tableau(live):
     from oto_mcp.db._conn import _connect
 
     db.upsert_user(SUB, email=f"{SUB}@recherche307.invalid", name=SUB)
-    ns = "t307-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "t307-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     with _connect() as conn:
         for rang, (rid, data) in enumerate(LIGNES.items()):
             conn.execute(

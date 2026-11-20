@@ -55,8 +55,8 @@ def test_un_null_sur_un_vide_ordinaire_reste_sans_effet():
 def _table():
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "tj2-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "tj2-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store("sub-test")
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"}, {"key": "raison", "type": "text"},

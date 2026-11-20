@@ -37,8 +37,8 @@ def _monte(schema_fields, rows):
     from oto_mcp.datastore.core import make_store
 
     st = make_store("sub-test")
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-test", ns)
+    ns = str(db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6]))
+
     # ⚠️ Les lignes AVANT le schéma, et l'ordre est le sujet même de ce banc.
     # Depuis le 08/09/2026, un `type` déclaré s'arme lui-même : `{"ca": "abc"}` sur une
     # colonne `number` est REFUSÉ à l'écriture. Or ce banc éprouve le TRI de valeurs non

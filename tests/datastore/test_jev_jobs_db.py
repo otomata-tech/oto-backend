@@ -86,8 +86,8 @@ def monte(compte, monkeypatch):
 def _table(n: int) -> tuple[str, int, list[str]]:
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = f"jev-jobs-{uuid.uuid4().hex[:6]}"
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, f"jev-jobs-{uuid.uuid4().hex[:6]}")
+    ns = str(ns_id)
     store = make_store(SUB)
     store.set_schema(ns, SCHEMA)
     ids = [store.append_row(ns, {"company": f"Co {i}"})["_id"] for i in range(n)]
@@ -316,13 +316,3 @@ async def test_a_closed_run_does_not_stop_its_job(monte):
     _vider()
     st = await _appeler(m, "jev_job", {"op": "status", "job_id": r["job_id"]})
     assert st["status"] == "done" and st["decided"] == 3
-
-
-@pytest.mark.asyncio
-async def test_by_name_or_by_number_it_is_the_same_table(monte):
-    m, _, _ = monte
-    ns, ns_id, _ = _table(2)
-    r = await _appeler(m, "jev_rows", _args(ns))
-    msg = await _appeler(m, "jev_rows", _args(str(ns_id)), erreur=True)
-    assert f"Job {r['job_id']} is already running" in msg
-    _vider()

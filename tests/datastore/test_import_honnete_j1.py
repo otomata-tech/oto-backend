@@ -35,8 +35,8 @@ def _blob(ns_id: int, row_id: str) -> dict:
 
 def _tableau(fields=None):
     from oto_mcp import db
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     _store().set_schema(ns, {"key": "siren", "fields": fields or [
         {"key": "siren", "type": "text"}, {"key": "email", "type": "text"},
         {"key": "nom", "type": "text"}]})

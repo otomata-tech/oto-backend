@@ -35,7 +35,7 @@ from ..datastore.identite import AdresseJson as Adresse
 from ..datastore.schema_keys import forme_schema
 from ..datastore.outils import _current_run, adresse_servie
 from ..datastore import schema as dsv2
-from ..datastore.errors import RevisionConflict
+from ..datastore.errors import CODE_TABLEAU_PAR_NOM, RevisionConflict, TableauParNom
 from ..datastore.precondition import revision_attendue
 from ..datastore.core import (
     indice_de_liberation,
@@ -424,8 +424,12 @@ def _unknown_filter_keys(store, datastore: str, filter, filters=None) -> set[str
 def _inconnu(datastore: str, e: DatastoreNotFound) -> str:
     """"unknown" — and, when the table exists in another org of the caller, WHERE and
     WHAT to pass (#631). The hint comes from the store (`datastore/hors_org`), the same lookup
-    as the REST face; without a hint, the bare refusal as before."""
+    as the REST face; without a hint, the bare refusal as before. A table NAME is not
+    "unknown": it is refused as a form of address, and the refusal says so alone
+    (`datastore_by_name`, the code the REST face serves)."""
     indice = getattr(e, "indice", None)
+    if isinstance(e, TableauParNom):
+        return f"{CODE_TABLEAU_PAR_NOM}: {indice}"
     return f"datastore `{datastore}` unknown" + (f" — {indice}" if indice else "")
 
 
@@ -1188,8 +1192,7 @@ def register(mcp: FastMCP) -> None:
 
         ⚠️ **Address the table by its NUMBER.** The reply carries `ns_id` — the
         table's number — and that is the form to pass as `datastore`:
-        `data_write(datastore=174, id=…)`. A name still resolves until 2026-11-08,
-        then it is REFUSED.
+        `data_write(datastore=174, id=…)`. A table name is REFUSED.
 
         `datastore` also accepts `slot:<name>` = the table BOUND under that slot
         name by the ACTIVE project (procedures reference tables as <slot:name>;
@@ -1198,7 +1201,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             datastore: the table's NUMBER (`ns_id`, e.g. 174) — the form to use.
-                Its name still resolves until 2026-11-08, then is refused.
+                Its name is refused.
                 `slot:<name>` also works. It must already exist.
             row: single-row content as a dict (JSON-encoded automatically).
             id: omit = append a new row ; provided = partial update of that `_id`
@@ -1456,9 +1459,9 @@ def register(mcp: FastMCP) -> None:
         again and again without a write end up set aside (the ceiling below) —
         LOST to the pass, without being at fault.
 
-        A name still resolves as `datastore` until 2026-11-08 — then it is refused —
-        but the number is what to carry: it survives a rename, it is unique where
-        a name is only unique per owner, and it is what the platform records.
+        A table name is refused as `datastore`: the number is what to carry — it
+        survives a rename, it is unique where a name is only unique per owner, and it
+        is what the platform records.
         `datastore` in the reply is the table's REAL name whatever form you passed
         in, so reading `"600"` back from a claim on `600` no longer happens.
 
@@ -1515,7 +1518,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             datastore: the table's NUMBER (`ns_id`, e.g. 174) — the form to use.
-                Its name still resolves until 2026-11-08, then is refused.
+                Its name is refused.
                 `slot:<name>` also works. It must already exist.
             layers: shape of a cell that carries layers. `flat` (default): each
                 filled layer beside the value (`email.comment`). `nested`:
@@ -1568,8 +1571,7 @@ def register(mcp: FastMCP) -> None:
         reply); a row you did not write stays where it is.
 
         `datastore` = the table's NUMBER (`ns_id`, the one data_claim_next handed
-        you) — the form to use. Its name still resolves until 2026-11-08, then is
-        refused. `slot:<name>` also works."""
+        you) — the form to use. Its name is refused. `slot:<name>` also works."""
         store = _acting_store()
         try:
             datastore, id = _adresse(datastore, id)
@@ -1616,8 +1618,7 @@ def register(mcp: FastMCP) -> None:
         it becomes an ordinary empty, refused on a required field.
 
         ⚠️ `datastore` = the table's NUMBER (`ns_id`, e.g. 174) — the form to use;
-        the reply carries it back. A name still resolves until 2026-11-08, then
-        is refused. `slot:<name>` also works.
+        the reply carries it back. Its name is refused. `slot:<name>` also works.
 
         ⚠️ List mode returns `{rows, count, next_cursor, ns_id}`. When `next_cursor`
         is not null there are MORE rows: call again with `cursor=<next_cursor>`

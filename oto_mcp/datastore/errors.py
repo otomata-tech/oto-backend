@@ -14,6 +14,7 @@ la tenait était l'objet même du mécanisme.
 from __future__ import annotations
 
 from typing import Any, Optional
+from . import jetons
 
 
 class RowValidationError(ValueError):
@@ -198,6 +199,49 @@ class DatastoreAmbigu(DatastoreNotFound):
             f"(identifier {par_nom}). Nothing is served. Its owner removes "
             "the ambiguity by renaming it (`data_rename_datastore`)."))
         self.par_id, self.par_nom = par_id, par_nom
+
+
+#: Le jeton machine du refus d'un NOM de tableau, le même sur les deux faces.
+CODE_TABLEAU_PAR_NOM = "datastore_by_name"
+
+
+def est_un_nom_de_tableau(adresse: Any) -> bool:
+    """`adresse` est-elle un NOM de tableau — ni un numéro, ni `slot:<nom>` ?
+
+    Juge la FORME, et c'est voulu : depuis le retrait du nom (08/11/2026), des chiffres
+    désignent toujours un numéro, et `slot:` est résolu en numéro avant le stockage."""
+    a = str(adresse if adresse is not None else "").strip()
+    if a in jetons.JETONS_RETIRES or jetons.jeton_de(a) is not None:
+        # Un jeton (même retiré) a son propre refus, qui nomme le geste qui aboutit.
+        return False
+    return bool(a) and not a.isdigit() and not a.lower().startswith("slot:")
+
+
+def refus_tableau_par_nom(adresse: Any) -> str:
+    """La phrase servie à qui désigne un tableau par son nom : ce qui est refusé, le
+    geste qui aboutit, et d'où vient la valeur à passer. Toute face qui refuse un nom
+    passe par elle : le journal y compte le refus par sa FORME (`ref_kind=name`,
+    `session_org.noter_forme_tableau`), jamais le nom."""
+    from .. import session_org
+    session_org.noter_forme_tableau(session_org.REF_NAME)
+    return (f"`{adresse}` is a table NAME: a table is addressed by its NUMBER only "
+            "(names are refused since 2026-11-08), and nothing was read or written. "
+            "Pass `datastore=<number>` — the `ns_id` that `data_list_datastores` "
+            "returns for that table, or that a previous reply carried back; or "
+            "`slot:<name>` for a table bound by the active project.")
+
+
+class TableauParNom(DatastoreNotFound):
+    """Un tableau désigné par son NOM : refusé depuis le 08/11/2026 (le nom ne résout
+    plus rien, aucun repli). Rien n'est cherché sous ce nom.
+
+    Sous-classe de `DatastoreNotFound`, même raison que `DatastoreAmbigu` : toute
+    surface qui rattrape « introuvable » refuse aussi ce cas au lieu de le laisser sortir
+    en 500. Les faces qui DISENT le refus (`capabilities/datastore/common.ns_not_found`,
+    les outils `data_*`) rendent `indice` et le code `CODE_TABLEAU_PAR_NOM`."""
+
+    def __init__(self, datastore: str):
+        super().__init__(datastore, indice=refus_tableau_par_nom(datastore))
 
 
 class RowNotFound(Exception):

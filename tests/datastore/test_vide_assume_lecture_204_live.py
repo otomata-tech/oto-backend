@@ -117,8 +117,8 @@ def _stockee(ns_id: int, row_id: str) -> dict:
 def ligne_marquee(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t204-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "t204-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store(SUB)
     st.set_schema(ns, SCHEMA)
     rid = st.append_row(ns, {"raison": "ACME", "fonction": "DG",

@@ -54,6 +54,7 @@ def table(base):
     from oto_mcp.datastore.core import make_store
     ns = "vide-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    ns = str(ns_id)
     st = make_store(SUB)
     st.set_schema(ns, {"fields": [{"key": "siren"}, {"key": "statut"}]})
     row = st.append_row(ns, {"siren": "552032534"})

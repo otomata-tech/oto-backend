@@ -76,7 +76,7 @@ _CYCLE = {"states": ["a_qualifier", "en_cours", "perdu"],
 def _table(client, lifecycle) -> str:
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", SUB, ns)
+    ns = str(db.create_datastore("user", SUB, ns))
     r = client.put(f"/api/datastores/{ns}/schema", headers=_h(), json={"schema": {
         "fields": [{"key": "ref", "type": "text"},
                    {"key": "statut", "type": "text", "role": "status",

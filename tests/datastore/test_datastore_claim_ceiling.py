@@ -72,8 +72,8 @@ def sous_le_run(run_id: str):
 def _table(schema) -> tuple:
     """Un tableau neuf portant UNE ligne à traiter."""
     from oto_mcp import db
-    ns = "file-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-agent", ns)
+    ns_id = db.create_datastore("user", "sub-agent", "file-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = _store()
     st.set_schema(ns, schema)
     st.append_row(ns, {"societe": "ENTREPRISE TEMOIN", "statut": "a_faire"})
@@ -94,6 +94,14 @@ def _brut(ns_id: int, row_id: str) -> dict:
             "FROM datastore_rows WHERE ns_id = %s AND row_id = %s",
             (ns_id, row_id)).fetchone()
     return dict(r or {})
+
+
+def _nom(ns_id: int) -> str:
+    """Le nom affiché du tableau, que la trace cite."""
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        return conn.execute("SELECT namespace FROM user_datastores WHERE id = %s",
+                            (ns_id,)).fetchone()["namespace"]
 
 
 def _un_id(st, ns) -> str:
@@ -174,13 +182,13 @@ def test_le_motif_cite_ses_chiffres(plafonne):
 def test_l_abandon_est_bruyant(plafonne, caplog):
     """Une ligne qui sort de la file sans que personne ne l'ait demandé se dit :
     le tableau, la ligne, le compteur."""
-    st, ns, _ = plafonne
+    st, ns, ns_id = plafonne
 
     with caplog.at_level(logging.WARNING, logger="oto_mcp.db.rowabandon"):
         rid = _tourner_a_vide(st, ns, 3)
 
     trace = caplog.text
-    assert ns in trace and rid in trace and "3" in trace
+    assert _nom(ns_id) in trace and rid in trace and "3" in trace
 
 
 # ══ le compteur ═════════════════════════════════════════════════════════════

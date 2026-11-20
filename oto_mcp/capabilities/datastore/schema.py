@@ -36,7 +36,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ... import access, deprecations
+from ... import access
 from ... import db
 from ...datastore import formule as dsformule
 from ...datastore import identite
@@ -334,9 +334,8 @@ CAPABILITIES += [
             "it, or of `strict`, `unknown_fields` and `key_required`, is named in "
             "`warning`. "
             "`ns_id` is the table's NUMBER (e.g. 174) and `datastore` its canonical name, "
-            "whatever form you addressed it by: pass the NUMBER as `datastore` from here "
-            f"on — a name still resolves until {deprecations.date_retrait_nom_de_tableau()}, "
-            "then it is refused. Read it BEFORE "
+            "whatever form you addressed it by: pass the NUMBER as `datastore` — a table "
+            "name is refused. Read it BEFORE "
             "amending: "
             "`data_set_schema` posts the schema WHOLE, it does not merge, so adding one "
             "field means re-posting the existing definition plus that field. "

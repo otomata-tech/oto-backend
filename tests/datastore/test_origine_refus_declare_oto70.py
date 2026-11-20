@@ -226,8 +226,8 @@ SCHEMA = {"fields": [{"key": "ref", "type": "text"},
 def _table(schema=SCHEMA):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-origine", ns)
+    ns_id = db.create_datastore("user", "sub-origine", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store("sub-origine")
     st.set_schema(ns, schema)
     return st, ns, ns_id

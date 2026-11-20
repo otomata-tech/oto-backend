@@ -46,6 +46,11 @@ install -m 0644 /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer /etc/systemd
 systemctl daemon-reload
 systemctl enable --now oto-mcp-maintenance.timer
 systemctl show -p NextElapseUSecRealtime --value oto-mcp-maintenance.timer
+install -m 0644 /opt/oto-mcp-green/deploy/oto-journal-archive.service /etc/systemd/system/oto-journal-archive.service
+install -m 0644 /opt/oto-mcp-green/deploy/oto-journal-archive.timer /etc/systemd/system/oto-journal-archive.timer
+systemctl daemon-reload
+systemctl enable --now oto-journal-archive.timer
+systemctl show -p NextElapseUSecRealtime --value oto-journal-archive.timer
 ### sortie
 [12:00:00] verrou pris (/var/lock/oto-mcp-bluegreen-prod.lock)
 [12:00:00] prod: couleur en service = blue, cible = green (:9107)
@@ -59,7 +64,8 @@ systemctl show -p NextElapseUSecRealtime --value oto-mcp-maintenance.timer
 [12:00:00] trafic public OK sur https://mcp.oto.cx/.well-known/oauth-protected-resource
 [12:00:00] vidange de blue (:9103) confiée à oto-mcp-drain-prod — 0 connexion(s) au moment de la bascule, plafond 240s (journalctl -u oto-mcp-drain-prod)
 [12:00:00] === prod OK : blue -> green en Ns (démarrage Ns) — déploiement TERMINÉ, la vidange continue en fond ===
-maintenance : timer actif, prochain tir Sun 2026-10-04 03:20:00 CEST
+oto-mcp-maintenance : timer actif, prochain tir Sun 2026-10-04 03:20:00 CEST
+oto-journal-archive : timer actif, prochain tir Sun 2026-10-04 03:20:00 CEST
 ### erreurs
 ### état final
 --- /etc/caddy/Caddyfile
@@ -107,12 +113,20 @@ maintenance : timer actif, prochain tir Sun 2026-10-04 03:20:00 CEST
 # amont d'avant la bascule
 --- /etc/oto-mcp/active-prod
 green
+--- /etc/systemd/system/oto-journal-archive.service
+# oto-journal-archive.service de la couleur green
+--- /etc/systemd/system/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur green
 --- /etc/systemd/system/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur green
 --- /etc/systemd/system/oto-mcp-maintenance.timer
 # oto-mcp-maintenance.timer de la couleur green
 --- /opt/oto-mcp-blue/deploy/lanceur_secrets.py
 # lanceur du tag
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur blue
 --- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur blue
 --- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.timer
@@ -125,6 +139,10 @@ dependencies = [
 {"ref": "v1.2.3", "commit": "0123456789abcdef0123456789abcdef01234567", "deployed_at": "2026-09-29T12:00:00+02:00"}
 --- /opt/oto-mcp-green/deploy/lanceur_secrets.py
 # lanceur du tag
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur green
 --- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur green
 --- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer

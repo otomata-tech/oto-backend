@@ -27,7 +27,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import (_abonnement, _acces_agent, _cle_exigee, _limites_du_run,
-               _lignes_reservables, _modele, _ordre_de_service)
+               _lignes_reservables, _modele, _ordre_de_service, _temps_gagne_borne)
 from .. import (db, outils_du_travail, runner_consigne, runner_models, time_saved, tool_alias,
                tours_au_cout)
 from ..db import user_subscriptions
@@ -366,6 +366,16 @@ class JobsOut(BaseModel):
     #: défaut, ou les surcharges de l'org — pour que l'écran dise sur quoi repose le
     #: chiffre.
     time_standards: Optional[dict[str, float]] = None
+    #: summary — le temps gagné est-il dans la réponse ? Il se calcule hors de la
+    #: requête (`_temps_gagne_borne`) : `pending` = pas encore connu, la réponse porte
+    #: alors des `time_saved` vides et ni `time_saved_minutes` ni `time_standards` —
+    #: une absence, jamais un zéro.
+    time_saved_status: Optional[Literal["ready", "pending"]] = Field(
+        None, description=(
+            "summary: `ready` = time saved is in the response; `pending` = not computed "
+            "yet (it is computed in the background): each agent then has no "
+            "`time_saved_minutes`, empty `time_saved` and `time_saved_not_counted`, and "
+            "`time_standards` is absent. An absence, never a zero: ask again later."))
     # enqueue → id/status/due_at ; claim → job (ou null, file vide) ;
     # list → jobs + total + next_cursor ;
     # complete → ok/status + run_id/rows_released/release ; les autres → ok.
@@ -1627,9 +1637,24 @@ def _resume(ctx: ResolvedCtx, jours: int) -> dict:
     # chaque appel de chaque run de la fenêtre, des centaines de milliers sur une org
     # chargée — 1,4 à 2 s de CPU sous le GIL, toutes les requêtes du processus
     # arrêtées (13/11/2026). Python ne reçoit plus que les formes des runs, par agent.
+    # ⚠️ HORS DE LA REQUÊTE (`_temps_gagne_borne`) : sur une org chargée, cette lecture
+    # va au disque et dure des minutes. Faite ici, à chaque ouverture, elle tenait une
+    # connexion du pool par ouverture jusqu'à le vider. Elle tourne désormais en fond,
+    # bornée, une fois par clé, en cache ; pas prête → la page sort sans le temps gagné.
+    agents_vus = sorted(par_agent)
+    calcul = _temps_gagne_borne.formes(
+        ctx.org_id, jours, agents_vus,
+        lambda: db.formes_des_runs_conclus(ctx.org_id, jours, agents_vus,
+                                           time_saved.classe))
+    depuis = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - jours * 86400))
+    if calcul is None:
+        for a in par_agent.values():
+            a["time_saved"] = []
+            a["time_saved_not_counted"] = []
+        return {"summary": sorted(par_agent.values(), key=lambda a: a["trigger_id"]),
+                "since": depuis, "time_saved_status": "pending"}
     minutes = time_saved.standards(db.minutes_gagnees_de_l_org(ctx.org_id))
-    formes, sans = db.formes_des_runs_conclus(ctx.org_id, jours, sorted(par_agent),
-                                              time_saved.classe)
+    formes, sans = calcul
     formes_par_agent: dict[int, list] = {}
     for f in formes:
         formes_par_agent.setdefault(f["trigger_id"], []).append(time_saved.Forme(
@@ -1653,9 +1678,8 @@ def _resume(ctx: ResolvedCtx, jours: int) -> dict:
         ]
         a["time_saved_not_counted"] = (
             [{"reason": "no_logged_calls", "runs": sans_journal[tid]}] if sans_journal.get(tid) else [])
-    depuis = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - jours * 86400))
     return {"summary": sorted(par_agent.values(), key=lambda a: a["trigger_id"]), "since": depuis,
-            "time_standards": minutes}
+            "time_standards": minutes, "time_saved_status": "ready"}
 
 
 #: Le côté d'un épisode (`agent_episodes.cote`) dit au tableau de bord (`problem.side`).

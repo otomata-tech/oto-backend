@@ -68,20 +68,25 @@ BG_LANCEUR=versionne
 # activée : le chemin figé /opt/oto-mcp de #533 lirait la couleur PRÉCÉDENTE.
 # Ne fait JAMAIS échouer le déploiement — une maintenance manquée se rattrape,
 # un service arrêté non.
+# L'archive du journal suit la même pose depuis #1807 : posée à la main avant, elle visait
+# /opt/oto-mcp, un arbre fixe, et tournait sur un script en retard sur le tag servi.
 install_timers() {
-  local tree="$1" u
-  for u in oto-mcp-maintenance.service oto-mcp-maintenance.timer; do
-    if [ ! -f "$tree/deploy/$u" ]; then
-      echo "maintenance : $u absent de $tree (tag antérieur au lot 0) — ignoré"
-      return 0
-    fi
-    install -m 0644 "$tree/deploy/$u" "/etc/systemd/system/$u" || return 0
+  local tree="$1" base u
+  for base in oto-mcp-maintenance oto-journal-archive; do
+    for u in "$base.service" "$base.timer"; do
+      if [ ! -f "$tree/deploy/$u" ]; then
+        echo "$base : $u absent de $tree (tag antérieur) — ignoré"
+        continue 2
+      fi
+      install -m 0644 "$tree/deploy/$u" "/etc/systemd/system/$u" || continue 2
+    done
+    # L'unité nomme l'arbre par @ARBRE@ (elle passe par le lanceur, qui est dans le tag).
+    sed -i "s|@ARBRE@|$tree|g" "/etc/systemd/system/$base.service" || continue
+    systemctl daemon-reload || continue
+    systemctl enable --now "$base.timer" || continue
+    echo "$base : timer actif, prochain tir $(systemctl show -p NextElapseUSecRealtime --value "$base.timer")"
   done
-  # L'unité nomme l'arbre par @ARBRE@ (elle passe par le lanceur, qui est dans le tag).
-  sed -i "s|@ARBRE@|$tree|g" /etc/systemd/system/oto-mcp-maintenance.service || return 0
-  systemctl daemon-reload || return 0
-  systemctl enable --now oto-mcp-maintenance.timer || return 0
-  echo "maintenance : timer actif, prochain tir $(systemctl show -p NextElapseUSecRealtime --value oto-mcp-maintenance.timer)"
+  return 0
 }
 
 if bg_run "$REF"; then

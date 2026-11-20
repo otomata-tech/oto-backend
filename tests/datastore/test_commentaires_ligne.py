@@ -47,12 +47,12 @@ def _h(sub: str = A) -> dict:
 
 def _table_et_ligne(rest) -> tuple[str, int, str]:
     from oto_mcp import db
-    ns = f"commentaires-{uuid.uuid4().hex[:6]}"
-    ns_id = db.create_datastore("user", A, ns)
+    ns_id = db.create_datastore("user", A, f"commentaires-{uuid.uuid4().hex[:6]}")
     db.set_datastore_schema(ns_id, {"fields": [{"key": "n"}]})
-    r = rest.post(f"/api/datastores/{ns}/rows", headers=_h(), json={"n": 1})
+    adr = str(ns_id)
+    r = rest.post(f"/api/datastores/{adr}/rows", headers=_h(), json={"n": 1})
     assert r.status_code == 201, r.text
-    return ns, ns_id, r.json()["_id"]
+    return adr, ns_id, r.json()["_id"]
 
 
 def _partager(ns_id: int, sub: str) -> None:

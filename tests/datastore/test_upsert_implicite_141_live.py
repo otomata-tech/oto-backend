@@ -165,13 +165,19 @@ def data_write(live, monkeypatch):
     return asyncio.run(mcp.get_tool("data_write")).fn
 
 
+#: Le nom affiché de chaque tableau du banc, par son adresse (le numéro).
+_NOMS: dict = {}
+
+
 def _table(schema=SCHEMA, lignes=()):
-    """Un tableau neuf, et ses lignes posées AVANT le geste jugé — rend (nom, ns_id,
-    {siren: _id})."""
+    """Un tableau neuf, et ses lignes posées AVANT le geste jugé — rend (adresse,
+    ns_id, {siren: _id}) ; l'adresse est le numéro, le nom se lit dans `_NOMS`."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    nom = "t-" + uuid.uuid4().hex[:6]
+    ns_id = db.create_datastore("user", SUB, nom)
+    ns = str(ns_id)
+    _NOMS[ns] = nom
     store = make_store(SUB)
     if schema is not None:
         store.set_schema(ns, {**schema, "new_rows": "create"})
@@ -264,7 +270,7 @@ def test_l_upload_signe_rend_fusions_sans_identifiant(live):
     from oto_mcp import upload_tokens
     ns, ns_id, _ = _table(lignes=EN_PLACE)
     corps = "\n".join(json.dumps(r) for r in LOT).encode()
-    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": ns, "format": "ndjson",
+    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": _NOMS[ns], "format": "ndjson",
              "key": "siren", "upsert": True}
     rep = upload_tokens.materialize(SUB, cible, corps, "application/x-ndjson")
     assert (rep["inserted"], rep["updated"]) == (2, 2)
@@ -282,7 +288,7 @@ def test_l_import_en_tranches_garde_les_rangs_du_fichier(live, monkeypatch):
     monkeypatch.setattr(upload_tokens, "IMPORT_SLICE", 2)
     ns, ns_id, en_place = _table(lignes=EN_PLACE)
     rows = [{"siren": "111"}, {"siren": "444"}, {"siren": "111"}, {"siren": "222"}]
-    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": ns, "key": "siren",
+    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": _NOMS[ns], "key": "siren",
              "upsert": True}
     rep = upload_tokens.import_rows(SUB, cible, rows, deadline=time.monotonic() + 60)
     a = _base(ns_id)["111"]["_id"]
@@ -384,7 +390,7 @@ def test_l_upload_signe_est_refuse_sans_nommer_de_ligne(live):
     from oto_mcp import upload_tokens
     ns, ns_id, ids = _table(lignes=EN_PLACE)
     corps = "\n".join(json.dumps(r) for r in LOT).encode()
-    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": ns, "format": "ndjson",
+    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": _NOMS[ns], "format": "ndjson",
              "key": "siren"}
     with pytest.raises(upload_tokens.UploadError) as e:
         upload_tokens.materialize(SUB, cible, corps, "application/x-ndjson")
@@ -418,7 +424,7 @@ def test_l_import_est_refuse_avant_sa_premiere_tranche(live, monkeypatch):
     monkeypatch.setattr(upload_tokens, "IMPORT_SLICE", 1)
     ns, ns_id, ids = _table(lignes=EN_PLACE)
     rows = [{"siren": "444"}, {"siren": "555"}, {"siren": "222"}]
-    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": ns, "key": "siren"}
+    cible = {"kind": "datastore", "ns_id": ns_id, "namespace": _NOMS[ns], "key": "siren"}
     with pytest.raises(upload_tokens.UploadError) as e:
         upload_tokens.import_rows(SUB, cible, rows, deadline=time.monotonic() + 60)
     assert (e.value.status, e.value.code) == (409, "business_key_exists")

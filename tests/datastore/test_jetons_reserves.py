@@ -415,7 +415,7 @@ def test_REST_le_pronom_retire_rend_400_avec_la_MEME_conduite_que_la_face_agent(
 def test_REST_le_pronom_retire_dans_le_row_id_est_refuse_aussi(rest):
     H, st = rest
     status, corps = H.call("me.datastore.update_row",
-                           path_params={"datastore": "vivier", "row_id": "@claimed"},
+                           path_params={"datastore": "7", "row_id": "@claimed"},
                            body={"statut": "enrichi"})
     assert (status, corps["error"]) == (400, "jeton_mal_place")
     assert "`_id`" in corps["detail"]
@@ -427,7 +427,7 @@ def test_REST_le_pronom_dans_le_CORPS_n_est_plus_qu_une_donnee(rest):
     une valeur de ligne."""
     H, st = rest
     status, _ = H.call("me.datastore.update_row",
-                       path_params={"datastore": "vivier", "row_id": "r1"},
+                       path_params={"datastore": "7", "row_id": "r1"},
                        body={"statut": "@claimed"})
     assert status == 200, "une valeur textuelle ne se juge pas sur une syntaxe morte"
     assert st.vu, "l'écriture doit atteindre le stockage"
@@ -436,7 +436,7 @@ def test_REST_le_pronom_dans_le_CORPS_n_est_plus_qu_une_donnee(rest):
 def test_REST_un_parametre_d_appel_en_colonne_est_refuse(rest):
     H, st = rest
     status, corps = H.call("me.datastore.append_row",
-                           path_params={"datastore": "vivier"},
+                           path_params={"datastore": "7"},
                            body={"siren": "1", "_run_id": "abc"})
     assert (status, corps["error"]) == (400, "jeton_mal_place")
     assert st.vu == []
@@ -444,6 +444,6 @@ def test_REST_un_parametre_d_appel_en_colonne_est_refuse(rest):
 
 def test_REST_une_valeur_qui_ressemble_a_un_slot_passe(rest):
     H, st = rest
-    H.call("me.datastore.append_row", path_params={"datastore": "vivier"},
+    H.call("me.datastore.append_row", path_params={"datastore": "7"},
            body={"note": "slot: machine à café"})
     assert st.vu, "une donnée légitime ne doit pas être refusée"

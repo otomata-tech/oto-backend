@@ -178,7 +178,7 @@ def register(mcp: FastMCP) -> None:
         rather than picking one. `dry_run` reads and checks, sends nothing.
 
         Args:
-            datastore: the table, by name or number.
+            datastore: the table, by its NUMBER (`ns_id`) — a name is refused.
             object_type: contacts | companies.
             field_mapping: {HubSpot INTERNAL property name: column} — names from
                 hubspot_property (`firstname`, not "First name").

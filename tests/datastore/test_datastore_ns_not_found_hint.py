@@ -24,7 +24,7 @@ def _sans_db(monkeypatch):
     monkeypatch.setattr(dsr, "make_store", lambda sub: Boom(DatastoreNotFound("nope")))
 
 
-def _get_rows(monkeypatch, *, orgs, datastores, ns="leads-accords-dormants"):
+def _get_rows(monkeypatch, *, orgs, datastores, ns="42"):
     monkeypatch.setattr(hors_org.org_store, "list_orgs_for_user", lambda sub: orgs)
     monkeypatch.setattr(hors_org.db, "list_datastores_for_owners",
                         lambda owners: datastores)
@@ -35,7 +35,7 @@ def test_hint_names_the_org_and_the_header(monkeypatch):
     status, corps = _get_rows(
         monkeypatch,
         orgs=[{"org_id": 2, "name": "Otomata Admin"}, {"org_id": 81, "name": "Marché"}],
-        datastores=[{"datastore": "leads-accords-dormants", "owner_type": "org",
+        datastores=[{"id": 42, "datastore": "leads-accords-dormants", "owner_type": "org",
                      "owner_id": "81"}],
     )
     assert (status, corps["error"]) == (404, "datastore_not_found")
@@ -49,11 +49,11 @@ def test_no_hint_when_the_datastore_exists_nowhere(monkeypatch):
                                               "detail": None})
 
 
-def test_no_hint_for_a_datastore_of_another_name(monkeypatch):
+def test_no_hint_for_another_datastore(monkeypatch):
     """On ne suggère que le datastore DEMANDÉ — pas un voisin qui traîne."""
     out = _get_rows(monkeypatch,
                     orgs=[{"org_id": 2, "name": "Otomata Admin"}],
-                    datastores=[{"datastore": "autre-chose", "owner_type": "org",
+                    datastores=[{"id": 7, "datastore": "autre-chose", "owner_type": "org",
                                  "owner_id": "2"}])
     assert out == (404, {"error": "datastore_not_found", "detail": None})
 
@@ -65,7 +65,7 @@ def test_lookup_failure_degrades_to_the_bare_404(monkeypatch):
 
     monkeypatch.setattr(hors_org.org_store, "list_orgs_for_user", boom)
     assert call("me.datastore.list_rows",
-                path_params={"datastore": "peu-importe"}) == (
+                path_params={"datastore": "999999999"}) == (
                     404, {"error": "datastore_not_found", "detail": None})
 
 
@@ -82,5 +82,5 @@ def test_only_orgs_the_caller_belongs_to_are_probed(monkeypatch):
                         lambda sub: [{"org_id": 2, "name": "A"},
                                      {"org_id": 81, "name": "B"}])
     monkeypatch.setattr(hors_org.db, "list_datastores_for_owners", capture)
-    call("me.datastore.list_rows", path_params={"datastore": "x"})
+    call("me.datastore.list_rows", path_params={"datastore": "999999999"})
     assert seen["owners"] == [("org", "2"), ("org", "81")]

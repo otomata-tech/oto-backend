@@ -61,8 +61,8 @@ def tableau(live):
     from oto_mcp.db._conn import _connect
 
     db.upsert_user(SUB, email=f"{SUB}@valeurs.invalid", name=SUB)
-    ns = "tvs-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "tvs-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     with _connect() as conn:
         for rang, (rid, data) in enumerate(LIGNES.items()):
             conn.execute(
@@ -136,8 +136,8 @@ def test_les_chemins_du_store_remplissent_aussi(tableau):
     déclare aucune, et ses recherches ne doivent pas en dépendre."""
     from oto_mcp import db
     store, _, _ = tableau
-    ns = "tvs-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "tvs-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     store.set_schema(ns, {"fields": [{"key": "titre", "type": "text"}]})
     ecrite = store.append_row(ns, {"titre": "Ligne du store"})
     rid = ecrite.get("_id") or ecrite.get("id")

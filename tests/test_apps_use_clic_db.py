@@ -28,8 +28,8 @@ def monde(live, monkeypatch):
     ns = f"leads_{u}"
     ns_id = db.create_datastore("user", auteur, ns, context_org_id=org)
     st = make_store(auteur)
-    st.set_schema(ns, SCHEMA)
-    ligne = st.append_row(ns, {"name": "Acme", "status": "open"})
+    st.set_schema(str(ns_id), SCHEMA)
+    ligne = st.append_row(str(ns_id), {"name": "Acme", "status": "open"})
     manifest = {"tables": {"leads": {"table": str(ns_id), "fields": ["name", "status"],
                                      "set": {"status": ["won", "lost"]}, "add": []}}}
     app = db.apps.create(("user", auteur), org, title=f"Desk {u}", manifest=manifest,
@@ -125,7 +125,7 @@ def test_use_ne_donne_aucun_acces_au_tableau(monde):
             _appel(m, m["lecteur"], consent=accord["consent"], **_ecrire(m))
     assert e.value.code != "app_view_only"
     from oto_mcp.datastore.core import make_store
-    (ligne,) = make_store(m["auteur"]).list_rows(f"leads_{m['u']}")
+    (ligne,) = make_store(m["auteur"]).list_rows(str(m["ns_id"]))
     assert ligne["status"] == "open"
 
 

@@ -38,8 +38,9 @@ SCHEMA = {"key": "siren", "fields": [{"key": "siren", "type": "text"},
 def table(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
+
     st = make_store("sub-test")
     st.set_schema(ns, SCHEMA)
     return st, ns, ns_id

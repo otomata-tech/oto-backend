@@ -476,6 +476,30 @@ def count_datastore_rows_for_ns(ns_id: int) -> int:
         return int(row["n"]) if row else 0
 
 
+#: Taille d'un lot de `count_datastore_rows_for_ns_ids`. Un seul `ANY` sur TOUS les
+#: tableaux bascule le plan en balayage de toute la table des lignes (mesuré : plusieurs
+#: secondes de plus) ; des lots de 200 restent sur l'index, par tableau.
+_LOT_DE_COMPTE = 200
+
+
+def count_datastore_rows_for_ns_ids(ns_ids) -> dict[int, int]:
+    """`{ns_id: nombre de lignes}` pour un LOT de tableaux — une connexion, une requête
+    par lot de `_LOT_DE_COMPTE`, au lieu d'une connexion et d'un `count(*)` par tableau.
+    Un tableau sans ligne vaut 0 (il est dans la réponse)."""
+    ids = sorted({int(i) for i in ns_ids})
+    out = {i: 0 for i in ids}
+    if not ids:
+        return out
+    with _connect() as conn:
+        for k in range(0, len(ids), _LOT_DE_COMPTE):
+            for r in conn.execute(
+                    "SELECT ns_id, count(*) AS n FROM datastore_rows "
+                    "WHERE ns_id = ANY(%s) GROUP BY ns_id",
+                    (ids[k:k + _LOT_DE_COMPTE],)).fetchall():
+                out[int(r["ns_id"])] = int(r["n"])
+    return out
+
+
 # ADR 0048 — le rôle est la source de vérité ; `permission` (plan CONTENU) en dérive.
 # `contributor` : une app seulement (`resources.ROLES_D_APP_SEULEMENT`) — la lire et cliquer ses
 # boutons. Sur le plan CONTENU, une lecture : il ne modifie pas l'app.

@@ -30,8 +30,8 @@ def tableau(live):
     from oto_mcp.db._conn import _connect
 
     db.upsert_user(SUB, email=f"{SUB}@total-borne.invalid", name=SUB)
-    ns = "tborne-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "tborne-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     with _connect() as conn:
         for i in range(8):
             mot = "edition" if i < 5 else "autre"

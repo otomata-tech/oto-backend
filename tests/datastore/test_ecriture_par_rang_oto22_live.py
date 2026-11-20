@@ -98,8 +98,8 @@ def _table(schema: dict, contacts: list) -> tuple:
     ne dépend d'aucun des gestes que le banc éprouve."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t22-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "t22-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store(SUB)
     st.set_schema(ns, schema)
     rid = st.append_row(ns, {"siren": "552032534"})["_id"]

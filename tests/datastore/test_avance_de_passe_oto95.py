@@ -55,6 +55,7 @@ def _table(schema=None, n: int = 1) -> tuple:
     from oto_mcp.datastore.core import make_store
     ns = "passes-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", "sub-o95", ns)
+    ns = str(ns_id)
     st = make_store("sub-o95")
     st.set_schema(ns, schema or _schema())
     for i in range(n):

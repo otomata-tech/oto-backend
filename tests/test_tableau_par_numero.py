@@ -1,183 +1,102 @@
-"""Lot 0 du retrait des NOMS de tableau (29/09/2026) : le nom résout encore, et le DIT.
+"""Retrait de la désignation d'un tableau par son NOM (08/11/2026) : un nom est REFUSÉ.
 
-Un tableau s'adresse par son numéro (`ns_id`). Jusqu'à `RETRAIT_NOM_DE_TABLEAU`, un nom
-résout encore — mais jamais en silence : la réponse MCP porte en tête l'avis qui donne
-le numéro et la date, la route REST répond `Deprecation`/`Sunset`, les textes servis
-portent la date. Ce banc fige les quatre, sans base.
+Un tableau s'adresse par son numéro (`ns_id`). Le préavis (lot 0, 29/09/2026) a servi
+le nom avec un avis daté jusqu'au 08/11/2026 ; depuis, un nom est refusé sur toutes les
+faces, sans repli et sans rien résoudre, avec un code nommé (`datastore_by_name`) et une
+phrase qui dit de passer le numéro. Ce banc fige le refus au stockage, sur la face REST,
+dans les capacités et dans les outils, et les textes servis — sans base.
 """
 from __future__ import annotations
 
-import datetime
 import importlib.util
 import pathlib
+import re
 from collections import Counter
 
 import pytest
 
-from oto_mcp import deprecations, session_org
+from oto_mcp.datastore import errors
 
 RACINE = pathlib.Path(__file__).resolve().parents[1]
 
 
-# ── La date : une seule, et le plancher du préavis tient ──────────────────────
+# ── La forme : un nom, pas un numéro ni un `slot:` ───────────────────────────
 
-def test_la_date_est_celle_du_retrait_de_namespace():
-    """Décision d'Alexis du 29/09/2026 : un seul geste pour les deux retraits."""
-    assert deprecations.RETRAIT_NOM_DE_TABLEAU == deprecations.RETRAIT_DATASTORE
-    assert deprecations.RETRAIT_NOM_DE_TABLEAU == datetime.date(2026, 11, 8)
-    assert deprecations.date_retrait_nom_de_tableau() == "2026-11-08"
-
-
-def test_le_plancher_du_preavis_tient_depuis_l_annonce():
-    """Le retrait est servi depuis le 07/09/2026 (sans date) : la date choisie ne
-    tombe pas avant les deux mois dus depuis ce jour. `PREAVIS_MOIS` n'a pas bougé."""
-    assert deprecations.PREAVIS_MOIS >= 2
-    plancher = deprecations._plus_de_mois(deprecations.ANNONCE_NOM_DE_TABLEAU,
-                                          deprecations.PREAVIS_MOIS)
-    assert deprecations.RETRAIT_NOM_DE_TABLEAU >= plancher
-
-
-@pytest.mark.parametrize("adresse,ns_id,par_nom", [
-    ("edition-vivier", 204, True),
-    ("204", 204, False),
-    (" 204 ", 204, False),
-    (204, 204, False),
-    ("2024", 204, True),       # des chiffres qui NOMMENT un tableau sont un nom
+@pytest.mark.parametrize("adresse,nom", [
+    ("edition-vivier", True),
+    ("2024-leads", True),
+    ("204", False),
+    (" 204 ", False),
+    (204, False),
+    ("slot:vivier", False),
+    ("SLOT:vivier", False),
+    ("", False),
+    (None, False),
 ])
-def test_adresse_par_nom_juge_le_resultat_pas_la_forme(adresse, ns_id, par_nom):
-    assert deprecations.adresse_par_nom(adresse, ns_id) is par_nom
+def test_est_un_nom_de_tableau(adresse, nom):
+    assert errors.est_un_nom_de_tableau(adresse) is nom
 
 
-def test_l_avis_donne_le_numero_et_la_date():
-    avis = deprecations.avis_nom_de_tableau("edition-vivier", 204)
-    assert "`datastore=204`" in avis
-    assert "2026-11-08" in avis
-    assert "edition-vivier" in avis
+def test_le_refus_dit_le_nom_et_le_geste():
+    texte = errors.refus_tableau_par_nom("edition-vivier")
+    assert "`edition-vivier` is a table NAME" in texte
+    assert "`datastore=<number>`" in texte and "data_list_datastores" in texte
+    assert "nothing was read or written" in texte
+    assert errors.CODE_TABLEAU_PAR_NOM == "datastore_by_name"
 
 
-# ── Les textes servis portent la date, plus « being retired » ─────────────────
-
-def _textes_servis() -> dict:
-    """Chaque phrase servie qui dit qu'un nom « still resolves ». Les docstrings des
-    outils `data_*` sont définies dans une fonction d'enregistrement : on les lit dans
-    la source, phrase par phrase."""
-    import re
-
-    from oto_mcp.capabilities.registry import CAPABILITIES
-    from oto_mcp.datastore import identite
-
-    out = {"identite.DESCRIPTION": identite.DESCRIPTION}
-    schema = next(c for c in CAPABILITIES if c.key == "me.datastore.get_schema")
-    out["me.datastore.get_schema"] = schema.description
-    source = (RACINE / "oto_mcp/tools/datastore.py").read_text()
-    for i, m in enumerate(re.finditer(r"still resolves", source)):
-        out[f"tools/datastore.py#{i}"] = source[m.start():m.start() + 120]
-    assert len(out) >= 7, "les descriptions d'outils ne disent plus où le nom en est"
-    return out
-
-
-def test_chaque_texte_servi_porte_la_date_du_refus():
-    """La date vit dans `deprecations` ; les docstrings d'outils, qui ne peuvent pas
-    la lire, la recopient — et ce test rougit le jour où l'une ne suit plus."""
-    date = deprecations.date_retrait_nom_de_tableau()
-    sans = [n for n, t in _textes_servis().items() if date not in t]
-    assert not sans, f"textes servis sans la date du refus ({date}) : {sans}"
-    encore = [n for n, t in _textes_servis().items() if "being retired" in t]
-    assert not encore, f"« being retired » sans date, encore servi par : {encore}"
-
-
-def test_le_guide_dit_la_date():
-    guide = (RACINE / "oto_mcp/guides/datastore-semantics.md").read_text()
-    assert deprecations.date_retrait_nom_de_tableau() in guide
-
-
-# ── MCP : l'avis arrive EN TÊTE de la réponse ────────────────────────────────
-
-def _serveur(monkeypatch):
-    from fastmcp import FastMCP
-
-    from oto_mcp import rappel_contexte
-    from oto_mcp.middleware.empty_result import EmptyResultMiddleware
-    from oto_mcp.middleware.rappel_contexte import (ConstatContexteMiddleware,
-                                                    RappelContexteMiddleware)
-    monkeypatch.setattr(rappel_contexte, "pour_l_appel", lambda outil: (None, None))
-    mcp = FastMCP("tableau-par-numero")
-
-    @mcp.tool
-    def par_nom() -> str:
-        # Un seam de résolution, dans le thread du handler, comme `_resolve`.
-        session_org.noter_avis(deprecations.avis_nom_de_tableau("vivier", 204))
-        session_org.noter_avis(deprecations.avis_nom_de_tableau("vivier", 204))
-        return "ligne"
-
-    @mcp.tool
-    def par_numero() -> str:
-        return "ligne"
-
-    mcp.add_middleware(RappelContexteMiddleware())
-    mcp.add_middleware(EmptyResultMiddleware())
-    mcp.add_middleware(ConstatContexteMiddleware())
-    return mcp
-
-
-def _textes(res):
-    return [b.text for b in res.content if getattr(b, "text", None) is not None]
-
-
-@pytest.mark.asyncio
-async def test_l_avis_arrive_en_tete_une_seule_fois(monkeypatch):
-    from fastmcp import Client
-
-    async with Client(_serveur(monkeypatch)) as c:
-        res = await c.call_tool("par_nom", {})
-    assert _textes(res) == [deprecations.avis_nom_de_tableau("vivier", 204), "ligne"]
-
-
-@pytest.mark.asyncio
-async def test_un_appel_par_numero_ne_recoit_rien(monkeypatch):
-    from fastmcp import Client
-
-    async with Client(_serveur(monkeypatch)) as c:
-        res = await c.call_tool("par_numero", {})
-    assert _textes(res) == ["ligne"]
-
-
-def test_noter_un_avis_hors_appel_mcp_ne_fait_rien():
-    """La face REST dit la même chose par ses en-têtes : ici, aucun holder."""
-    session_org.noter_avis("rien")
-
-
-# ── Le store : `_resolve` note l'avis quand, et seulement quand, un NOM a résolu ──
+# ── Le stockage : un nom est refusé AVANT toute lecture ──────────────────────
 
 @pytest.fixture()
 def store(monkeypatch):
     from oto_mcp import access, group_store, roles
     from oto_mcp.datastore import core as D
 
+    vus: list = []
     monkeypatch.setattr(access, "current_org", lambda sub: 99)
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, oid: False)
     monkeypatch.setattr(group_store, "list_groups_for_user", lambda sub, org_id=None: [])
     monkeypatch.setattr(D.ownership, "vue_bornee", lambda: None)
     monkeypatch.setattr(D.db, "resolve_datastore_ns",
-                        lambda *a, **k: {"id": 204, "datastore": "vivier"})
-    return D.make_store("u-1")
+                        lambda adresse, **k: vus.append(adresse)
+                        or {"id": 204, "datastore": "vivier"})
+    return D.make_store("u-1"), vus
 
 
-@pytest.mark.parametrize("adresse,avis", [("vivier", True), ("204", False)])
-def test_resoudre_par_nom_pose_l_avis(store, adresse, avis):
-    holder: list = []
-    jeton = session_org.set_call_avis(holder)
-    try:
-        assert store._resolve(adresse) == 204
-    finally:
-        session_org.reset_call_avis(jeton)
-    assert holder == ([deprecations.avis_nom_de_tableau("vivier", 204)] if avis else [])
+def test_un_nom_est_refuse_sans_rien_resoudre(store):
+    st, vus = store
+    with pytest.raises(errors.TableauParNom) as e:
+        st._resolve("vivier")
+    assert isinstance(e.value, errors.DatastoreNotFound), \
+        "refusé partout où « introuvable » l'est déjà"
+    assert e.value.indice == errors.refus_tableau_par_nom("vivier")
+    assert vus == [], "aucune résolution sous un nom"
 
 
-# ── REST : `Deprecation` / `Sunset` sur une route adressée par un nom ────────
+def test_un_numero_resout(store):
+    st, vus = store
+    assert st._resolve("204") == 204
+    assert vus == ["204"]
 
-@pytest.mark.parametrize("adresse,date", [("vivier", "08/11/2026"), ("204", None)])
-def test_la_route_rest_adressee_par_nom_est_datee(monkeypatch, adresse, date):
+
+# ── Les faces : le même code, la même phrase ─────────────────────────────────
+
+def test_capacite_le_refus_est_nomme():
+    from oto_mcp.capabilities.datastore.common import ns_not_found
+    d = ns_not_found("u-1", "vivier")
+    assert (d.status, d.code) == (400, "datastore_by_name")
+    assert d.message == errors.refus_tableau_par_nom("vivier")
+
+
+def test_outil_mcp_le_refus_est_nomme():
+    from oto_mcp.tools.datastore import _inconnu
+    assert _inconnu("vivier", errors.TableauParNom("vivier")) == (
+        "datastore_by_name: " + errors.refus_tableau_par_nom("vivier"))
+    assert _inconnu("204", errors.DatastoreNotFound("204")) == "datastore `204` unknown"
+
+
+@pytest.mark.parametrize("adresse,attendu", [("vivier", 400), ("204", 200)])
+def test_la_route_rest_adressee_par_nom_est_refusee(adresse, attendu):
     from pydantic import BaseModel
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
@@ -186,6 +105,8 @@ def test_la_route_rest_adressee_par_nom_est_datee(monkeypatch, adresse, date):
     from oto_mcp.capabilities import _rest_adapter
     from oto_mcp.capabilities._types import Capability, ResolvedCtx, RestBinding
 
+    appels: list = []
+
     class Entree(BaseModel):
         datastore: str
 
@@ -193,8 +114,8 @@ def test_la_route_rest_adressee_par_nom_est_datee(monkeypatch, adresse, date):
         ok: bool
 
     cap = Capability(
-        key="t.tableau", handler=lambda ctx, inp: {"ok": True}, Input=Entree,
-        Output=Sortie,
+        key="t.tableau", handler=lambda ctx, inp: appels.append(inp) or {"ok": True},
+        Input=Entree, Output=Sortie,
         authz=lambda raw, inp: ResolvedCtx(sub=raw.sub, org_id=None),
         rest=RestBinding(verb="GET", path="/api/datastores/{datastore}/t"))
 
@@ -207,13 +128,45 @@ def test_la_route_rest_adressee_par_nom_est_datee(monkeypatch, adresse, date):
     routes = _rest_adapter.make_routes(
         None, authenticate,
         lambda request, data, status=200: JSONResponse(data, status),
-        lambda request, status, code, detail=None, **kw: JSONResponse({"error": code},
-                                                                      status),
+        lambda request, status, code, detail=None, **kw: JSONResponse(
+            {"error": code, "detail": detail}, status),
         options, [cap])
     r = TestClient(Starlette(routes=routes)).get(f"/api/datastores/{adresse}/t")
-    assert r.status_code == 200, r.text
-    assert r.headers.get("Sunset") == date
-    assert (r.headers.get("Deprecation") == "true") is (date is not None)
+    assert r.status_code == attendu, r.text
+    assert "Sunset" not in r.headers and "Deprecation" not in r.headers
+    if attendu == 400:
+        assert r.json() == {"error": "datastore_by_name",
+                            "detail": errors.refus_tableau_par_nom("vivier")}
+        assert appels == [], "le handler n'est jamais appelé"
+
+
+# ── Les textes servis ne promettent plus que le nom résout ───────────────────
+
+def _textes_servis() -> dict:
+    from oto_mcp.capabilities.registry import CAPABILITIES
+    from oto_mcp.datastore import identite
+
+    out = {"identite.DESCRIPTION": identite.DESCRIPTION}
+    for c in CAPABILITIES:
+        if c.key in ("me.datastore.get_schema", "me.project", "runner.fleets"):
+            out[c.key] = c.description
+    assert len(out) == 4, "un texte servi a disparu du relevé"
+    for chemin in ("oto_mcp/tools/datastore.py", "oto_mcp/capabilities/_instruction.py",
+                   "oto_mcp/guides/datastore-semantics.md"):
+        out[chemin] = (RACINE / chemin).read_text()
+    return out
+
+
+@pytest.mark.parametrize("motif", [r"still resolves", r"being (retired|phased out)",
+                                   r"name still works", r"by name or number"])
+def test_aucun_texte_servi_ne_dit_que_le_nom_resout(motif):
+    encore = [n for n, t in _textes_servis().items() if re.search(motif, t)]
+    assert not encore, f"« {motif} » encore servi par : {encore}"
+
+
+def test_le_guide_dit_le_refus():
+    guide = (RACINE / "oto_mcp/guides/datastore-semantics.md").read_text()
+    assert "datastore_by_name" in guide
 
 
 # ── Le script de migration : ne devine jamais ────────────────────────────────

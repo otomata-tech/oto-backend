@@ -340,7 +340,7 @@ def test_le_catalogue_rend_le_numero_sous_LES_DEUX_noms(registre):
     remises = {
         "list": registre.list_datastores()[0],
         "create": registre.create_datastore("edition-vivier-2"),
-        "rename": registre.rename_datastore(NOM, "edition-vivier-3"),
+        "rename": registre.rename_datastore(str(CATALOGUE_NS), "edition-vivier-3"),
     }
     sans_numero = {g: o for g, o in remises.items()
                    if o.get(identite.CLE) != CATALOGUE_NS}

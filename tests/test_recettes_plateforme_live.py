@@ -81,14 +81,13 @@ def _publier_plateforme(appeler, slug: str, corps=CORPS, **kw) -> dict:
 def _table_de_l_org(org: int) -> tuple[int, str]:
     from oto_mcp import db, session_org
     from oto_mcp.datastore.core import make_store
-    nom = f"recettes-plateforme-{uuid.uuid4().hex[:6]}"
-    ns_id = db.create_datastore("org", str(org), nom)
+    ns_id = db.create_datastore("org", str(org), f"recettes-plateforme-{uuid.uuid4().hex[:6]}")
     jeton = session_org.set_call_org(org)
     try:
-        make_store(MEMBRE).set_schema(nom, SCHEMA)
+        make_store(MEMBRE).set_schema(str(ns_id), SCHEMA)
     finally:
         session_org.reset_call_org(jeton)
-    return ns_id, nom
+    return ns_id, str(ns_id)
 
 
 def test_un_membre_ne_peut_pas_ecrire_la_plateforme(monde):
@@ -140,7 +139,7 @@ def test_un_membre_lance_la_recette_de_la_plateforme_avec_ses_propres_droits(mon
     assert appeler(MEMBRE, org, op="get", slug=slug)["recipe"]["owner_type"] == "platform"
     assert [v["version"] for v in appeler(MEMBRE, org, op="versions",
                                           slug=slug)["versions"]] == [1]
-    ns, nom = _table_de_l_org(org)
+    ns, adresse = _table_de_l_org(org)
     run = appeler(MEMBRE, org, op="run", slug=slug, datastore=ns)
     assert run["recipe"]["owner_type"] == "platform"
     assert run["receipt"]["done"] and run["receipt"]["written"] == 4
@@ -152,7 +151,8 @@ def test_un_membre_lance_la_recette_de_la_plateforme_avec_ses_propres_droits(mon
     from oto_mcp import session_org
     jeton = session_org.set_call_org(org)
     try:
-        assert len(make_store(MEMBRE).cursor_rows(nom, limit=10)["rows"]) == 4
+        assert len(make_store(MEMBRE).cursor_rows(adresse, limit=10)["rows"]) == 4
+
     finally:
         session_org.reset_call_org(jeton)
 

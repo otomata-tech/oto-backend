@@ -469,7 +469,7 @@ _DOC = """Run the {label} waterfall over a TABLE's rows, on the server — op `u
 
         Args:
             op: `update_rows`.
-            datastore: the table, by name or number.
+            datastore: the table, by its NUMBER (`ns_id`) — a name is refused.
             inputs: {{input: column}} — inputs are {entrees}. Map every column
                 you have: more inputs open more (and cheaper) steps.
             output: {{field of the find: column}} — {champs}, or `provider`.

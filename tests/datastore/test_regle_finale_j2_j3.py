@@ -98,8 +98,8 @@ def _table():
     from oto_mcp.datastore.core import make_store
 
     db.upsert_user(SUB, email=f"{SUB}@regle-finale.invalid", name=SUB)
-    ns = "tbd-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "tbd-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store(SUB)
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"}, {"key": "raison", "type": "text"},

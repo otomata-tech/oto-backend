@@ -111,18 +111,17 @@ def test_unscoped_token_is_unchanged():
 
 
 def test_datastore_with_url_encoded_name():
-    """Un NOM dans le chemin est jugé sur l'identifiant qu'il résout (oto#158) — que
-    l'appelant fournit, décodé du chemin (`tableau_du_chemin`)."""
+    """Le chemin se lit décodé (`tableau_du_chemin`) ; un NOM n'ouvre rien — l'appelant
+    le refuse avant (`api.base`, `datastore_by_name`)."""
     scopes = {"namespaces": {"204": "read"}}
     assert ts.tableau_du_chemin("GET", "/api/datastores/mon%20tableau/rows") == "mon tableau"
-    assert ts.authorize(scopes, "GET", "/api/datastores/mon%20tableau/rows",
-                        id_du_tableau=204)
+    assert not ts.authorize(scopes, "GET", "/api/datastores/mon%20tableau/rows")
+    assert ts.authorize(scopes, "GET", "/api/datastores/204/rows")
 
 
-def test_un_nom_qui_ne_resout_rien_n_ouvre_rien():
+def test_un_nom_n_ouvre_rien():
     assert not ts.authorize(READ_ONLY, "GET", "/api/datastores/leads-accords-dormants/rows")
-    assert not ts.authorize(READ_ONLY, "GET", "/api/datastores/autre/rows",
-                            id_du_tableau=317)
+    assert not ts.authorize(READ_ONLY, "GET", "/api/datastores/autre/rows")
 
 
 def test_une_portee_par_nom_se_voit():

@@ -63,6 +63,7 @@ def _table(schema, ligne: dict) -> tuple:
     from oto_mcp.datastore.core import make_store
     ns = "cause-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", "sub-agent", ns)
+    ns = str(ns_id)
     st = make_store("sub-agent")
     st.set_schema(ns, schema)
     st.append_row(ns, ligne)

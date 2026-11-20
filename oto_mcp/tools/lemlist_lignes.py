@@ -98,7 +98,7 @@ def register(mcp: FastMCP) -> None:
         lead waits for review until lemlist_launch_lead.
 
         Args:
-            datastore: the table, by name or number.
+            datastore: the table, by its NUMBER (`ns_id`) — a name is refused.
             campaign_id: lemlist campaign id WITH its `cam_` prefix.
             field_mapping: {lead field: column}. Lead fields are those of
                 lemlist_create_lead (email, first_name, last_name, company_name,

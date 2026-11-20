@@ -96,11 +96,11 @@ def declarant(live):
 
 
 def _table(declarant, schema, lignes) -> tuple:
-    """Un tableau neuf du déclarant → `(store, nom, ns_id, [_id])`."""
+    """Un tableau neuf du déclarant → `(store, adresse, ns_id, [_id])`."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "file-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", declarant["sub"], ns)
+    ns_id = db.create_datastore("user", declarant["sub"], "file-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store(declarant["sub"])
     st.set_schema(ns, schema)
     ids = [st.append_row(ns, dict(ligne))["_id"] for ligne in lignes]

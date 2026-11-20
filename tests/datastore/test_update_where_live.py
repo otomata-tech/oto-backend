@@ -72,8 +72,8 @@ def store(live):
 def _table(lignes, schema=SCHEMA):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "uw-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "uw-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     st = make_store(SUB)
     if schema is not None:
         st.set_schema(ns, schema)

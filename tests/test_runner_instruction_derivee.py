@@ -73,11 +73,10 @@ def test_une_campagne_sans_instruction_en_recoit_une_qui_pointe_sa_file(monkeypa
                         lambda adresse, *, sub, org_id: 77)
     RF._fleets(_ctx(), RF.FleetInput(
         op="create", model="claude-sonnet-5", label="essai", procedure="enrichissement", tools=["data_write"],
-        namespace="edition-vivier", row_filter={"statut": "a_enrichir"}))
+        namespace="77", row_filter={"statut": "a_enrichir"}))
     servie = vus["input"]
     assert "`enrichissement`" in servie          # l'objet qui fait autorité
     assert "`77`" in servie                      # la file, par sa clé (#1067)
-    assert "edition-vivier" not in servie
     assert "a_enrichir" in servie                # et son périmètre
     assert "data_claim_next" in servie           # la mécanique, qui est à nous
 
@@ -112,7 +111,8 @@ def test_une_instruction_fournie_passe_intacte(monkeypatch):
     ecrite = "Traite la file de droite à gauche et ne conclus rien."
     RF._fleets(_ctx(), RF.FleetInput(
         op="create", model="claude-sonnet-5", label="essai", procedure="p", tools=["data_write"],
-        namespace="t", input=ecrite))
+        namespace="77", input=ecrite))
+
     assert vus["input"] == ecrite
 
 

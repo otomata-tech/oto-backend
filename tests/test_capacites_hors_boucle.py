@@ -269,8 +269,7 @@ _PATCH_A_CLE = {"key": "siren",
 @pytest.fixture
 def tableau(base_jetable):
     from oto_mcp import db
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-loop", ns)
+    ns = str(db.create_datastore("user", "sub-loop", "t-" + uuid.uuid4().hex[:6]))
     return ns
 
 

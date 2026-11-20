@@ -48,8 +48,8 @@ def _store():
 
 def _table(ligne: dict | None = None) -> tuple[str, int]:
     from oto_mcp import db
-    ns = "p217-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "p217-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     _store().set_schema(ns, SCHEMA)
     db.datastore_insert_row(ns_id, "r1", dict(ligne or {"titre": "t1",
                                                         "statut": "ouvert"}))
@@ -414,6 +414,6 @@ def test_un_tableau_en_lecture_seule_refuse_la_liberation(monkeypatch):
     stub_authz(monkeypatch)
     monkeypatch.setattr(R, "make_store", lambda sub: Boom(DatastoreReadOnly("v")))
     code, corps = call("me.datastore.release_claim",
-                       path_params={"datastore": "v", "row_id": "r1"},
+                       path_params={"datastore": "1", "row_id": "r1"},
                        body={"worker": "w-1"}, sub=SUB)
     assert (code, corps["error"]) == (403, "datastore_read_only"), corps

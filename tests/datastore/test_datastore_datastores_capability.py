@@ -216,13 +216,13 @@ def test_un_nom_deja_pris_est_un_409(store, monkeypatch):
 
 def test_la_suppression_rend_ok_et_le_nom(store):
     assert _call("me.datastore.delete_datastore",
-                 path_params={"datastore": "vivier"}) == (200, {"ok": True,
-                                                                "datastore": "vivier"})
+                 path_params={"datastore": "42"}) == (200, {"ok": True,
+                                                            "datastore": "42"})
 
 
 def test_la_suppression_sans_gouvernance_est_un_403(monkeypatch):
     monkeypatch.setattr(dsn, "make_store", lambda sub: Boom(DatastoreForbidden("v")))
-    code, corps = _call("me.datastore.delete_datastore", path_params={"datastore": "v"})
+    code, corps = _call("me.datastore.delete_datastore", path_params={"datastore": "42"})
     assert (code, corps["error"]) == (403, "forbidden")
 
 
@@ -235,9 +235,9 @@ def test_un_tableau_absent_garde_son_404_qui_dit_ou_il_vit(monkeypatch):
     monkeypatch.setattr(hors_org.org_store, "list_orgs_for_user",
                         lambda sub: [{"org_id": 81, "name": "Marché"}])
     monkeypatch.setattr(hors_org.db, "list_datastores_for_owners",
-                        lambda owners: [{"datastore": "v", "owner_type": "org",
+                        lambda owners: [{"id": 42, "datastore": "v", "owner_type": "org",
                                          "owner_id": "81"}])
-    code, corps = _call("me.datastore.delete_datastore", path_params={"datastore": "v"})
+    code, corps = _call("me.datastore.delete_datastore", path_params={"datastore": "42"})
     assert (code, corps["error"]) == (404, "datastore_not_found")
     assert "X-Oto-Org: 81" in corps["detail"] and "Marché" in corps["detail"]
 
@@ -246,7 +246,7 @@ def test_un_tableau_absent_garde_son_404_qui_dit_ou_il_vit(monkeypatch):
 
 def test_le_renommage_exige_un_nom(store):
     code, corps = _call("me.datastore.rename_datastore",
-                        path_params={"datastore": "v"}, body={"name": " "})
+                        path_params={"datastore": "42"}, body={"name": " "})
     assert (code, corps["error"]) == (400, "name_required")
 
 
@@ -259,7 +259,7 @@ def test_le_renommage_passe_par_la_gouvernance_pas_par_un_role(store, monkeypatc
     monkeypatch.setattr("oto_mcp.capabilities.datastore.common.ownership.can_govern",
                         lambda sub, rt, rid: vus.append((sub, rt, rid)) or False)
     code, corps = _call("me.datastore.rename_datastore",
-                        path_params={"datastore": "v"}, body={"name": "neuf"})
+                        path_params={"datastore": "42"}, body={"name": "neuf"})
     assert (code, corps["error"]) == (403, "forbidden")
     assert vus == [("u-1", "datastore_namespace", "42")]
 
@@ -273,7 +273,7 @@ def test_le_renommage_rend_le_nouveau_nom(store, monkeypatch):
     monkeypatch.setattr(dsn.db, "rename_datastore_by_id", lambda i, n: None)
     # ⚠️ Le NUMÉRO part avec (oto#176) : c'est la remise après laquelle l'adresse par
     # nom que l'appelant détenait est périmée, et le numéro, lui, n'a pas bougé.
-    assert _call("me.datastore.rename_datastore", path_params={"datastore": "v"},
+    assert _call("me.datastore.rename_datastore", path_params={"datastore": "42"},
                  body={"name": "neuf"}) == (200, {"ok": True, "datastore": "neuf",
                                                   "ns_id": 42})
 
@@ -288,7 +288,7 @@ def test_une_collision_de_nom_rend_409_avec_le_message_du_store(store, monkeypat
     def _boom(i, n):
         raise ValueError("datastore 'neuf' already exists")
     monkeypatch.setattr(dsn.db, "rename_datastore_by_id", _boom)
-    code, corps = _call("me.datastore.rename_datastore", path_params={"datastore": "v"},
+    code, corps = _call("me.datastore.rename_datastore", path_params={"datastore": "42"},
                         body={"name": "neuf"})
     assert code == 409 and "already exists" in corps["error"]
 
@@ -297,7 +297,7 @@ def test_une_collision_de_nom_rend_409_avec_le_message_du_store(store, monkeypat
 
 def test_lurl_rend_le_deep_link(store):
     store.v["get_url"] = "https://dashboard.oto.ninja/data/42"
-    assert _call("me.datastore.url", path_params={"datastore": "v"}) == (
+    assert _call("me.datastore.url", path_params={"datastore": "42"}) == (
         200, {"url": "https://dashboard.oto.ninja/data/42"})
 
 
@@ -310,7 +310,7 @@ def test_une_url_absente_dit_pourquoi_et_n_est_pas_un_404(store, monkeypatch):
     store.v["get_url"] = None
     monkeypatch.setattr(access, "current_org", lambda sub: 58)
     monkeypatch.setattr(links, "raison_sans_lien", lambda kind, **k: f"pas de page de {kind}")
-    assert _call("me.datastore.url", path_params={"datastore": "v"}) == (
+    assert _call("me.datastore.url", path_params={"datastore": "42"}) == (
         200, {"url": None, "url_absente": "pas de page de table"})
 
 

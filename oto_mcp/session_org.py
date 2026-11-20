@@ -411,6 +411,49 @@ def noter_avis(texte: str) -> None:
         holder.append(texte)
 
 
+# ── La FORME sous laquelle l'appel a désigné un tableau (`ref_kind`) ──────────
+# Le journal cite le tableau RÉSOLU (`ns_id`, nom canonique) : `957`, `slot:vivier` et
+# `mes_leads` y laissaient la même trace. Un nom est REFUSÉ depuis le retrait
+# (`datastore_by_name`) : la forme `name` compte ces refus. La forme est notée au point
+# où l'adresse reçue est jugée — `access.resolve_datastore_ref` pour `slot:`, les
+# résolutions par numéro (store `_resolve`, lien de projet, automatisation, portée d'un
+# jeton) pour `number`, le refus d'un nom (`datastore.errors.refus_tableau_par_nom`, par
+# où passent toutes les faces qui le refusent) pour `name` — et rejoint le journal :
+#   - face MCP : le relevé de l'appel (`_CALL_TRACE`), versé dans `args` par
+#     `calllog.apply_call_trace` (`server._TRACED_ARGS`) ;
+#   - face REST : le holder posé par le journal des routes (`api.routes.RestCallLogger`),
+#     versé dans les `args` de la ligne de route. Un holder À PART, et non le relevé
+#     MCP : ce relevé, posé en REST, ferait lire `key_mode`/`quantity` aux gardes de
+#     crédit et de budget qui le prennent pour un appel MCP.
+# Jamais le nom lui-même : seulement sa forme. Plusieurs tableaux désignés dans un même
+# appel : la forme la plus dépréciée l'emporte (`name` > `slot` > `number`).
+REF_NUMBER = "number"
+REF_SLOT = "slot"
+REF_NAME = "name"
+_RANG_REF = {REF_NUMBER: 0, REF_SLOT: 1, REF_NAME: 2}
+
+_REF_REST: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "oto_ref_rest", default=None)
+
+
+def set_ref_rest(holder: dict) -> contextvars.Token:
+    """Pose le holder de la requête REST (dict vide, relu par le journal des routes)."""
+    return _REF_REST.set(holder)
+
+
+def reset_ref_rest(token: contextvars.Token) -> None:
+    _REF_REST.reset(token)
+
+
+def noter_forme_tableau(forme: str) -> None:
+    """Note la forme d'une désignation de tableau dans les holders posés. No-op hors
+    appel MCP et hors requête REST. Une forme inconnue est une faute de l'appelant."""
+    rang = _RANG_REF[forme]
+    for holder in (_CALL_TRACE.get(), _REF_REST.get()):
+        if holder is not None and rang > _RANG_REF.get(holder.get("ref_kind"), -1):
+            holder["ref_kind"] = forme
+
+
 # ── L'ancien nom sous lequel l'appel est arrivé (`deprecations.TOOLS`) ─────────
 # Le bord du protocole (`middleware.alias`) et `oto_call` rétablissent le nom
 # d'aujourd'hui avant que le reste ne le lise ; ce qui a été DEMANDÉ ne reste lisible

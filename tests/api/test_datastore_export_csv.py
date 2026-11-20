@@ -134,10 +134,10 @@ def test_valeurs_null_liste_et_objet(monkeypatch):
 
 
 def test_404_sur_tableau_introuvable(monkeypatch):
-    store = _Store(DatastoreNotFound("nope"), [])
+    store = _Store(DatastoreNotFound("999999999"), [])
     client = TestClient(_app(monkeypatch, store))
 
-    rep = client.get("/api/datastores/nope/rows/export.csv")
+    rep = client.get("/api/datastores/999999999/rows/export.csv")
 
     assert rep.status_code == 404
     assert rep.json()["error"] == "datastore_not_found"

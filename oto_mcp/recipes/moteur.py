@@ -294,7 +294,7 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
     # correspondance) comptent dans le budget de l'appel.
     fin = time.monotonic() + budget_s
     try:
-        # Comparées RÉSOLUES : un numéro et un nom désignent le même tableau.
+        # Comparées RÉSOLUES : `slot:<nom>` et le numéro qu'il lie désignent le même tableau.
         if fe and datastore is not None and await run_in_threadpool(
                 ecriture.meme_tableau, datastore, fe["datastore"]):
             raise RecetteRefusee("for_each_same_table",

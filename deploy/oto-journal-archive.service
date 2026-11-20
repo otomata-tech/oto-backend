@@ -13,14 +13,17 @@ Type=oneshot
 # jamais une copie (une copie divergerait le jour d'une rotation de clé) : le `.env`
 # partagé porte le non-secret (endpoint, région, bucket), les secrets arrivent par le
 # lanceur générique (#967, lot 5), qui exécute le script VERSIONNÉ de l'arbre du tag.
-# Cette unité n'est pas posée par le déploiement : le remplacement se fait à la main,
-# après avoir vidé le `.env` de ses secrets (docs/instance-cible.md §Passer notre box
-# au lanceur). Bleu = /opt/oto-mcp ; l'arbre nommé doit porter le lanceur.
+# Posée par le déploiement prod (`install_timers` de deploy/oto-backend.sh) avec la
+# maintenance : @ARBRE@ est réécrit à la pose par l'arbre de la couleur EN SERVICE (#1807 ;
+# avant, posée à la main sur /opt/oto-mcp, un arbre fixe en retard sur le tag servi). Le
+# fichier n'est pas exécutable tel quel.
 EnvironmentFile=/opt/oto-mcp/.env
 EnvironmentFile=/etc/oto-mcp/lanceur-prod.env
 LoadCredential=scw:/etc/oto-mcp/scw.key
-ExecStart=/opt/oto-mcp/.venv/bin/python /opt/oto-mcp/deploy/lanceur_secrets.py --script deploy/archive_tool_calls.py
+WorkingDirectory=@ARBRE@
+ExecStart=@ARBRE@/.venv/bin/python @ARBRE@/deploy/lanceur_secrets.py --script deploy/archive_tool_calls.py
 # Un export volumineux ne doit pas concurrencer le service qui répond aux utilisateurs.
 Nice=10
 IOSchedulingClass=idle
 TimeoutStartSec=3h
+SyslogIdentifier=oto-journal-archive

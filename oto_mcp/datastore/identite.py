@@ -34,7 +34,6 @@ from typing import Annotated, Any, Mapping, Optional
 
 from pydantic import BeforeValidator, WithJsonSchema
 
-from .. import deprecations
 
 # Le nom de la clé, écrit une fois : les deux faces et les tests le citent d'ici.
 CLE = "ns_id"
@@ -42,9 +41,8 @@ CLE = "ns_id"
 # La phrase servie AVEC la clé, au contrat comme aux descriptions d'outils : une clé
 # neuve dont personne ne dit à quoi elle sert reste une clé que personne n'emploie.
 DESCRIPTION = (
-    "The table's NUMBER — the form to pass as `datastore` from here on. A name still "
-    f"resolves (same visibility check) until {deprecations.date_retrait_nom_de_tableau()}"
-    ", then it is refused. `null` only when no table was resolved.")
+    "The table's NUMBER — the form to pass as `datastore` from here on (a table name is "
+    "refused). `null` only when no table was resolved.")
 
 
 def identite(ns_id: Any = None, nom: Optional[str] = None, *,

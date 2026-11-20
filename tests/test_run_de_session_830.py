@@ -262,9 +262,10 @@ def test_une_reservation_sans_jeton_est_rattachee_au_run_et_liberee(live, monkey
     monkeypatch.setattr(T, "_acting_store", lambda: make_store(SUB))
     monkeypatch.setattr(T, "_ns", lambda ns: ns)
     monkeypatch.setattr(T, "_project_hint", lambda ns: None)
-    ns = "file-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "file-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     for i in range(2):
+
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"85045{i:04d}"})
 
     m = FastMCP("t-run-session-830-pg")

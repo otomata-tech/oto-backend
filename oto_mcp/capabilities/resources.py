@@ -286,7 +286,12 @@ def _notify_grant(sharer_sub: str, resource_type: str, rid: str, to_email: str,
         return False
 
 
-def _enrich_datastore(row: dict) -> dict:
+_A_LIRE = object()
+
+
+def _enrich_datastore(row: dict, *, row_count=_A_LIRE, owner_label=_A_LIRE) -> dict:
+    """UN tableau. `row_count`/`owner_label` déjà lus en lot (`_enrich_datastores`)
+    sont repris tels quels ; sinon lus ici, pour ce seul tableau (op=get)."""
     ns_id = int(row["id"])
     return {
         "resource_type": "datastore_namespace",
@@ -294,10 +299,45 @@ def _enrich_datastore(row: dict) -> dict:
         "datastore": row["datastore"],
         "owner_type": row.get("owner_type"),
         "owner_id": row.get("owner_id"),
-        "owner_label": _owner_label(row.get("owner_type"), row.get("owner_id")),
-        "row_count": db.count_datastore_rows_for_ns(ns_id),
+        "owner_label": (_owner_label(row.get("owner_type"), row.get("owner_id"))
+                        if owner_label is _A_LIRE else owner_label),
+        "row_count": (db.count_datastore_rows_for_ns(ns_id)
+                      if row_count is _A_LIRE else row_count),
         "created_at": row.get("created_at"),
     }
+
+
+def _libelles_d_owners(paires) -> dict:
+    """`{(owner_type, owner_id): libellé}` pour un LOT de propriétaires — même libellé
+    que `_owner_label`. Les comptes en lots (`db.emails_by_subs`, borné à 200 par
+    appel) ; une org ou une équipe, une fois par propriétaire DISTINCT."""
+    distinctes = list(dict.fromkeys((t, i) for t, i in paires))
+    subs = [i for t, i in distinctes if t == "user" and i]
+    emails: dict = {}
+    for k in range(0, len(subs), 200):
+        emails.update(db.emails_by_subs(subs[k:k + 200]))
+    return {(t, i): (emails.get(i) if t == "user" else _owner_label(t, i))
+            for t, i in distinctes}
+
+
+def _enrich_datastores(rows: list[dict]) -> list[dict]:
+    """La LISTE des tableaux (op=list) : les nombres de lignes et les libellés lus en
+    lot, pas un `count(*)` et une lecture de propriétaire par tableau — chacun sur sa
+    connexion du pool. Sur une liste de plateforme (tous les tableaux), c'était des
+    milliers de requêtes et des dizaines de secondes par affichage.
+
+    ⚠️ Un SEUL emprunt au pool pour tout l'enrichissement (`db.reuse_connection`) : le
+    chemin ne fait que lire (`tests/test_resources_liste_en_lot_live.py` le vérifie).
+    Une org ou une équipe propriétaire coûte encore une lecture, par propriétaire
+    DISTINCT, jamais par tableau."""
+    with db.reuse_connection():
+        comptes = db.count_datastore_rows_for_ns_ids([int(r["id"]) for r in rows])
+        libelles = _libelles_d_owners((r.get("owner_type"), r.get("owner_id"))
+                                      for r in rows)
+    return [_enrich_datastore(r, row_count=comptes.get(int(r["id"]), 0),
+                              owner_label=libelles.get((r.get("owner_type"),
+                                                        r.get("owner_id"))))
+            for r in rows]
 
 
 def _enrich_app(row: dict) -> dict:
@@ -354,6 +394,8 @@ _OPS: dict[str, dict] = {
         "list_for_owners": lambda owners: db.list_datastores_for_owners(owners),
         "get_by_id": lambda i: db.get_datastore_by_id(i),
         "enrich": _enrich_datastore,
+        # La liste se lit en LOT (`_enrich_datastores`) ; `enrich` reste celui d'UN.
+        "enrich_many": lambda rows: _enrich_datastores(rows),
     },
     "project": {
         "list_all": lambda: db.list_all_projects(),
@@ -719,7 +761,8 @@ def _gouverner(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
                          if roles.can_admin_group(ctx.sub, g)]
             rows = ops["list_for_owners"](governed)
         return {"resource_type": inp.resource_type,
-                "resources": [ops["enrich"](r) for r in rows]}
+                "resources": (ops["enrich_many"](rows) if "enrich_many" in ops
+                              else [ops["enrich"](r) for r in rows])}
 
     # Filet pour les appels DIRECTS au handler (tests, réemploi interne) : par les
     # faces servies, `RESOURCE_GOVERN` a déjà refusé un `resource_id` absent avec son

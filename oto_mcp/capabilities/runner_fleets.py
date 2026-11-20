@@ -66,8 +66,10 @@ from pydantic import BaseModel, Field
 from . import (_abonnement, _acces_agent, _cle_exigee, _descriptions_outils, _instruction,
                _limites_du_run, _lignes_de_campagne, _lignes_reservables, _modele,
                _ordonnanceur_de_campagne, _outils_manquants, _outils_plateforme)
-from .. import (db, deprecations, output_projection, runner_models, session_org,
+from .. import (db, output_projection, runner_models, session_org,
                tool_alias, verrou_org)
+from ..datastore.errors import est_un_nom_de_tableau
+from .datastore.common import refus_nom_de_tableau
 
 logger = logging.getLogger(__name__)
 from ._authz import ORG_MEMBER
@@ -129,10 +131,9 @@ class FleetInput(BaseModel):
     procedure: Optional[str] = None
     tools: Optional[list[str]] = None
     namespace: Optional[str] = Field(None, description=(
-        "create: the target table, by id or name. Resolved ONCE, at declaration, in "
-        "the declarer's scope, and kept as the table's id — served back in "
-        "`namespace`. A name that several tables carry at the same rank is refused "
-        "(`datastore_ambigu`)."))
+        "create: the target table, by its NUMBER (`ns_id`) — a table name is refused "
+        "(`datastore_by_name`). Checked ONCE, at declaration, in the declarer's scope, "
+        "and served back in `namespace`."))
     row_filter: Optional[dict] = None
     project_id: Optional[int] = None
     input: Optional[str] = None
@@ -400,10 +401,12 @@ def _cible_a_la_declaration(ctx: ResolvedCtx, adresse: Optional[str]) -> Optiona
     IDENTIFIANT (#1067) — `None` sans cible. Un nom se résout dans la portée du
     déclarant (`_lignes_reservables.cle_a_la_declaration`) : ce qui lit l'automatisation
     ensuite passe par l'identifiant, et un homonyme apparu plus tard n'y change rien.
-    Rien ne répond → 404 ; plusieurs tableaux à ce nom au même rang → 409 nommé."""
+    Un NOM est refusé (`datastore_by_name`, 08/11/2026) ; rien ne répond → 404."""
     adresse = (adresse or "").strip()
     if not adresse:
         return None
+    if est_un_nom_de_tableau(adresse):
+        raise refus_nom_de_tableau(adresse)
     try:
         cle = _lignes_reservables.cle_a_la_declaration(
             adresse, sub=ctx.sub, org_id=ctx.org_id)
@@ -414,8 +417,7 @@ def _cible_a_la_declaration(ctx: ResolvedCtx, adresse: Optional[str]) -> Optiona
             404, "datastore_not_found",
             f"aucun tableau « {adresse} » dans ta portée : une automatisation vise un "
             "tableau qui existe, désigné par son identifiant.")
-    if deprecations.adresse_par_nom(adresse, cle):
-        session_org.noter_avis(deprecations.avis_nom_de_tableau(adresse, cle))
+    session_org.noter_forme_tableau(session_org.REF_NUMBER)
     return str(cle)
 
 
@@ -528,6 +530,7 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # d'organisation ; en pool, il faut qu'un membre y prête un abonnement.
         _abonnement.exiger_a_la_pose(ctx.sub, None, famille, flotte=True,
                                      org_id=ctx.org_id)
+        _outils_plateforme.exiger_outils_d_admin_a_sa_portee(ctx.sub, inp.tools)
         descriptions = _descriptions_outils.valider(inp.descriptions_outils, inp.tools)
         cible = _cible_a_la_declaration(ctx, inp.namespace)
         return {"fleet": db.create_fleet(
@@ -794,6 +797,8 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # campagne plus outillée que le travail appelant reste permis (relais) : sa
         # liste, elle, est posée par une personne.
         _outils_plateforme.exiger_aucun_ajout_d_agent(actuelle, inp.tools)
+        _outils_plateforme.exiger_outils_d_admin_a_sa_portee(
+            ctx.sub, inp.tools, actuelle.get("tools"))
         retires = _descriptions_outils.outils_nommes_retires(
             actuelle.get("descriptions_outils"), inp.tools)
         if retires:
@@ -864,9 +869,12 @@ CAPABILITIES += [
             DeclaredError(404, "datastore_not_found",
                           "`create` sur un `namespace` qu'aucun tableau de la portée "
                           "du déclarant ne porte"),
+            DeclaredError(400, "datastore_by_name",
+                          "`create` qui désigne son tableau (`namespace`) par son NOM, "
+                          "refusé depuis le 08/11/2026 : on passe son numéro"),
             DeclaredError(409, "datastore_ambigu",
-                          "`create` sur un nom que plusieurs tableaux portent au même "
-                          "rang de la portée du déclarant, ou `launch` d'une "
+                          "`create` sur un numéro qui est aussi le NOM d'un autre "
+                          "tableau de la portée du déclarant, ou `launch` d'une "
                           "automatisation d'avant #1067 dont le nom ne désigne plus un "
                           "seul tableau"),
             DeclaredError(404, "fleet_not_found",

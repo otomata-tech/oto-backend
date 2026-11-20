@@ -114,6 +114,10 @@ ECRITURES = {
     "runs.thread": {"append"},
     "usage.notify_reporters": {"send"},
     "org.instruction.share.write": {"publish", "set", "unpublish"},
+    # Effacer une org : demander (un lien part), annuler, confirmer (l'org est suspendue
+    # et sa purge fixée). `plan`/`status`/`preview` sont des lectures.
+    "org.erasure": {"request", "cancel"},
+    "org.erasure_confirm": {"confirm"},
 }
 
 # Capacités dont l'`op` est un texte LIBRE (pas un `Literal`) : leurs ops ne se lisent

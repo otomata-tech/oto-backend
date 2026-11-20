@@ -389,15 +389,16 @@ _REGLAGES: tuple[Variable, ...] = (
              "(défaut) refuse toute résolution du porteur hors de l'org de son travail, "
              "`report` la journalise et la laisse passer, `off` le coupe. Une valeur "
              "inconnue vaut `enforce`.",
-             ("oto_mcp/verrou_org.py:141",)),
-    Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "report",
+             ("oto_mcp/verrou_org.py:142",)),
+    Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "enforce",
              "Verrou des rôles PLATEFORME des jetons de délégation (`verrou_org.py`) : "
-             "`enforce` lit `member` le porteur `admin`/`super_admin` d'un travail du "
-             "runner (aucune garde plateforme, aucun `oto_admin_*` — sauf, pendant leur "
-             "appel, ceux que son agent nomme : `platform_tools`), `report` (défaut) "
-             "journalise ce qui serait retiré et ne retire rien, `off` le coupe. Une "
-             "valeur inconnue vaut `report`. Indépendant d'`OTO_VERROU_ORG_DELEGATION`.",
-             ("oto_mcp/verrou_org.py:226",)),
+             "`enforce` (défaut) lit `member` le porteur `admin`/`super_admin` d'un "
+             "travail du runner (aucune garde plateforme, aucun `oto_admin_*` — sauf, "
+             "pendant leur appel, ceux que son agent nomme : `platform_tools`), `report` "
+             "(posé explicitement) journalise ce qui serait retiré et ne retire rien, "
+             "`off` le coupe. Une valeur inconnue vaut `enforce`. Indépendant "
+             "d'`OTO_VERROU_ORG_DELEGATION`.",
+             ("oto_mcp/verrou_org.py:227",)),
     Variable("OTO_COPILOT_SUBS", Classe.REGLAGE, "",
              "L'agent intégré à l'application (`capabilities/copilot`, docs/copilot.md) : "
              "les `sub` autorisés, séparés par des virgules. Vide (défaut) = personne — les "
@@ -890,6 +891,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "d'une procédure partagée par lien qui a de nouveaux lecteurs visibles. "
              "Absente (ou autre que 1/true/on) : le travail compte ce qu'il enverrait, "
              "n'envoie ni ne marque rien.", ("oto_mcp/digest_lecteurs.py:34",)),
+    Variable("OTO_EFFACEMENTS", Classe.REGLAGE, "",
+             "Ouvre le travail `effacements` (docs/effacement-d-org.md) : la purge des "
+             "orgs dont l'effacement est confirmé et le délai de grâce échu — base, "
+             "stockage, sièges Unipile, comptes Logto, archives du journal. Absente "
+             "(ou autre que 1/true/yes/on) : le travail liste ce qu'il ferait, n'écrit "
+             "rien. Prod seulement : la préprod partage la base.",
+             ("oto_mcp/effacement/travail.py:43",)),
     Variable("OTO_UNIPILE_FIN_DE_DROIT_DELAI_JOURS", Classe.REGLAGE, "7",
              "Jours entre le premier constat de la perte du droit `unipile` et la "
              "suppression du compte chez unipile. Entier ≥ 1, sinon le travail lève.",

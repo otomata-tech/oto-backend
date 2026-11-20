@@ -6,6 +6,7 @@ import types
 
 import pytest
 
+from oto_mcp import session_org
 from oto_mcp.capabilities import projects as P
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
@@ -99,10 +100,10 @@ def seams(monkeypatch):
                                                 "detail": "Proj", "created_at": "2026-06-30"}])
     # Bracelet projet (B2.2) : session présente + record des poses/retraits.
     rec["proj"] = []
-    monkeypatch.setattr(P.session_org, "current_session_id", lambda: "sess1")
-    monkeypatch.setattr(P.session_org, "set_project_override",
+    monkeypatch.setattr(session_org, "current_session_id", lambda: "sess1")
+    monkeypatch.setattr(session_org, "set_project_override",
                         lambda sid, pid: rec["proj"].append((sid, pid)))
-    monkeypatch.setattr(P.session_org, "clear_project_override",
+    monkeypatch.setattr(session_org, "clear_project_override",
                         lambda sid: rec["proj"].append((sid, None)))
     # Gate de contexte d'org (ADR 0023) : pas de grant par défaut → visibilité dérivée
     # de l'owner-match seul. Les tests dédiés surchargent (partage à un principal).
@@ -929,7 +930,7 @@ def test_use_project_other_org_hidden(seams, monkeypatch):
 
 def test_use_project_no_session_needed(seams, monkeypatch):
     # Hint sans état : plus d'exigence de session MCP (ADR 0038 B3b).
-    monkeypatch.setattr(P.session_org, "current_session_id", lambda: None)
+    monkeypatch.setattr(session_org, "current_session_id", lambda: None)
     out = P._use_project(CTX, P.UseProjectInput(project_id=7))
     assert out["project"] == 7 and seams["proj"] == []
 

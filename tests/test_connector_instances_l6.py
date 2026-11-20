@@ -90,6 +90,11 @@ _LECTEURS_ADMIS = {
     # et la recopie telle quelle vers une autre base. Il ne résout rien : ni cascade,
     # ni coffre, ni autorisation ne passent par lui.
     "export_perimetre/classement.py",
+    # L'effacement d'une org (`docs/effacement-d-org.md`) nomme la table dans sa décision
+    # sur les tables qui se désignent elles-mêmes (`AUTO_REFERENCES` : une instance
+    # d'une autre org héritée d'une des siennes est détachée). Il ne résout rien : ni
+    # cascade, ni coffre, ni autorisation ne passent par lui.
+    "effacement/disposition.py",
     # Les clés d'un tenant devenu PRIMAIRE à l'import, rangées en instances plateforme.
     # Ne résout rien : il lit l'instance d'une ligne tenant pour archiver les arêtes qui
     # la désignent, et vérifie que la ligne plateforme posée par le coffre est nommée.

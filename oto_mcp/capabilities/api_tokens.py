@@ -60,8 +60,10 @@ from typing import Any, Optional, Union
 from pydantic import BaseModel, Field
 
 from .. import (access, credentials_store, db, org_origin, org_store, ownership,
-                providers, roles)
+                providers, roles, session_org)
 from ..auth import token_scopes
+from ..datastore.errors import est_un_nom_de_tableau
+from .datastore.common import refus_nom_de_tableau
 from ._authz import SUB_ONLY, SUPER_ADMIN
 from ._refus_de_pose import REFUS_DE_VERIFICATION, refus_de_pose
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -435,16 +437,14 @@ def _my_list(ctx: ResolvedCtx, inp: TokenListInput) -> dict:
 
 def _par_identifiant(sub: str, scopes: Optional[dict]) -> Optional[dict]:
     """La portée telle qu'elle est RANGÉE : chaque tableau sous son IDENTIFIANT
-    (oto#158), résolu dans ce que `sub` — le porteur du jeton — voit dans son org
-    active. Un nom est accepté à l'émission le temps du préavis
-    (`deprecations.RETRAIT_NOM_DE_TABLEAU`) ; la réponse rend la portée rangée, donc
-    l'identifiant, et c'est lui qu'un appelant doit envoyer désormais.
+    (oto#158), parmi ce que `sub` — le porteur du jeton — voit dans son org active. Un
+    NOM de tableau est refusé depuis le 08/11/2026 (`datastore_by_name`) : rien n'est
+    résolu sous ce nom.
 
     ⚠️ La portée ne nomme pas forcément un tableau : `parse` rend légitimement
     `{"projects": …}` ou `{"runner": true}` seuls. Refuser un tableau que le porteur ne
     voit pas : le jeton ne peut de toute façon pas dépasser ses droits, mais une faute
-    de frappe produirait un jeton muet qu'on croirait branché. Un nom que portent
-    plusieurs tableaux visibles est refusé, jamais tranché."""
+    de frappe produirait un jeton muet qu'on croirait branché."""
     if (scopes or {}).get(token_scopes.ISSUE):
         # Le plafond d'un émetteur se range comme une portée : par identifiant.
         scopes = {**scopes, token_scopes.ISSUE: _par_identifiant(
@@ -452,31 +452,18 @@ def _par_identifiant(sub: str, scopes: Optional[dict]) -> Optional[dict]:
     vises = (scopes or {}).get("namespaces") or {}
     if not vises:
         return scopes
+    noms = sorted(c for c in vises if est_un_nom_de_tableau(c))
+    if noms:
+        raise refus_nom_de_tableau(noms[0])
     from ..datastore.core import make_store
-    visibles = make_store(sub).list_datastores()
-    ids = {str(n["id"]) for n in visibles}
-    par_nom: dict = {}
-    for n in visibles:
-        par_nom.setdefault(n["datastore"], set()).add(str(n["id"]))
-    ranges: dict = {}
-    inconnus, ambigus = [], []
-    for cle, droit in vises.items():
-        if cle.isdigit() and cle in ids:
-            ranges[cle] = droit
-        elif len(par_nom.get(cle, ())) == 1:
-            ranges[next(iter(par_nom[cle]))] = droit
-        elif par_nom.get(cle):
-            ambigus.append(cle)
-        else:
-            inconnus.append(cle)
-    if ambigus:
-        raise AuthzDenied(400, "ambiguous_namespace",
-                          f"Plusieurs tableaux visibles portent ces noms : {sorted(ambigus)}"
-                          " — nomme-les par leur identifiant (`data_list_datastores`).")
+    ids = {str(n["id"]) for n in make_store(sub).list_datastores()}
+    inconnus = sorted(c for c in vises if str(c).strip() not in ids)
+    if vises and not inconnus:
+        session_org.noter_forme_tableau(session_org.REF_NUMBER)
     if inconnus:
         raise AuthzDenied(400, "unknown_namespace",
-                          f"Tableaux inconnus dans l'org active : {sorted(inconnus)}")
-    return {**scopes, "namespaces": ranges}
+                          f"Tableaux inconnus dans l'org active : {inconnus}")
+    return {**scopes, "namespaces": {str(c).strip(): d for c, d in vises.items()}}
 
 
 def _my_create(ctx: ResolvedCtx, inp: TokenCreateInput) -> dict:
@@ -597,7 +584,7 @@ _D_LIST = ("Mes jetons API, sans leur secret — il n'est rendu qu'à la créati
 _D_CREATE = ("Émet un jeton API. ⚠️ Le secret n'est rendu QU'UNE FOIS. `scopes` le BORNE "
              "à des tableaux (par IDENTIFIANT) ou projets nommés — la forme à confier à "
              "une intégration tierce ; absent, le jeton a tous mes droits. Un nom de "
-             "tableau est rangé sous son identifiant, que la réponse rend. Un tableau que "
+             "tableau est refusé (`datastore_by_name`). Un tableau que "
              "je ne vois pas est refusé (`unknown_namespace`) : sinon le jeton serait "
              "muet et on le croirait branché. `{\"issue\": <plafond>}` fait un jeton "
              "ÉMETTEUR, qui émet à son tour sans session : `ttl_days` y est requis, et ce "

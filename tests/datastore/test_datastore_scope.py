@@ -120,12 +120,12 @@ def test_org_store_write_uses_org_principal(monkeypatch):
     # jamais sur `can_access(sub, …)` (il n'y a pas de sub).
     seen = {}
     monkeypatch.setattr(D.db, "resolve_datastore_ns",
-                        lambda ns, sub, org_ids, group_ids: {"id": 1} if ns == "leads" else None)
+                        lambda ns, sub, org_ids, group_ids: {"id": 1} if ns == "1" else None)
     monkeypatch.setattr(D.ownership, "org_can_access",
                         lambda org_id, t, rid, want="read": seen.setdefault("org", (org_id, want)) or True)
     monkeypatch.setattr(D.ownership, "can_access",
                         lambda *a, **k: pytest.fail("can_access(sub) ne doit pas être appelé en mode org"))
-    ns_id = D.make_org_store(99)._resolve("leads", write=True)
+    ns_id = D.make_org_store(99)._resolve("1", write=True)
     assert ns_id == 1 and seen["org"] == (99, "write")
 
 
@@ -150,8 +150,8 @@ def test_list_datastores_no_active_org_is_empty(monkeypatch):
 
 
 def test_resolve_by_name_scopes_to_active_org(monkeypatch):
-    # RÉGRESSION (fuite cross-org, symétrique au fix projets) : la résolution PAR NOM
-    # scope sur l'org active — `resolve_datastore_ns` reçoit [org active] + mes groupes
+    # RÉGRESSION (fuite cross-org, symétrique au fix projets) : la résolution d'une
+    # adresse scope sur l'org active — `resolve_datastore_ns` reçoit [org active] + mes groupes
     # DE CETTE ORG, jamais l'union de toutes mes orgs (`accessor_scope`). Un datastore
     # d'une AUTRE de mes orgs (introuvable dans ce scope) lève DatastoreNotFound.
     rec = {}
@@ -165,8 +165,8 @@ def test_resolve_by_name_scopes_to_active_org(monkeypatch):
 
     monkeypatch.setattr(D.db, "resolve_datastore_ns", fake_resolve)
     with pytest.raises(D.DatastoreNotFound):
-        D.make_store("u1").resolve_ns_id("leads")
-    assert rec["args"] == ("leads", "u1", [44], [7])   # org active seule, pas l'union
+        D.make_store("u1").resolve_ns_id("1")
+    assert rec["args"] == ("1", "u1", [44], [7])   # org active seule, pas l'union
 
 
 def test_resolve_finds_active_org_datastore(monkeypatch):
@@ -176,7 +176,7 @@ def test_resolve_finds_active_org_datastore(monkeypatch):
     monkeypatch.setattr(
         D.db, "resolve_datastore_ns",
         lambda datastore, *, sub, org_ids, group_ids: {"id": 1} if org_ids == [99] else None)
-    assert D.make_store("u1").resolve_ns_id("leads") == 1
+    assert D.make_store("u1").resolve_ns_id("1") == 1
 
 
 # ── Endpoint partagé : scope aux tableaux liés au projet + read-only (#193) ──
@@ -197,10 +197,10 @@ def test_org_store_resolve_outside_scope_not_found(monkeypatch):
     monkeypatch.setattr(D.db, "resolve_datastore_ns",
                         lambda ns, *, sub, org_ids, group_ids: {"id": 2})   # existe côté org
     with pytest.raises(D.DatastoreNotFound):
-        D.make_org_store(99, allowed_ns_ids={1})._resolve("accords")        # id 2 ∉ {1}
+        D.make_org_store(99, allowed_ns_ids={1})._resolve("2")        # id 2 ∉ {1}
     monkeypatch.setattr(D.db, "resolve_datastore_ns",
                         lambda ns, *, sub, org_ids, group_ids: {"id": 1})
-    assert D.make_org_store(99, allowed_ns_ids={1})._resolve("leads") == 1   # dans le scope → OK
+    assert D.make_org_store(99, allowed_ns_ids={1})._resolve("1") == 1   # dans le scope → OK
 
 
 def test_anon_project_scope_resolves_name_and_id_links(monkeypatch):
@@ -231,8 +231,8 @@ def test_org_store_read_only_blocks_write(monkeypatch):
                         lambda *a, **k: pytest.fail("pas de check ownership en read_only"))
     store = D.make_org_store(99, allowed_ns_ids={1}, read_only=True)
     with pytest.raises(D.DatastoreReadOnly):
-        store._resolve("leads", write=True)
-    assert store._resolve("leads") == 1        # lecture OK en read_only
+        store._resolve("1", write=True)
+    assert store._resolve("1") == 1        # lecture OK en read_only
 
 
 def test_un_tableau_qu_on_vient_de_CREER_se_liste_la_ou_il_est_cree(monkeypatch):

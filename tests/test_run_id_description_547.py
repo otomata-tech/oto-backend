@@ -127,8 +127,9 @@ def test_seule_la_description_de_run_id_change_sur_un_outil_qui_le_porte():
 @pytest.fixture
 def table(live):
     from oto_mcp import db
-    ns = "camp-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", "sub-agent", ns)
+    ns_id = db.create_datastore("user", "sub-agent", "camp-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
+
     for i in range(3):
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"5511100{i}", "statut": "a_faire"})
     return ns, ns_id

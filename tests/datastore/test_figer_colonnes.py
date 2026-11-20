@@ -124,11 +124,10 @@ def test_apres_le_gel_les_colonnes_figees_s_ecrivent_et_les_neuves_non(live):
     """La raison d'être du gel : sous la garde, ce qui existait passe encore."""
     from oto_mcp.datastore import colonnes_non_declarees as cnd
     from oto_mcp.datastore.core import make_store
-    from oto_mcp import db
     ns_id = _tableau(None, [{"nom": "A", "age": 3}])
     _passage(True, tableaux=[ns_id])
     store = make_store(SUB)
-    ns = db.get_datastore_by_id(ns_id)["datastore"]
+    ns = str(ns_id)
     store.append_row(ns, {"nom": "B", "age": 4})
     with pytest.raises(cnd.ColonneNonDeclaree):
         make_store(SUB).append_row(ns, {"nom": "C", "taille": 180})

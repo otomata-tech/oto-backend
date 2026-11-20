@@ -2,8 +2,8 @@
 
 La maintenance quotidienne et l'archive du journal lisent la base et le stockage : une
 fois les secrets sortis du `.env`, ils n'y ont plus accès qu'en passant par
-`deploy/lanceur_secrets.py`. La maintenance est posée par le déploiement prod
-(`install_timers`), l'archive à la main.
+`deploy/lanceur_secrets.py`. La maintenance et l'archive sont posées par le
+déploiement prod (`install_timers`), sur l'arbre de la couleur en service (#1807).
 """
 from __future__ import annotations
 
@@ -38,8 +38,9 @@ def test_la_maintenance_demarre_par_le_lanceur_avec_la_cle_d_api_en_credential()
 def test_l_archive_du_journal_demarre_le_script_versionne_par_le_lanceur():
     u = _unite("oto-journal-archive.service")
     assert u["ExecStart"] == [
-        "/opt/oto-mcp/.venv/bin/python /opt/oto-mcp/deploy/lanceur_secrets.py"
+        "@ARBRE@/.venv/bin/python @ARBRE@/deploy/lanceur_secrets.py"
         " --script deploy/archive_tool_calls.py"]
+    assert u["WorkingDirectory"] == ["@ARBRE@"]
     assert u["LoadCredential"] == ["scw:/etc/oto-mcp/scw.key"]
     assert (DEPLOY / "archive_tool_calls.py").is_file()
 
@@ -51,7 +52,8 @@ def test_install_timers_ecrit_l_arbre_de_la_couleur_en_service(tmp_path):
     arbre = racine / "opt/oto-mcp-green"
     (arbre / "deploy").mkdir(parents=True)
     (racine / "etc/systemd/system").mkdir(parents=True)
-    for u in ("oto-mcp-maintenance.service", "oto-mcp-maintenance.timer"):
+    for u in ("oto-mcp-maintenance.service", "oto-mcp-maintenance.timer",
+              "oto-journal-archive.service", "oto-journal-archive.timer"):
         (arbre / "deploy" / u).write_text((DEPLOY / u).read_text(encoding="utf-8"))
     source = (DEPLOY / "oto-backend.sh").read_text(encoding="utf-8")
     fonction = re.search(r"^install_timers\(\) \{.*?^\}", source, re.S | re.M).group(0)
@@ -67,6 +69,12 @@ def test_install_timers_ecrit_l_arbre_de_la_couleur_en_service(tmp_path):
     assert "@ARBRE@" not in pose
     assert f"ExecStart={arbre}/.venv/bin/python {arbre}/deploy/lanceur_secrets.py maintenance all" in pose
     assert f"WorkingDirectory={arbre}\n" in pose
+    # L'archive du journal suit la même couleur (#1807), plus /opt/oto-mcp figé.
+    archive = (racine / "etc/systemd/system/oto-journal-archive.service").read_text()
+    assert "@ARBRE@" not in archive and "/opt/oto-mcp/.venv" not in archive
+    assert (f"ExecStart={arbre}/.venv/bin/python {arbre}/deploy/lanceur_secrets.py "
+            "--script deploy/archive_tool_calls.py") in archive
+    assert (racine / "etc/systemd/system/oto-journal-archive.timer").is_file()
 
 
 def test_la_migration_documentee_passe_par_le_lanceur_avec_l_environnement_des_unites():

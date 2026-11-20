@@ -166,12 +166,14 @@ d'`ownership`, la visibilité des `oto_admin_*`) restait ouverte à tout travail
 compte admin. Un seul point, d'où dérivent tous ces prédicats :
 `access.scope.role_effectif` (derrière `get_user_role` et `is_operator_role`, et relu par
 `run_thread` sur sa colonne SQL) rend `member` au porteur sous le jeton.
-`OTO_VERROU_ROLES_PLATEFORME`, réglage propre : `enforce`, `report` (**défaut** —
+`OTO_VERROU_ROLES_PLATEFORME`, réglage propre : `enforce` (**défaut**, et la valeur
+d'une valeur inconnue, depuis le 11/11/2026), `report` (posé explicitement seulement —
 journalise une fois par requête le rôle qui serait retiré, avec le travail, et ne retire
 rien) ou `off`. Il ne suit pas `OTO_VERROU_ORG_DELEGATION` : couper l'un ne rend pas
-l'autre. ⚠️ Avant `enforce`, relever au journal (`verrou des rôles plateforme (report)`)
-les travaux qui agissent avec un rôle plateforme : sous `enforce`, leurs `oto_admin_*`
-disparaissent de `tools/list` et toute garde plateforme les refuse.
+l'autre. ⚠️ Une instance qui ne pose pas la variable passe en `enforce` : relever d'abord
+au journal (`verrou des rôles plateforme (report)`) les travaux qui agissent avec un rôle
+plateforme. Sous `enforce`, leurs `oto_admin_*` disparaissent de `tools/list` et toute
+garde plateforme les refuse — sauf ceux que leur agent nomme (`platform_tools`, ci-dessous).
 **Les outils d'admin d'un agent** (revue de #1274) : sous `enforce`, un agent hébergé ne
 garde le rôle plateforme de son porteur QUE pendant l'appel d'un des `oto_admin_*` que son
 agent nomme — `runner_triggers.outils_plateforme`, posé par `oto_trigger op=update

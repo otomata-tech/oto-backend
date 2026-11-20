@@ -34,6 +34,8 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from .. import config, db
 from ..auth import platform_worker, service_identity, token_scopes
+from ..datastore.errors import (CODE_TABLEAU_PAR_NOM, est_un_nom_de_tableau,
+                               refus_tableau_par_nom)
 from .. import verrou_org
 from ..tenant_migration import alias_drain_armed
 from .. import garde_identite
@@ -231,16 +233,6 @@ ROUTES_DE_LA_DELEGATION: dict[tuple[str, str], str] = {
 }
 
 
-def _id_du_tableau(sub: str, adresse: str):
-    """L'identifiant du tableau que `adresse` (un nom) désigne pour `sub` — `None` s'il
-    n'en désigne aucun, ou plusieurs : un nom qui ne résout pas n'ouvre rien."""
-    from ..datastore.core import DatastoreAmbigu, DatastoreNotFound, make_store
-    try:
-        return make_store(sub)._resolve(adresse)
-    except (DatastoreNotFound, DatastoreAmbigu):
-        return None
-
-
 async def _authenticate(
     request: Request,
     verifier: JWTVerifier,
@@ -356,13 +348,15 @@ async def _authenticate(
                 f"({', '.join(anciens)}) : une portée nomme un tableau par son "
                 "IDENTIFIANT, et celle-ci n'ouvre donc plus ces tableaux. Le jeton doit "
                 "être réémis avec les identifiants (`data_list_datastores`).")
-        # Un NOM de tableau dans le chemin est jugé sur l'identifiant qu'il résout,
-        # pour le porteur — le temps du préavis (`deprecations.RETRAIT_NOM_DE_TABLEAU`).
+        # Un NOM de tableau dans le chemin est refusé (08/11/2026) — avec le même code
+        # et la même phrase que la route elle-même, plutôt qu'un « hors portée » qui
+        # enverrait chercher dans le jeton. Rien n'est résolu sous ce nom.
         adresse = token_scopes.tableau_du_chemin(request.method, request.url.path)
-        id_du_tableau = (await run_in_threadpool(_id_du_tableau, row["sub"], adresse)
-                         if scopes and adresse and not adresse.isdigit() else None)
-        if not token_scopes.authorize(scopes, request.method, request.url.path,
-                                      id_du_tableau):
+        if scopes and est_un_nom_de_tableau(adresse):
+            token_scopes.set_current(None)
+            return None, _json_error(request, 400, CODE_TABLEAU_PAR_NOM,
+                                     refus_tableau_par_nom(adresse))
+        if not token_scopes.authorize(scopes, request.method, request.url.path):
             granted = []
             if token_scopes.namespaces(scopes):
                 granted.append(f"les tableaux {sorted(token_scopes.namespaces(scopes))}")

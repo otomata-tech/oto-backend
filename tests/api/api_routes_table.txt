@@ -220,6 +220,8 @@ POST /api/service/orgs/{id}/trial -> _handler
 OPTIONS /api/service/orgs/{id}/trial -> options_handler
 POST /api/admin/orgs/{id}/trial -> _handler
 OPTIONS /api/admin/orgs/{id}/trial -> options_handler
+PUT /api/service/orgs/{id}/subscription-state -> _handler
+OPTIONS /api/service/orgs/{id}/subscription-state -> options_handler
 POST /api/admin/outreach -> _handler
 OPTIONS /api/admin/outreach -> options_handler
 POST /api/admin/instances/{instance_id:int}/health -> _handler

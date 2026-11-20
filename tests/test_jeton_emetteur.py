@@ -190,7 +190,7 @@ def emetteur():
 
 def test_l_emetteur_emet_un_enfant_qui_le_nomme_parent(socle, emetteur):
     code, out = call("me.token.create",
-                     body={"scopes": {"namespaces": {"clients": "write"}}, "ttl_days": 30})
+                     body={"scopes": {"namespaces": {"12": "write"}}, "ttl_days": 30})
     assert code == 201, out
     assert out["scopes"] == {"namespaces": {"12": "write"}}
     assert socle[-1][2]["parent_id"] == 41
@@ -242,7 +242,7 @@ def test_un_emetteur_ne_nait_pas_sans_echeance(monkeypatch, socle, cle, pp):
     code, out = call(cle, path_params=pp, body={"scopes": _EMETTEUR})
     assert code == 400 and out["error"] == "issuer_ttl_required", out
     code, out = call(cle, path_params=pp,
-                     body={"scopes": {"issue": {"namespaces": {"clients": "write"}}},
+                     body={"scopes": {"issue": {"namespaces": {"12": "write"}}},
                            "ttl_days": 90})
     assert code in (200, 201), out
     assert out["scopes"] == {"issue": {"namespaces": {"12": "write"}}}, (

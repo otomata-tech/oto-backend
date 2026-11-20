@@ -298,7 +298,12 @@ def test_une_org_SANS_acces_ne_tourne_pas_sur_la_cle_du_worker(remise, monkeypat
     monkeypatch.setattr(CE, "cle_partagee", lambda org, f, sub=None, strict=False: None)
     rendu = _reserver()
     assert "model_key" not in rendu
-    assert "déposer" in rendu["delegation_refusee"] and "accès" in rendu["delegation_refusee"]
+    raison = rendu["delegation_refusee"]
+    # Les trois issues, dites : recharger, déposer sa clé, demander l'accès.
+    assert all(m in raison for m in ("Rechargez", "déposez", "accès")), raison
+    # La tête lue dans les lentilles (80 caractères) nomme les crédits, sans affirmer
+    # qu'ils ont été consommés : une org qui n'en a jamais eu arrive ici aussi.
+    assert "crédits" in raison[:80] and "ou absents" in raison[:80], raison
 
 
 def test_sans_cle_de_plateforme_posee_rien_ne_change(remise, monkeypatch):

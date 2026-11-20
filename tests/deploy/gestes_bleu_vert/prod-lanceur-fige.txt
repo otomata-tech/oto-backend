@@ -28,6 +28,10 @@ date +%H:%M:%S
 # amont d'avant la bascule
 --- /etc/oto-mcp/active-prod
 blue
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur blue
 --- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur blue
 --- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.timer
@@ -41,6 +45,10 @@ dependencies = [
 --- /opt/oto-mcp-blue/start-encrypted.sh
 #!/bin/bash
 exec /opt/oto-mcp-blue/.venv/bin/oto-mcp
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur green
 --- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur green
 --- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer

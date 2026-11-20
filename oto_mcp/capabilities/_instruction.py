@@ -172,8 +172,8 @@ def de_file(slug: str, namespace: Optional[str],
         "agent will take the next. If the claim returns nothing, the queue is "
         "empty: conclude and stop.\n"
         "The claim returns `ns_id`, the datastore's NUMBER: address it by that "
-        "number in all your following calls (`namespace: 174`). A name still "
-        "works, it is being phased out.\n"
+        "number in all your following calls (`datastore: 174`); a table name is "
+        "refused.\n"
         "Write your result in a single call on the row you claimed: "
         "`data_claim_next` returned its `_id`, pass it as `id`. Re-read it, then "
         f"{_BILAN}")

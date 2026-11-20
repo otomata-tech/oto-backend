@@ -176,8 +176,8 @@ def _table(nom: str, schema=None):
     ns = f"{nom}-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
     if schema is not None:
-        make_store(SUB).set_schema(ns, schema)
-    return ns, ns_id
+        make_store(SUB).set_schema(str(ns_id), schema)
+    return str(ns_id), ns_id
 
 
 def test_pose_et_ecriture_sur_une_vraie_base(live):

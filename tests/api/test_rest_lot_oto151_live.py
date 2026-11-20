@@ -85,11 +85,12 @@ def client(live):
 def _table(schema=None):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    nom = "t-" + uuid.uuid4().hex[:6]
+    ns_id = db.create_datastore("user", SUB, nom)
+    ns = str(ns_id)
     if schema is not None:
         make_store(SUB).set_schema(ns, schema)
-    return ns, ns_id
+    return ns, ns_id, nom
 
 
 def _base(ns_id: int) -> dict:
@@ -124,13 +125,13 @@ def data_write(live, monkeypatch):
 # ── le lot, par la clé métier ─────────────────────────────────────────────────
 
 def test_le_lot_upsert_sur_la_cle_metier_declaree(client):
-    ns, ns_id = _table(SCHEMA)
+    ns, ns_id, nom = _table(SCHEMA)
     r1 = _lot(client, ns, {"rows": [{"siren": "1", "nom": "A"}, {"siren": "2", "nom": "B"}]})
     assert r1.status_code == 200, r1.text
     rep = r1.json()
     assert (rep["inserted"], rep["updated"], rep["count"]) == (2, 0, 2)
     assert rep["key"] == "siren" and len(rep["ids"]) == 2
-    assert rep["ns_id"] == ns_id and rep["datastore"] == ns
+    assert rep["ns_id"] == ns_id and rep["datastore"] == nom
     # Ré-envoi avec `upsert` : la ligne retrouvée par sa clé est FUSIONNÉE, la neuve
     # est créée (sans `upsert`, un ajout sur une clé en place est refusé, oto#141).
     r2 = _lot(client, ns, {"rows": [{"siren": "2", "nom": "B bis"}, {"siren": "3", "nom": "C"}],
@@ -144,7 +145,7 @@ def test_le_lot_upsert_sur_la_cle_metier_declaree(client):
 
 def test_le_lot_dedoublonne_sur_la_cle_passee_a_l_appel(client):
     """Sans clé déclarée, `key` du corps dédoublonne — le cas exact du rapport."""
-    ns, ns_id = _table({"fields": SCHEMA["fields"]})
+    ns, ns_id, _nom = _table({"fields": SCHEMA["fields"]})
     corps = {"rows": [{"siren": "9", "nom": "X"}], "key": "siren"}
     assert _lot(client, ns, corps).json()["inserted"] == 1
     r = _lot(client, ns, {"rows": [{"siren": "9", "nom": "Y"}], "key": "siren"})
@@ -159,7 +160,7 @@ def test_le_lot_dedoublonne_sur_la_cle_passee_a_l_appel(client):
 
 def test_donnees_d_origine_pose_l_origine_et_le_reimport_ne_la_touche_pas(client):
     from oto_mcp.datastore import schema as dsv2
-    ns, ns_id = _table(SCHEMA)
+    ns, ns_id, _nom = _table(SCHEMA)
     r1 = _lot(client, ns, {"rows": [{"siren": "1", "nom": {"valeur": "DUPONT",
                                                           "comment": "fichier du 05/08"}}],
                            "donnees_d_origine": True})
@@ -184,7 +185,7 @@ def test_donnees_d_origine_pose_l_origine_et_le_reimport_ne_la_touche_pas(client
 
 def test_un_mot_refuse_refuse_le_lot_entier_rien_n_est_ecrit(client):
     """`@keep` sur la DEUXIÈME ligne refuse le lot avant la première."""
-    ns, ns_id = _table(SCHEMA)
+    ns, ns_id, _nom = _table(SCHEMA)
     r = _lot(client, ns, {"rows": [{"siren": "1", "nom": "A"},
                                    {"siren": "2", "nom": "@keep"}]})
     assert r.status_code == 400, r.text
@@ -194,7 +195,7 @@ def test_un_mot_refuse_refuse_le_lot_entier_rien_n_est_ecrit(client):
 
 def test_une_ligne_refusee_est_nommee_et_le_refus_dit_ou_reprendre(
         client):
-    ns, ns_id = _table(SCHEMA)
+    ns, ns_id, _nom = _table(SCHEMA)
     r = _lot(client, ns, {"rows": [{"siren": "1", "effectif": 3},
                                    {"siren": "2", "effectif": "beaucoup"}]})
     assert r.status_code == 400, r.text
@@ -204,7 +205,7 @@ def test_une_ligne_refusee_est_nommee_et_le_refus_dit_ou_reprendre(
 
 
 def test_un_champ_inconnu_du_corps_est_refuse(client):
-    ns, ns_id = _table(SCHEMA)
+    ns, ns_id, _nom = _table(SCHEMA)
     r = _lot(client, ns, {"rows": [{"siren": "1"}], "cle": "siren"})
     assert (r.status_code, r.json()["error"]) == (400, "unknown_fields")
     assert _base(ns_id) == {}
@@ -216,8 +217,8 @@ def test_les_deux_faces_rendent_la_meme_enveloppe_et_les_memes_notices(client, d
     """`donnees_d_origine` relève ce qu'il a posé : une notice, qui doit être la même
     phrase sur les deux faces."""
     lot = [{"siren": "1", "nom": "A"}, {"siren": "2", "nom": "B"}]
-    ns_rest, _ = _table(SCHEMA)
-    ns_mcp, _ = _table(SCHEMA)
+    ns_rest, _, _ = _table(SCHEMA)
+    ns_mcp, _, _ = _table(SCHEMA)
     rest = _lot(client, ns_rest, {"rows": lot, "donnees_d_origine": True})
     assert rest.status_code == 200, rest.text
     mcp = data_write(datastore=ns_mcp, rows=lot, donnees_d_origine=True)
@@ -246,7 +247,7 @@ def test_le_refus_de_cle_dit_si_l_ecriture_la_portait_sur_les_deux_faces(
     """Même refus, quatre chemins : REST ligne, REST lot, `data_write(row=)`,
     `data_write(rows=)`. REST porte `details` ; MCP, qui n'a pas d'enveloppe, finit
     son message par la charge à renvoyer. Rien n'est écrit."""
-    ns, ns_id = _table(FERME)
+    ns, ns_id, _nom = _table(FERME)
     attendu = {"key": "siren", "cle_portee": portee,
                **({"valeur": "999"} if portee else {}),
                "a_renvoyer": {"siren": "<text>"}}

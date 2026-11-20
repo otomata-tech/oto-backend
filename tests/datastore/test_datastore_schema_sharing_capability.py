@@ -22,7 +22,7 @@ from oto_mcp.capabilities.datastore import schema as dss
 from oto_mcp.capabilities.datastore import sharing as dsh
 from oto_mcp.datastore.core import DatastoreNotFound, DatastoreReadOnly
 
-NS = {"datastore": "vivier"}
+NS = {"datastore": "42"}
 SCHEMA = {"fields": [{"key": "societe", "role": "title"}], "key": "siren"}
 
 
@@ -51,8 +51,8 @@ def test_le_schema_part_tel_quel_et_revient_tel_quel(monkeypatch):
     assert status == 200
     # Le schéma part et revient inchangé — c'est ce que ce banc garde. Une clé
     # inconnue n'est plus signalée à côté : le store la REFUSE (01/10/2026).
-    assert corps == {"datastore": "vivier", "schema": SCHEMA}
-    assert store.calls == [("vivier", SCHEMA)]
+    assert corps == {"datastore": "42", "schema": SCHEMA}
+    assert store.calls == [("42", SCHEMA)]
 
 
 def test_un_schema_nul_repasse_le_tableau_en_table_libre(monkeypatch):
@@ -62,7 +62,7 @@ def test_un_schema_nul_repasse_le_tableau_en_table_libre(monkeypatch):
     monkeypatch.setattr(dss, "make_store", lambda sub: store)
     call("me.datastore.set_schema", path_params=NS, body={"schema": None})
     call("me.datastore.set_schema", path_params=NS, body={})
-    assert store.calls == [("vivier", None), ("vivier", None)]
+    assert store.calls == [("42", None), ("42", None)]
 
 
 def test_lavertissement_de_configuration_remonte_a_lauteur(monkeypatch):
@@ -124,7 +124,7 @@ def test_le_partage_rend_ok_et_ce_qui_a_ete_accorde(monkeypatch, gouvernance):
                         lambda *a, **k: vus.append((a, k)))
     assert call("me.datastore.share", path_params=NS,
                 body={"email": "sarah@x.fr", "permission": "read"}) == (
-        200, {"ok": True, "datastore": "vivier", "shared_with": "sarah@x.fr",
+        200, {"ok": True, "datastore": "42", "shared_with": "sarah@x.fr",
               "permission": "read"})
     (rt, rid, ptype, pid, perm), kw = vus[0]
     assert (rt, rid, ptype, pid, perm) == ("datastore_namespace", "42", "user",
@@ -188,7 +188,7 @@ def test_le_retrait_lit_bien_le_corps_du_delete(monkeypatch, gouvernance):
     monkeypatch.setattr(dsh.ownership, "revoke", lambda *a: True)
     assert call("me.datastore.unshare", path_params=NS,
                 body={"email": "sarah@x.fr"}) == (
-        200, {"ok": True, "datastore": "vivier", "removed": "sarah@x.fr"})
+        200, {"ok": True, "datastore": "42", "removed": "sarah@x.fr"})
 
 
 def test_retirer_un_partage_inexistant_est_un_404_qui_le_dit(monkeypatch, gouvernance):
@@ -196,7 +196,7 @@ def test_retirer_un_partage_inexistant_est_un_404_qui_le_dit(monkeypatch, gouver
     status, corps = call("me.datastore.unshare", path_params=NS,
                          body={"email": "sarah@x.fr"})
     assert (status, corps["error"]) == (
-        404, "no active share for sarah@x.fr on vivier")
+        404, "no active share for sarah@x.fr on 42")
 
 
 def test_la_liste_des_partages_aplatit_les_grants(monkeypatch, gouvernance):

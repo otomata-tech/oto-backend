@@ -135,16 +135,16 @@ def data_write(live, monkeypatch):
 
 def _table(schema=SCHEMA, lignes=()):
     """Un tableau neuf, ses lignes (déclarées) posées AVANT le geste jugé — rend
-    (nom, ns_id, [_id])."""
+    (adresse = numéro en texte, ns_id, [_id])."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
-    ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "t-" + uuid.uuid4().hex[:6])
+    adr = str(ns_id)
     store = make_store(SUB)
     if schema is not None:
-        store.set_schema(ns, schema)
-    ids = [store.append_row(ns, dict(ligne))["_id"] for ligne in lignes]
-    return ns, ns_id, ids
+        store.set_schema(adr, schema)
+    ids = [store.append_row(adr, dict(ligne))["_id"] for ligne in lignes]
+    return adr, ns_id, ids
 
 
 def _base(ns_id: int) -> list[dict]:

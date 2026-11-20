@@ -58,7 +58,8 @@ journalctl -u oto-mcp@green -n 10 --no-pager
 [12:00:00] trafic public OK sur https://mcp.oto.cx/.well-known/oauth-protected-resource
 [12:00:00] vidange de blue (:9103) confiée à oto-mcp-drain-prod — 0 connexion(s) au moment de la bascule, plafond 240s (journalctl -u oto-mcp-drain-prod)
 [12:00:00] === prod OK : blue -> green en Ns (démarrage Ns) — déploiement TERMINÉ, la vidange continue en fond ===
-maintenance : oto-mcp-maintenance.service absent de /opt/oto-mcp-green (tag antérieur au lot 0) — ignoré
+oto-mcp-maintenance : oto-mcp-maintenance.service absent de /opt/oto-mcp-green (tag antérieur) — ignoré
+oto-journal-archive : oto-journal-archive.service absent de /opt/oto-mcp-green (tag antérieur) — ignoré
 ### erreurs
 ### état final
 --- /etc/caddy/Caddyfile

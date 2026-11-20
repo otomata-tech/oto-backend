@@ -406,7 +406,11 @@ def resolve_datastore_ref(namespace: str) -> str:
     if the refusal were not there."""
     if (isinstance(namespace, str)
             and namespace.strip().lower().startswith(SLOT_PREFIX)):
-        return resolve_slot_tableau(namespace.strip()[len(SLOT_PREFIX):])
+        ns_id = resolve_slot_tableau(namespace.strip()[len(SLOT_PREFIX):])
+        # La FORME reçue, pour le journal (`session_org.noter_forme_tableau`) : le store
+        # ne verra plus que l'identifiant que le slot a rendu.
+        session_org.noter_forme_tableau(session_org.REF_SLOT)
+        return ns_id
     return namespace
 
 

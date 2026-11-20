@@ -63,8 +63,10 @@ from .errors import (  # noqa: F401
     RowLocked,
     RowNotFound,
     RowValidationError,
+    TableauParNom,
+    est_un_nom_de_tableau,
 )
-from .. import db, deprecations, ownership, session_org
+from .. import db, ownership, session_org
 from .. import config
 from ..db.query import ds_filter_specs as _filter_specs
 
@@ -251,21 +253,18 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
     def _resolve(self, datastore: str, *, write: bool = False) -> int:
         """ns_id d'un datastore VISIBLE DANS L'ORG ACTIVE (possédé par elle, perso, ou
         accordé à son contexte). `write=True` exige le droit d'écriture via
-        `ownership.can_access`. L'adresse de l'APPEL : le journal, l'avis d'adresse par
-        nom et `dernier_tableau` la retiennent (`_trouver` seul ne retient rien)."""
+        `ownership.can_access`. L'adresse de l'APPEL : le journal et `dernier_tableau` la
+        retiennent (`_trouver` seul ne retient rien)."""
         ns = self._trouver(datastore, write=write)
         ns_id = int(ns["id"])
-        # Le journal cite l'ENTITÉ, pas la chaîne tapée : `data_write("leads-clients")`,
-        # `data_write("160")` et `data_write("slot:vivier")` visent le même tableau.
+        # Le journal cite l'ENTITÉ, pas la chaîne tapée : `data_write("160")` et
+        # `data_write("slot:vivier")` visent le même tableau.
         # Consigné APRÈS les gardes (un datastore refusé ne laisse pas de trace) ;
         # no-op hors appel MCP — la face REST tient déjà son propre relevé.
         session_org.note_call_trace(ns_id=ns_id, ns_name=ns.get("datastore"))
-        # Adressé par son NOM : la réponse le dit, avec l'identifiant et la date du
-        # refus (`deprecations.RETRAIT_NOM_DE_TABLEAU`). Même règle qu'au journal :
-        # après les gardes — un refus n'a rien à corriger d'autre que lui-même.
-        if deprecations.adresse_par_nom(datastore, ns_id):
-            session_org.noter_avis(deprecations.avis_nom_de_tableau(
-                ns.get("datastore") or str(datastore), ns_id))
+        # Le journal garde la FORME de la désignation (`ref_kind`), jamais le nom : ici
+        # toujours un numéro (un nom est refusé par `_trouver`, `slot:` noté à sa résolution).
+        session_org.noter_forme_tableau(session_org.REF_NUMBER)
         # Le MÊME couple, gardé sur le store, pour les REMISES : le relevé d'appel
         # ci-dessus est muet hors MCP (REST, stdio, tests) et n'alimente que le
         # journal. Les deux valeurs sont dans la ligne déjà lue — l'identité ne coûte
@@ -277,7 +276,12 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         """La ligne du tableau que `_resolve` résout, sous les MÊMES gardes, sans rien
         retenir de l'appel : ni journal, ni avis, ni `dernier_tableau`. Pour regarder
         un AUTRE tableau que celui de l'appel (la cible d'un lien, `schema_ops`) sans
-        que la remise ni le journal ne le prennent pour lui."""
+        que la remise ni le journal ne le prennent pour lui.
+
+        Un NOM de tableau est refusé avant toute lecture (`TableauParNom`, retrait du
+        08/11/2026) : seuls le numéro et `slot:<nom>`, déjà résolu en numéro, désignent."""
+        if est_un_nom_de_tableau(datastore):
+            raise TableauParNom(str(datastore))
         org_ids, group_ids = self._active_scope()
         try:
             ns = db.resolve_datastore_ns(

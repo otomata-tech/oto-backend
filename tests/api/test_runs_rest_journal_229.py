@@ -96,6 +96,7 @@ def _table(org: int) -> str:
     from oto_mcp import db
     ns = "journal-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("org", str(org), ns)
+    ns = str(ns_id)
     # `statut` déclarée : une colonne non déclarée est refusée à l'écriture (oto#124).
     db.set_datastore_schema(ns_id, {"fields": [{"key": "statut", "type": "text"}]})
     for i in range(2):

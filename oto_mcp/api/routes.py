@@ -56,7 +56,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import db, journal_secrets, tenancy
+from .. import db, journal_secrets, session_org, tenancy
 from . import (accords as api_routes_accords,
                billing as api_routes_billing,
                datastore as api_routes_datastore,
@@ -723,10 +723,17 @@ class RestCallLogger:
 
         request = Request(scope, receive)  # headers/query only → ne consomme pas le body
         org = _parse_view_org(request)  # org de consultation revendiquée (header), best-effort
+        # La FORME sous laquelle la requête a désigné un tableau (`ref_kind`), notée au
+        # point de résolution (`session_org.noter_forme_tableau`). Un holder MUTABLE posé
+        # ici, autour de toute la requête : l'authentification (portée d'un jeton) et le
+        # handler, même en threadpool, écrivent DEDANS, et ce `finally` le relit.
+        forme_ref: dict = {}
+        jeton_ref = session_org.set_ref_rest(forme_ref)
         started = time.monotonic()
         try:
             await self.app(scope, receive, _send)
         finally:
+            session_org.reset_ref_rest(jeton_ref)
             code = status["code"]
             # ⚠️ LU APRÈS la requête, pas avant : c'est l'authentification qui
             # résout le porteur, et elle n'a pas encore tourné au moment où le
@@ -755,6 +762,10 @@ class RestCallLogger:
                     masques = {**(masques or {}), "view_as_write": True}
                     if org is None:
                         org = scope.get(CLE_VIEW_AS_ORG)
+                if forme_ref.get("ref_kind"):
+                    # La forme, jamais le nom : la route réduite peut porter le nom (un
+                    # segment non numérique reste tel quel), `args` n'en reçoit aucun.
+                    masques = {**(masques or {}), "ref_kind": forme_ref["ref_kind"]}
                 row = {
                     "kind": "rest",
                     "tool": f"{method} {route}",

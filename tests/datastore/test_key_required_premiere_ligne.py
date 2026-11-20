@@ -53,8 +53,7 @@ def _store():
 def ferme(live):
     """Un tableau fermé et VIDE — l'état d'un tableau de journalisation qui débute."""
     from oto_mcp import db
-    ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore("user", "sub-test", ns)
+    ns = str(db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6]))
     st = _store()
     pose = st.set_schema(ns, FERME)
     assert "new_rows" in pose["enforced"]      # le cran est bien appliqué ICI

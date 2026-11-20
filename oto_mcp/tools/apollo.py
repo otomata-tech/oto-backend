@@ -768,8 +768,8 @@ def register(mcp: FastMCP) -> None:
                 default (same cut as apollo_reveal_phone): ~15 000 characters per
                 person otherwise, and a batch of 50 fits in no context. Numbers
                 and person identity are kept either way. Still 0 credits.
-            datastore: write the numbers into this table (name or number) and
-                return counts only.
+            datastore: write the numbers into this table (its NUMBER, `ns_id` —
+                a name is refused) and return counts only.
             row_id: with `datastore`, the row of the ONE person revealed.
             match_column: with `datastore`, for a batch: the column holding each
                 person's Apollo id — every row whose value matches gets the number.

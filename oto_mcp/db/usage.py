@@ -1337,6 +1337,28 @@ def aggregate_tool_feedback(days: int = 30, *, org_id: Optional[int] = None) -> 
     return _signal_agg("tool_feedback", "s.target AS tool", "s.target", days, org_id)
 
 
+def journal_archive_passages() -> dict:
+    """Les derniers passages de l'archive du journal, réussi et en échec, et l'heure de la
+    base — lus dans `journal_archive_passages` (écrite par `deploy/archive_tool_calls.py`
+    à la fin de chaque passage). Une table d'une ligne par jour : lue entière.
+
+    Rend `last_success_at`, `last_failure_at` (None quand il n'y en a jamais eu),
+    `last_failure_detail` et `maintenant`, l'heure de la BASE : c'est elle qui date les
+    passages, l'écart se mesure sur la même horloge."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT max(finished_at) FILTER (WHERE ok) AS last_success_at,
+                   max(finished_at) FILTER (WHERE NOT ok) AS last_failure_at,
+                   (SELECT detail FROM journal_archive_passages WHERE NOT ok
+                     ORDER BY finished_at DESC, id DESC LIMIT 1) AS last_failure_detail,
+                   now() AS maintenant
+              FROM journal_archive_passages
+            """
+        ).fetchone()
+    return dict(row)
+
+
 def agents_en_echec(days: int = 1, *, org_id: Optional[int] = None,
                     seuil: int = 2) -> list[dict]:
     """Les agents dont les travaux MEURENT, groupés par agent et par motif.

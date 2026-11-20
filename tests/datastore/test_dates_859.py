@@ -162,8 +162,8 @@ def _monte(schema=SCHEMA, lignes=()):
     from oto_mcp.datastore.core import make_store
     db.upsert_user(SUB, email=f"{SUB}@exemple.invalid", name=SUB)
     st = make_store(SUB)
-    ns = "d859-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, "d859-" + uuid.uuid4().hex[:6])
+    ns = str(ns_id)
     # L'existant d'avant la normalisation, posé en base tel quel : une colonne non
     # déclarée est refusée à l'écriture (oto#124).
     for r in lignes:

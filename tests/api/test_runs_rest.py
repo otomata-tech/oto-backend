@@ -77,6 +77,7 @@ def _table(org: int, n: int = 3) -> tuple[str, int]:
     from oto_mcp import db
     ns = "fiches-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("org", str(org), ns)
+    ns = str(ns_id)
     db.set_datastore_schema(ns_id, {"fields": [{"key": "statut"}]})
     for i in range(n):
         db.datastore_insert_row(ns_id, f"f{i}", {"statut": "a_appeler"})

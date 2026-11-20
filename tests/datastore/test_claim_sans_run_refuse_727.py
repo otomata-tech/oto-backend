@@ -57,6 +57,7 @@ def _table():
     from oto_mcp import db
     ns = "file-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", SUB, ns)
+    ns = str(ns_id)
     db.datastore_insert_row(ns_id, "r0", {"siren": "417891959", "statut": "a_enrichir"})
     return ns, ns_id
 

@@ -128,12 +128,12 @@ def _servi(org: int, payload: dict) -> dict:
 
 def _table(org: int) -> tuple[str, int]:
     from oto_mcp import db
-    ns = "file-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore("org", str(org), ns)
+    ns_id = db.create_datastore("org", str(org), "file-" + uuid.uuid4().hex[:6])
     # `statut` déclarée : une colonne non déclarée est refusée à l'écriture (oto#124).
     db.set_datastore_schema(ns_id, {"fields": [{"key": "statut", "type": "text"}]})
     db.datastore_insert_row(ns_id, "r0", {"statut": "a_faire"})
-    return ns, ns_id
+    return str(ns_id), ns_id
+
 
 
 def _valeur(ns_id: int, champ: str):

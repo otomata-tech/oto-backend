@@ -701,14 +701,14 @@ server = [
 
 [[package]]
 name = "france-opendata"
-version = "0.47.0"
+version = "0.54.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/41/74/e4f59d26f8dbc34e019dd969d36765518a5c9f6e32a57633669beca1f081/france_opendata-0.47.0.tar.gz", hash = "sha256:d573f05a8dc3a314f3a58c037dea5d0fbb9f1255762fe2c0afc4cf4d9aeea634", size = 1149308, upload-time = "2026-09-27T20:40:08.051Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/3d/b9b72bc5f60ab56f6193c5b4b0f8d0cb7582e8ca7079af1ab440cb69c556/france_opendata-0.54.0.tar.gz", hash = "sha256:3260a1c3a14d5a1d50d83aa387b6f07bd7075be4c03bd6459af336508df744bc", size = 1218493, upload-time = "2026-11-20T23:04:31.028Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9b/0e/e93812be9301878e39000101f54f43400beb4fe52aa520ba7a16cb0aab1f/france_opendata-0.47.0-py3-none-any.whl", hash = "sha256:09fae9371e930648e7aed876b7da34db235b089b7904f6b35383bbfb62d0b0df", size = 1148434, upload-time = "2026-09-27T20:40:06.191Z" },
+    { url = "https://files.pythonhosted.org/packages/af/3d/9246b9ef1d022561b44b243afce3b99c597e650c9b05823f773f7bc4fc1a/france_opendata-0.54.0-py3-none-any.whl", hash = "sha256:1a403f88127e795fc2d878b0a103387fbd51383070689c4aaf0eb2cdb40a7b30", size = 1197735, upload-time = "2026-11-20T23:04:04.541Z" },
 ]
 
 [[package]]
@@ -1472,8 +1472,8 @@ wheels = [
 
 [[package]]
 name = "oto-core"
-version = "1.241.0"
-source = { git = "https://github.com/otomata-tech/oto-core.git?rev=v1.241.0#bf73779c5d42b78ba6fa23d2386cb75cdf1f1f00" }
+version = "1.242.0"
+source = { git = "https://github.com/otomata-tech/oto-core.git?rev=v1.242.0#cbefc1761150d8bbba5b900c4e97f490c120a7ab" }
 dependencies = [
     { name = "defusedxml" },
     { name = "france-opendata" },
@@ -1554,7 +1554,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=3.0" },
     { name = "nh3", specifier = ">=0.2.17" },
     { name = "openpyxl", specifier = ">=3.1" },
-    { name = "oto-core", extras = ["anonymize", "planity"], git = "https://github.com/otomata-tech/oto-core.git?rev=v1.241.0" },
+    { name = "oto-core", extras = ["anonymize", "planity"], git = "https://github.com/otomata-tech/oto-core.git?rev=v1.242.0" },
     { name = "packaging", specifier = ">=23" },
     { name = "patchright", specifier = ">=0.1.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },

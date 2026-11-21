@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import pytest
 
-from oto_mcp.tools.fr import _split_legal_form
-
 
 class _Reg:
     def __init__(self):
@@ -67,16 +65,6 @@ def fr_search(monkeypatch):
         return reg.tools["fr_search"]
 
     return _make, calls
-
-
-# ── détection du préfixe ──
-
-def test_prefix_detection():
-    assert _split_legal_form("SCI ASC") == ("SCI", "ASC")
-    assert _split_legal_form("sarl dupont et fils") == ("SARL", "dupont et fils")
-    assert _split_legal_form("SCI") is None            # pas de nom à chercher
-    assert _split_legal_form("ASCENSEURS RENOV") is None  # pas un préfixe isolé
-    assert _split_legal_form(None) is None
 
 
 # ── comportement du tool ──

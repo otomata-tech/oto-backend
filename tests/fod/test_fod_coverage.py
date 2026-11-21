@@ -74,7 +74,21 @@ _URBA_FR_JAMAIS_PAR_LA_LIB = (
     "il n'a jamais tourné in-process côté backend"
 )
 
+_SANTE_JAMAIS_PAR_LA_LIB = (
+    "client santé consommé via le service FOD dédié en proxy HTTP live "
+    "(oto_mcp/fod/sante.py → /api/sante/*, ADR 0028 extraction totale) — le tool "
+    "`sante` est exposé, le client lib n'a jamais tourné dans le backend"
+)
+
 FOD_NOT_EXPOSED = {
+    "bdpm": _SANTE_JAMAIS_PAR_LA_LIB,  # médicaments — sante(op="search_medicines"|"get_medicine")
+    "clinicaltrials": _SANTE_JAMAIS_PAR_LA_LIB,  # sante(op="search_clinicaltrials"|"get_clinicaltrial")
+    "ctis": _SANTE_JAMAIS_PAR_LA_LIB,  # essais UE — sante(op="search_ctis_trials"|"get_ctis_trial")
+    "pubmed": _SANTE_JAMAIS_PAR_LA_LIB,  # sante(op="search_pubmed"|"get_pubmed_article")
+    "europepmc": _SANTE_JAMAIS_PAR_LA_LIB,  # sante(op="search_europepmc"|"get_europepmc_article")
+    "transparence": _SANTE_JAMAIS_PAR_LA_LIB,  # liens d'intérêts — sante(op="search_interest_declarations"|…)
+    "bofip": "client BOFiP (doctrine fiscale) servi par le service FOD (/api/doctrine/*) ; "
+             "aucun outil du backend ne l'expose encore — décision d'exposition à prendre",
     "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
                  "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
                  "via le service FOD (fr_juris_*, oto_mcp/fod_juris.py → HTTP), pas "

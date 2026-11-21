@@ -67,6 +67,7 @@ from fastmcp import FastMCP
 from .. import output_projection
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
+from oto.tools.fod.compact import compact_icpe  # ICPE record reduced, "energy" headings first
 
 # OPTIONAL import of prefab_ui (extra `fastmcp[apps]`) at MODULE level — and NOT
 # local to register(): the *_app tools below annotate their return `-> Card`,
@@ -293,55 +294,6 @@ def _millesime(transport: Optional[dict], annee: str, reseau: str) -> Optional[s
             "not aligned, don't sum without saying so"
         )
     return None
-
-
-# Headings of the ICPE nomenclature whose activity IS an energy consumption.
-# Used to READ a record, not to measure: the declared quantity relates to the classified
-# activity (m³ stored, MW installed…), never to kWh. It's the closest the API gets
-# to a "large consumer" when grid consumption is missing — a presumption sourced by its
-# codeAIOT, just like the regime or the IED status.
-_RUBRIQUES_ENERGIE = {
-    "2910": "combustion (boilers, engines)",
-    "3110": "combustion ≥ 50 MW (IED)",
-    "2915": "heating by heat-transfer fluids",
-    "2920": "compression and refrigeration",
-    "2921": "evaporative cooling (cooling towers)",
-    "4735": "ammonia — industrial cooling",
-    "1185": "fluorinated refrigerants — cooling",
-}
-
-_ICPE_MAX_RUBRIQUES = 10
-
-
-def _compact_rubriques(brutes: list) -> tuple[list, list, bool]:
-    """Declared headings of an ICPE record, the "energy" ones first.
-
-    Returns `(rubriques, rubriques_energie, tronquees)`. A large-site record
-    sometimes carries thirty: we cap, but by putting AHEAD those that
-    carry the signal — otherwise truncation eats precisely what we're looking for.
-    """
-    rubriques = [
-        {
-            "numero": r.get("numeroRubrique"),
-            "nature": r.get("nature"),
-            "regime": r.get("regimeAutoriseAlinea"),
-            "quantite": r.get("quantiteTotale"),
-            "unite": r.get("unite"),
-        }
-        for r in brutes
-    ]
-    energie = [
-        {**r, "lecture": _RUBRIQUES_ENERGIE[str(r["numero"])]}
-        for r in rubriques
-        if str(r.get("numero")) in _RUBRIQUES_ENERGIE
-    ]
-    numeros_energie = {r["numero"] for r in energie}
-    ordonnees = energie + [r for r in rubriques if r["numero"] not in numeros_energie]
-    return (
-        [{k: v for k, v in r.items() if k != "lecture"} for r in ordonnees[:_ICPE_MAX_RUBRIQUES]],
-        energie,
-        len(ordonnees) > _ICPE_MAX_RUBRIQUES,
-    )
 
 
 def _ops_error(ops: tuple[str, ...]) -> str:
@@ -738,28 +690,7 @@ def register(mcp: FastMCP) -> None:
         return out
 
     # --- industrial risks / ICPE (Géorisques) — taken over from `fr` ------------
-
-    _ICPE_KEEP = (
-        "raisonSociale", "siret", "adresse1", "codePostal", "codeInsee", "commune",
-        "codeNaf", "longitude", "latitude", "regime", "ied", "statutSeveso",
-        "prioriteNationale", "etatActivite", "codeAIOT", "serviceAIOT",
-        "industrie", "carriere", "eolienne", "bovins", "porcs", "volailles",
-    )
-
-    def _compact_icpe(d: dict) -> dict:
-        out = {k: d.get(k) for k in _ICPE_KEEP}
-        inspections = d.get("inspections") or []
-        out["inspections"] = [
-            {"date": i.get("dateInspection"),
-             "url": (i.get("fichierInspection") or {}).get("urlFichier")}
-            for i in inspections[-3:]
-        ]
-        rubriques, energie, tronquees = _compact_rubriques(d.get("rubriques") or [])
-        out["rubriques"] = rubriques
-        out["rubriques_energie"] = energie
-        if tronquees:
-            out["rubriques_tronquees"] = True
-        return out
+    # Records compacted by `oto.tools.fod.compact.compact_icpe` (shared with the library).
 
     @mcp.tool()
     def foncier_icpe(
@@ -834,7 +765,7 @@ def register(mcp: FastMCP) -> None:
             "results": res.get("results", 0),
             "page": res.get("page", page),
             "total_pages": res.get("total_pages", 1),
-            "data": [_compact_icpe(d) for d in res.get("data", [])],
+            "data": [compact_icpe(d) for d in res.get("data", [])],
         }, items_path="data", fields=fields)
 
     @mcp.tool()

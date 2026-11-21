@@ -170,6 +170,7 @@ cognism_redeem	account contact	4faca235a21b467f
 cognism_search	account contact	b78d5ef6baaa3556
 compliance	check_mutual_termination	ed2e3bf36e1b43a2
 crisp	conversation conversation_meta conversations helpdesk helpdesk_content helpdesk_entry helpdesk_locales helpdesk_metadata helpdesk_pages helpdesk_tree inbox inboxes messages people person person_conversations person_data search_conversations search_people website	a06f342b70caec3f
+crisp_act	add_note add_segments remove_segments send_message set_state update_conversation update_person update_person_data	d2b9eaa29e6204e5
 crunchbase_connect_start	-	99334726611ccf58
 crunchbase_connect_status	-	473cd19bf52403e4
 crunchbase_get_company	-	3424e64c4f9b1f5e
@@ -820,6 +821,7 @@ salesforce_describe	-	b08f321a0ab3d244
 salesforce_note	create list	8fb225c1a4a92370
 salesforce_query	soql sosl	af4c2a14ce5b1c7e
 salesforce_record	bulk_create bulk_update create delete get list update upsert	904320010b7c3a53
+sante	get_clinicaltrial get_ctis_trial get_europepmc_article get_medicine get_pubmed_article interest_totals_by_company search_clinicaltrials search_ctis_trials search_europepmc search_interest_declarations search_medicines search_pubmed	bc7cd8215e869981
 sante_essms_dimensions	-	99334726611ccf58
 sante_essms_search	-	ac3078711024b515
 sante_finess	-	eb5f0f708f494079

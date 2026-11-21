@@ -1,13 +1,14 @@
-"""Crisp tool — customer messaging, read-only.
+"""Crisp tools — customer messaging: `crisp` reads, `crisp_act` acts.
 
 Wraps `oto.tools.crisp.CrispClient` (REST API V1, Basic `token_identifier:token_key`
 with `X-Crisp-Tier: website`), credential resolved per call via
 `access.resolve_credential_fields("crisp")`: the website token and the website ID,
 which every path carries.
 
-The connector is read-only, so it serves ONE tool, `crisp` (LECTURE), the read verb
-in `op` — no `crisp_act` (`tests/test_convention_act.py`). One op per function of the
-`crisp` description (connectors repo, `connectors/crisp/connector.yaml`).
+The pair (`tests/test_convention_act.py`): `crisp` (LECTURE), the read verb in `op`, one
+op per read function of the `crisp` description (connectors repo,
+`connectors/crisp/connector.yaml`); `crisp_act` (ACTE), the writes and the send to a
+contact, in `tools/crisp_act.py`, registered from here.
 
 Personal data: conversations, messages and contacts may carry personal or health
 data. The served text says so, and asks not to look a person up by name or phone
@@ -197,6 +198,9 @@ def register(mcp: FastMCP) -> None:
 
     connector_verify.register(_NAME, _verify)
 
+    from .crisp_act import register_act
+    register_act(mcp)
+
     def _client() -> CrispClient:
         creds = access.resolve_credential_fields(_NAME)
         return CrispClient(token_identifier=creds.get("token_identifier"),
@@ -244,7 +248,8 @@ def register(mcp: FastMCP) -> None:
     ) -> Any:
         """Crisp customer messaging, read-only: the workspace's conversations across its
         channels (chat, email and the others it connects) and their messages, its
-        contacts, inboxes and knowledge base. Nothing is ever sent or changed in Crisp.
+        contacts, inboxes and knowledge base. This tool changes nothing; notes, states,
+        contact details, segments and messages to a contact are `crisp_act`.
         May contain personal or health data: read only what the task needs, and do not
         look a person up by name or phone number unless the task requires it.
 

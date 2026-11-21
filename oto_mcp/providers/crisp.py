@@ -8,11 +8,13 @@ from __future__ import annotations
 from ._model import CredentialField, _c
 
 # crisp: customer messaging (chat, email and the other channels a workspace
-# connects), READ-ONLY — the workspace, its inboxes, conversations and their
-# messages, contacts (people profiles) and the knowledge base. The client lives
-# in the connector library (`oto.tools.crisp.CrispClient`, the client of the
-# `crisp` description), the tool in `tools/crisp.py` (one read-only tool, the
-# read verb in `op`).
+# connects) — reads the workspace, its inboxes, conversations and their
+# messages, contacts (people profiles) and the knowledge base; writes notes,
+# states, contact details, segments and custom data, and sends a text to a
+# conversation's contact. The client lives in the connector library
+# (`oto.tools.crisp.CrispClient`, the client of the `crisp` description), the
+# tools in `tools/crisp.py` (the pair `crisp` / `crisp_act`, the latter in
+# `tools/crisp_act.py`).
 #
 # THREE fields, hence `secret_kind="fields"` and resolution via
 # `access.resolve_credential_fields`: a website token is a keypair (identifier
@@ -24,13 +26,13 @@ from ._model import CredentialField, _c
 # field designates a destination, no egress guard to set.
 #
 # Strict BYO (`byo_user` + `byo_org`, no platform mode): these are the
-# conversations of the customer's own clients. Read-only: no message, note,
-# state change or contact edit.
+# conversations of the customer's own clients. Nothing deletes; a message to a
+# contact needs `confirm_send=True` on top of the client's confirmation.
 CONNECTOR = _c(
     "crisp", ["crisp"], auth_modes={"byo_user", "byo_org"},
     secret_kind="fields", label="Crisp",
-    help="customer messaging, read-only: conversations and messages, contacts, "
-         "inboxes, knowledge base",
+    help="customer messaging: conversations and messages, contacts, inboxes, "
+         "knowledge base; notes, states, segments, contact edits, replies",
     href="https://crisp.chat",
     credential_fields=(
         CredentialField(
@@ -56,6 +58,7 @@ DESCRIPTION = (
     "Customer messaging on Crisp: the workspace's conversations across its "
     "channels (chat, email and the others connected) with their messages and "
     "metadata, the contacts and their custom data, the inboxes, and the "
-    "knowledge base. Read-only; a website token and the website ID, set by a "
-    "workspace owner."
+    "knowledge base; internal notes, conversation states, segments, contact "
+    "details and custom data, and replies to a contact (confirmed apart). A "
+    "website token and the website ID, set by a workspace owner."
 )

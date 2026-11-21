@@ -348,6 +348,12 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "cognism_filter_values": "lire",
     "cognism_redeem": {"lire": "contact account"},
     "cognism_search": {"lire": "contact account"},
+    # A note stays in the conversation, unseen by the contact; segments are added or removed
+    # one by one (read, changed, read again), removing one is a removal; `send_message`
+    # without `confirm_send` only reads a preview, with it reaches the contact.
+    "crisp_act": {"ecrire": "add_note set_state update_conversation update_person "
+                            "update_person_data add_segments",
+                  "envoyer": "send_message", "detruire": "remove_segments"},
     "crunchbase_connect_start": "ecrire",
     "crunchbase_connect_status": "lire",
     "crunchbase_get_company": "lire",
@@ -1542,6 +1548,8 @@ PAS_UN_LOT: dict[str, str] = {
     "cognism_enrich_account": "anchor_fields",
     "cognism_enrich_contact": "anchor_fields",
     "cognism_redeem": "ids redeem_ids",
+    # the segment names of ONE conversation or ONE contact, not a batch of records
+    "crisp_act": "segments",
     "figma_get_file": "node_ids",
     "figma_get_images": "node_ids",
     "finkare_invoice": "invoices",

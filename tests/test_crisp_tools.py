@@ -1,11 +1,11 @@
-"""Connecteur Crisp — messagerie client, lecture seule.
+"""Connecteur Crisp — messagerie client, l'outil qui lit (`crisp`) ; celui qui agit : `test_crisp_act.py`.
 
 Les tripwires génériques couvrent déjà le registre, l'éditeur, le logo, la prose
 servie, la paire lire/agir et la jointure au client oto-core. Ce fichier verrouille
 ce qui est PROPRE à ce module :
 
-- un seul outil `crisp` (LECTURE), le verbe de lecture dans `op`, une op par fonction
-  de la description `crisp` ;
+- la paire `crisp` (LECTURE), le verbe de lecture dans `op`, une op par fonction de
+  lecture de la description `crisp`, et `crisp_act` (ACTE) ;
 - le texte servi dit que le contenu peut porter des données personnelles ou de santé ;
 - chaque op appelle la BONNE méthode, avec les bons arguments, et le credential à
   trois champs (identifiant, clé, website ID) arrive au client ;
@@ -66,9 +66,9 @@ def test_registry_entry():
     assert fields == {"token_identifier": False, "token_key": True, "website_id": False}
 
 
-def test_one_read_tool_served_with_the_privacy_notice():
+def test_the_pair_is_served_and_the_reader_carries_the_privacy_notice():
     tools = _tools()
-    assert set(tools) == {"crisp"}
+    assert set(tools) == {"crisp", "crisp_act"}
     t = tools["crisp"]
     assert t.annotations.readOnlyHint is True
     assert PRIVACY in " ".join(t.description.split())

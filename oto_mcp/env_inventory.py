@@ -346,6 +346,14 @@ _REGLAGES: tuple[Variable, ...] = (
              "Absente, vide ou un non = ces travaux attendent la réinitialisation ; "
              "l'org peut toujours l'ouvrir ou le couper. Toute autre valeur lève.",
              ("oto_mcp/db/org_subscription_pool.py:75",)),
+    Variable("OTO_REPLI_CLE_PLATEFORME_PERMIS", Classe.REGLAGE, "",
+             "Permet qu'un travail d'abonnement Claude épuisé, d'une org SANS clé déposée "
+             "qui l'a choisi (`repli_cle_plateforme`, réglé par un org_admin), rejoue sur "
+             "la clé PARTAGÉE de la plateforme accordée à l'org, chaque appel refacturé à "
+             "ses crédits (`1`, `true`, `yes`, `on`). Absente, vide ou un non = le réglage "
+             "ne s'ouvre pas et un réglage ouvert est ignoré. À ne déclarer que sur une "
+             "instance qui facture sa clé partagée. Toute autre valeur lève.",
+             ("oto_mcp/db/org_subscription_pool.py:196",)),
     Variable("OTO_CONNECTEURS_ACTIFS_PAR_DEFAUT", Classe.REGLAGE, "",
              "Ouvre à la plateforme, à chaque boot, tout connecteur du registre qui n'y "
              "a encore AUCUNE ligne (`1`, `true`, `yes`, `on`) — arriéré compris : au "

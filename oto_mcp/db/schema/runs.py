@@ -711,6 +711,26 @@ CREATE TABLE IF NOT EXISTS user_model_subscription_orgs (
 );
 """
 
+# le REPLI d'un abonnement épuisé sur la clé de PLATEFORME (19/11/2026,
+# docs/repli-cle-plateforme.md)
+MODEL_SUBSCRIPTION_REPLI_PLATEFORME = """
+-- Le second « je paie » d'une org : un travail d'abonnement au plafond, sans clé déposée
+-- par l'org, peut rejouer sur la clé PARTAGÉE de la plateforme, refacturée tour par tour
+-- à l'org (`runner_jobs._avec_cle`, `meter_usage`). Un réglage À PART de `repli_api`,
+-- qui reste le booléen « se replier ou attendre » que le tableau de bord lit : celui-ci
+-- ne choisit que le PAYEUR, et ne vaut que si `repli_api` est ouvert ET que l'instance
+-- le permet (`OTO_REPLI_CLE_PLATEFORME_PERMIS`). `FALSE` par défaut : sans geste d'un
+-- org_admin, rien ne change.
+--
+-- ⚠️ Qui l'a réglé et quand, sur des colonnes à lui (`_by`, `_at`) : `updated_by`
+-- appartient au MODE, et chaque setter voisin l'écrase. `_by` est une colonne de
+-- compte : `migrate_sub` la repointe (`users._SUB_COLUMNS`). Une ligne par ordre : les
+-- gardes de l'inventaire des comptes (`test_migrate_sub_inventory`) lisent cette forme.
+ALTER TABLE org_model_subscription_modes ADD COLUMN IF NOT EXISTS repli_cle_plateforme BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE org_model_subscription_modes ADD COLUMN IF NOT EXISTS repli_cle_plateforme_by TEXT;
+ALTER TABLE org_model_subscription_modes ADD COLUMN IF NOT EXISTS repli_cle_plateforme_at TIMESTAMPTZ;
+"""
+
 # Les LIENS entre agents (22/10/2026) — docs/runner-et-automatisations.md §Lier des agents
 AGENT_LINKS = """
 -- Ce qu'un agent fait à un autre, DÉCLARÉ par quelqu'un qui peut modifier les deux :

@@ -30,7 +30,7 @@ from . import (_abonnement, _acces_agent, _cle_exigee, _limites_du_run,
                _lignes_reservables, _modele, _ordre_de_service, _temps_gagne_borne)
 from .. import (db, outils_du_travail, runner_consigne, runner_models, time_saved, tool_alias,
                tours_au_cout)
-from ..db import user_subscriptions
+from ..db import org_subscription_pool, user_subscriptions
 from ..access import credits as budget
 from ..access import credits_tours as tours
 from ..access import limite_du_jour
@@ -721,29 +721,28 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
             return _refuser_sans_cle(job, appelant, _SANS_DEPOT)
         return job
     cle, workspace = _cle_de_modele(job["org_id"], depot)
-    if not cle and (job.get("payload") or {}).get("_plateforme", {}).get("repli"):
-        # ⚠️ UN TRAVAIL REPLIÉ NE SE SERT JAMAIS SUR NOTRE CLÉ (OTO-130). Il a été
-        # déplacé d'un abonnement gratuit vers une clé d'org PRÉCISÉMENT parce que
-        # cette clé était lisible ; si elle ne l'est plus à la remise, les deux
-        # issues d'en dessous sont fausses pour lui : le servir sans clé le ferait
-        # payer par la PLATEFORME (le cas `return job`), et l'arrêter
+    paye_par = db.payeur_du_repli(
+        ((job.get("payload") or {}).get("_plateforme") or {}).get("repli"))
+    if paye_par == db.PAYEUR_CLE_PLATEFORME:
+        # Le repli que l'org a choisi de faire payer par la clé de PLATEFORME
+        # (19/11/2026) : servi sur la clé partagée refacturée, ou DÉFAIT — jamais une
+        # des issues d'en dessous (voir `_servir_le_repli_sur_la_plateforme`).
+        return _servir_le_repli_sur_la_plateforme(job, depot, appelant, bool(cle),
+                                                  metre=metre, ferme=ferme)
+    if not cle and paye_par:
+        # ⚠️ UN TRAVAIL REPLIÉ SUR LA CLÉ DE L'ORG NE SE SERT JAMAIS SUR NOTRE CLÉ
+        # (OTO-130). Il a été déplacé d'un abonnement gratuit vers une clé d'org
+        # PRÉCISÉMENT parce que cette clé était lisible ; si elle ne l'est plus à la
+        # remise, les deux issues d'en dessous sont fausses pour lui : le servir sans
+        # clé le ferait payer par la PLATEFORME (le cas `return job`), et l'arrêter
         # définitivement le tuerait alors qu'il avait de quoi attendre.
         #
         # La troisième issue est la bonne, et elle n'existait pas : défaire le
         # repli et le rendre à la file, tel qu'il était. Il redevient un travail
         # d'abonnement qui attend sa réinitialisation — ce qu'il aurait fait si on
         # ne l'avait jamais touché.
-        if db.defaire_le_repli(job["id"], appelant,
-                               f"clé `{depot}` de l'org illisible à la remise"):
-            logger.warning("repli DÉFAIT pour le travail %s (org %s) : la clé `%s` "
-                           "n'était plus lisible à la remise — rendu à la file sur "
-                           "son abonnement", job.get("id"), job.get("org_id"), depot)
-            return None
-        # Le défaire a échoué (course sur la prise) : on ne sert RIEN plutôt que de
-        # servir sur notre clé. Le bail expirera et le travail repartira.
-        logger.warning("repli du travail %s NON défait (course) — rien n'est servi",
-                       job.get("id"))
-        return None
+        return _defaire_a_la_remise(job, appelant,
+                                    f"clé `{depot}` de l'org illisible à la remise")
     payeur = None
     depose = _depot_pose(job["org_id"], depot) if not cle else True
     if depose is None:
@@ -885,6 +884,166 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
             # Le worker rapporte alors CHAQUE appel au modèle (`op=meter`) avant de
             # continuer : c'est ce que ce drapeau lui demande.
             **({"meter_usage": True} if payeur else {})}
+
+
+def _defaire_a_la_remise(job: dict, appelant: str, raison: str) -> None:
+    """Défait le repli d'un travail que la remise ne peut pas servir comme la prise
+    l'avait décidé (`db.defaire_le_repli`) : il retrouve son abonnement et la file,
+    tentative rendue. Rien n'est servi, dans tous les cas — un défaire perdu à la
+    course laisse le bail expirer, jamais une clé qu'on n'a pas choisie."""
+    if db.defaire_le_repli(job["id"], appelant, raison):
+        logger.warning("repli DÉFAIT pour le travail %s (org %s) : %s — rendu à la file "
+                       "sur son abonnement", job.get("id"), job.get("org_id"), raison)
+        return None
+    # Le défaire a échoué (course sur la prise) : on ne sert RIEN plutôt que de
+    # servir sur une clé que le repli n'a pas choisie. Le bail expirera.
+    logger.warning("repli du travail %s NON défait (course) — rien n'est servi",
+                   job.get("id"))
+    return None
+
+
+def _cle_de_plateforme_du_repli(org_id: int, sub: Optional[str], depot: str,
+                                model: Optional[str], *, metre: bool,
+                                ferme: bool) -> tuple[Any, str]:
+    """La clé de PLATEFORME qui paierait le repli d'un travail de cette org vers
+    `model` (dépôt `depot`), et le palier sous lequel elle se refacture :
+    `(clé partagée, palier)` — ou `(None, raison)` quand elle ne le peut pas
+    (19/11/2026, `docs/repli-cle-plateforme.md`).
+
+    ⚠️ UNE lecture, jugée DEUX fois : par la prise (`db.repli_disponible`, à qui la
+    capacité l'injecte) et par la remise (`_servir_le_repli_sur_la_plateforme`). Ce
+    qui décide est ce qui sert : une prise jugée sur moins prendrait un travail que la
+    remise défait aussitôt, à chaque sondage.
+
+    « Peut payer » veut dire : la clé PARTAGÉE accordée à l'org (la cascade ordinaire,
+    au nom du demandeur et dans l'org du travail), au palier que l'opérateur
+    REFACTURE (`budget.rang_refacture` : la plateforme ou le tenant primaire — une clé
+    de tenant non primaire, ce tenant la paie, et il n'a rien demandé), servie à un
+    worker qui MESURE chaque appel, hors ferme, sous la limite du jour et au-dessus du
+    plancher de crédits, sur une instance qui facture ces appels (mode ≠ `off`, le
+    modèle replié TARIFÉ au barème), au compte de l'ORG — jamais d'une org qui règle
+    les crédits de chaque personne, où le payeur serait le demandeur.
+    JAMAIS la clé d'environnement du worker (le `return job` sans clé de `_avec_cle`) :
+    rien ne la mesure, la plateforme paierait sans que l'org soit facturée. Une org à
+    qui la clé n'est pas accordée n'y gagne pas un accès : son travail attend.
+
+    ⚠️ Et jamais une org qui a DÉPOSÉ sa clé, même illisible au coffre (`_depot_pose`
+    vrai ou inconnu) : elle paie déjà son fournisseur."""
+    if ferme:
+        return None, ("la ferme ne reçoit jamais une clé refacturée (Claude Code, "
+                      "appels non mesurés)")
+    if not metre:
+        return None, "worker qui ne mesure pas chaque appel au modèle"
+    if not org_subscription_pool.repli_cle_plateforme_permis():
+        return None, "l'instance ne permet plus le repli sur la clé de plateforme"
+    if not sub:
+        return None, "travail sans demandeur : aucun accès à la clé partagée à juger"
+    depose = _depot_pose(org_id, depot)
+    if depose is not False:
+        return None, (f"l'organisation a déposé sa clé `{depot}`" if depose else
+                      f"coffre illisible pour la clé `{depot}` de l'organisation")
+    if tours_au_cout.au_cout(model):
+        # Les familles journalisées au coût ont leur propre quota d'accord : ce repli ne
+        # les connaît pas (aucun abonnement n'y mène aujourd'hui), il ne les sert pas.
+        return None, f"`{model}` se facture au coût, hors du repli sur la clé de plateforme"
+    if tours.mode_du_modele(model, "runner") == "off":
+        return None, "les appels au modèle ne sont pas facturés sur cette instance"
+    try:
+        tarife = tours.modele_tarife(model)
+        paie = tours.payeur_du_travail(sub, org_id)
+    except Exception:
+        logger.warning("repli sur la clé de plateforme (org %s) : barème ou mode de "
+                       "payeur illisible — le travail attend", org_id, exc_info=True)
+        return None, "barème de crédits illisible"
+    if not tarife:
+        # Sans ses quatre lignes au barème, le run replié ne se facture pas : servi en
+        # `report` (rien ne se règle), arrêté au premier tour en `enforce`. Ni l'un ni
+        # l'autre n'est le run payé que l'org a choisi : il attend.
+        return None, f"`{model}` n'a pas de prix au barème de crédits de l'instance"
+    if paie != f"org:{org_id}":
+        # ⚠️ Une org dont le payeur est la PERSONNE (`credit_payer_modes`) : le run
+        # replié se réglerait sur le solde du DEMANDEUR, que le réglage d'un org_admin
+        # n'engage pas — le défaut même que `_cle_ok_pour_repli` ferme. Il attend.
+        return None, ("l'organisation règle les crédits de chaque personne : le "
+                      "réglage d'un org_admin n'engage pas le solde du demandeur")
+    try:
+        partagee = _cle_exigee.cle_partagee(org_id, depot, sub=sub, strict=True)
+    except _cle_exigee.CleIllisible:
+        return None, f"clé partagée `{depot}` illisible"
+    if partagee is None:
+        return None, f"la clé partagée `{depot}` n'est pas accordée à l'organisation"
+    palier = budget.rang_refacture(partagee.mode, partagee.entity_id)
+    if palier is None:
+        return None, f"la clé partagée `{depot}` qui sert l'organisation n'est pas refacturée"
+    if limite_du_jour.refus(sub, org_id) is not None:
+        return None, "limite de dépense du jour atteinte"
+    manque = tours.sous_le_plancher(sub, org_id, model)
+    if manque is not None:
+        return None, ("solde de crédits illisible" if manque["code"] == budget.INDISPONIBLE
+                      else "solde de crédits sous le plancher d'un travail")
+    return partagee, palier
+
+
+def plateforme_paie_le_repli(candidat: dict, depot: str, *, metre: bool,
+                             ferme: bool) -> bool:
+    """Le jugement que la prise reçoit (`db.repli_disponible(plateforme_paie=…)`) :
+    la clé de plateforme paierait-elle le repli de ce candidat ? La lecture de la
+    remise (`_cle_de_plateforme_du_repli`), sur le modèle d'ARRIVÉE."""
+    partagee, _ = _cle_de_plateforme_du_repli(
+        candidat["org_id"], candidat.get("sub"), depot, candidat.get("to_model"),
+        metre=metre, ferme=ferme)
+    return partagee is not None
+
+
+def _servir_le_repli_sur_la_plateforme(job: dict, depot: str, appelant: str,
+                                       cle_org_lue: bool, *, metre: bool,
+                                       ferme: bool) -> Optional[dict]:
+    """La remise d'un travail replié que la prise a fait payer par la clé de
+    PLATEFORME (`_plateforme.repli.payeur = cle_plateforme`, 19/11/2026).
+
+    Deux issues, et deux seulement :
+    - **servi** sur la clé partagée refacturée, estampillé (`cle_partagee`) et
+      `meter_usage` — chaque appel au modèle se réserve puis se règle au budget de
+      l'org du travail, exactement comme un travail ordinaire sur cette clé ;
+    - **défait** (`_defaire_a_la_remise`) dans TOUT autre cas, raison écrite.
+
+    ⚠️ Aucune des autres issues de `_avec_cle` ne lui va. Arrêter
+    (`_refuser_sans_cle`) tuerait un travail qui avait de quoi attendre son forfait ;
+    rendre à la file (`rendre_a_la_file`, `_doute_du_coffre`) le laisserait estampillé
+    `anthropic`, qu'un worker reprendrait plus tard ; le servir sans clé le ferait
+    tourner sur la clé d'environnement du worker, que rien ne mesure.
+
+    ⚠️ Une org qui a déposé SA clé depuis la prise : défait aussi. Le servir sur sa clé
+    ferait mentir le stamp (`payeur`), et le sondage suivant le rejoue sur elle."""
+    if cle_org_lue:
+        return _defaire_a_la_remise(
+            job, appelant, f"l'organisation a déposé sa clé `{depot}` depuis la prise : "
+            "le repli se rejoue sur elle")
+    partagee, palier = _cle_de_plateforme_du_repli(
+        job["org_id"], job.get("sub"), depot, (job.get("payload") or {}).get("model"),
+        metre=metre, ferme=ferme)
+    if partagee is None:
+        return _defaire_a_la_remise(
+            job, appelant, f"clé de plateforme non servie à la remise : {palier}")
+    if not db.estampiller_cle_partagee(job["id"], appelant, depot, palier):
+        # Plus à ce worker (course) : rien n'est servi sur une clé qu'on ne saurait pas
+        # refacturer. Le bail expirera, et la remise suivante rejugera.
+        logger.warning("travail replié %s : estampille de la clé partagée `%s` NON "
+                       "écrite — rien n'est servi", job.get("id"), depot)
+        return None
+    try:
+        workspace = (partagee.config or {}).get("workspace_id") or None
+    except Exception:
+        logger.warning("travail replié %s : config de la clé partagée `%s` illisible — "
+                       "servie sans workspace", job.get("id"), depot, exc_info=True)
+        workspace = None
+    # Trace de REMISE, comme celle de `_avec_cle` : jamais la clé.
+    logger.info("clé de modèle `%s` remise à %s pour l'org %s (travail %s, repli d'un "
+                "abonnement au plafond, clé partagée, rang %s)", depot, appelant,
+                job["org_id"], job.get("id"), palier)
+    return {**job, "model_key": partagee.key,
+            **({"model_workspace": workspace} if workspace else {}),
+            "meter_usage": True}
 
 
 def _postes_du_resultat(r: dict) -> dict:
@@ -1850,9 +2009,15 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
             # ⚠️ Sans `forfait_sonde` : le repli sur la clé de l'org lit la pause
             # STOCKÉE, quel que soit le worker — une pause ancienne qu'une sonde
             # revérifiera reste une pause pour le repli (décision du 22/10/2026).
-            job = db.repli_disponible(ctx.org_id, inp.org_ids, ctx.sub,
-                                      inp.provider, _abonnement.DEFAUT_LIMITE_PCT,
-                                      lease_seconds=bail, ferme=ferme)
+            # Le second payeur (19/11/2026) : la clé de PLATEFORME, pour une org sans
+            # clé qui l'a choisi — jugée par la lecture de la remise, avec CE worker
+            # (mesure-t-il ? est-il la ferme ?), pour ne prendre que ce qu'il servira.
+            depot = inp.provider
+            job = db.repli_disponible(
+                ctx.org_id, inp.org_ids, ctx.sub, depot, _abonnement.DEFAUT_LIMITE_PCT,
+                lease_seconds=bail, ferme=ferme,
+                plateforme_paie=lambda cand: plateforme_paie_le_repli(
+                    cand, depot, metre=inp.meters_usage, ferme=ferme))
         if job is None:
             return {"job": None}
         # La charge servie est composée AVANT la délégation : tout ce qui se décide

@@ -163,6 +163,7 @@ def test_repli_personnel_plafond_futur(live):
     assert repli["mode"] == "personnel"
     assert repli["reason"] == "paused_limit"
     assert repli["reset_at"] is not None
+    assert repli["payeur"] == "cle_org", "le payeur s'écrit avec le repli (19/11/2026)"
     assert _etat(jid)["status"] == "claimed"
 
 

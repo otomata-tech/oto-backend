@@ -115,6 +115,7 @@ class OrgSettingsInput(BaseModel):
     limit_pct: Optional[int] = None          # set : 1..100, null (EXPLICITE) = défaut
     mode: Optional[str] = None               # set : personnel | pool (seul, sans limit_pct)
     api_fallback: Optional[bool] = None      # set : repli clé de l'org (seul) ; défaut d'instance
+    platform_key_fallback: Optional[bool] = None  # set : repli clé de plateforme (seul) ; si l'instance le permet
     # time_saved (set) : minutes par type de résultat — {"record": 2, …} ; une
     # valeur null rend le défaut à ce type, `{}` les rend tous.
     minutes: Optional[dict[str, Optional[float]]] = None
@@ -310,8 +311,20 @@ def _plafond_abonnements(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
                    f"`family` (ex. claude_subscription) requis pour {inp.op}.")
     if inp.op == "get":
         return ms._get_plafond(ctx, ms.GetOrgPlafondInput(org_id=inp.org_id, family=family))
+    if inp.op == "set" and inp.platform_key_fallback is not None:
+        # Le payeur du repli (19/11/2026), seul lui aussi : un `set` qui ouvrirait
+        # `api_fallback` et `platform_key_fallback` d'un coup ferait d'un seul geste
+        # deux choix distincts — se replier, et sur QUELLE clé.
+        if (inp.mode is not None or inp.limit_pct is not None
+                or inp.api_fallback is not None):
+            raise AuthzDenied(400, "one_setting_per_call",
+                              "`platform_key_fallback` se règle seul : un appel par "
+                              "réglage.")
+        return ms._set_repli_plateforme(ctx, ms.SetOrgRepliPlateformeInput(
+            org_id=inp.org_id, family=family,
+            platform_key_fallback=inp.platform_key_fallback))
     if inp.op == "set" and inp.api_fallback is not None:
-        # Même discipline que `mode` : un réglage par appel. Trois interrupteurs sur
+        # Même discipline que `mode` : un réglage par appel. Quatre interrupteurs sur
         # la même ressource, et un `set` qui en porterait deux ne dirait pas lequel
         # on voulait laisser tel quel.
         if inp.mode is not None or inp.limit_pct is not None:
@@ -470,8 +483,15 @@ CAPABILITIES += [
             "they serve members with no usable subscription of their own, and fleets; OR, in a separate call, `api_fallback` "
             "true|false — true lets a job whose subscription is exhausted replay on the "
             "org's OWN deposited API key, same tier, instead of waiting (the default depends on the instance); "
+            "OR, in a separate call, `platform_key_fallback` true|false — with "
+            "`api_fallback` on, true lets such a job replay on the instance's shared "
+            "(platform) key when the org has deposited NO key of its own, each model call "
+            "billed to the org's credits, only if that key is granted to the org; turning "
+            "it on is refused (`platform_key_fallback_not_permitted`) where the instance "
+            "does not allow it, turning it off always works; "
             "get also returns `mode`, `pool_size`, `lenders` (who lends, and whether each is "
-            "usable now — never their tier or usage) and `api_fallback`) | time_saved "
+            "usable now — never their tier or usage), `api_fallback`, "
+            "`platform_key_fallback` (+ `_permitted`, `_set_by`, `_set_at`)) | time_saved "
             "(minutes per result type behind the agents' time saved — report, action, record, "
             "research; the defaults are estimates, the org may override them; get returns "
             "each kind's default and applied minutes; set takes "

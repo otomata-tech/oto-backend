@@ -58,7 +58,9 @@ def get_mode(org_id: Optional[int], famille: str) -> Optional[dict]:
         return None
     with _connect() as conn:
         row = conn.execute(
-            "SELECT org_id, famille, mode, repli_api, updated_at, updated_by "
+            "SELECT org_id, famille, mode, repli_api, updated_at, updated_by, "
+            "       repli_cle_plateforme, repli_cle_plateforme_by, repli_cle_plateforme_at, "
+            "       repli_quand, repli_quand_by, repli_quand_at "
             "FROM org_model_subscription_modes WHERE org_id = %s AND famille = %s",
             (org_id, famille)).fetchone()
     return dict(row) if row else None
@@ -150,8 +152,11 @@ def repli_api_actif(org_id: Optional[int], famille: str) -> bool:
     que d'attendre la réinitialisation (OTO-130) ? Le réglage de l'org s'il existe,
     sinon le défaut de l'instance (`repli_api_par_defaut`).
 
-    Le repli exige toujours la clé déposée PAR l'org (`runner_jobs._cle_ok_pour_repli`) :
-    sans clé, rien ne change. La réservation lit la même règle en SQL, avec le MÊME
+    Le repli exige toujours que l'org ait dit « je paie » : sa clé déposée
+    (`runner_jobs._cle_ok_pour_repli`), ou — sur une instance qui le permet — son
+    réglage `repli_cle_plateforme` (19/11/2026). Sans l'un ni l'autre, rien ne change ;
+    et ce booléen-ci reste la porte : fermé, aucun des deux ne replie. La réservation
+    lit la même règle en SQL, avec le MÊME
     défaut passé en paramètre (`runner_jobs.candidats_repli_abonnement`) ; cette
     lecture sert l'écran."""
     ligne = get_mode(org_id, famille)
@@ -174,6 +179,89 @@ def set_repli_api(org_id: int, famille: str, actif: bool, par: Optional[str]) ->
            "RETURNING org_id, famille, mode, repli_api, updated_at, updated_by")
     with _connect() as conn:
         row = conn.execute(sql, (org_id, famille, None, bool(actif), par)).fetchone()
+    return dict(row)
+
+
+ENV_REPLI_CLE_PLATEFORME_PERMIS = "OTO_REPLI_CLE_PLATEFORME_PERMIS"
+
+
+def repli_cle_plateforme_permis() -> bool:
+    """L'INSTANCE permet-elle qu'un travail d'abonnement au plafond rejoue sur la clé de
+    PLATEFORME (19/11/2026, `docs/repli-cle-plateforme.md`) ? Fermé si elle ne déclare
+    rien : une instance qui ne refacture pas sa clé partagée ne doit pas offrir ce
+    réglage — l'org y lirait « je paie » là où personne ne facture. Fermé, le réglage ne
+    s'ouvre pas (refus nommé à la capacité) et un réglage déjà ouvert est IGNORÉ par le
+    repli. Lu à chaque appel, sans redémarrage ; une valeur illisible lève
+    (`interrupteurs`)."""
+    return interrupteurs.oui_non(ENV_REPLI_CLE_PLATEFORME_PERMIS,
+                                 os.environ.get("OTO_REPLI_CLE_PLATEFORME_PERMIS"))
+
+
+def set_repli_cle_plateforme(org_id: int, famille: str, actif: bool,
+                             par: Optional[str]) -> dict:
+    """Ouvre ou referme, pour cette org, le repli sur la clé de PLATEFORME : le second
+    moyen de dire « je paie » (19/11/2026). Qui (`par`) et quand s'écrivent sur des
+    colonnes à lui, jamais sur `updated_by`, qui appartient au mode.
+
+    ⚠️ Une ligne qui NAÎT ici n'a rien choisi du repli API ni du mode : `mode` NULL (le
+    pool continue de compléter) et `repli_api` au DÉFAUT DE L'INSTANCE, comme
+    `poser_mode`. La colonne a beau valoir `FALSE` par défaut, naître à `FALSE` sur une
+    instance ouverte FERMERAIT le repli de l'org par effet de bord — l'inverse de ce
+    qu'elle vient de demander. Une ligne existante garde son `repli_api`.
+
+    La permission de l'instance se juge à la capacité (refus nommé), pas ici."""
+    with _connect() as conn:
+        row = conn.execute(
+            """INSERT INTO org_model_subscription_modes
+                           (org_id, famille, mode, repli_api, repli_cle_plateforme,
+                            repli_cle_plateforme_by, repli_cle_plateforme_at)
+                    VALUES (%s, %s, NULL, %s, %s, %s, NOW())
+               ON CONFLICT (org_id, famille) DO UPDATE
+                       SET repli_cle_plateforme = EXCLUDED.repli_cle_plateforme,
+                           repli_cle_plateforme_by = EXCLUDED.repli_cle_plateforme_by,
+                           repli_cle_plateforme_at = NOW()
+            RETURNING org_id, famille, mode, repli_api, repli_cle_plateforme,
+                      repli_cle_plateforme_by, repli_cle_plateforme_at""",
+            (org_id, famille, repli_api_par_defaut(), bool(actif), par)).fetchone()
+    return dict(row)
+
+
+#: QUAND un travail d'abonnement se replie (22/11/2026, `docs/repli-cle-plateforme.md`
+#: §Quand se replier) — le choix de l'org, une valeur de `repli_quand` :
+#: - `plafond` (le défaut, et toute org qui n'a rien réglé) : seulement un forfait au
+#:   plafond, la règle d'OTO-130 à l'identique ;
+#: - `plafond_ou_deconnexion` : AUSSI un abonnement déconnecté ou à reconnecter — celui du
+#:   demandeur, ou tous les prêteurs du pool (`runner_jobs._jointures_de_repli`).
+#: Il ne choisit ni le repli (`repli_api` reste la porte) ni le payeur.
+REPLI_AU_PLAFOND = "plafond"
+REPLI_AUSSI_DECONNECTE = "plafond_ou_deconnexion"
+REPLI_QUAND = (REPLI_AU_PLAFOND, REPLI_AUSSI_DECONNECTE)
+
+
+def set_repli_quand(org_id: int, famille: str, quand: str, par: Optional[str]) -> dict:
+    """Pose QUAND les travaux d'abonnement de cette org se replient (22/11/2026). Qui
+    (`par`) et quand s'écrivent sur des colonnes à lui, jamais sur `updated_by`, qui
+    appartient au mode.
+
+    ⚠️ Une ligne qui NAÎT ici n'a rien choisi du repli API ni du mode, comme
+    `set_repli_cle_plateforme` : `mode` NULL (le pool continue de compléter) et
+    `repli_api` au DÉFAUT DE L'INSTANCE — naître à `FALSE` fermerait le repli de l'org par
+    effet de bord. Une ligne existante garde son `repli_api` et son payeur."""
+    if quand not in REPLI_QUAND:
+        raise ValueError(f"repli_quand hors contrat : {quand!r}")
+    with _connect() as conn:
+        row = conn.execute(
+            """INSERT INTO org_model_subscription_modes
+                           (org_id, famille, mode, repli_api, repli_quand, repli_quand_by,
+                            repli_quand_at)
+                    VALUES (%s, %s, NULL, %s, %s, %s, NOW())
+               ON CONFLICT (org_id, famille) DO UPDATE
+                       SET repli_quand = EXCLUDED.repli_quand,
+                           repli_quand_by = EXCLUDED.repli_quand_by,
+                           repli_quand_at = NOW()
+            RETURNING org_id, famille, mode, repli_api, repli_quand, repli_quand_by,
+                      repli_quand_at""",
+            (org_id, famille, repli_api_par_defaut(), quand, par)).fetchone()
     return dict(row)
 
 
@@ -255,7 +343,10 @@ def pool_au_plafond(org_id: int, famille: str, depot: Optional[str]) -> dict:
     - `repli_api` : l'interrupteur de repli de l'org, None si elle ne l'a jamais réglé
       (l'appelant lit alors `repli_api_par_defaut`, comme `repli_api_actif`) ;
     - `cle_org` : l'org a-t-elle déposé une clé `depot` — la présence, la même lecture
-      que les candidats au repli (`runner_jobs.candidats_repli_abonnement`)."""
+      que les candidats au repli (`runner_jobs.candidats_repli_abonnement`) ;
+    - `repli_cle_plateforme` : le réglage de l'org pour le repli sur la clé de
+      PLATEFORME (19/11/2026), FAUX sans ligne — l'appelant le croise avec la
+      permission de l'instance (`repli_cle_plateforme_permis`)."""
     with _connect() as conn:
         row = conn.execute(
             f"""
@@ -266,11 +357,16 @@ def pool_au_plafond(org_id: int, famille: str, depot: Optional[str]) -> dict:
                        AS reprise,
                    (SELECT m.repli_api FROM org_model_subscription_modes m
                      WHERE m.org_id = %s AND m.famille = %s) AS repli_api,
+                   COALESCE((SELECT m.repli_cle_plateforme
+                               FROM org_model_subscription_modes m
+                              WHERE m.org_id = %s AND m.famille = %s), FALSE)
+                       AS repli_cle_plateforme,
                    EXISTS (SELECT 1 FROM connector_credentials c
                             WHERE c.entity_type = 'org' AND c.entity_id = %s::text
                               AND c.connector = %s) AS cle_org
             """,
-            (org_id, famille, org_id, famille, org_id, depot or "")).fetchone()
+            (org_id, famille, org_id, famille, org_id, famille, org_id,
+             depot or "")).fetchone()
     return dict(row)
 
 

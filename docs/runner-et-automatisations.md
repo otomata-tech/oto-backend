@@ -1241,9 +1241,10 @@ le connecteur déclare `platform` dans ses `auth_modes` et une clé **fermée**
 (`platform_key_open=False`) — le grant de l'org est le droit, et le retirer coupe
 l'org à la réservation suivante, ses agents compris.
 
-- **L'ordre à la remise** : repli d'abonnement (jamais sur notre clé) → clé de l'org →
-  clé partagée → refus « clés d'org seules » → garde `runner.org_key_required` → le
-  comportement d'avant. La résolution est la cascade ordinaire, au nom du demandeur et
+- **L'ordre à la remise** : repli d'abonnement (sur la clé de l'org, jamais sur notre
+  clé ; ou, payeur `cle_plateforme` stampé, sur la clé partagée refacturée, sinon
+  défait — `docs/repli-cle-plateforme.md`) → clé de l'org → clé partagée → refus « clés
+  d'org seules » → garde `runner.org_key_required` → le comportement d'avant. La résolution est la cascade ordinaire, au nom du demandeur et
   dans l'org du travail (`_cle_exigee.cle_partagee`), et seuls les rangs `tenant` et
   `platform` y comptent.
 - **Refacturée, ou pas** (20/10/2026) : seule la clé de la plateforme ou du tenant
@@ -2818,10 +2819,30 @@ modèle, au même palier, payé aux jetons sur la clé API de l'org. Le repli le
   usage (`limit_utilisation`) dépasse le seuil de CETTE org. La pause est portée par la
   personne : le seuil de 80 % d'une org la met en attente partout, mais une autre org
   qui tolère 95 % a encore de la marge sur ce forfait — elle ne paie pas le repli. Une
-  pause écrite sans sa cause (avant la révision `0025`) n'ouvre rien. **Jamais**
-  `needs_login`/`disconnected` — se reconnecter est un geste que le repli ne remplace
-  pas —, **jamais** un pool vide : personne ne prête n'est pas une pause, c'est une
-  absence, et l'org doit la voir.
+  pause écrite sans sa cause (avant la révision `0025`) n'ouvre rien. **Par défaut,
+  jamais** `needs_login`/`disconnected` — se reconnecter est un geste que le repli ne
+  remplace pas —, **jamais** un pool vide : personne ne prête n'est pas une pause, c'est
+  une absence, et l'org doit la voir.
+- **Ou, si l'org l'a choisi, AUSSI un abonnement déconnecté (22/11/2026).** Le réglage
+  d'org `repli_quand` (org_admin, qui et quand) : `plafond` (le défaut, et toute org qui
+  n'a rien réglé — la règle ci-dessus, à l'identique) ou `plafond_ou_deconnexion`. Ce
+  dernier élargit le SEUL déclencheur, ni la porte (`repli_api`) ni le payeur ni les
+  bornes : l'abonnement du demandeur ouvert dans l'org, `needs_login` ou `disconnected`
+  (sandbox posé, depuis dix minutes au moins, `DECONNEXION_TENUE_S`) ; en pool, chaque
+  prêteur vivant en pause pour l'org OU déconnecté (un pool mélangé se replie) ; sans
+  mode réglé, le pool d'un demandeur qui n'a pas d'abonnement ouvert ici. Restent en
+  attente : un pool sans prêteur, un demandeur sans abonnement hors de ce cas, un prêteur
+  servable, `repli_api` fermé, une org sans payeur. Le stamp dit pourquoi
+  (`_plateforme.repli.cause` : `plafond` | `deconnexion`). Reconnecté, l'abonnement
+  reprend les travaux suivants ; un travail déjà replié finit sur son payeur.
+  `oto_org_settings domain=model_subscriptions fallback_when=limit|limit_or_signed_out`,
+  ou `PUT /api/orgs/{id}/model-subscriptions/{family}/fallback-when`. Révision
+  `20261122_1200_repli_quand`. Détail : `docs/repli-cle-plateforme.md` §Quand se replier.
+- **Jamais un modèle ÉTEINT** (`orgs.disabled_models`, 22/11/2026), quel que soit le
+  réglage : ni celui du travail (rerouté, il tournerait sur un modèle allumé, quand la
+  règle est qu'un modèle éteint s'arrête), ni celui d'arrivée (le travail serait arrêté à
+  la remise au lieu d'attendre). Lu en SQL avant la limite des candidats, revérifié à la
+  prise (`runner_jobs._modeles_allumes`).
 - **Qui paie : l'org, sur SA clé déposée, ou personne.** `_cle_ok_pour_repli` exige la
   clé de l'org au coffre — pas le barreau tenant, pas la clé de plateforme, pas la clé
   d'environnement du worker. ⚠️ **Ne pas lire `runner.org_key_required` ici** : ce réglage
@@ -2830,6 +2851,20 @@ modèle, au même palier, payé aux jetons sur la clé API de l'org. Le repli le
   la première version, corrigé avant mise en service). Le réglage répond à « qui peut
   tourner ? », cette fonction à « qui PAIE ? ». Sans clé d'org : le travail **attend**,
   comme avant — jamais un échec dur.
+- **Ou, sans clé d'org, la clé de PLATEFORME — si l'org l'a dit (19/11/2026).** Une
+  seconde manière, explicite, de dire « je paie » : le réglage d'org
+  `repli_cle_plateforme` (qui, quand), posé par un org_admin, sur une instance qui le
+  permet (`OTO_REPLI_CLE_PLATEFORME_PERMIS`, fermé par défaut). Il choisit le payeur, pas
+  le repli : `repli_api` reste la porte. Une org qui a sa clé paie toujours sur elle. La
+  clé de plateforme est la clé PARTAGÉE accordée à l'org, refacturée tour par tour à ses
+  crédits (`meter_usage`), jamais la clé d'environnement du worker ; sans accord, sans
+  prix du modèle replié au barème, ou pour une org qui règle les crédits de chaque
+  personne, le travail attend. Le payeur s'écrit dans `_plateforme.repli.payeur` (`cle_org` |
+  `cle_plateforme`), et la remise sert ce payeur ou défait le repli — jamais rien
+  d'autre. `oto_org_settings domain=model_subscriptions platform_key_fallback=true|false`,
+  ou `PUT /api/orgs/{id}/model-subscriptions/{family}/platform-key-fallback`. Révision
+  `20261122_1100_repli_plateforme`. Détail, bornes et preuve de facturation :
+  `docs/repli-cle-plateforme.md`.
 - **L'org le CHOISIT** : colonne `org_model_subscription_modes.repli_api`. Sans
   réglage de l'org, c'est le **défaut de l'instance** : `OTO_REPLI_API_PAR_DEFAUT`
   (décision du 08/10/2026), fermé si l'instance ne déclare rien — les clés d'org
@@ -2848,8 +2883,8 @@ modèle, au même palier, payé aux jetons sur la clé API de l'org. Le repli le
   personnel, le pool de l'org en pool —, comme le chemin abonnement (`_deja_en_vol`).
   Même modèle, même palier : Opus reste Opus.
 - **Le repli se STAMPE, jamais silencieusement** : `payload._plateforme.repli` porte
-  l'avant, l'après, le mode et l'échéance qui l'a déclenché, visible partout où la charge
-  l'est déjà. Déplacer une dépense sans le dire serait la faire découvrir au relevé.
+  l'avant, l'après, le mode, sa cause (`cause`, `reason`) et l'échéance qui l'a déclenché
+  (`reset_at`, nulle pour une déconnexion), visible partout où la charge l'est déjà. Déplacer une dépense sans le dire serait la faire découvrir au relevé.
 - **Le travail rerouté est un travail `anthropic` ORDINAIRE** : la charge du modèle
   d'arrivée (`runner_models.charge` — `model`, `model_family`, et son `effort` :
   `claude-haiku-4-5` répond 400 sans `effort=none`) est réécrite DANS l'écriture de la

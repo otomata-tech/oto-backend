@@ -6,8 +6,9 @@ ne l'a pas COUPÉ (`repli_api`, ouvert par défaut depuis le 08/10/2026). Ce que
 base :
 
 1. forfait épuisé (mode personnel) → repli, avec le stamp `_plateforme.repli` ;
-2. `needs_login` / `disconnected` → JAMAIS de repli (l'abonnement doit se
-   reconnecter, ce n'est pas ce que ce chemin répare) ;
+2. `needs_login` / `disconnected` → JAMAIS de repli sous le réglage par défaut
+   (`repli_quand = plafond`) : l'abonnement doit se reconnecter. L'org qui choisit
+   `plafond_ou_deconnexion` a ses bancs à part (`test_repli_deconnexion.py`) ;
 3. pool VIDE → jamais de repli (personne ne prête, ce n'est pas une pause) ;
 4. pool INTÉGRALEMENT plafonné (échéance future) → repli, stamp `mode: pool` ;
 5. pool MÉLANGÉ (un plafonné, un déconnecté) → jamais de repli (pas
@@ -163,6 +164,7 @@ def test_repli_personnel_plafond_futur(live):
     assert repli["mode"] == "personnel"
     assert repli["reason"] == "paused_limit"
     assert repli["reset_at"] is not None
+    assert repli["payeur"] == "cle_org", "le payeur s'écrit avec le repli (19/11/2026)"
     assert _etat(jid)["status"] == "claimed"
 
 

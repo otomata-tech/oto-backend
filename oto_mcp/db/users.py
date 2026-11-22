@@ -639,6 +639,11 @@ _SUB_COLUMNS = [
     ("org_model_subscription_limits", "updated_by"),
     # Qui a réglé le MODE (personnel / pool) d'une org — colonne d'AUTEUR, sans FK.
     ("org_model_subscription_modes", "updated_by"),
+    # Qui a ouvert ou fermé le repli sur la clé de PLATEFORME (19/11/2026) — même
+    # nature : une signature d'admin, sans FK.
+    ("org_model_subscription_modes", "repli_cle_plateforme_by"),
+    # Qui a choisi QUAND l'abonnement se replie (22/11/2026) — même nature.
+    ("org_model_subscription_modes", "repli_quand_by"),
     # Les relances reçues, et qui les a déclenchées. Le TITULAIRE (`sub`) est sous
     # index unique partiel : l'UPDATE nu ci-dessous ne suffit pas seul, il est
     # précédé du retrait de l'étape 2 quinquies (`_UNIQUE_INDEX_SUB_TABLES`).

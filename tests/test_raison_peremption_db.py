@@ -390,3 +390,61 @@ def test_la_famille_non_servie_atterrit_dans_last_error_et_attempt_errors(live):
     assert "famille `mistral` (dernier vu le 18/10/2026 09:12 UTC)" in raison
     (t,) = row["attempt_errors"]
     assert t["error"] == raison and t["attempt"] == 0, t
+
+
+# ── le repli sur la clé de PLATEFORME dans le diagnostic (19/11/2026) ────────
+
+@pytest.mark.parametrize("declare", [None, "0"])
+def test_pool_au_plafond_instance_qui_ne_permet_pas_garde_le_texte_d_avant(
+        live, monkeypatch, declare):
+    """Une instance qui ne permet pas le repli sur la clé de plateforme ne le nomme
+    pas : le texte reste celui d'avant, mot pour mot — même si l'org l'a réglé."""
+    from oto_mcp.db import org_subscription_pool as P
+    if declare is None:
+        monkeypatch.delenv("OTO_REPLI_CLE_PLATEFORME_PERMIS", raising=False)
+    else:
+        monkeypatch.setenv("OTO_REPLI_CLE_PLATEFORME_PERMIS", declare)
+    nom = f"r13{declare}"
+    oid, reprise = _pool_au_plafond(nom)
+    P.set_repli_api(oid, _F, True, "banc")
+    P.set_repli_cle_plateforme(oid, _F, True, "banc")
+    r = _raison(f"{nom}-dem", oid, _F, _servie(_F), modele="sub:sonnet")
+    assert r.endswith(f"jusqu'au {reprise}, repli sur la clé d'org ouvert mais aucune "
+                      "clé `anthropic` déposée par l'organisation."), r
+
+
+def test_pool_au_plafond_repli_plateforme_ferme_le_dit(live, monkeypatch):
+    """L'instance le permet, l'org ne l'a pas ouvert : le diagnostic nomme le réglage
+    qui aurait servi le travail."""
+    from oto_mcp.db import org_subscription_pool as P
+    monkeypatch.setenv("OTO_REPLI_CLE_PLATEFORME_PERMIS", "1")
+    oid, reprise = _pool_au_plafond("r14")
+    P.set_repli_api(oid, _F, True, "banc")
+    r = _raison("r14-dem", oid, _F, _servie(_F), modele="sub:sonnet")
+    assert r.endswith("aucune clé `anthropic` déposée par l'organisation, et repli sur "
+                      "la clé de plateforme fermé."), r
+    assert f"jusqu'au {reprise}" in r
+
+
+def test_pool_au_plafond_repli_plateforme_ouvert_dit_ce_qui_l_a_retenu(live, monkeypatch):
+    from oto_mcp.db import org_subscription_pool as P
+    monkeypatch.setenv("OTO_REPLI_CLE_PLATEFORME_PERMIS", "yes")
+    oid, reprise = _pool_au_plafond("r15")
+    P.set_repli_api(oid, _F, True, "banc")
+    P.set_repli_cle_plateforme(oid, _F, True, "banc")
+    r = _raison("r15-dem", oid, _F, _servie(_F), modele="sub:sonnet")
+    assert f"jusqu'au {reprise}" in r
+    assert "repli sur la clé de plateforme ouvert" in r, r
+    assert "un seul travail replié à la fois par forfait" in r
+    assert "accordée à l'organisation" in r and "crédits" in r
+
+
+def test_pool_au_plafond_repli_api_ferme_ne_parle_pas_de_la_plateforme(live, monkeypatch):
+    """`repli_api` fermé : rien ne replie, quel que soit le payeur choisi."""
+    from oto_mcp.db import org_subscription_pool as P
+    monkeypatch.setenv("OTO_REPLI_CLE_PLATEFORME_PERMIS", "1")
+    monkeypatch.delenv("OTO_REPLI_API_PAR_DEFAUT", raising=False)
+    oid, _ = _pool_au_plafond("r16")
+    P.set_repli_cle_plateforme(oid, _F, True, "banc")
+    r = _raison("r16-dem", oid, _F, _servie(_F), modele="sub:sonnet")
+    assert r.endswith("repli sur la clé d'org fermé."), r

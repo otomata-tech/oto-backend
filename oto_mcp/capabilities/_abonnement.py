@@ -520,10 +520,17 @@ def _famille_non_servie(base: str, org_id: int, famille: str) -> str:
 
 
 def _pool_au_plafond(base: str, org_id: int, famille: str, modele: Optional[str]) -> str:
-    """Un pool AU PLAFOND, et pourquoi le repli sur la clé d'org ne l'a pas pris
-    (21/10/2026) : fermé, ou ouvert sans clé déposée. Sans ce détail, l'expiration ne
-    disait ni jusqu'à quand attendre, ni quel réglage aurait servi le travail. Les
-    autres cas gardent le texte d'avant. UNE lecture (`pool_au_plafond`)."""
+    """Un pool AU PLAFOND, et pourquoi le repli ne l'a pas pris (21/10/2026) : fermé,
+    ou ouvert sans clé déposée. Sans ce détail, l'expiration ne disait ni jusqu'à quand
+    attendre, ni quel réglage aurait servi le travail. Les autres cas gardent le texte
+    d'avant. UNE lecture (`pool_au_plafond`).
+
+    Le repli sur la clé de PLATEFORME (19/11/2026), seulement sur une instance qui le
+    PERMET — ailleurs, le nommer annoncerait un réglage que l'org ne peut pas ouvrir, et
+    les textes restent ceux d'avant, mot pour mot : sans clé d'org, il dit s'il était
+    fermé (le réglage qui aurait servi), ou ouvert — alors ce qui l'a retenu ne se lit
+    pas ici (un seul repli en vol par forfait, l'accès de l'org à la clé partagée, ses
+    crédits), et le texte le dit sans trancher."""
     depot = runner_models.famille(runner_models.repli_api(modele))
     pause = org_subscription_pool.pool_au_plafond(org_id, famille, depot)
     repli = (org_subscription_pool.repli_api_par_defaut() if pause["repli_api"] is None
@@ -535,8 +542,17 @@ def _pool_au_plafond(base: str, org_id: int, famille: str, modele: Optional[str]
     if not repli:
         return f"{au_plafond}, repli sur la clé d'org fermé."
     if depot and not pause["cle_org"]:
-        return (f"{au_plafond}, repli sur la clé d'org ouvert mais aucune clé `{depot}` "
-                "déposée par l'organisation.")
+        sans_cle = (f"{au_plafond}, repli sur la clé d'org ouvert mais aucune clé "
+                    f"`{depot}` déposée par l'organisation")
+        if not org_subscription_pool.repli_cle_plateforme_permis():
+            return f"{sans_cle}."
+        if not pause["repli_cle_plateforme"]:
+            return f"{sans_cle}, et repli sur la clé de plateforme fermé."
+        return (f"{sans_cle} ; repli sur la clé de plateforme ouvert, mais il n'a pas "
+                "servi cette occurrence à temps : un seul travail replié à la fois par "
+                "forfait, et la clé de plateforme ne sert que si elle est accordée à "
+                "l'organisation, que le modèle a un prix au barème et que les crédits "
+                "de l'organisation couvrent le travail.")
     return (f"{base} Le pool `{famille}` de l'organisation était en pause "
             "(plafond de consommation atteint) au moment où la suivante est arrivée.")
 

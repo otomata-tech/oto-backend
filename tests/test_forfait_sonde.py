@@ -238,7 +238,12 @@ def test_le_repli_sur_cle_ignore_la_sonde():
               DBRJ._pause_pour_l_org):
         assert "sonde" not in inspect.signature(f).parameters, f.__name__
     sql = DBRJ._jointures_de_repli(80)
-    assert "updated_at" not in sql and "limit_fenetre" not in sql
+    # La fraîcheur de la SONDE (`updated_at >` une fenêtre, `limit_fenetre`) n'y est
+    # pas. `updated_at <=` y est, depuis le 22/11/2026 : l'ANCIENNETÉ d'une déconnexion
+    # (`_deconnecte`, `DECONNEXION_TENUE_S`), qui ne lit jamais un `paused_limit`.
+    assert "updated_at >" not in sql and "limit_fenetre" not in sql
+    assert US.pause_en_vigueur("ab", True) not in sql
+    assert DBRJ._deconnecte("ab") in sql
 
 
 # ── 7. le texte servi dit « au plafond jusqu'au … », pas « reconnecter » ────────

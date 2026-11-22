@@ -64,7 +64,7 @@ from .errors import (  # noqa: F401
     RowNotFound,
     RowValidationError,
 )
-from .. import db, deprecations, ownership, session_org
+from .. import db, ownership, session_org
 from .. import config
 from ..db.query import ds_filter_specs as _filter_specs
 
@@ -261,11 +261,10 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         # no-op hors appel MCP — la face REST tient déjà son propre relevé.
         session_org.note_call_trace(ns_id=ns_id, ns_name=ns.get("datastore"))
         # Adressé par son NOM : la réponse le dit, avec l'identifiant et la date du
-        # refus (`deprecations.RETRAIT_NOM_DE_TABLEAU`). Même règle qu'au journal :
-        # après les gardes — un refus n'a rien à corriger d'autre que lui-même.
-        if deprecations.adresse_par_nom(datastore, ns_id):
-            session_org.noter_avis(deprecations.avis_nom_de_tableau(
-                ns.get("datastore") or str(datastore), ns_id))
+        # refus (`deprecations.RETRAIT_NOM_DE_TABLEAU`), et le journal en garde la
+        # FORME (`ref_kind`), jamais le nom. Même règle qu'au journal : après les
+        # gardes — un refus n'a rien à corriger d'autre que lui-même.
+        session_org.noter_adresse_de_tableau(datastore, ns_id, ns.get("datastore"))
         # Le MÊME couple, gardé sur le store, pour les REMISES : le relevé d'appel
         # ci-dessus est muet hors MCP (REST, stdio, tests) et n'alimente que le
         # journal. Les deux valeurs sont dans la ligne déjà lue — l'identité ne coûte

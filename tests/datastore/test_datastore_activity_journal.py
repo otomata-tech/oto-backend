@@ -598,6 +598,9 @@ def test_trace_only_yields_a_closed_set_of_keys():
     02/11/2026, même rôle).
     Et le SLUG de la procédure qu'un run déroule (#1340), sous la clé que lisent la
     reconstruction des runs et l'audit de projet (`usage._ARG_PROCEDURE`).
+    Et la FORME sous laquelle l'appel a désigné un tableau (`ref_kind`, 17/11/2026 :
+    `number`|`slot`|`name`, jamais le nom), qui compte l'usage d'un nom de tableau
+    avant son retrait.
     Une clé s'ajoute ICI, à la main, dans le commit qui la provoque."""
     from oto_mcp import server
     assert server._TRACED_ARGS == ("ns_id", "doctrine_version", "instance",
@@ -605,7 +608,8 @@ def test_trace_only_yields_a_closed_set_of_keys():
                                    "found_work_emails", "found_personal_emails",
                                    "found_phones", "apify_run_id",
                                    "higgsfield_request_id", "guide_scope",
-                                   usage._ARG_PROCEDURE, "recipe_bridge_refusals")
+                                   usage._ARG_PROCEDURE, "recipe_bridge_refusals",
+                                   "ref_kind")
 
 
 def test_datastore_lens_correlates_on_the_id_without_a_tenant_bound(monkeypatch):

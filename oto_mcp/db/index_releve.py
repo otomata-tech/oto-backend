@@ -50,6 +50,16 @@ par `INSERT … ON CONFLICT DO NOTHING` (`usage.inserer_tour_au_cout`). Partiel 
 seuls relevés des familles au coût : il ne porte que ces lignes. ⚠️ Sans lui, l'écriture
 du tour échoue (aucune contrainte ne répond à l'`ON CONFLICT`) : le worker s'arrête, rien
 n'est servi sans dédoublonnage.
+
+**`TABLEAU_PAR_NOM`** — les appels qui ont désigné un tableau par son NOM (révision
+`20261120_2210_tableau_par_nom`). Le journal cite le tableau résolu ; la FORME de la
+désignation (`args.ref_kind` ∈ `number`|`slot`|`name`, `session_org.noter_forme_tableau`)
+est ce qui prouve, avant le retrait du nom (`deprecations.RETRAIT_NOM_DE_TABLEAU`),
+qu'aucun appelant ne s'en sert plus — face MCP (ligne de l'appel) comme face REST (ligne
+de route). Sans index, ce compte parcourrait des jours entiers du journal par
+`idx_tool_calls_created_at` en ouvrant chaque `args`. Partiel sur les seules
+désignations par nom : quelques lignes, et zéro une fois le nom retiré
+(`MESURE_TABLEAU_PAR_NOM`, la requête qu'il sert).
 """
 from __future__ import annotations
 
@@ -123,4 +133,31 @@ TOUR_AU_COUT = IndexConcurrent(
     nom="idx_tool_calls_tour_au_cout", table="tool_calls",
     forme=f"(kind, tool, call_uid) WHERE {PREDICAT_TOUR_AU_COUT}",
     revision=REVISION_TOURS_AU_COUT, unique=True,
+)
+
+#: La révision qui pose l'index des désignations par nom.
+REVISION_TABLEAU_PAR_NOM = "20261120_2210_tableau_par_nom"
+
+#: Le prédicat d'une désignation par NOM, partagé par l'index et par la mesure.
+PREDICAT_TABLEAU_PAR_NOM = "args->>'ref_kind' = 'name'"
+
+#: Les appels qui ont désigné un tableau par son nom, par date.
+TABLEAU_PAR_NOM = IndexConcurrent(
+    nom="idx_tool_calls_ref_nom", table="tool_calls",
+    forme=f"(created_at DESC) WHERE {PREDICAT_TABLEAU_PAR_NOM}",
+    revision=REVISION_TABLEAU_PAR_NOM,
+)
+
+#: La MESURE de l'usage d'un nom de tableau : par face (`mcp`|`rest`), org et principal
+#: (`sub`, et le jeton s'il y en a un), sur les `%(jours)s` derniers jours. Lecture seule,
+#: servie par `TABLEAU_PAR_NOM` (son prédicat est celui de l'index, mot pour mot). À jouer
+#: sous `SET statement_timeout = '15s'` (docs/datastore.md).
+MESURE_TABLEAU_PAR_NOM = (
+    "SELECT kind AS face, org_id, sub, token_kind, token_id, count(*) AS appels, "
+    "min(created_at) AS premier, max(created_at) AS dernier "
+    "FROM tool_calls "
+    f"WHERE {PREDICAT_TABLEAU_PAR_NOM} "
+    "AND created_at >= now() - make_interval(days => %(jours)s) "
+    "GROUP BY kind, org_id, sub, token_kind, token_id "
+    "ORDER BY appels DESC"
 )

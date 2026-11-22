@@ -511,10 +511,17 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # projet. `run_start` la pose lui-même : l'agent passe `guide=` (le nom documenté), et
 # le journal, qui garde les arguments tels que passés, n'écrivait jamais la clé lue —
 # la procédure passait pour « jamais déroulée ». Même clé que la face REST.
+#
+# `ref_kind` (17/11/2026) — la FORME sous laquelle l'appel a désigné un tableau
+# (`number`|`slot`|`name`, `session_org.noter_forme_tableau`), jamais le nom : `ns_id`
+# cite le tableau résolu, il ne dit pas si l'agent l'a nommé. C'est ce qui compte
+# l'usage d'un nom de tableau avant son retrait (`deprecations.RETRAIT_NOM_DE_TABLEAU`).
+# Même clé sur la ligne de route REST (`api.routes.RestCallLogger`).
 _TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
                 "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones",
                 "apify_run_id", "higgsfield_request_id", "guide_scope",
-                db.usage._ARG_PROCEDURE, "recipe_bridge_refusals")
+                db.usage._ARG_PROCEDURE, "recipe_bridge_refusals",
+                "ref_kind")
 
 
 _PREPARED = False

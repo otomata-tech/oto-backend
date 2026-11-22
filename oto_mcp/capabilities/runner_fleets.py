@@ -66,7 +66,7 @@ from pydantic import BaseModel, Field
 from . import (_abonnement, _acces_agent, _cle_exigee, _descriptions_outils, _instruction,
                _limites_du_run, _lignes_de_campagne, _lignes_reservables, _modele,
                _ordonnanceur_de_campagne, _outils_manquants, _outils_plateforme)
-from .. import (db, deprecations, output_projection, runner_models, session_org,
+from .. import (db, output_projection, runner_models, session_org,
                tool_alias, verrou_org)
 
 logger = logging.getLogger(__name__)
@@ -414,8 +414,7 @@ def _cible_a_la_declaration(ctx: ResolvedCtx, adresse: Optional[str]) -> Optiona
             404, "datastore_not_found",
             f"aucun tableau « {adresse} » dans ta portée : une automatisation vise un "
             "tableau qui existe, désigné par son identifiant.")
-    if deprecations.adresse_par_nom(adresse, cle):
-        session_org.noter_avis(deprecations.avis_nom_de_tableau(adresse, cle))
+    session_org.noter_adresse_de_tableau(adresse, cle)
     return str(cle)
 
 

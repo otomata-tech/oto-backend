@@ -85,5 +85,3 @@ def test_run_axis_includes_project_spine_tools():
     # ne doit pas être rejeté par les tools spine de la surface de travail.
     for name in ("oto_project", "oto_project_files", "oto_doc", "oto_resource"):
         assert "_run_id" in _params(name), name
-        # SEUL run_id : org= reste injecté par _mcp_adapter (pas de double-traitement)
-        assert "_org" not in _params(name), name

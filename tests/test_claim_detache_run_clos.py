@@ -232,7 +232,7 @@ def _reserver_ligne(ns: str, run: str) -> dict:
         return await outil.run(c.message.arguments)
 
     async def _go():
-        return await CallContextMiddleware(frozenset()).on_call_tool(ctx, _next)
+        return await CallContextMiddleware().on_call_tool(ctx, _next)
 
     return asyncio.run(_go()).structured_content
 

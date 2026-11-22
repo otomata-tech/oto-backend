@@ -59,7 +59,6 @@ def _serveur():
         m = FastMCP("t-project-spine")
         _mcp_adapter.register(m, registry.CAPABILITIES)
         _SERVEUR["mcp"] = m
-        _SERVEUR["org"] = _mcp_adapter.reserved_org_tool_names(registry.CAPABILITIES)
     return _SERVEUR
 
 
@@ -87,7 +86,7 @@ def _appel(nom: str, arguments: dict, suivant=None):
         outil = await srv["mcp"].get_tool(nom)
         return await outil.run(c.message.arguments)
 
-    return asyncio.run(CallContextMiddleware(srv["org"]).on_call_tool(ctx, _next))
+    return asyncio.run(CallContextMiddleware().on_call_tool(ctx, _next))
 
 
 def _motif(nom: str, arguments: dict) -> str:

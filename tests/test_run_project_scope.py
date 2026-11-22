@@ -82,7 +82,7 @@ def _wire(monkeypatch, *, sub="u1", home_org=3, project_org=42, readable=True) -
 
 async def _start_run(run_start_fn, **args) -> dict:
     """Ouvre un run PAR LE CHEMIN RÉEL : middleware (axes) puis fonction du tool."""
-    mw = CallContextMiddleware(reserved_org_tools=set())
+    mw = CallContextMiddleware()
     seen: dict = {}
 
     async def _next(ctx):

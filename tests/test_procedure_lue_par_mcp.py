@@ -113,8 +113,7 @@ def _serveur():
         m = FastMCP("t-procedure-lue")
         register_all(m)
         _mcp_adapter.register(m, CAPABILITIES)
-        m.add_middleware(CallContextMiddleware(
-            _mcp_adapter.reserved_org_tool_names(CAPABILITIES)))
+        m.add_middleware(CallContextMiddleware())
         _SERVEUR["m"] = m
     return _SERVEUR["m"]
 

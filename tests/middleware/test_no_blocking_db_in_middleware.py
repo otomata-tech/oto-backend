@@ -168,7 +168,7 @@ def test_on_call_tool_avec_un_run_ne_touche_pas_la_base_dans_la_boucle(mouchard,
         # Le mouchard refuse la connexion : la résolution échoue en refus propre
         # (McpError), ce qui est le comportement voulu — ici on ne mesure que le thread.
         with contextlib.suppress(Exception):
-            await CallContextMiddleware(frozenset()).on_call_tool(ctx, call_next)
+            await CallContextMiddleware().on_call_tool(ctx, call_next)
 
     boucle = _joue(go)
     _assert_hors_boucle(mouchard, boucle, "CallContextMiddleware.on_call_tool (_run_id)")

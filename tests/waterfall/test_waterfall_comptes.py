@@ -237,7 +237,7 @@ class _Ctx:
 
 @pytest.mark.asyncio
 async def test_le_middleware_pose_les_comptes_de_cascade_jamais_le_compte_de_l_appel():
-    mw = CallContextMiddleware(reserved_org_tools=set())
+    mw = CallContextMiddleware()
     vu = {}
 
     async def _next(ctx):

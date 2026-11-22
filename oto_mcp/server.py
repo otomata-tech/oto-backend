@@ -835,9 +835,7 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # le handler ET les hooks post-tool (rédaction, calllog) lisent la MÊME org que
     # l'appel. Garde d'appartenance au point d'entrée.
     from .middleware.call_context import CallContextMiddleware
-    instance.add_middleware(
-        CallContextMiddleware(_mcp_adapter.reserved_org_tool_names(_cap_registry.CAPABILITIES))
-    )
+    instance.add_middleware(CallContextMiddleware())
     # 2 bis. Le verdict du rappel de contexte (0 quater) — DANS la portée du contexte
     # d'appel, qui porte l'org de l'appel (`_org=`, projet, run), et hors boucle.
     instance.add_middleware(ConstatContexteMiddleware())

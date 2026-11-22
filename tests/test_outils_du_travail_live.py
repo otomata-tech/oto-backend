@@ -157,7 +157,7 @@ def _direct(name: str, appels: list):
     async def _next(c):
         appels.append(c.message.name)
         return "servi"
-    return asyncio.run(CallContextMiddleware(frozenset()).on_call_tool(ctx, _next))
+    return asyncio.run(CallContextMiddleware().on_call_tool(ctx, _next))
 
 
 def test_un_appel_direct_hors_liste_est_refuse_avant_le_handler(travail):
@@ -207,7 +207,7 @@ def test_une_cascade_appelee_en_direct_couvre_ses_etapes_le_temps_de_son_appel(v
             vu["etape"] = await asyncio.to_thread(odt.refus, "lemlist_database")
             vu["autre"] = await asyncio.to_thread(odt.refus, "folk_record")
         return "servi"
-    assert asyncio.run(CallContextMiddleware(frozenset()).on_call_tool(_Ctx(), _handler)) \
+    assert asyncio.run(CallContextMiddleware().on_call_tool(_Ctx(), _handler)) \
         == "servi"
     assert vu["etape"] is None and vu["autre"] is not None
     assert odt.refus("lemlist_database") is not None

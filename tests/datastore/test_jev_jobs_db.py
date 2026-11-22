@@ -78,7 +78,7 @@ def monte(compte, monkeypatch):
         cls.return_value.decide.return_value = ANSWER
         m = FastMCP("t-jev-jobs")
         jev.register(m)
-        m.add_middleware(CallContextMiddleware(frozenset()))
+        m.add_middleware(CallContextMiddleware())
         m.add_middleware(ToolCallLogger(sink, server="t", identity=identite))
         yield m, cls.return_value, etat
 

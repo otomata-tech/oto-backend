@@ -48,7 +48,6 @@ def _serveur():
         m = FastMCP("t-run-id")
         _mcp_adapter.register(m, registry.CAPABILITIES)
         _SERVEUR["mcp"] = m
-        _SERVEUR["org"] = _mcp_adapter.reserved_org_tool_names(registry.CAPABILITIES)
         _SERVEUR["noms"] = sorted(
             c.mcp for c in registry.CAPABILITIES if getattr(c, "mcp", None))
     return _SERVEUR
@@ -78,7 +77,7 @@ def _appel(nom: str, arguments: dict):
         return await outil.run(c.message.arguments)
 
     async def _go():
-        return await CallContextMiddleware(srv["org"]).on_call_tool(ctx, _next)
+        return await CallContextMiddleware().on_call_tool(ctx, _next)
 
     return asyncio.run(_go())
 
@@ -146,7 +145,7 @@ def test_le_jeton_est_retire_avant_le_dispatch():
         vus.update(dict(c.message.arguments))
         return None
 
-    asyncio.run(CallContextMiddleware(frozenset()).on_call_tool(ctx, _next))
+    asyncio.run(CallContextMiddleware().on_call_tool(ctx, _next))
     assert vus == {"op": "list"}, vus
 
 
@@ -178,7 +177,7 @@ def test_hors_surface_de_correlation_le_jeton_ne_pose_aucun_contexte():
         vu["run"] = session_org.current_call_run()
         return None
 
-    asyncio.run(CallContextMiddleware(frozenset()).on_call_tool(ctx, _next))
+    asyncio.run(CallContextMiddleware().on_call_tool(ctx, _next))
     assert vu["run"] is None
     # …et l'axe reste hors de la surface ANNONCÉE : le budget de `tools/list` ne
     # bouge pas d'un caractère pour ces 53 outils.
@@ -204,13 +203,13 @@ def _catalogue():
 
 
 def test_oto_call_declare_le_jeton_dans_sa_signature_servie():
-    """`RUN_SELF_HANDLED` est une liste par NOM : elle rouille en silence le jour où
+    """`SELF_HANDLED` est une liste par NOM : elle rouille en silence le jour où
     l'outil cesse de déclarer le paramètre — le middleware le lui mangerait alors
     avant le dispatch, sans que rien ne rougisse. La garde vit ici."""
-    for nom in sorted(call_axes.RUN_SELF_HANDLED):
+    for nom in sorted(call_axes.SELF_HANDLED):
         outil = asyncio.run(_catalogue().get_tool(nom))
         props = (outil.parameters or {}).get("properties") or {}
-        assert "_run_id" in props, (nom, sorted(props))
+        assert {"_org", "_run_id"} <= set(props), (nom, sorted(props))
 
 
 def test_oto_call_replie_le_jeton_sur_sa_cible(monkeypatch):

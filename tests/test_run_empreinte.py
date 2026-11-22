@@ -98,7 +98,7 @@ async def _start(run_start_fn, **args) -> tuple[dict, dict]:
     relit pour le verser dans les args de la ligne. Le poser depuis le test donnerait un
     holder que le middleware remplace — et un test qui n'observerait rien."""
     seen: dict = {}
-    mw = CallContextMiddleware(reserved_org_tools=set())
+    mw = CallContextMiddleware()
 
     async def _next(ctx):
         out = await run_start_fn(_SessionCtx(), **ctx.message.arguments)

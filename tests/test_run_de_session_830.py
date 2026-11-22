@@ -69,7 +69,7 @@ def _serveur(monkeypatch, *, sub=SUB, delegation_run=None):
     monkeypatch.setattr(run_org, "_resoudre", _resoudre)
 
     m = FastMCP("t-run-session-830")
-    m.add_middleware(CallContextMiddleware(frozenset()))
+    m.add_middleware(CallContextMiddleware())
     outils_run.register(m)
 
     @m.tool(name="oto_fleet")
@@ -269,7 +269,7 @@ def test_une_reservation_sans_jeton_est_rattachee_au_run_et_liberee(live, monkey
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"85045{i:04d}"})
 
     m = FastMCP("t-run-session-830-pg")
-    m.add_middleware(CallContextMiddleware(frozenset()))
+    m.add_middleware(CallContextMiddleware())
     register_all(m)
 
     def _bail(row_id):

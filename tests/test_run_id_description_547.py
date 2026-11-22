@@ -76,7 +76,7 @@ def _outils_servis(ctx) -> dict[str, dict]:
     async def _call_next(_):
         return tools
 
-    servis = asyncio.run(CallContextMiddleware(frozenset()).on_list_tools(ctx, _call_next))
+    servis = asyncio.run(CallContextMiddleware().on_list_tools(ctx, _call_next))
     return {t.name: t.parameters for t in servis}
 
 

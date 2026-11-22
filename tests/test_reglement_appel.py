@@ -245,7 +245,7 @@ class _Ctx:
 async def test_le_middleware_regle_un_appel_reussi_et_pas_un_appel_en_echec(monkeypatch,
                                                                            debits):
     from oto_mcp.middleware import call_context as mwmod
-    mw = mwmod.CallContextMiddleware(reserved_org_tools=set())
+    mw = mwmod.CallContextMiddleware()
     monkeypatch.setattr(mwmod, "current_user_sub_from_token", lambda: "u")
 
     async def _reussi(ctx):

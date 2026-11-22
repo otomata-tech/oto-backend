@@ -214,7 +214,7 @@ This runs independently of the notes.
 This runs every hour, whatever steps 2 and 4 found, because a callback comes due on the clock.
 - **Callbacks due by the end of today, overdue included.** <tool:hubspot_object> `op="search"` on contacts with `queue_state` `EQ` `callback` and `callback_at` `LTE` the end of today in **[your timezone]**. **Use `LTE`, not a window on today**: the date rules often land on a weekend (the 1st of a month, "in 10 days", a time-only note written on a Friday), and after any missed run day a window on today leaves those contacts in `callback`, out of the queue and out of the morning list, for good. Once back, the state is `in_queue`, so each contact re-enters exactly once. **Compute the day's end as a UTC instant before filtering**: HubSpot stores datetimes in UTC, and a naive date comparison is off by your offset. Each one goes back to `in_queue` with the re-entry note. Leave `callback_at` in place until a new note routes the contact.
 - **Email requests whose wait is over.** `queue_state` `email_requested` and `reentry_at` `LTE` now. Each one goes back to `in_queue` with the re-entry note.
-- <tool:hubspot_list> `op="add_members"` with the hour's contacts in one `record_ids` list. When removals are due in the same pass, pass them as `remove_record_ids` in that same call: one list revision instead of two.
+- <tool:hubspot_list> `op="add_members"` with the hour's contacts in one `record_ids` list.
 - `dnc`, `reroute`, `meeting` and `out` never re-enter. Only a person puts those back.
 
 ## 6. Write the watermarks last

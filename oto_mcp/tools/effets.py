@@ -507,8 +507,8 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "api_act": {"lire": "import", "detruire": "call request set_definition"},
     "api_doc": "lire",
     "api_post": "envoyer",
-    # add_members may also remove (remove_record_ids); copy_from moves up to 100 000 records
-    "hubspot_list": {"lire": "search get members record_lists", "ecrire": "create restore", "detruire": "update delete add_members remove_members clear_members copy_from"},
+    # copy_from moves up to 100 000 records
+    "hubspot_list": {"lire": "search get members record_lists", "ecrire": "create restore add_members", "detruire": "update delete remove_members clear_members copy_from"},
     "hubspot_object": {"lire": "search list get associations", "ecrire": "create update add_note", "detruire": "delete merge"},
     # update PATCHes the raw definition: options given replace the whole option list
     "hubspot_property": {"lire": "list get groups", "ecrire": "create", "detruire": "update delete"},
@@ -1404,6 +1404,7 @@ LOTS: dict[str, Lot] = {
     "github_pulls:review_comment": Lot("reviewers", avec=("team_reviewers",)),
     "hellostock_demande_send": Lot("user_ids"),
     "hubspot_list:create": Lot("record_ids"),
+    "hubspot_list:add_members": Lot("record_ids"),
     "hubspot_list:restore": Lot("record_ids"),
     "hubspot_push_rows": Lot("row_ids"),
     "inqom_entry_create": Lot("entries"),
@@ -1576,7 +1577,7 @@ PAS_UN_LOT: dict[str, str] = {
     "hellostock_offre_update": "keywords",
     "api_act": "body operations",
     "api_post": "body",
-    "hubspot_list": "remove_record_ids properties processing_types",
+    "hubspot_list": "properties processing_types",
     "hubspot_object": "properties associations filters sorts merge_ids",
     "hubspot_property": "names",
     "jev_rows": "state_fields filters",

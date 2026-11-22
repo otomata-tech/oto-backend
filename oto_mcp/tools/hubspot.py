@@ -685,7 +685,6 @@ def register(mcp: FastMCP) -> None:
         processing_type: Literal["MANUAL", "DYNAMIC", "SNAPSHOT"] = "MANUAL",
         filter_branch: Optional[dict] = None,
         record_ids: Optional[list] = None,
-        remove_record_ids: Optional[list] = None,
         record_id: Optional[str] = None,
         source_list_id: Optional[str] = None,
         query: Optional[str] = None,
@@ -732,9 +731,8 @@ def register(mcp: FastMCP) -> None:
           member. Do that: a HubSpot private app is capped at 190 requests per
           10 seconds, and the per-member loop hits the ceiling around the
           fortieth lead, mid-record.
-        - **"add_members"** / **"remove_members"** : add/remove `record_ids`.
-          On op="add_members", also passing `remove_record_ids` does both in a
-          SINGLE list revision (one recompute instead of two).
+        - **"add_members"** : add `record_ids` — it only ever adds.
+        - **"remove_members"** : remove `record_ids` (supports `dry_run`).
         - **"clear_members"** : remove EVERY record from the list (the list
           survives). Supports `dry_run` — use it.
         - **"copy_from"** : copy every member of `source_list_id` into
@@ -768,8 +766,6 @@ def register(mcp: FastMCP) -> None:
                 are the INTERNAL ones — get them from `hubspot_property`.
             record_ids: op="add_members"/"remove_members" — the record ids to
                 add / to remove.
-            remove_record_ids: op="add_members" only — ids to remove in the same
-                revision as the ones being added.
             record_id: op="record_lists" — the single record to look up.
             source_list_id: op="copy_from" — the list to copy members from.
             query: op="search" — name fragment.
@@ -916,11 +912,6 @@ def register(mcp: FastMCP) -> None:
                 lid = _need(list_id, "list_id", op)
                 ids = _ids(record_ids, "record_ids", op)
                 _writable_list(c, lid, op)
-                if remove_record_ids:
-                    return c.add_and_remove_list_memberships(
-                        lid, record_ids_to_add=ids,
-                        record_ids_to_remove=_ids(
-                            remove_record_ids, "remove_record_ids", op))
                 return c.add_list_memberships(lid, ids)
 
             if op == "remove_members":

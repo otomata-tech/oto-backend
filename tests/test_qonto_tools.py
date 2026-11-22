@@ -109,6 +109,14 @@ def test_split_credential_is_joined_for_the_client(client, monkeypatch):
     client.assert_called_once_with(api_key=KEY)
 
 
+def test_login_in_meta_wins_over_a_legacy_key(client, monkeypatch):
+    monkeypatch.setattr("oto_mcp.access.resolve_credential",
+                        lambda provider, want="auto", account=None:
+                        _Resolved("old-1:sk_test", {"login": "acme-1234"}))
+    _fn()()
+    client.assert_called_once_with(api_key=KEY)
+
+
 def test_split_credential_without_login_is_refused_clearly(client, monkeypatch):
     monkeypatch.setattr("oto_mcp.access.resolve_credential",
                         lambda provider, want="auto", account=None: _Resolved("sk_test"))

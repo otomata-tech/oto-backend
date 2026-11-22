@@ -105,7 +105,7 @@ def _upstream_message(e) -> str:
         return ("Qonto rejected the login and secret key (401). Both come from Settings → "
                 "Integrations and partnerships → API key: the Login (like acme-1234, not "
                 "an email) and the latest Secret key — regenerating it revokes the old "
-                "one. Update them on Tulina's Qonto connector; retrying unchanged fails "
+                "one. Update them on the Qonto connector; retrying unchanged fails "
                 "the same way.")
     if status == 403:
         return f"Qonto refused this read (403): the key's member lacks the right. {detail}"
@@ -177,10 +177,9 @@ def register(mcp: FastMCP) -> None:
 
     def _client() -> QontoClient:
         rc = access.resolve_credential(_NAME, want="auto")
-        key = rc.key
-        # The login lives in the row's `meta`, read only when the key does not carry it.
-        login = None if ":" in (key or "") else rc.config.get("login")
-        return QontoClient(api_key=_authorization(key, login))
+        # The login lives in the row's `meta`; it wins over a login carried inside a
+        # key saved before the split, as in `_verify` (`_authorization`).
+        return QontoClient(api_key=_authorization(rc.key, rc.config.get("login")))
 
     def _run(fn):
         try:

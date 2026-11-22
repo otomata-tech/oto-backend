@@ -2806,6 +2806,34 @@ exclusif, si.
 - **Le run en cours n'est jamais coupé** : changer de mode, retirer un prêt ou franchir un
   plafond vaut pour les travaux suivants.
 
+**Ce que l'admin d'org lit : pourquoi ses agents attendent (22/11/2026).** Un forfait à
+reconnecter et un forfait au plafond se lisaient tous deux `usable_now: false` : l'admin
+ne savait ni qui prévenir, ni s'il suffisait d'attendre. Le `GET` de la ressource rend,
+à l'org_admin SEUL :
+
+- sur chaque prêteur, `state` (`ok` | `signed_out` | `at_limit`), `last_ok_at` et
+  `reset_at` (au plafond seulement) — lus dans la MÊME ligne SQL que `usable_now`
+  (`org_subscription_pool.ETAT_DU_PRETEUR`) : `state == "ok"` ⇔ `usable_now` ;
+- `plans` : chaque forfait qui fait tourner les agents de l'org — les prêteurs, et (hors
+  mode `pool` réglé) les porteurs d'agents ALLUMÉS de la famille plus quiconque a un
+  travail en file sur sa voie personnelle (`forfaits_de_l_org`, une lecture). L'état d'un
+  porteur : `none` (aucun abonnement) > `ok` (`sql_propre_sert`, la clause de la file mot
+  pour mot) > `signed_out` > `at_limit` > `not_open` (pas ouvert ici,
+  `runner_jobs.abonnement_ouvert_ici`, la clause de la file paramétrée). Une personne qui
+  prête ET porte n'a qu'une ligne : état de prêteur, sauf en `personnel` réglé (le prêt
+  n'y sert rien). `waiting_jobs` = ses travaux en file (`pending`, dus) que la file
+  servirait par SA voie personnelle ;
+- `pool_waiting_jobs` : ceux que la file enverrait au pool (`runner_jobs._par_le_pool`,
+  sans sonde), comptés UNE fois — jamais par prêteur : la file prend le premier libre.
+
+La pause lue est celle de la RÉSERVATION (`pause_en_vigueur`), pas celle du repli
+(`_pause_pour_l_org`) : une pause posée par le seuil plus serré d'une AUTRE org fait
+attendre les travaux d'ici aussi, et l'écran la dit `at_limit`. Un MEMBRE lit la forme
+d'avant : `lenders` à `sub` + `usable_now`, `plans: []` — ni palier, ni usage, ni
+échéance d'autrui (décision du 08/10/2026, maintenue pour les membres ; l'admin en reçoit
+une seconde exception, après `limit_pct`). Jamais servis, à personne : le palier (`plan`),
+l'usage mesuré (`limit_utilisation`), la fenêtre.
+
 **Le REPLI vers la clé de l'org, quand le forfait est épuisé (27/09/2026).** Un forfait
 au plafond arrête tout jusqu'à sa réinitialisation — jusqu'à trente-six heures pour la
 fenêtre sept jours. Le travail qui attend a pourtant un autre moyen de tourner : le même

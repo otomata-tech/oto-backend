@@ -190,18 +190,31 @@ _CHARGE_PRISE = f"CASE WHEN clos.a IS NULL THEN j.payload ELSE {_TRACE_RUN_CLOS}
 #: La famille du travail examiné par la réservation.
 _FAMILLE_RJ = "rj.payload->>'model_family'"
 
+def abonnement_ouvert_ici(sub: str, famille: str, org: str) -> str:
+    """SQL : l'abonnement personnel de `sub` (de `famille`) SERT l'org `org` (08/10/2026) :
+    ouvert dans cette org (`user_model_subscription_orgs`) ET la personne en est toujours
+    membre. Trois expressions SQL ; l'instance `rj` est `_ABONNEMENT_OUVERT_ICI`.
+
+    Paramétrée pour que l'écran de l'org (`org_subscription_pool.forfaits_de_l_org`) lise
+    la MÊME clause que la file pour le porteur d'un agent qui n'a aucun travail en file :
+    un écran qui la recopierait finirait par dire « ouvert ici » d'un forfait que la file
+    fait attendre. ⚠️ Le texte rendu pour `rj` est celui d'avant la paramétrisation, à
+    l'octet près : la réservation n'a pas changé."""
+    return f"""({org} IS NULL OR EXISTS (
+                                 SELECT 1 FROM user_model_subscription_orgs u
+                                   JOIN org_members om
+                                     ON om.org_id = u.org_id AND om.sub = u.sub
+                                  WHERE u.sub = {sub}
+                                    AND u.famille = {famille}
+                                    AND u.org_id = {org}))"""
+
+
 #: L'abonnement personnel du demandeur `rj.sub` SERT l'org du travail (08/10/2026) :
 #: ouvert dans cette org (`user_model_subscription_orgs`) ET la personne en est
 #: toujours membre. Une seule écriture, lue par la réservation (sinon le travail
 #: ATTEND) et par le repli (sinon il ne replie pas : un travail qui attend parce que
 #: l'abonnement n'est pas ouvert ici n'est pas un travail bloqué par un plafond).
-_ABONNEMENT_OUVERT_ICI = f"""(rj.org_id IS NULL OR EXISTS (
-                                 SELECT 1 FROM user_model_subscription_orgs u
-                                   JOIN org_members om
-                                     ON om.org_id = u.org_id AND om.sub = u.sub
-                                  WHERE u.sub = rj.sub
-                                    AND u.famille = {_FAMILLE_RJ}
-                                    AND u.org_id = rj.org_id))"""
+_ABONNEMENT_OUVERT_ICI = abonnement_ouvert_ici("rj.sub", _FAMILLE_RJ, "rj.org_id")
 
 
 def _par_le_pool(sonde: bool = False) -> str:
@@ -2378,9 +2391,32 @@ def jetons_des_travaux(org_id: int, jours: int) -> list[dict]:
     `secondes` : le temps que les travaux ont tourné (voir `duree` ci-dessous) ;
     `non_chronometres` : ceux dont le temps n'est pas connu — la somme est un minorant.
 
+    `unites_reglees` : les unités de budget que le grand livre a RÉGLÉES pour les tours de
+    modèle des travaux de la case (les mouvements `settle` de `anthropic.messages:*`
+    rapprochés de leur travail par `meta.runner_job_id`, `credits_tours.appariement`),
+    toutes tentatives et tous payeurs confondus — un payeur `user:<sub>` (org en mode
+    personne) compte comme `org:<id>`. Positives (un règlement est un mouvement négatif).
+    0 pour un travail sans tour réglé : un abonnement, ou la clé de l'org. Des UNITÉS,
+    jamais des crédits : le commerce seul les convertit (`db/schema/credits.py`).
+
+    ⚠️ Les règlements sont sommés PAR TRAVAIL avant le regroupement (sous-requête `rg`) :
+    un travail a un règlement par tour, et les joindre tels quels multiplierait ses jetons,
+    son temps et son compte de travaux par son nombre de tours.
+
+    ⚠️ Les tours journalisés AU COÛT (`tours_au_cout`, OpenRouter) n'y sont PAS : ils
+    s'écrivent au journal (`tool_calls`, en micro-dollars que le fournisseur a facturés),
+    jamais au grand livre d'unités, et rien ici ne les tarife.
+
     Lecture d'agrégat BORNÉE (`lecture_d_agregat`) : au-delà de sa durée maximale, elle
     lève `LectureTropLongue`, que la face rend en `503 aggregate_timeout`. Servie par
-    `idx_runner_jobs_conclus` (`INDEX_CONCLUS`), dont elle porte le prédicat."""
+    `idx_runner_jobs_conclus` (`INDEX_CONCLUS`), dont elle porte le prédicat, et pour les
+    règlements par `idx_credit_movements_travail` (`credits.INDEX_REGLEMENTS_PAR_TRAVAIL`),
+    dont elle porte le prédicat aussi. ⚠️ Sans ce second index, elle reste JUSTE mais
+    parcourt le grand livre ligne à ligne (mesuré : ~9 s pour 1,6 M de règlements) : sur
+    un gros grand livre, elle sort en 503 — l'index se pose avant de servir la lentille."""
+    # Paresseux : `access` importe `db`.
+    from ..access import credits_tours as tours
+    from .credits import PREDICAT_REGLEMENT_DE_TRAVAIL
     nombre = "jsonb_typeof(result->'{}') = 'number'"
 
     # Le temps d'un travail : de l'ouverture de SON run à sa conclusion. Seul un
@@ -2413,15 +2449,35 @@ def jetons_des_travaux(org_id: int, jours: int) -> list[dict]:
                                           AND COALESCE({nombre.format('usage_output')}, FALSE)))::int
                        AS non_mesures,
                    COALESCE(SUM({duree}), 0)::bigint AS secondes,
-                   COUNT(*) FILTER (WHERE {duree} IS NULL)::int AS non_chronometres
+                   COUNT(*) FILTER (WHERE {duree} IS NULL)::int AS non_chronometres,
+                   COALESCE(SUM(rg.unites), 0)::bigint AS unites_reglees
               FROM runner_jobs rj
               LEFT JOIN runs r ON r.run_id = rj.run_id
+              -- Une ligne PAR TRAVAIL (voir la docstring) : les travaux de la fenêtre,
+              -- cherchés au grand livre par l'index des règlements d'un travail. La
+              -- fenêtre est celle de la requête englobante (même `NOW()` dans une
+              -- instruction).
+              -- ⚠️ `= ANY(ARRAY(…))`, pas `IN (SELECT …)` : mesuré sur 1,6 M de
+              -- règlements et 1 500 travaux dans la fenêtre, le semi-join laissait le
+              -- planificateur balayer TOUT le grand livre (~0,4 s, et linéaire en sa
+              -- taille) ; le tableau des travaux se cherche dans l'index (~25 ms).
+              LEFT JOIN (
+                    SELECT meta->>'runner_job_id' AS travail, -SUM(amount) AS unites
+                      FROM credit_movements
+                     WHERE {PREDICAT_REGLEMENT_DE_TRAVAIL}
+                       AND connector = %s AND left(function, length(%s)) = %s
+                       AND meta->>'runner_job_id' = ANY(ARRAY(
+                             SELECT t.id::text FROM runner_jobs t
+                              WHERE t.org_id = %s AND t.finished_at IS NOT NULL
+                                AND t.finished_at >= NOW() - make_interval(days => %s)))
+                     GROUP BY 1) rg ON rg.travail = rj.id::text
              WHERE rj.org_id = %s AND rj.finished_at IS NOT NULL
                AND rj.finished_at >= NOW() - make_interval(days => %s)
              GROUP BY 1, 2, 3, 4
              ORDER BY 1, 2, 3, 4
             """,
-            (org_id, int(jours)),
+            (tours.MODELE_CONNECTOR, tours.PREFIXE_DES_MODELES, tours.PREFIXE_DES_MODELES,
+             org_id, int(jours), org_id, int(jours)),
         ).fetchall()
     return [{**r, "jour": str(r["jour"])[:10],
              "trigger_id": int(r["trigger_id"]) if r["trigger_id"] is not None else None}

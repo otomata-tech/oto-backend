@@ -15,6 +15,12 @@ l'org, flottes comprises ; `org_subscription_pool`). Réglé à part
 (`PUT …/{family}/mode`) : un plafond et un mode ne se règlent pas dans le même geste,
 et un corps partiel ne dirait pas lequel des deux on voulait laisser.
 
+Ce qui fait tourner les agents de l'org (22/11/2026) : l'org_admin SEUL lit, sur la même
+ressource, l'état de chaque forfait (`state`) et les travaux qui l'attendent (`plans`,
+`pool_waiting_jobs`) — jugés par les clauses mêmes de la réservation
+(`org_subscription_pool.ETAT_DU_PRETEUR`, `forfaits_de_l_org`). Un membre lit la forme
+d'avant, `plans: []` en plus.
+
 Lecture = membre ; écriture = org_admin. Une déclaration → deux surfaces : REST
 `/api/orgs/{id}/model-subscriptions/{family}` ici, MCP par la console
 `oto_org_settings domain=model_subscriptions` (`org_console.py`).
@@ -40,18 +46,40 @@ _PATH_MODE = "/api/orgs/{id}/model-subscriptions/{family}/mode"
 _PATH_REPLI = "/api/orgs/{id}/model-subscriptions/{family}/api-fallback"
 
 
-class Preteur(BaseModel):
-    """Un membre qui prête son abonnement au pool de l'org — et RIEN de plus.
+#: Ce que l'écran de l'admin lit d'un forfait (`org_subscription_pool.ETATS`).
+EtatForfait = Literal["ok", "signed_out", "at_limit", "not_open", "none"]
 
-    ⚠️ Ni palier, ni état de connexion, ni échéance, ni usage : un abonnement
-    appartient à qui le paie (`capabilities/me_abonnements.py`), et prêter partage sa
-    CAPACITÉ, pas son état. « Au plafond jusqu'à … » dirait à toute l'org l'usage
-    TOTAL d'un compte, usage personnel compris. Même forme pour un admin d'org
-    (décision d'Alexis, 08/10/2026), à UNE exception près (décision d'Alexis,
-    29/10/2026) : l'org_admin SEUL lit `limit_pct`, le plafond effectif du prêteur —
-    un RÉGLAGE qu'il a choisi (ou celui de l'org), jamais son usage. Il dit à qui
-    gouverne le pool quelle part de chaque forfait les agents peuvent prendre ; un
-    membre ne le lit pas."""
+_DESCRIPTION_ETAT = (
+    "Org admins only (absent for members). Why this plan does or does not run the org's "
+    "jobs right now, judged by the job queue's own rule: `ok` (it would be picked now), "
+    "`signed_out` (disconnected, its session lost, or never set up: its owner "
+    "reconnects), `at_limit` (paused at a cap until `reset_at` — possibly a tighter cap "
+    "of another org it serves: the pause holds every org's jobs), `not_open` (personal "
+    "plan not opened in this org: its owner adds it to `used_in`), `none` (an agent "
+    "owner with no plan of this family at all).")
+
+
+class Preteur(BaseModel):
+    """Un membre qui prête son abonnement au pool de l'org.
+
+    ⚠️ Un abonnement appartient à qui le paie (`capabilities/me_abonnements.py`), et
+    prêter partage sa CAPACITÉ, pas son état. « Au plafond jusqu'à … » dirait l'usage
+    TOTAL d'un compte, usage personnel compris. Un MEMBRE ne lit donc que `sub` et
+    `usable_now` — ni palier, ni état, ni échéance, ni usage, ni réglage. L'admin d'org
+    lit en plus, et lui seul :
+
+    - `limit_pct` (29/10/2026), le plafond effectif du prêteur — un RÉGLAGE qu'il a
+      choisi (ou celui de l'org), jamais son usage : la part de chaque forfait que les
+      agents peuvent prendre ;
+    - `state`, `last_ok_at` et `reset_at` (22/11/2026) : POURQUOI le forfait ne sert pas.
+      Sans eux, `usable_now: false` confondait un compte à reconnecter (son porteur doit
+      agir) et un compte au plafond (il suffit d'attendre), et l'admin qui gouverne le
+      pool ne savait pas qui prévenir. C'est une SECONDE exception à « même forme pour un
+      admin » (08/10/2026), délibérée et bornée : un état et deux instants, jamais le
+      palier (`plan`), jamais l'usage mesuré (`limit_utilisation`), jamais la fenêtre.
+
+    `state` est lu dans la même ligne SQL que `usable_now`
+    (`org_subscription_pool.ETAT_DU_PRETEUR`) : `state == "ok"` ⇔ `usable_now`."""
     sub: str
     usable_now: bool = Field(
         description=("Whether this subscription is usable right now (connected, or at a "
@@ -63,6 +91,41 @@ class Preteur(BaseModel):
         description=("Org admins only (absent for members): the lender's effective cap "
                      "in % of their account's TOTAL usage — their own if they set one, "
                      "else the org's. A setting, never usage."))
+    state: Optional[EtatForfait] = Field(
+        default=None,
+        description=_DESCRIPTION_ETAT + " A lender is never `not_open` nor `none`; "
+        "`ok` exactly when `usable_now`.")
+    last_ok_at: Optional[str] = Field(
+        default=None,
+        description=("Org admins only (absent for members): when this plan last ran a "
+                     "job successfully, ISO 8601; null = never recorded."))
+    reset_at: Optional[str] = Field(
+        default=None,
+        description=("Org admins only (absent for members): when the cap lifts, ISO "
+                     "8601 — set only when `state` is `at_limit`."))
+
+
+class Forfait(BaseModel):
+    """Un forfait qui fait tourner (ou devrait faire tourner) les agents de l'org — ce
+    que l'admin lit pour savoir ce qui attend, et sur qui (`_servi`).
+
+    Qui y figure : les prêteurs (`lent: true`, sauf en mode `personnel` réglé, où un prêt
+    ne sert rien mais reste listé) et, hors mode `pool` réglé, les porteurs d'agents de la
+    voie personnelle (`org_subscription_pool.forfaits_de_l_org`). Une personne qui prête
+    ET porte des agents n'a qu'une ligne : c'est le même compte."""
+    sub: str
+    lent: bool = Field(description="Whether this member lends this plan to the org's pool.")
+    state: EtatForfait = Field(description=_DESCRIPTION_ETAT.replace(
+        "Org admins only (absent for members). ", ""))
+    last_ok_at: Optional[str] = Field(
+        default=None, description="When this plan last ran a job successfully, ISO 8601.")
+    reset_at: Optional[str] = Field(
+        default=None, description="When the cap lifts, ISO 8601 — only when `at_limit`.")
+    waiting_jobs: int = Field(
+        description=("The org's due, pending jobs of this family that the job queue would "
+                     "run on THIS plan (the personal route: its owner's own jobs). Jobs "
+                     "routed to the pool are counted once, in `pool_waiting_jobs`, never "
+                     "on a lender: the queue takes whichever lender is free first."))
 
 
 class AgentEteint(BaseModel):
@@ -111,8 +174,23 @@ class OrgPlafond(BaseModel):
         default_factory=list,
         description=("One entry per member who lends this org their subscription, in "
                      "either mode: who (`sub`) and whether it is usable right now "
-                     "(`usable_now`) — never their tier, state, reset time or usage. "
-                     "An org admin also reads each one's effective cap (`limit_pct`)."))
+                     "(`usable_now`) — never their tier or usage. An org admin also "
+                     "reads each one's effective cap (`limit_pct`) and why it does or "
+                     "does not serve (`state`, `last_ok_at`, `reset_at`); a member reads "
+                     "`sub` and `usable_now` only."))
+    plans: list[Forfait] = Field(
+        default_factory=list,
+        description=("Org admins only (`[]` for members): every member plan that runs, "
+                     "or should run, the org's agents of this family — the lenders, and "
+                     "(unless the org is in `pool` mode) the owners of its ENABLED agents "
+                     "on this family plus anyone with a job waiting on their own plan — "
+                     "each with its `state` and the jobs waiting on it. One entry per "
+                     "member, sorted by `sub`."))
+    pool_waiting_jobs: Optional[int] = Field(
+        default=None,
+        description=("Org admins only (absent for members): the org's due, pending jobs "
+                     "of this family that the job queue routes to the POOL — counted once "
+                     "here, never per lender."))
     disabled_agents: Optional[list[AgentEteint]] = Field(
         default=None,
         description=("`set_mode` leaving `pool` only: the org's agents on this family "
@@ -172,13 +250,62 @@ def _exiger(org_id: int, famille: str) -> None:
             f"({', '.join(sorted(_abonnement.FAMILLES))}).")
 
 
+def _iso_utc(v) -> Optional[str]:
+    """Un instant lu en base en ISO 8601 AVEC son fuseau (UTC). ⚠️ La fabrique de lignes
+    du pool rend un texte « AAAA-MM-JJ HH:MM:SS » sans fuseau (`db._conn`), qu'un
+    navigateur lirait à l'heure LOCALE : l'écran daterait d'une heure de trop (ou de
+    moins) le dernier succès d'un forfait."""
+    quand = _abonnement.echeance_utc(v)
+    return quand.isoformat() if quand else None
+
+
+def _l_etat(ligne: dict) -> dict:
+    """L'état d'un forfait tel que l'admin le lit : l'échéance seulement au plafond."""
+    au_plafond = ligne["etat"] == org_subscription_pool.ETAT_AU_PLAFOND
+    return {"state": ligne["etat"], "last_ok_at": _iso_utc(ligne.get("last_ok_at")),
+            "reset_at": _iso_utc(ligne.get("limit_reset_at")) if au_plafond else None}
+
+
+def _forfaits(org_id: int, famille: str, regle: Optional[str], lus: list[dict]) -> dict:
+    """`plans` et `pool_waiting_jobs` pour l'admin : les prêteurs déjà lus (`lus`) et les
+    porteurs de la voie personnelle (`forfaits_de_l_org`, UNE lecture de plus).
+
+    - Mode `pool` réglé : les porteurs n'y sont pas — leur forfait ne sert pas ici.
+    - Une personne qui prête ET porte des agents : une seule ligne, `lent: true`. Son
+      état est celui de PRÊTEUR (le pool la sert, et ses propres travaux passent par le
+      pool quand son abonnement n'est pas ouvert ici) — sauf en mode `personnel` réglé,
+      où un prêt ne sert rien : l'état est alors celui de sa voie personnelle.
+    - Un prêteur qui ne porte rien attend `0` travail : ceux du pool sont comptés une
+      fois, dans `pool_waiting_jobs`."""
+    lu = org_subscription_pool.forfaits_de_l_org(org_id, famille)
+    par_sub = {p["sub"]: {"sub": p["sub"], "lent": True, **_l_etat(p), "waiting_jobs": 0}
+               for p in lus}
+    if regle != org_subscription_pool.POOL:
+        for o in lu["porteurs"]:
+            entree = par_sub.get(o["sub"])
+            if entree is None:
+                par_sub[o["sub"]] = {"sub": o["sub"], "lent": False, **_l_etat(o),
+                                     "waiting_jobs": o["en_attente"]}
+                continue
+            entree["waiting_jobs"] = o["en_attente"]
+            if regle == org_subscription_pool.PERSONNEL:
+                entree.update(_l_etat(o))
+    return {"plans": [par_sub[s] for s in sorted(par_sub)],
+            "pool_waiting_jobs": lu["pool_en_attente"]}
+
+
 def _servi(org_id: int, famille: str, admin: bool) -> dict:
-    """`admin` : le lecteur gouverne l'org — lui seul lit le plafond de chaque prêteur."""
+    """`admin` : le lecteur gouverne l'org — lui seul lit le plafond et l'état de chaque
+    prêteur, et `plans` (ce qui fait tourner les agents de l'org, et ce qui attend).
+
+    ⚠️ Un MEMBRE lit la forme d'avant, à la clé près : `lenders` à `sub` + `usable_now`,
+    et `plans: []` — rien de neuf sur le forfait de personne."""
     repli = {"api_fallback": org_subscription_pool.repli_api_actif(org_id, famille)}
     ligne = org_subscription_limits.get_limite(org_id, famille)
     de_l_org = ligne["limite_pct"] if ligne else _abonnement.DEFAUT_LIMITE_PCT
+    lus = org_subscription_pool.preteurs(org_id, famille)
     preteurs = []
-    for p in org_subscription_pool.preteurs(org_id, famille):
+    for p in lus:
         entree = {"sub": p["sub"], "usable_now": bool(p["servable"])}
         if admin:
             # LA règle est `_abonnement.seuil` : le perso s'il est posé (borné), sinon
@@ -186,6 +313,7 @@ def _servi(org_id: int, famille: str, admin: bool) -> dict:
             perso = p.get("limite_pct")
             entree["limit_pct"] = (min(perso, user_subscriptions.LIMITE_PERSO_MAX)
                                    if perso is not None else de_l_org)
+            entree.update(_l_etat(p))
         preteurs.append(entree)
     # `pool_size` se DÉDUIT de `lenders` : une seule lecture, aucun écart possible
     # entre le compte et la liste montrés sur le même écran.
@@ -195,7 +323,8 @@ def _servi(org_id: int, famille: str, admin: bool) -> dict:
     pool = {"mode": regle or org_subscription_pool.PERSONNEL,
             "mode_chosen": regle is not None,
             "pool_size": sum(p["usable_now"] for p in preteurs),
-            "lenders": preteurs}
+            "lenders": preteurs,
+            **(_forfaits(org_id, famille, regle, lus) if admin else {"plans": []})}
     if not ligne:
         return {"org_id": org_id, "family": famille,
                 "limit_pct": _abonnement.DEFAUT_LIMITE_PCT, "default": True,
@@ -283,8 +412,13 @@ CAPABILITIES += [
                      "Also returns the org's `mode` (`personnel` | `pool`), its "
                      "`pool_size` (members lending a usable subscription) and "
                      "`lenders` (who lends, and whether each is usable right now — "
-                     "never their tier, state or usage; an org admin also reads each "
-                     "lender's effective cap, `limit_pct`)."),
+                     "never their tier or usage; an org admin also reads each "
+                     "lender's effective cap, `limit_pct`, and its `state`). An org "
+                     "admin also reads `plans` — every member plan that runs the org's "
+                     "agents of this family, with its `state` (`ok`, `signed_out`, "
+                     "`at_limit`, `not_open`, `none`), `last_ok_at`, `reset_at` and the "
+                     "jobs waiting on it — and `pool_waiting_jobs`; a member reads "
+                     "`plans: []`."),
         rest=RestBinding("GET", _PATH, _ID),
     ),
     Capability(

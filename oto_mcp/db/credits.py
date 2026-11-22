@@ -28,8 +28,38 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ._conn import _connect
+from .index_concurrent import IndexConcurrent
 
 logger = logging.getLogger(__name__)
+
+#: La révision qui pose l'index des règlements d'un TRAVAIL.
+REVISION_REGLEMENTS_PAR_TRAVAIL = "20261122_1200_reglements_travail"
+
+#: Le prédicat des règlements rapprochés d'un travail : un tour d'agent hébergé, réglé
+#: (`credits_tours.appariement` écrit `runner_job_id` dans la `meta` de chaque règlement de
+#: tour, échéance comprise). Repris MOT POUR MOT par la requête qui le lit
+#: (`runner_jobs.jetons_des_travaux`) : un index partiel ne sert que la requête dont le
+#: WHERE implique son prédicat.
+PREDICAT_REGLEMENT_DE_TRAVAIL = "kind = 'settle' AND meta->>'runner_job_id' IS NOT NULL"
+
+#: Les unités réglées PAR TRAVAIL (lentille `org.usage.tokens`). ⚠️ Rien d'autre ne mène
+#: d'un travail à ses règlements : les deux index de `credit_movements` servent
+#: l'idempotence d'un versement et le curseur du commerce. Sans celui-ci, la lentille
+#: balaierait tout le grand livre, tous payeurs confondus, à chaque lecture.
+#:
+#: ⚠️ La clé est le TEXTE de `meta->>'runner_job_id'`, comparé à `rj.id::text` — jamais
+#: `(meta->>'runner_job_id')::bigint` : une conversion dans la requête ne se sert pas d'un
+#: index posé sur l'expression texte, et une conversion dans l'index lèverait sur la
+#: première `meta` dont la valeur ne serait pas un entier.
+#:
+#: Posé CONCURRENTLY par sa révision, ou par le démarrage d'une base neuve (`_init.py`),
+#: sous le verdict commun (`index_concurrent`).
+INDEX_REGLEMENTS_PAR_TRAVAIL = IndexConcurrent(
+    nom="idx_credit_movements_travail",
+    table="credit_movements",
+    forme=f"((meta->>'runner_job_id')) WHERE {PREDICAT_REGLEMENT_DE_TRAVAIL}",
+    revision=REVISION_REGLEMENTS_PAR_TRAVAIL,
+)
 
 # Les états d'une réservation.
 OUVERTE, REGLEE, LIBEREE, ECHUE = "open", "settled", "released", "expired"

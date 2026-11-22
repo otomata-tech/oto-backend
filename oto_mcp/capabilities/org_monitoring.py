@@ -1130,7 +1130,9 @@ def _connections(ctx: ResolvedCtx, inp: OrgConnectionsInput) -> dict:
 # de paiement — la clé de l'org, la clé de la plateforme ET l'abonnement Claude —
 # parce que les jetons d'un abonnement ne coûtent aucun crédit mais restent de la
 # consommation. Ce que le grand livre de crédits ne voit pas. Aucun prix ici : des
-# jetons, comme le worker les a déclarés (`runner_jobs.result`).
+# jetons, comme le worker les a déclarés (`runner_jobs.result`) — et, à côté, ce que le
+# grand livre a RÉGLÉ pour les tours de ces travaux (`budget_units`), en unités de
+# budget : le commerce seul les convertit en ce qu'il facture.
 #
 # Admin seulement, comme la page Usage qui la lit : c'est la consommation de toute
 # l'org, agents privés compris (le consommateur nomme ce qu'il connaît, le reste reste
@@ -1160,6 +1162,16 @@ class OrgTokenRow(BaseModel):
     # et `seconds` est alors un minorant.
     seconds: int = 0
     untimed: int = 0
+    # ⚠️ Des UNITÉS de budget, jamais des crédits ni une monnaie : le cœur ne connaît pas
+    # le taux, le commerce seul convertit (`db/schema/credits.py`, `service_credits`).
+    budget_units: int = Field(0, description=(
+        "Budget units the credit ledger SETTLED for the model turns of this row's jobs "
+        "(`settle` movements of `anthropic.messages:<model>`, matched to each job by its "
+        "`runner_job_id`, every attempt and every payer of the org): a positive integer, "
+        "0 when no turn was settled — a subscription, or the org's own key. Units, not "
+        "credits: the commerce that bills them converts. Turns of models billed at the "
+        "cost the provider reports (OpenRouter) are not in it: they are journaled in "
+        "micro-dollars, never settled in units."))
 
 
 class OrgTokens(BaseModel):
@@ -1179,7 +1191,8 @@ def _tokens(ctx: ResolvedCtx, inp: OrgTokensInput) -> dict:
          "model": r["modele"], "jobs": r["travaux"], "input": r["entree"],
          "output": r["sortie"], "cache_read": r["lecture_cache"],
          "cache_write": r["ecriture_cache"], "unmeasured": r["non_mesures"],
-         "seconds": r["secondes"], "untimed": r["non_chronometres"]}
+         "seconds": r["secondes"], "untimed": r["non_chronometres"],
+         "budget_units": r["unites_reglees"]}
         for r in rows]}
 
 

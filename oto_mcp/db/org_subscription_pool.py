@@ -274,21 +274,140 @@ def pool_au_plafond(org_id: int, famille: str, depot: Optional[str]) -> dict:
     return dict(row)
 
 
+# ── ce qui fait tourner les agents de l'org : l'ÉTAT de chaque forfait ─────────
+#
+# Ce que l'admin d'org lit pour savoir POURQUOI ses agents attendent (`model_subscriptions.
+# _servi`, admin seulement) : un forfait déconnecté et un forfait au plafond ne se
+# distinguaient pas — `usable_now: false` dans les deux cas. Chaque état est écrit ICI, sur
+# les clauses mêmes de la réservation, jamais recopiées : un écran qui jugerait autrement
+# que la file dirait « tout va bien » d'un forfait qu'elle fait attendre.
+
+#: Le forfait sert maintenant (la clause de réservation de sa voie est vraie).
+ETAT_OK = "ok"
+#: À (re)connecter : déconnecté, session perdue, ou sans bac à sable.
+ETAT_DECONNECTE = "signed_out"
+#: En pause jusqu'à son échéance (`user_subscriptions.pause_en_vigueur`).
+ETAT_AU_PLAFOND = "at_limit"
+#: Voie personnelle : l'abonnement n'est pas ouvert dans CETTE org (`used_in`).
+ETAT_NON_OUVERT = "not_open"
+#: Voie personnelle : le porteur d'agents n'a aucun abonnement de cette famille.
+ETAT_AUCUN = "none"
+ETATS = (ETAT_OK, ETAT_DECONNECTE, ETAT_AU_PLAFOND, ETAT_NON_OUVERT, ETAT_AUCUN)
+
+#: L'état d'un PRÊTEUR (`ab`, joint par `PRET_VIVANT`). `ok` est EXACTEMENT
+#: `PRETEUR_SERVABLE` — le `servable` de la même ligne, donc le `usable_now` servi à côté.
+#: Sinon : sans bac à sable ou hors `connected`/`paused_limit` → `signed_out` ; il ne
+#: reste alors qu'une pause en vigueur → `at_limit`. Un prêteur n'est jamais `not_open`
+#: (prêter EST ouvrir au pool de cette org) ni `none` (le prêt joint son abonnement).
+#:
+#: ⚠️ La pause est celle de la RÉSERVATION (`pause_en_vigueur`, sans sonde — comme
+#: `usable_now`), pas celle du repli (`runner_jobs._pause_pour_l_org`) : une pause posée
+#: par le seuil plus serré d'une AUTRE org fait attendre les travaux d'ici aussi, et
+#: l'écran le dit `at_limit`. Le repli, lui, ne part pas de cette pause-là.
+ETAT_DU_PRETEUR = (f"CASE WHEN {PRETEUR_SERVABLE} THEN '{ETAT_OK}' "
+                   "WHEN ab.sandbox_id IS NULL "
+                   "  OR ab.statut NOT IN ('connected', 'paused_limit') "
+                   f"THEN '{ETAT_DECONNECTE}' ELSE '{ETAT_AU_PLAFOND}' END")
+
+
 def preteurs(org_id: int, famille: str) -> list[dict]:
     """QUI prête un abonnement au pool de cette org — une ligne par prêteur, et
     `servable` : la même clause que la réservation (`PRETEUR_SERVABLE`). Les prêts
     VIVANTS seulement (abonnement existant, auteur toujours membre), servables ou
-    non. Ni palier, ni état, ni échéance : un abonnement appartient à qui le paie,
-    prêter n'en partage que la capacité. `limite_pct` (le plafond PERSO, NULL sans
-    réglage) n'est SERVI qu'à l'org_admin — la capacité choisie, pas l'usage ; le
-    tri se fait à la sortie (`model_subscriptions._servi`)."""
+    non.
+
+    Le reste n'est SERVI qu'à l'org_admin, le tri se fait à la sortie
+    (`model_subscriptions._servi`) : `limite_pct` (le plafond PERSO, NULL sans réglage —
+    la capacité choisie, pas l'usage), et `etat` / `last_ok_at` / `limit_reset_at`, ce qui
+    dit à qui gouverne le pool pourquoi un prêteur ne sert pas. `etat` est lu dans la
+    MÊME ligne que `servable` (`ETAT_DU_PRETEUR`) : `ok` et `servable` ne peuvent pas
+    diverger. Ni palier (`plan`), ni usage (`limit_utilisation`), ni fenêtre : jamais
+    servis."""
     with _connect() as conn:
         rows = conn.execute(
-            f"SELECT l.sub, ({PRETEUR_SERVABLE}) AS servable, ab.limite_pct "
+            f"SELECT l.sub, ({PRETEUR_SERVABLE}) AS servable, ab.limite_pct, "
+            f"({ETAT_DU_PRETEUR}) AS etat, ab.last_ok_at, ab.limit_reset_at "
             f"FROM user_model_subscription_loans l {PRET_VIVANT} "
             f"WHERE l.org_id = %s AND l.famille = %s ORDER BY l.sub",
             (org_id, famille)).fetchall()
     return [dict(r) for r in rows]
+
+
+def forfaits_de_l_org(org_id: int, famille: str) -> dict:
+    """Les forfaits PERSONNELS qui font tourner les agents de l'org, et les travaux qui
+    attendent chacun — en UNE lecture, sans requête par agent ni par personne. Le
+    complément de `preteurs` pour l'écran de l'admin (`model_subscriptions._servi`).
+
+    - `porteurs` : une ligne par personne dont un travail passerait par SON abonnement
+      (voie personnelle) — le propriétaire d'un agent ALLUMÉ de l'org sur un modèle de
+      `famille`, plus quiconque a un travail en file sur cette voie (un agent éteint
+      depuis, un lancement à la main) : sans lui, des travaux en attente ne seraient
+      comptés nulle part. Pour chacune, `etat` :
+
+        `none` (aucun abonnement) > `ok` (`sql_propre_sert`, la clause de la file, mot
+        pour mot) > `signed_out` (`needs_login`/`disconnected`) > `at_limit` (pause en
+        vigueur) > `not_open` (ce qui reste : pas ouvert ici, `abonnement_ouvert_ici`) ;
+
+      `ok` est donc EXACTEMENT « la file servirait ce forfait maintenant » ; une personne
+      déconnectée ET non ouverte ici se lit `signed_out` — se reconnecter d'abord. Plus
+      `last_ok_at`, `limit_reset_at` et `en_attente`.
+    - `pool_en_attente` : les travaux en file que la réservation enverrait au POOL
+      (`runner_jobs._par_le_pool`, la clause de la file, mot pour mot) — comptés UNE fois
+      pour le pool, jamais par prêteur : la file prend le premier prêteur libre, aucun
+      travail n'attend un prêteur nommé.
+
+    « En file » = `pending` et dû (`due_at <= NOW()`), de la famille, comme la réservation
+    les voit ; un travail gelé (`held`, agent en pause) n'attend aucun forfait. Ni `sonde`
+    ici : la pause STOCKÉE, comme `usable_now`.
+
+    ⚠️ En mode `pool` réglé, `porteurs` sort quand même (sans travail : tout passe par le
+    pool) ; c'est l'appelant qui ne les montre pas — leur forfait ne sert pas ici."""
+    # Paresseux : `runner_jobs` importe ce module.
+    from .. import runner_models
+    from .runner_jobs import _par_le_pool, abonnement_ouvert_ici
+    modeles = [m.id for m in runner_models.MODELES if m.family == famille]
+    # Les clauses partagées prennent des EXPRESSIONS SQL : l'org et la famille y entrent
+    # en paramètres nommés, jamais en valeurs formatées dans le texte — et l'org reste
+    # une constante que le planificateur porte jusqu'aux index (`idx_runner_jobs_live`,
+    # file d'une org).
+    org, fam = "%(org)s::bigint", "%(famille)s::text"
+    propre_sert = sql_propre_sert("o.sub", fam, abonnement_ouvert_ici("o.sub", fam, org))
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            WITH attente AS (
+                SELECT viap.actif AS pool, rj.sub, COUNT(*)::int AS n
+                  FROM runner_jobs rj
+                 CROSS JOIN LATERAL (SELECT {_par_le_pool()} AS actif) viap
+                 WHERE rj.org_id = {org} AND rj.status = 'pending' AND rj.due_at <= NOW()
+                   AND rj.payload->>'model_family' = {fam}
+                 GROUP BY 1, 2),
+            porteurs AS (
+                SELECT t.sub FROM runner_triggers t
+                 WHERE t.org_id = {org} AND t.enabled AND t.model = ANY(%(modeles)s)
+                UNION
+                SELECT a.sub FROM attente a WHERE NOT a.pool AND a.sub IS NOT NULL)
+            SELECT FALSE AS pool, o.sub,
+                   CASE WHEN f.sub IS NULL THEN '{ETAT_AUCUN}'
+                        WHEN {propre_sert} THEN '{ETAT_OK}'
+                        WHEN f.statut IN ('needs_login', 'disconnected')
+                        THEN '{ETAT_DECONNECTE}'
+                        WHEN {pause_en_vigueur('f')} THEN '{ETAT_AU_PLAFOND}'
+                        ELSE '{ETAT_NON_OUVERT}' END AS etat,
+                   f.last_ok_at, f.limit_reset_at,
+                   COALESCE((SELECT SUM(a.n) FROM attente a
+                              WHERE NOT a.pool AND a.sub = o.sub), 0)::int AS en_attente
+              FROM porteurs o
+              LEFT JOIN user_model_subscriptions f ON f.sub = o.sub AND f.famille = {fam}
+            UNION ALL
+            SELECT TRUE, NULL, NULL, NULL, NULL,
+                   COALESCE((SELECT SUM(a.n) FROM attente a WHERE a.pool), 0)::int
+             ORDER BY 1, 2
+            """,
+            {"org": org_id, "famille": famille, "modeles": modeles}).fetchall()
+    porteurs = [dict(r) for r in rows if not r["pool"]]
+    (pool,) = [r["en_attente"] for r in rows if r["pool"]]
+    return {"porteurs": porteurs, "pool_en_attente": int(pool)}
 
 
 def orgs_pretees(sub: str, famille: str) -> list[int]:

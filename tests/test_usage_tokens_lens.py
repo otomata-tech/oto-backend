@@ -41,7 +41,7 @@ def test_les_cases_sont_rendues_sous_leurs_noms_publics(monkeypatch):
         return [{"jour": "2026-11-03", "trigger_id": 5, "paye_par": "abonnement",
                  "modele": "claude-opus-5-5", "travaux": 3, "entree": 10, "sortie": 20,
                  "lecture_cache": 30, "ecriture_cache": 40, "non_mesures": 1,
-                 "secondes": 600, "non_chronometres": 1}]
+                 "secondes": 600, "non_chronometres": 1, "unites_reglees": 0}]
 
     monkeypatch.setattr(om.db, "jetons_des_travaux", faux)
     out = om._tokens(CTX, om.OrgTokensInput(org_id=7, days=7))
@@ -50,7 +50,7 @@ def test_les_cases_sont_rendues_sous_leurs_noms_publics(monkeypatch):
         "day": "2026-11-03", "trigger_id": 5, "paid_by": "abonnement",
         "model": "claude-opus-5-5", "jobs": 3, "input": 10, "output": 20,
         "cache_read": 30, "cache_write": 40, "unmeasured": 1,
-        "seconds": 600, "untimed": 1}]}
+        "seconds": 600, "untimed": 1, "budget_units": 0}]}
 
 
 @pytest.fixture
@@ -144,11 +144,14 @@ def test_le_payeur_est_l_un_des_trois_connus():
 
 
 def test_la_lecture_d_une_org_chargee_passe_par_l_index(base, monkeypatch):
-    """Contre une vraie base : 20 000 travaux en cours (sans `finished_at`) dans l'org.
-    Le démarrage a posé `idx_runner_jobs_conclus`, valide, et la requête du code —
-    capturée telle quelle, puis expliquée — le prend au lieu de balayer la file."""
+    """Contre une vraie base : 20 000 travaux en cours (sans `finished_at`) dans l'org, et
+    un grand livre de 100 000 règlements de tours d'AUTRES travaux. Le démarrage a posé
+    `idx_runner_jobs_conclus` et `idx_credit_movements_travail`, valides, et la requête du
+    code — capturée telle quelle, puis expliquée — les prend tous deux au lieu de balayer
+    la file ou le grand livre."""
     from contextlib import contextmanager
 
+    from oto_mcp.db import credits as db_credits
     from oto_mcp.db import index_concurrent as ic
     from oto_mcp.db import runner_jobs as RJ
     from oto_mcp.db._conn import _connect
@@ -171,10 +174,21 @@ def test_la_lecture_d_une_org_chargee_passe_par_l_index(base, monkeypatch):
 
     with _connect() as c:
         assert ic.scalaire_de(c)(RJ.INDEX_CONCLUS.sql_validite) is True
+        assert ic.scalaire_de(c)(
+            db_credits.INDEX_REGLEMENTS_PAR_TRAVAIL.sql_validite) is True
         c.execute(
             "INSERT INTO runner_jobs (org_id, kind, status, due_at, attempts, max_attempts, payload) "
             "SELECT 1, 'start', 'pending', NOW() - g * interval '1 minute', 1, 3, '{}'::jsonb "
             "FROM generate_series(1, 20000) g")
+        # Le grand livre de toute l'instance : des règlements de tours d'autres travaux.
+        c.execute(
+            "INSERT INTO credit_movements (payer, kind, amount, held, call_uid, connector, "
+            "function, meta) "
+            "SELECT 'org:2', 'settle', -3, -3, 'runner:' || (10000000 + g) || ':1:0', "
+            "'anthropic', 'messages:claude-sonnet-5', "
+            "jsonb_build_object('runner_job_id', 10000000 + g, 'attempt', 1, 'turn', 0) "
+            "FROM generate_series(1, 100000) g")
+        c.execute("ANALYZE credit_movements")
         # Le temps se lit sur le run du travail (`runs`, jointure par sa clé) : une
         # table pleine comme en prod, pour que la jointure n'y balaye rien non plus.
         c.execute(
@@ -186,6 +200,7 @@ def test_la_lecture_d_une_org_chargee_passe_par_l_index(base, monkeypatch):
         ((sql, params),) = lues
         plan = "\n".join(r["QUERY PLAN"] for r in c.execute("EXPLAIN " + sql, params).fetchall())
         assert RJ.INDEX_CONCLUS.nom in plan and "Seq Scan" not in plan, plan
+        assert db_credits.INDEX_REGLEMENTS_PAR_TRAVAIL.nom in plan, plan
         c.rollback()
 
 

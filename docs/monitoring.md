@@ -703,6 +703,34 @@ compte est un parcours d'index sur l'org et l'outil, et le replier dans la page
 (`count(*) OVER ()`) forcerait à extraire les arguments JSON de TOUTES les lignes de la
 fenêtre au lieu des seules lignes de la page.
 
+### Les jetons des agents, et ce que le grand livre en a réglé (`usage/tokens`, 22/11/2026)
+
+Lentille ADMIN, `GET /api/orgs/{id}/usage/tokens?days=N` (`org.usage.tokens`,
+`runner_jobs.jetons_des_travaux`) : par jour UTC × agent × payeur × modèle, les jetons
+que les travaux conclus ont DÉCLARÉS, toutes voies de paiement confondues — et, depuis le
+22/11/2026, `budget_units` : les unités de budget que le grand livre a RÉGLÉES pour les
+tours de modèle de ces travaux.
+
+- **Ce qui compte** : les mouvements `settle` de `anthropic.messages:<modèle>`
+  rapprochés de leur travail par `meta.runner_job_id` (`credits_tours.appariement`) —
+  tours rapportés et tours jamais rapportés réglés à la conclusion, toutes tentatives,
+  tous payeurs (`org:<id>` comme `user:<sub>` d'une org en mode personne). `0` pour un
+  travail sans tour réglé : un abonnement, la clé de l'org.
+- **Des unités, jamais des crédits** : le cœur ne connaît pas le taux
+  (`db/schema/credits.py`) ; le commerce qui facture convertit.
+- **Ce qui n'y est pas** : les tours journalisés AU COÛT (`tours_au_cout`, OpenRouter).
+  Ils sont bien rapprochés de leur travail (`tool_calls`, `kind='settlement'`,
+  `call_uid = runner:<travail>:<tentative>:<tour>`), mais en micro-dollars que le
+  fournisseur a facturés, jamais en unités : les sommer ici mélangerait deux grandeurs.
+- **Sommés par travail avant le regroupement** : un règlement par tour, et les joindre
+  tels quels multiplierait les jetons, le temps et le compte de travaux de la case.
+- **L'index** `idx_credit_movements_travail` (`credits.INDEX_REGLEMENTS_PAR_TRAVAIL`,
+  révision `20261122_1200_reglements_travail`) : rien d'autre ne mène d'un travail à ses
+  règlements. La lecture cherche le TABLEAU des travaux de la fenêtre dans l'index
+  (`= ANY(ARRAY(…))`) : un `IN (SELECT …)` laissait le planificateur balayer tout le grand
+  livre (mesuré : ~0,4 s contre ~25 ms sur 1,6 M de règlements). Sans l'index, la lecture
+  reste juste mais lente, et sort en `503 aggregate_timeout` sur un gros grand livre.
+
 ## Les lectures d'agrégat sont bornées à 10 s (#1145, 04/10)
 
 Le pool applicatif ne pose aucun `statement_timeout` (les migrations de démarrage en

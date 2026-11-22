@@ -14,7 +14,7 @@ import time
 import psycopg
 
 from . import (_prerequis, org_d_inscription, slack_reglage, regions_de_modeles, modeles_eteints, access_shadow, alertes_agents, copilot as copilot_store, doc_archivage, index_concurrent, index_releve, journal_calls, journal_jour, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions, attribution_cellules, regles_de_comptes,
-               projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
+               credits, projects, recipes, revision, runner_fleets, runner_jobs, runner_triggers, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
 from ._schema import _SCHEMA
@@ -381,6 +381,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # Les travaux conclus d'une org (jetons des travaux) : même régime — révision
     # `20261104_1200_runner_jobs_finis` ou à la main (§5.1).
     index_concurrent.poser_au_demarrage(conn, runner_jobs.INDEX_CONCLUS)
+    # Les règlements d'un travail (les unités réglées de `org.usage.tokens`) : même
+    # régime — révision `20261122_1200_reglements_travail` ou à la main (§5.1).
+    index_concurrent.poser_au_demarrage(conn, credits.INDEX_REGLEMENTS_PAR_TRAVAIL)
     # Chantier runner R4b : l'INTENTION se sépare du FAIT. `armed` (on a demandé
     # que ça tourne) ≠ `running` (un ordonnanceur l'a prise) ; `stopping` (l'arrêt
     # est demandé) ≠ `stopped` (il a été accusé). ⚠️ Un `CREATE TABLE IF NOT

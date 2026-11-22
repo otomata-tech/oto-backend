@@ -128,7 +128,9 @@ def test_un_admin_passe_l_org_en_pool_et_un_membre_le_lit(client, org, abonne, o
 
 def test_la_lecture_dit_QUI_prete_et_dans_quel_etat(client, org, abonne, option):
     """Une ligne par prêteur, en tout mode : qui partage, et s'il est utilisable
-    maintenant — jamais son palier, son état ni son usage (décision du 08/10/2026)."""
+    maintenant — jamais son palier ni son usage (décision du 08/10/2026). L'org_admin
+    seul lit en plus le plafond effectif et POURQUOI le forfait ne sert pas (`state`,
+    22/11/2026, `test_forfaits_de_l_org_db.py`) ; un membre, rien de plus qu'avant."""
     from oto_mcp.db import org_subscription_pool as P
     from oto_mcp.db import user_subscriptions as US
     o = org
@@ -138,8 +140,14 @@ def test_la_lecture_dit_QUI_prete_et_dans_quel_etat(client, org, abonne, option)
 
     lu = client.get(o["route"], headers=_h(o["admin"])).json()
     # l'org_admin lit le plafond effectif de chaque prêteur (un réglage, pas l'usage)
-    assert lu["lenders"] == [{"sub": o["membre"], "usable_now": True,
-                              "limit_pct": lu["limit_pct"]}]
+    # et son état (`ok` ⇔ `usable_now`) — jamais son palier ni son usage mesuré
+    (preteur,) = lu["lenders"]
+    assert {k: preteur[k] for k in ("sub", "usable_now", "limit_pct", "state",
+                                    "reset_at")} == {
+        "sub": o["membre"], "usable_now": True, "limit_pct": lu["limit_pct"],
+        "state": "ok", "reset_at": None}
+    assert set(preteur) == {"sub", "usable_now", "limit_pct", "state", "last_ok_at",
+                            "reset_at"}
     assert lu["pool_size"] == 1
     # un membre ne lit que qui prête et s'il est utilisable — jamais le plafond d'autrui
     assert client.get(o["route"], headers=_h(o["membre"])).json()["lenders"] == \

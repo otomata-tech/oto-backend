@@ -261,14 +261,14 @@ def declares() -> tuple[IndexConcurrent, ...]:
     pas le poser : un banc compare cette liste aux déclarations du code.
 
     Import tardif : les modules déclarants importent celui-ci."""
-    from . import (access_shadow, contraintes_create_table, index_releve, runner_jobs,
-                   search, valeurs_servies)
+    from . import (access_shadow, contraintes_create_table, credits, index_releve,
+                   runner_jobs, search, valeurs_servies)
     return (index_releve.RELEVE, *index_releve.OUVERTURES, index_releve.GESTES_DE_LIGNE,
             index_releve.OUVERTURE_PAR_RUN, index_releve.TOUR_AU_COUT,
             *search.INDEX_VALEURS, access_shadow.CLE_ORIGINE,
             *(cle.index for cle in contraintes_create_table.CLES),
             *valeurs_servies.INDEX, runner_jobs.INDEX_DECLENCHEURS,
-            runner_jobs.INDEX_CONCLUS)
+            runner_jobs.INDEX_CONCLUS, credits.INDEX_REGLEMENTS_PAR_TRAVAIL)
 
 
 class RevisionSansIndex(ValueError):

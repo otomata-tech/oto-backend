@@ -42,9 +42,9 @@ def client(monkeypatch):
     monkeypatch.setattr(coeur, "MailClient", fabrique)
     monkeypatch.setattr("oto_mcp.access.current_user_sub_or_raise", lambda: "sub-1")
 
-    def jeton(sub, service):
+    def jeton(sub, service, *, renew=False):
         assert service == "outlook", "le jeton se demande pour CE service"
-        return f"AT-{sub}"
+        return f"AT-{sub}" + ("-renouvele" if renew else "")
 
     monkeypatch.setattr("oto_mcp.auth.microsoft.access_token_for", jeton)
     inst.jetons = jetons
@@ -111,7 +111,7 @@ def test_search_vue_resserree_brut_et_fields(client):
     client.search_messages.return_value = [dict(MSG)]
     out = _tool("outlook")(query="from:jane", folder="inbox", limit=5)
     client.search_messages.assert_called_once_with("from:jane", folder="inbox", top=5,
-                                                   unread=None)
+                                                   unread=None, mailbox=None)
     m = out["messages"][0]
     assert m["from"] == "Jane <jane@contoso.example>" and m["preview"] == "Bonjour"
     assert "internetMessageHeaders" not in m and out["count"] == 1
@@ -147,7 +147,8 @@ def test_get_rend_le_corps_et_les_pieces(client):
         {"id": "a1", "name": "f.pdf", "contentType": "application/pdf", "size": 9,
          "lastModifiedDateTime": "x"}]
     out = _tool("outlook")(op="get", message_id="m1")
-    client.get_message.assert_called_once_with("m1")
+    client.get_message.assert_called_once_with("m1", mailbox=None)
+    client.list_attachments.assert_called_once_with("m1", mailbox=None)
     assert out["body"] == "Bonjour Jane"
     assert out["attachments"] == [{"id": "a1", "name": "f.pdf",
                                    "contentType": "application/pdf", "size": 9,
@@ -164,7 +165,7 @@ def test_piece_jointe_par_nom_rendue_pour_l_agent(client, monkeypatch):
                         lambda data, nom, mime, **kw: vus.append((data, nom, mime, kw))
                         or {"encoding": "text"})
     _tool("outlook")(op="attachment", message_id="m1", filename="f.pdf")
-    client.get_attachment.assert_called_once_with("m1", "a1")
+    client.get_attachment.assert_called_once_with("m1", "a1", mailbox=None)
     data, nom, mime, kw = vus[0]
     assert (data, nom, mime) == (b"%PDF", "f.pdf", "application/pdf")
     assert kw["prefix"] == "outlook-attachments" and kw["sub"] == "sub-1"
@@ -606,3 +607,147 @@ def test_un_deplacement_refuse_la_redaction_et_le_draft_id(client, op):
     with pytest.raises(McpError, match="does not use `draft_id`"):
         _tool("outlook_act")(op=op, message_ids=["m1"], draft_id="d1")
     client.move.assert_not_called()
+
+
+# --- boîtes partagées ou déléguées (`mailbox`, oto-now/connectors#283) ------------
+
+BOITE = "accueil@contoso.example"
+_PARTAGE = "Mail.ReadWrite Mail.Send Mail.Read.Shared User.Read offline_access"
+# Un compte Outlook connecté avant `Mail.Read.Shared` : son service reste reconnu.
+_ANCIEN = "Mail.ReadWrite Mail.Send User.Read offline_access"
+
+
+@pytest.fixture
+def coffre(monkeypatch):
+    """Le `meta` du compte que l'appel désigne, et les renouvellements demandés."""
+    etat = {"scopes": _PARTAGE, "renouvellements": 0}
+
+    etat["compte"] = ("member", "42:sub-1")   # le compte PERSONNEL de l'appelant
+
+    def resoudre(sub, service, account=None):
+        from oto_mcp.access.resolved_credential import ResolvedCredential
+        assert service == "outlook"
+        entite, eid = etat["compte"]
+        rc = ResolvedCredential(provider="microsoft", secret="RT", is_platform=False,
+                                mode="user", entity_type=entite, entity_id=eid,
+                                account="jane@contoso.example")
+        return rc, {"scopes": etat["scopes"]}
+
+    monkeypatch.setattr("oto_mcp.auth.microsoft.resolve_account", resoudre)
+    return etat
+
+
+def test_mailbox_passe_aux_lectures_de_la_lib(client, coffre, monkeypatch):
+    client.search_messages.return_value = []
+    _tool("outlook")(query="facture", mailbox=BOITE)
+    client.search_messages.assert_called_once_with("facture", folder=None, top=25,
+                                                   unread=None, mailbox=BOITE)
+    client.list_folders.return_value = []
+    _tool("outlook")(op="folders", mailbox=BOITE)
+    client.list_folders.assert_called_once_with(limit=25, mailbox=BOITE)
+    client.get_message.return_value = {**MSG, "body": {"content": "x"}}
+    client.list_attachments.return_value = [{"id": "a1", "name": "f.pdf"}]
+    _tool("outlook")(op="get", message_id="m1", mailbox=BOITE)
+    client.get_message.assert_called_once_with("m1", mailbox=BOITE)
+    client.list_attachments.assert_called_once_with("m1", mailbox=BOITE)
+    client.get_attachment.return_value = {
+        "name": "f.pdf", "contentType": "application/pdf",
+        "contentBytes": base64.b64encode(b"%PDF").decode()}
+    monkeypatch.setattr("oto_mcp.file_content.render_for_agent",
+                        lambda *a, **k: {"encoding": "text"})
+    _tool("outlook")(op="attachment", message_id="m1", filename="f.pdf", mailbox=BOITE)
+    assert client.list_attachments.call_args.kwargs == {"mailbox": BOITE}
+    client.get_attachment.assert_called_once_with("m1", "a1", mailbox=BOITE)
+    assert set(client.jetons) == {"AT-sub-1"}, "scope présent : aucun renouvellement"
+
+
+@pytest.mark.parametrize("op, extra", [("draft", {"to": ["a@b.example"], "body": "x"}),
+                                       ("drafts", {})])
+def test_mailbox_refuse_aux_brouillons_avant_le_jeton(client, op, extra):
+    with pytest.raises(McpError, match="drafts stay in the person's own mailbox"):
+        _tool("outlook")(op=op, mailbox=BOITE, **extra)
+    assert client.jetons == []
+    client.create_draft.assert_not_called()
+
+
+@pytest.mark.parametrize("args", [{"op": "send", "draft_id": "d1"},
+                                  {"op": "archive", "message_ids": ["m1"]},
+                                  {"op": "move", "message_ids": ["m1"], "destination": "f1"}])
+def test_mailbox_refuse_par_outlook_act(client, args):
+    with pytest.raises(McpError, match="`mailbox` is not accepted here"):
+        _tool("outlook_act")(mailbox=BOITE, **args)
+    assert client.jetons == []
+    client.send_draft.assert_not_called()
+    client.move.assert_not_called()
+
+
+def test_mailbox_vide_refusee(client):
+    with pytest.raises(McpError, match="`mailbox` is empty"):
+        _tool("outlook")(mailbox="  ")
+    assert client.jetons == []
+
+
+def test_scope_manquant_un_renouvellement_puis_le_refus_qui_dit_de_reconnecter(
+        client, coffre):
+    coffre["scopes"] = _ANCIEN
+    with pytest.raises(McpError, match="reconnect Outlook once"):
+        _tool("outlook")(mailbox=BOITE)
+    assert client.jetons == ["AT-sub-1-renouvele"], "UN renouvellement, puis le refus"
+    client.search_messages.assert_not_called()
+
+
+def test_scope_appris_au_renouvellement_la_lecture_passe(client, coffre, monkeypatch):
+    # Une approbation d'administrateur donnée depuis : le coffre l'apprend au renouvellement.
+    coffre["scopes"] = _ANCIEN
+
+    def jeton(sub, service, *, renew=False):
+        if renew:
+            coffre["scopes"] = _PARTAGE
+        return "AT-renouvele" if renew else "AT"
+
+    monkeypatch.setattr("oto_mcp.auth.microsoft.access_token_for", jeton)
+    client.search_messages.return_value = []
+    _tool("outlook")(mailbox=BOITE)
+    assert client.jetons == ["AT-renouvele"]
+    assert client.search_messages.call_args.kwargs["mailbox"] == BOITE
+
+
+def test_sans_mailbox_un_compte_ancien_lit_sa_boite(client, coffre):
+    coffre["scopes"] = _ANCIEN
+    client.search_messages.return_value = []
+    _tool("outlook")()
+    assert client.jetons == ["AT-sub-1"]
+
+
+def test_refus_sur_la_boite_dit_les_mots_de_la_lib_sans_repli(client, coffre):
+    from oto.tools.common.errors import UpstreamHTTPError
+    from oto.tools.microsoft import MailboxAccessError
+
+    refus = MailboxAccessError(BOITE, UpstreamHTTPError(
+        403, {"error": {"code": "ErrorAccessDenied", "message": "Access is denied."}},
+        service="microsoft"))
+    client.search_messages.side_effect = refus
+    with pytest.raises(McpError) as e:
+        _tool("outlook")(mailbox=BOITE)
+    assert str(refus) in str(e.value) and "ErrorAccessDenied" in str(e.value)
+    assert client.search_messages.call_count == 1, "aucun repli sur la boîte de la personne"
+
+
+@pytest.mark.parametrize("compte", [
+    ("member", "42:collegue-preteuse"),   # prêté par une collègue
+    ("member", "7:collegue-preteuse"),    # prêté depuis une autre org
+    ("group", "49"),                      # le compte de l'équipe
+    ("org", "42"),                        # le compte de l'org
+])
+def test_mailbox_refuse_sur_un_compte_prete_ou_partage(client, coffre, compte):
+    coffre["compte"] = compte
+    with pytest.raises(McpError, match="only allowed on your own Outlook account"):
+        _tool("outlook")(mailbox=BOITE)
+    assert client.jetons == [], "refus avant tout jeton"
+    client.search_messages.assert_not_called()
+    # Sans `mailbox`, le même compte lit SA boîte, comme avant.
+    client.search_messages.return_value = []
+    _tool("outlook")()
+    client.search_messages.assert_called_once_with(None, folder=None, top=25, unread=None,
+                                                   mailbox=None)
+

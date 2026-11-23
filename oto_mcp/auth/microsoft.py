@@ -28,8 +28,8 @@ loan (no `lent_by`). Two accounts at the same tier and no `_account` = the casca
 ambiguity — no default is set by itself there, an admin picks one
 (`oto_identity op=set scope=org|group`). The token carries every consent this Microsoft
 account gave oto, the holder's personal ones included: the row keeps only what ITS
-consents asked for, plus the administrator tier of those services (`_borne_partagee`),
-and so does every renewal. Removed by its admin:
+consents asked for, plus the optional scopes and administrator tier of those services
+(`_borne_partagee`), and so does every renewal. Removed by its admin:
 `DELETE /api/settings/api-keys/microsoft?scope=org|group&account=…`.
 
 **Incremental consent.** Entra ACCUMULATES the consents of one account for one
@@ -39,7 +39,10 @@ is the normalized union of what was granted (`scopes.normalize`); it is refreshe
 from `grant.scope` at every renewal — an administrator's consent given later is seen
 there without reconnecting. `services_granted(meta.scopes)` says which services an
 account has authorized; a service tool refuses an account that has not authorized
-ITS service, naming the card to open — never a mute 403 from Graph.
+ITS service, naming the card to open — never a mute 403 from Graph. A card may also
+ask OPTIONAL scopes (`SERVICE_OPTIONAL`: Outlook's `Mail.Read.Shared`, for the shared
+or delegated mailboxes) that do not make the service: an account connected before they
+were asked keeps its service, and the tool that needs them checks them at use.
 
 **Renewal.** An access token lives one hour; `access_token_for` requests it again
 with `scopes.REFRESH` (`.default`: everything already consented) — never a list,
@@ -143,6 +146,16 @@ ADMIN_ONLY_SERVICES: frozenset[str] = frozenset({"entra"})
 SERVICE_ADMIN_TIER: dict[str, tuple[str, str]] = {
     "teams": ("TEAMS_ADMIN", "reading channel messages"),
 }
+#: A service's OPTIONAL scopes: the lib's scopes its card ALSO requests at connection,
+#: but that do not make the service — `services_granted` ignores them, so an account
+#: connected before they were asked keeps its service; the tools that need them check
+#: them at use (`has_scopes`). Outlook: reading the shared or delegated mailboxes the
+#: person was given access to in Exchange (`Mail.Read.Shared`, no administrator needed).
+#: ⚠️ PERSONAL rows only: a row of the org or a team never holds them (`_borne_partagee`),
+#: and the tools serve them on the caller's OWN account only (`own_account`) — a lent or
+#: shared account would open every mailbox its holder reaches, which the sharing never
+#: consented to.
+SERVICE_OPTIONAL: dict[str, str] = {"outlook": "MAIL_SHARED"}
 
 _AUD = "microsoft"
 #: The administrator's approval: its own audience — a person's state is never worth an
@@ -199,13 +212,22 @@ def service_scopes(service: str) -> tuple[str, ...]:
     return tuple(getattr(_scopes(), SERVICE_SCOPES[service]))
 
 
+def optional_scopes(service: str) -> tuple[str, ...]:
+    """The lib's OPTIONAL scopes of `service` (`SERVICE_OPTIONAL`) — none for a service
+    that has none."""
+    if service not in SERVICE_OPTIONAL:
+        return ()
+    return tuple(getattr(_scopes(), SERVICE_OPTIONAL[service]))
+
+
 def scopes_for(connector: str) -> tuple[str, ...]:
-    """The scopes THIS consent requests: the identity, then the card's own —
-    nothing more for the account (`microsoft`), whose services add theirs one by one."""
+    """The scopes THIS consent requests: the identity, then the card's own and its
+    optional ones — nothing more for the account (`microsoft`), whose services add
+    theirs one by one."""
     identite = tuple(_scopes().IDENTITY)
     if connector == CONNECTOR:
         return identite
-    return identite + service_scopes(connector)
+    return identite + service_scopes(connector) + optional_scopes(connector)
 
 
 def _normalises(scopes) -> frozenset:
@@ -227,10 +249,20 @@ def services_granted(scopes) -> list[str]:
 
 def has_scopes(meta: dict, scopes: tuple[str, ...]) -> bool:
     """Does this account (its vault `meta`) hold ALL these scopes? For a permission
-    that no card requests at connection — a service's administrator tier
-    (`admin_scopes`), granted by a tenant administrator (`admin_consent_url`) and
-    checked at use by the service's tools."""
+    that does not make the service, checked at use by the service's tools: its
+    administrator tier (`admin_scopes`), granted by a tenant administrator
+    (`admin_consent_url`), or an optional scope (`optional_scopes`) that an account
+    connected before it was asked does not hold."""
     return _scopes().short(tuple(scopes)) <= _normalises((meta or {}).get("scopes"))
+
+
+def own_account(sub: str, rc) -> bool:
+    """Is the resolved credential `rc` the caller's OWN personal row — not a row of her
+    team or org, not an account a peer lent her? What an optional scope opens is served
+    on it only (`SERVICE_OPTIONAL`)."""
+    if rc.entity_type != credentials_store.MEMBER or not rc.entity_id:
+        return False
+    return rc.entity_id.split(":", 1)[-1] == sub
 
 
 def admin_scopes(service: str) -> tuple[str, ...]:
@@ -526,7 +558,7 @@ def admin_consent_url(sub: str, services: tuple[str, ...], tenant: Optional[str]
     org_id = _ctx_org(sub)
     demandes = list(_scopes().IDENTITY)
     for svc in services:
-        demandes += service_scopes(svc) + admin_scopes(svc)
+        demandes += service_scopes(svc) + optional_scopes(svc) + admin_scopes(svc)
     state = oauth_flow.sign_state(_AUD_ADMIN, {
         "sub": sub, "org": org_id, "app": oauth_flow.resolve_return_app(return_app),
         "c": connector, "s": list(services)})
@@ -693,11 +725,14 @@ def finish_connection(etat: EtatConnexion, code: str) -> dict:
 def _borne_partagee(scopes, connector: Optional[str] = None) -> frozenset:
     """What a row of the org or a team may hold: its scopes, what THIS consent asks
     (`connector`), and the administrator tier of those services — never the holder's
-    other consents, which the Entra token carries too."""
+    other consents, which the Entra token carries too, and never an OPTIONAL scope
+    (`SERVICE_OPTIONAL`): those serve the holder's own account only (`own_account`)."""
     permis = _normalises(scopes) | (_scopes().short(scopes_for(connector))
                                     if connector else frozenset())
     tiers = tuple(s for svc in services_granted(" ".join(permis)) for s in admin_scopes(svc))
-    return permis | _scopes().short(tiers)
+    optionnels = _scopes().short(tuple(s for svc in SERVICE_OPTIONAL
+                                       for s in optional_scopes(svc)))
+    return (permis | _scopes().short(tiers)) - optionnels
 
 
 def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None,

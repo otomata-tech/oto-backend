@@ -27,6 +27,9 @@ This module is PURE (no I/O, no `oto_mcp` import at module level): from a served
   account itself, is not served on it;
 - the ACCESS LEVELS (`auth.access_levels`, since 13/11/2026): the declaration `connectors.access_levels` reads like a
   hand-written connector's `ACCESS_LEVELS`, its default level included (`auth.default_level`);
+- the ACCESS of a connector that opens by several (`connector.accesses`, since oto-core v1.243.0): oto 1 serves ONE
+  of them, named in `ACCES_SERVIS`, and reads the description as that access sees it (`charger`); a connector with
+  several accesses and none named here is refused at load, never served by a default one;
 - what the reader CANNOT serve, refused at mount, never approximated.
 """
 from __future__ import annotations
@@ -49,14 +52,22 @@ _AUTH_BASIQUE = "basic"
 CHAMP_DE_CLE = "key"
 
 
+#: The one access oto 1 serves of a connector that declares several (`connector.accesses`). Search Console opens here by
+#: the organization's service account only: a person's own Google connection is served by `search_console`.
+ACCES_SERVIS = {"google_search_console": "service_account"}
+
+
 class DescriptionNonServie(ValueError):
     """A description the reader does not know how to serve: refused at mount, with every reason."""
 
 
 def charger(nom: str) -> dict:
-    """The served description of `nom`, from the library (never a YAML file)."""
+    """The served description of `nom`, from the library (never a YAML file), as the access oto 1 serves sees it
+    (`ACCES_SERVIS`): `accesses` gone, that access's `auth`, `credential` and `modes` in their place. The library
+    raises `UnknownAccess` for a connector with several accesses and none named, or one named for a single access."""
     from oto.connectors import descriptions as servies
-    return servies.load(nom)
+    from oto.connectors.engine import accesses
+    return accesses.view(servies.load(nom), ACCES_SERVIS.get(nom))
 
 
 def inscrits() -> tuple:

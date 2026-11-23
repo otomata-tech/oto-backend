@@ -1,6 +1,6 @@
 ## prerequisite — connect with your Microsoft 365 account
 
-on the "Outlook" card, click **Authorize Outlook** and choose your work account. Nothing else to install or register. The account itself is the "Microsoft 365 account" connector: Outlook borrows it and only adds its own permissions (read and write your mail, send it).
+on the "Outlook" card, click **Authorize Outlook** and choose your work account. Nothing else to install or register. The account itself is the "Microsoft 365 account" connector: Outlook borrows it and only adds its own permissions (read and write your mail, send it, and read the shared or delegated mailboxes you have access to).
 - the agent acts **with your rights**, in **your** mailbox: it reads what you can read, and what it sends leaves from your address. Each person in the org connects their own account
 - work or school accounts only; a guest of a client's Microsoft 365 fills in **Client directory** at connection (the client's domain; see the "Microsoft 365 account" connector)
 - ⚠️ **many organizations require a Microsoft 365 administrator to authorize oto a first time.** If Microsoft shows "admin approval required", the card comes back with that reason: an administrator approves oto once for the whole organization (`microsoft_admin_consent`, see the "Microsoft 365 account" connector), then everyone can connect
@@ -16,6 +16,7 @@ Two tools, under the account the call names (`_account="me@fabrikam.com"`), othe
 - "write to Marc with the contract" → `outlook(op="draft", to=["marc@…"], subject="…", body="…", attachments=[{"kind":"drive","file_id":"…"}])`, then `outlook_act(op="send", draft_id="…")`
 - "send this HTML newsletter" → `outlook_act(op="send", to=[…], subject="…", html="<html>…")`, or `html_source={"kind":"project_file",…}` for an HTML file: sent exactly as given, nothing rewritten. An image shown in it is an attachment with `"content_id":"logo"`, referenced as `<img src="cid:logo">`; Outlook's rendering has its limits, see the oto guide "Mails HTML compatibles Outlook" (`outlook-html`)
 - "archive the newsletters" → `outlook_act(op="archive", message_ids=[…])`; `op="trash"` moves to Deleted Items, `op="move"` to any folder (`outlook(op="folders")` lists them)
+- "the unread emails of contact@…" → `outlook(mailbox="contact@…", unread=true)`: a shared mailbox, or a colleague's that was delegated to you in Exchange, is READ with `mailbox` (op `search`, `get`, `attachment`, `folders`; read its messages again with the same `mailbox`). Drafts, sending and moving stay in your own mailbox. Only on your own Outlook account: an account lent by a colleague, or your team's or org's, reads its own mailbox but no other
 - each response is a trimmed view; `full=true` returns the complete Microsoft Graph object, `fields=[…]` keeps only some keys of each message
 
 ## note — what is misleading
@@ -25,8 +26,9 @@ Two tools, under the account the call names (`_account="me@fabrikam.com"`), othe
 - a message keeps its id when it is moved (archive, trash, move) or sent: the id an answer gives stays valid
 - a search (`query`) cannot be combined with `unread`: Microsoft refuses it. Put the condition in the query, or list without one
 - a search comes back in Microsoft's order (most recent first), from its index: a message received seconds ago may not be found yet
+- ⚠️ **another mailbox needs a reconnection once**: an Outlook connection made before oto could read shared mailboxes does not carry the permission (`Mail.Read.Shared`); reading with `mailbox` says so — reconnect Outlook from its card, your own mailbox keeps working meanwhile. Without access to that mailbox in Exchange, the refusal names it: ask its administrator for the access, oto cannot grant it
 - an attachment is limited to 3 MB when writing, an HTML body read from a file to 1 MB; reading one has the usual limits
 
 ## note — scope
 
-mail only: search, read, attachments, drafts, replies, sending, archive, trash, move between folders. Nothing deletes a message for good, nothing changes rules, categories or the signature. The calendar is the "Outlook Calendar" connector.
+mail only: search, read (your mailbox, and the shared or delegated ones you have access to), attachments, drafts, replies, sending, archive, trash, move between folders. Nothing deletes a message for good, nothing changes rules, categories or the signature. The calendar is the "Outlook Calendar" connector.

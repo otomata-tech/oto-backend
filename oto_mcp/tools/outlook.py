@@ -28,6 +28,18 @@ id given in Outlook's older format; an attachment
 travels inline up to 3 MB, and one with a `content_id` is an inline image (`cid:`);
 Graph does not expose the Outlook signature, so nothing is appended to a body.
 
+**Shared or delegated mailboxes** (`mailbox`, oto-now/connectors#283): `outlook` READS
+another mailbox the person was given access to in Exchange (search, get, attachment,
+folders), under `/users/{mailbox}`, still on her behalf — on her OWN account only, never
+a lent one nor one of her team or org (`auth/microsoft.own_account`: the sharing did not
+consent to the holder's other mailboxes). It needs the optional scope
+`Mail.Read.Shared` (`auth/microsoft.SERVICE_OPTIONAL`), asked by the Outlook card since
+then: an account connected before is refused, told to reconnect Outlook once — after a
+single token renewal, which sees an administrator's approval given since. Graph's 403
+or 404 on that mailbox comes back as the lib's `MailboxAccessError`, which names the
+mailbox and Graph's code — never a fallback on the person's own mailbox. Drafts and
+every act (`outlook_act`) stay on the person's own mailbox: `mailbox` is refused there.
+
 ⚠️ `outlook_act` WRITES to the person's mailbox: send, archive, trash, move. `outlook`
 writes only drafts; its default is `op="search"` — a READ.
 """
@@ -53,6 +65,8 @@ _LABEL = "Outlook"
 
 _OPS = ("search", "get", "attachment", "drafts", "folders", "draft")
 _ACT_OPS = ("send", "archive", "trash", "move")
+#: The ops that read another mailbox (`mailbox`): the lib's reading methods.
+_MAILBOX_OPS = ("search", "get", "attachment", "folders")
 
 
 def _ops_error(ops: tuple) -> str:
@@ -210,6 +224,15 @@ _OUTLOOK_DOC = f"""The person's Outlook mailbox — READ it, or prepare a DRAFT.
 sends, archives, trashes or moves: that is `outlook_act`, the tool your client asks you to
 confirm.
 
+**Another mailbox** — a shared mailbox (e.g. `contact@…`) or a colleague's that the person
+was given access to in Exchange: name it in `mailbox` (its address) to READ it with
+op="search", "get", "attachment" or "folders". Ids found there are read again with the
+same `mailbox`. Drafts and every act stay on the person's own mailbox (`mailbox` is
+refused there). Only on the person's OWN Outlook account: not on an account lent by a
+colleague, nor on a team's or the org's. Without access in Exchange, the refusal names the
+mailbox; an Outlook connection older than this feature must be reconnected once — the
+refusal says so.
+
 `op`:
 - **"search"** (default): messages, most recent first, without their body (`preview`
   only). `query` is an Outlook (KQL) search — `from:jane subject:invoice`, plain words;
@@ -250,6 +273,8 @@ Args:
     max_rows: op="attachment" of an .xlsx — rows per sheet (default 200).
     full: return Graph's raw objects instead of the trimmed view.
     fields: op="search"/"drafts" — keep only these keys of each message.
+    mailbox: op="search"/"get"/"attachment"/"folders" — read this shared or delegated
+        mailbox (its address) instead of the person's own.
     For op="draft":
 {_COMPOSITION_ARGS}
 """
@@ -282,21 +307,71 @@ Args:
     draft_id: op="send" — the draft to send, as it stands (no other argument).
     message_ids: op="archive"/"trash"/"move" — the messages to move.
     destination: op="move" — the target folder (id or well-known name).
+    mailbox: not accepted — sending and moving act on the person's own mailbox only
+        (`outlook` reads a shared or delegated one).
     For op="send" without `draft_id`:
 {_COMPOSITION_ARGS}
 """
 
 
 def register(mcp: FastMCP) -> None:
-    from oto.tools.microsoft import MailClient
+    from oto.tools.microsoft import MailboxAccessError, MailClient
     from oto.tools.microsoft.mail import MAX_INLINE_ATTACHMENT
 
-    def _client() -> MailClient:
+    from ..auth import microsoft as ms_auth
+
+    def _client(*, renew: bool = False) -> MailClient:
         """The Graph client of THIS caller, with their current token."""
-        return MailClient(token(_SERVICE))
+        return MailClient(token(_SERVICE, renew=renew))
+
+    def _compte() -> tuple:
+        """`(ResolvedCredential, meta)` of the account this call designates
+        (`_account=`…)."""
+        try:
+            return ms_auth.resolve_account(access.current_user_sub_or_raise(), _SERVICE)
+        except RuntimeError as e:
+            raise bad(str(e))
+
+    def _client_de_la_boite(mailbox: Optional[str]) -> MailClient:
+        """The client for a read of `mailbox` — the person's own when None. Another
+        mailbox is read on the caller's OWN account only: a lent account, or one of her
+        team or org, would open every mailbox its holder reaches, which the sharing never
+        consented to. It needs the optional scope `Mail.Read.Shared`: the vault learns an
+        administrator's approval at a token renewal only, so a missing scope renews the
+        token ONCE before refusing."""
+        if mailbox is None:
+            return _client()
+        rc, meta = _compte()
+        if not ms_auth.own_account(access.current_user_sub_or_raise(), rc):
+            raise bad(
+                f"Reading another mailbox ({mailbox}) is only allowed on your own Outlook "
+                f"account: `{rc.account}` is shared with you (a team's or the org's "
+                "account, or lent by a colleague), and sharing it does not open the other "
+                "mailboxes its holder can read. Connect your own Outlook account, or read "
+                "this account's own mailbox without `mailbox`. Nothing was read.")
+        requis = ms_auth.optional_scopes(_SERVICE)
+        if ms_auth.has_scopes(meta, requis):
+            return _client()
+        c = _client(renew=True)
+        if not ms_auth.has_scopes(_compte()[1], requis):
+            raise bad(
+                f"Reading the mailbox {mailbox} needs the Microsoft permission "
+                "Mail.Read.Shared, which this Outlook connection predates: reconnect "
+                "Outlook once (« Reconnect » on the account's line, card « Outlook » of "
+                "the connectors page), then retry. The person's own mailbox works without "
+                "it. Nothing was read.")
+        return c
 
     def _run(fn):
-        return run(fn, _LABEL)
+        """`fn()` under the Graph refusals (`run`) — except a refused read of ANOTHER
+        mailbox (`MailboxAccessError`, a 403 or 404 there), said in the lib's own words,
+        which name the mailbox and Graph's code, never as an item of the person's own."""
+        def lire():
+            try:
+                return fn()
+            except MailboxAccessError as e:
+                raise bad(str(e)) from e
+        return run(lire, _LABEL)
 
     def _deplacer(c: MailClient, ids: list[str], destination: str) -> list[dict]:
         """One `move` per message: a PARTIAL move is possible, and is named — what
@@ -420,10 +495,19 @@ def register(mcp: FastMCP) -> None:
         reply_to: Optional[str] = None,
         reply_all: bool = False,
         attachments: Optional[list[dict]] = None,
+        mailbox: Optional[str] = None,
     ) -> Union[dict, ToolResult]:
         # Refusal BEFORE any credential resolution: an unknown op never reaches the client.
         if op not in _OPS:
             raise bad(_ops_error(_OPS))
+        if mailbox is not None:
+            if op not in _MAILBOX_OPS:
+                raise bad(f"`mailbox` reads another mailbox, with op='search', 'get', "
+                          f"'attachment' or 'folders' — not op='{op}': drafts stay in the "
+                          "person's own mailbox. Nothing was done.")
+            if not mailbox.strip():
+                raise bad("`mailbox` is empty — give the address of the shared or "
+                          "delegated mailbox, or omit it for the person's own.")
         if (sheet is not None or max_rows is not None) and op != "attachment":
             raise bad(f"`sheet`/`max_rows` only apply to op='attachment' (got op='{op}').")
         if fields is not None and op not in ("search", "drafts"):
@@ -439,7 +523,7 @@ def register(mcp: FastMCP) -> None:
                             cc=cc, bcc=bcc, subject=subject, reply_to=reply_to,
                             reply_all=reply_all, attachments=attachments)
         vue = raw if full else _message
-        c = _client()
+        c = _client_de_la_boite(mailbox)
 
         def _liste(messages: list) -> dict:
             out = {"messages": [vue(m) for m in messages], "count": len(messages)}
@@ -451,7 +535,7 @@ def register(mcp: FastMCP) -> None:
             if query is not None and not query.strip():
                 raise bad("`query` is empty — omit it to list the most recent messages.")
             return _liste(_run(lambda: c.search_messages(query, folder=folder, top=limit,
-                                                         unread=unread)))
+                                                         unread=unread, mailbox=mailbox)))
 
         if op == "drafts":
             refuse_ignored(op, query=query, folder=folder, unread=unread,
@@ -463,7 +547,7 @@ def register(mcp: FastMCP) -> None:
             refuse_ignored(op, query=query, folder=folder, unread=unread,
                            message_id=message_id, attachment_id=attachment_id,
                            filename=filename)
-            dossiers = _run(lambda: c.list_folders(limit=limit))
+            dossiers = _run(lambda: c.list_folders(limit=limit, mailbox=mailbox))
             return {"folders": [raw(f) if full else _dossier(f) for f in dossiers],
                     "count": len(dossiers)}
 
@@ -471,8 +555,9 @@ def register(mcp: FastMCP) -> None:
             refuse_ignored(op, query=query, folder=folder, unread=unread,
                            attachment_id=attachment_id, filename=filename)
             mid = need(message_id, "message_id", op)
-            m = _run(lambda: c.get_message(mid))
-            pieces = _run(lambda: c.list_attachments(mid)) if m.get("hasAttachments") else []
+            m = _run(lambda: c.get_message(mid, mailbox=mailbox))
+            pieces = (_run(lambda: c.list_attachments(mid, mailbox=mailbox))
+                      if m.get("hasAttachments") else [])
             if full:
                 return {**m, "attachments": pieces}
             return {**_message(m), "body": (m.get("body") or {}).get("content"),
@@ -487,14 +572,14 @@ def register(mcp: FastMCP) -> None:
                           "(only one) — both come from op='get'.")
             aid = attachment_id
             if aid is None:
-                pieces = _run(lambda: c.list_attachments(mid))
+                pieces = _run(lambda: c.list_attachments(mid, mailbox=mailbox))
                 memes = [a for a in pieces if a.get("name") == filename]
                 if len(memes) != 1:
                     noms = [(a.get("name"), a.get("id")) for a in pieces]
                     raise bad(f"{len(memes)} attachments are named {filename!r} on this "
                               f"message — pass `attachment_id` (name, id): {noms}.")
                 aid = memes[0]["id"]
-            piece = _run(lambda: c.get_attachment(mid, aid))
+            piece = _run(lambda: c.get_attachment(mid, aid, mailbox=mailbox))
             if piece.get("contentBytes") is None:
                 raise bad(f"« {piece.get('name')} » is not a file attachment "
                           f"({piece.get('@odata.type')}): an attached email or a link "
@@ -530,9 +615,14 @@ def register(mcp: FastMCP) -> None:
         reply_to: Optional[str] = None,
         reply_all: bool = False,
         attachments: Optional[list[dict]] = None,
+        mailbox: Optional[str] = None,
     ) -> dict:
         if op not in _ACT_OPS:
             raise bad(_ops_error(_ACT_OPS))
+        if mailbox is not None:
+            raise bad("`mailbox` is not accepted here: sending and moving act on the "
+                      "person's own mailbox only (`outlook` reads a shared or delegated "
+                      "one). Nothing was done.")
         if op == "send":
             refuse_ignored(op, message_ids=message_ids, destination=destination)
             if draft_id is None:

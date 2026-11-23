@@ -470,6 +470,7 @@ sources = [
   "oto_mcp/db/datastore*.py",
   "oto_mcp/db/valeurs_servies.py",
   "oto_mcp/db/schema/datastore.py",
+  "oto_mcp/db/ecrivains_de_service.py",
   "oto_mcp/db/row*.py",
   "oto_mcp/tools/datastore*.py",
   "oto_mcp/api/datastore*.py",

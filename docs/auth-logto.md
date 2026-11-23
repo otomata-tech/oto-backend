@@ -241,6 +241,14 @@ Refus nommés : `service_forbidden`, `service_machine_required`, `service_role_m
 `service_required`, `invalid_token`. Banc : `tests/test_service_identity_1068.py`.
 Les capacités ouvertes au rôle `commerce` : `docs/droits-declares.md` §L'API du commerce.
 
+**Un rôle par service** (22/11/2026). Le catalogue `ROLES` porte `commerce` et `visitors` :
+le second est le service des visites de site, qui n'a qu'un geste — écrire les lignes d'un
+tableau d'org que l'org lui a ouvert (`docs/datastore.md` §Écrivains de service). Chaque
+service est SON client machine, avec SA permission sur la ressource `…/api/service` :
+la fuite du secret de l'un ne donne pas les gestes de l'autre (`COMMERCE_SERVICE` refuse
+un jeton `visitors`, et l'inverse). `ROLES_ECRIVAINS` dit lesquels une org peut inscrire
+comme écrivains d'un tableau — `commerce` n'en est pas.
+
 ## Coexistence multi-domaine (pré-cutover, 2026-07-02)
 
 Avant le cutover ADR 0040 (cf. ci-dessous), `mcp.oto.cx/mcp` servait le MCP en

@@ -166,6 +166,10 @@ CLASSEMENT: dict[str, Table] = {
     "datastore_rows": indirecte(_TABLEAUX),
     "datastore_row_revisions": indirecte(_TABLEAUX),
     "datastore_row_comments": indirecte(_TABLEAUX),
+    "datastore_service_writers": exclue(
+        _TABLEAUX, "l'ouverture d'un tableau à un service machine de CETTE instance : "
+        "l'instance qui reçoit le périmètre a ses propres services, que ses admins "
+        "ouvrent eux-mêmes"),
     "datastore_cell_sources": indirecte(_TABLEAUX),
     "datastore_row_embeddings": indirecte(
         Via("datastore_rows", ("ns_id", "row_id"), ("ns_id", "row_id"))),

@@ -4011,3 +4011,33 @@ du front y montre un fil. `GET|POST /api/datastores/{datastore}/rows/{row_id}/co
   sonde d'index par ligne (`LATERAL … ORDER BY id DESC LIMIT 1`), jamais une
   agrégation du tableau entier — une seule agrégation, lue par le front une fois par chargement de tableau.
 - Surface REST **provisoire** (`x-oto-provisoire`) tant que le front n'a pas tranché.
+
+## Écrivains de service — un service machine écrit un tableau d'org (22/11/2026)
+
+Un service à part (le service des visites de site, rôle `visitors`) remplit un tableau
+d'org pendant des mois, sans personne devant. Il le faisait avec un jeton `oto_` porté au
+tableau, émis par l'admin qui l'avait branché : un jeton de PERSONNE, rangé dans sa liste
+de clés, mort si elle le révoque ou perd l'accès, et dont chaque écriture se lisait dans
+l'historique comme la sienne. Code : `capabilities/datastore/ecrivains_de_service.py`,
+table `datastore_service_writers`.
+
+- **Ouvrir** : qui GOUVERNE le tableau (`govern_ns`, le droit de le partager) l'ouvre à un
+  rôle de service — `PUT /api/datastores/{datastore}/service-writers/{role}`, idempotent ;
+  `DELETE` le referme, `GET …/service-writers` relit. Seul un tableau d'ORG s'ouvre
+  (`400 org_table_required`), seul un rôle de `service_identity.ROLES_ECRIVAINS`
+  s'inscrit (`400 unknown_service_role`).
+- **Écrire** : le service, sous son identité (`docs/auth-logto.md` §Identité de service),
+  `POST /api/service/orgs/{id}/datastores/{datastore}/rows/batch` — le moteur du lot REST
+  (`write_rows`, mêmes refus de forme), sous l'autorité de l'org (`make_org_store`, scope
+  dur `allowed_ns_ids={ns_id}`). Le tableau se désigne par son numéro.
+- **Le même 404 nu** pour un tableau absent, non ouvert à CE rôle, ou d'une autre org que
+  celle du chemin : un identifiant faux côté service n'écrit ni chez une autre org, ni dans
+  un autre tableau de la même. Une org suspendue n'est pas écrite (`409 org_suspended`).
+- **L'auteur** : l'historique de ligne porte `service:<client_id>` (source `api`), le
+  journal du tableau aussi — plus le nom d'une personne.
+- Supprimer le tableau retire l'ouverture (FK en cascade). Hors de l'export de périmètre
+  (`export_perimetre/classement.py`, `exclue`) : l'instance qui reçoit un périmètre a ses
+  propres services. `granted_by` est une colonne-compte (`migrate_sub`, indexée).
+
+Banc : `tests/datastore/test_ecrivains_de_service.py`.
+

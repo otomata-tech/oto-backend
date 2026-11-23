@@ -35,7 +35,15 @@ from ..config import public_base_url, require_env
 # Le catalogue FERMÉ des rôles de service. Un rôle est une permission de la
 # ressource des services, accordée au client machine par l'annuaire.
 COMMERCE = "commerce"
-ROLES: frozenset[str] = frozenset({COMMERCE})
+# Le service des VISITES DE SITE : il identifie les entreprises qui visitent le site
+# d'une org et les écrit dans le tableau que l'org lui a ouvert — rien d'autre
+# (`capabilities/datastore/ecrivains_de_service.py`). Un rôle par service : la
+# fuite du secret de l'un ne donne pas les gestes de l'autre.
+VISITORS = "visitors"
+ROLES: frozenset[str] = frozenset({COMMERCE, VISITORS})
+# Les rôles qu'une org peut inscrire comme ÉCRIVAINS d'un de ses tableaux. Le
+# commerce n'en est pas : il ne touche à aucune ligne.
+ROLES_ECRIVAINS: frozenset[str] = frozenset({VISITORS})
 
 # Préfixe du principal publié : le journal distingue un service d'un compte d'un coup
 # d'œil. Le `client_id` qui suit reste OPAQUE — jamais relu pour décider.

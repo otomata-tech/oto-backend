@@ -120,6 +120,9 @@ from . import (
     regles_de_comptes,
     # NON aplati : `poser`/`suivre` sont trop communs — `db.sous_instances.<fn>`.
     sous_instances,
+    # NON aplati : `poser`/`retirer`/`lister` sont trop communs — les services machine
+    # qu'une org laisse écrire un de ses tableaux, `db.ecrivains_de_service.<fn>`.
+    ecrivains_de_service,
 )
 
 # Ré-export plat (publics + privés à un underscore). Les noms dunder restent au

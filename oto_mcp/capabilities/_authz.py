@@ -222,6 +222,7 @@ def SERVICE_ROLE(role: str):
 
 
 COMMERCE_SERVICE = SERVICE_ROLE("commerce")
+VISITORS_SERVICE = SERVICE_ROLE("visitors")
 
 
 def accepts_service(rule) -> bool:

@@ -8,6 +8,7 @@ users.PROFILE
 legal.LEGAL
 datastore.DATASTORE
 datastore.REVISIONS
+datastore.ECRIVAINS_DE_SERVICE
 projects.PROJECTS
 embeddings.EMBEDDINGS
 projects.PROJECT_FILES

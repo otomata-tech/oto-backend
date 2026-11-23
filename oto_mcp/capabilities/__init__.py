@@ -223,6 +223,8 @@ import oto_mcp.capabilities.datastore.columns  # noqa: F401 — me.datastore.dro
 import oto_mcp.capabilities.datastore.update_where  # noqa: F401 — me.datastore.update_where (MCP data_update_where + REST)
 import oto_mcp.capabilities.datastore.history  # noqa: F401 — me.datastore.row_history (MCP data_row_history + REST)
 import oto_mcp.capabilities.datastore.comments  # noqa: F401 — me.datastore.{row_comments,comment_counts,row_comment,delete_row_comment}
+# Les écrivains de service d'un tableau — APRÈS `rows`, dont il reprend le moteur du lot.
+import oto_mcp.capabilities.datastore.ecrivains_de_service  # noqa: F401 — me.datastore.service_writer{s.list,.put,.delete} + service.datastore.write_rows (REST)
 from . import demandes_acces  # noqa: F401 — me.access_requests.{create,list,approve,decline,cancel,remind} (REST)
 import oto_mcp.capabilities.connectors.waterfall_plan  # noqa: F401 — me.waterfall_plan (REST only: the cascade a screen shows)
 from . import automation  # noqa: F401 — me.automation.fire (MCP routine_fire + REST)

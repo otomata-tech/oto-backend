@@ -169,3 +169,22 @@ CREATE INDEX IF NOT EXISTS idx_datastore_row_comments_ligne
 CREATE INDEX IF NOT EXISTS idx_datastore_row_comments_auteur
     ON datastore_row_comments (auteur_sub);
 """
+
+# écrivains de service : les services machine qu'une org laisse écrire un de ses tableaux
+ECRIVAINS_DE_SERVICE = """
+-- ÉCRIVAINS DE SERVICE d'un tableau (`capabilities/datastore/ecrivains_de_service.py`) :
+-- quel rôle de service (`auth/service_identity.ROLES_ECRIVAINS`) peut écrire les lignes
+-- de CE tableau, et qui le lui a ouvert. Le service, lui, n'a ni compte ni org : sans
+-- ligne ici, il n'écrit nulle part. Posé par qui GOUVERNE le tableau, sur un tableau
+-- d'org seulement. FK vers le tableau, en cascade : supprimer le tableau retire l'accès.
+-- L'index sur `granted_by` sert la fusion de comptes (`migrate_sub` repointe la colonne).
+CREATE TABLE IF NOT EXISTS datastore_service_writers (
+    ns_id BIGINT NOT NULL REFERENCES user_datastores(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    granted_by TEXT NOT NULL,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (ns_id, role)
+);
+CREATE INDEX IF NOT EXISTS idx_datastore_service_writers_granted_by
+    ON datastore_service_writers (granted_by);
+"""

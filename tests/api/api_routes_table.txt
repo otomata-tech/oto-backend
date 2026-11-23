@@ -934,6 +934,14 @@ POST /api/datastores/{datastore}/rows/{row_id}/comments -> _handler
 OPTIONS /api/datastores/{datastore}/rows/{row_id}/comments -> options_handler
 DELETE /api/datastores/{datastore}/rows/{row_id}/comments/{comment_id} -> _handler
 OPTIONS /api/datastores/{datastore}/rows/{row_id}/comments/{comment_id} -> options_handler
+GET,HEAD /api/datastores/{datastore}/service-writers -> _handler
+OPTIONS /api/datastores/{datastore}/service-writers -> options_handler
+PUT /api/datastores/{datastore}/service-writers/{role} -> _handler
+OPTIONS /api/datastores/{datastore}/service-writers/{role} -> options_handler
+DELETE /api/datastores/{datastore}/service-writers/{role} -> _handler
+OPTIONS /api/datastores/{datastore}/service-writers/{role} -> options_handler
+POST /api/service/orgs/{id}/datastores/{datastore}/rows/batch -> _handler
+OPTIONS /api/service/orgs/{id}/datastores/{datastore}/rows/batch -> options_handler
 POST /api/me/access-requests -> _handler
 OPTIONS /api/me/access-requests -> options_handler
 GET,HEAD /api/me/access-requests -> _handler
@@ -1043,6 +1051,8 @@ GET,HEAD /api/datastore/namespaces/{namespace}/column-sources -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/column-sources -> options_handler
 GET,HEAD /api/datastore/namespaces/{namespace}/comments/counts -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/comments/counts -> options_handler
+GET,HEAD /api/datastore/namespaces/{namespace}/service-writers -> alias_deprecie
+OPTIONS /api/datastore/namespaces/{namespace}/service-writers -> options_handler
 POST /api/datastore/namespaces/{namespace}/rows/update_where -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/rows/update_where -> options_handler
 GET,HEAD /api/datastore/namespaces/{namespace}/rows/{row_id} -> alias_deprecie
@@ -1063,6 +1073,10 @@ GET,HEAD /api/datastore/namespaces/{namespace}/rows/{row_id}/comments -> alias_d
 OPTIONS /api/datastore/namespaces/{namespace}/rows/{row_id}/comments -> options_handler
 POST /api/datastore/namespaces/{namespace}/rows/{row_id}/comments -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/rows/{row_id}/comments -> options_handler
+PUT /api/datastore/namespaces/{namespace}/service-writers/{role} -> alias_deprecie
+OPTIONS /api/datastore/namespaces/{namespace}/service-writers/{role} -> options_handler
+DELETE /api/datastore/namespaces/{namespace}/service-writers/{role} -> alias_deprecie
+OPTIONS /api/datastore/namespaces/{namespace}/service-writers/{role} -> options_handler
 DELETE /api/datastore/namespaces/{namespace}/rows/{row_id}/comments/{comment_id} -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/rows/{row_id}/comments/{comment_id} -> options_handler
 GET,HEAD /api/orgs/{id}/connectors/http/operations -> alias_deprecie

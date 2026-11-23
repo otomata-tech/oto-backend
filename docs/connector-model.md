@@ -72,7 +72,10 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
 > sans en avoir les effets) — flux, lien, indice et identités se DÉRIVENT du registre
 > (`credential_of="microsoft"`). Un service peut avoir un PALIER ADMIN que nulle carte
 > ne demande (`SERVICE_ADMIN_TIER` : Teams, lire les messages d'un canal) : vérifié à
-> l'usage, dit par l'indice de la fiche, accordé par le lien d'approbation. Entra cumule les consentements d'un compte : un seul refresh token,
+> l'usage, dit par l'indice de la fiche, accordé par le lien d'approbation ; et des scopes
+> OPTIONNELS que sa carte demande sans qu'ils fassent le service (`SERVICE_OPTIONAL` :
+> Outlook, `Mail.Read.Shared` pour lire une boîte partagée ou déléguée) — un compte connecté
+> avant reste reconnu, l'outil vérifie le scope à l'usage et dit de reconnecter. Entra cumule les consentements d'un compte : un seul refresh token,
 > `meta.scopes` = l'union normalisée, relue à chaque renouvellement (`.default`).
 > Le coffre et les coordonnées d'application posés sous `sharepoint` sont COPIÉS au
 > démarrage (`copier_depuis_sharepoint`, idempotent par marque `copied_to`) : la base est

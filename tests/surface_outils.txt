@@ -671,8 +671,8 @@ oto_use_org	-	5c64f85f3092fc23
 oto_use_project	-	e0eac4aa79eaf494
 oto_webhook_app	-	02cdc6938d4bf44a
 oto_whoami	-	99334726611ccf58
-outlook	attachment draft drafts folders get search	6aa0b861a91ab308
-outlook_act	archive move send trash	e0f842df4621b772
+outlook	attachment draft drafts folders get search	c0e9ff14dc0d93cb
+outlook_act	archive move send trash	3ca1df62772bf02a
 outlook_calendar_calendars	-	02a94a00eac0b9a0
 outlook_calendar_event	create get list rm update	8c63b7e5a765b80d
 payfit_absence	cancel create list	cdefc6bc2c0c09fc

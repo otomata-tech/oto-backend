@@ -70,6 +70,7 @@ def _faux_scopes():
     s.IDENTITY = ("offline_access", "User.Read")
     s.FILES = (G + "Files.ReadWrite.All", G + "Sites.ReadWrite.All")
     s.MAIL = (G + "Mail.ReadWrite", G + "Mail.Send")
+    s.MAIL_SHARED = (G + "Mail.Read.Shared",)
     s.CALENDAR = (G + "Calendars.ReadWrite",)
     s.TEAMS = (G + "Team.ReadBasic.All", G + "Chat.ReadWrite")
     s.NOTES = (G + "Notes.ReadWrite.All",)
@@ -82,8 +83,8 @@ def _faux_scopes():
     s.POWERBI = (PBI + "Workspace.Read.All", PBI + "Report.Read.All", PBI + "Dataset.Read.All")
     s.POWERBI_REFRESH = (PBI + ".default", "offline_access")
     canon = {n.removeprefix(G).lower(): n.removeprefix(G)
-             for t in (s.IDENTITY, s.FILES, s.MAIL, s.CALENDAR, s.TEAMS, s.NOTES, s.DIRECTORY,
-                       s.TEAMS_ADMIN, s.POWERBI)
+             for t in (s.IDENTITY, s.FILES, s.MAIL, s.MAIL_SHARED, s.CALENDAR, s.TEAMS,
+                       s.NOTES, s.DIRECTORY, s.TEAMS_ADMIN, s.POWERBI)
              for n in t}
 
     def _court(n):
@@ -300,7 +301,8 @@ def test_scopes_par_carte(env):
     s = env.coeur.scopes
     assert env.auth.scopes_for(PORTEUR) == s.IDENTITY, "le compte : l'identité seule"
     assert env.auth.scopes_for("sharepoint") == s.IDENTITY + s.FILES
-    assert env.auth.scopes_for("outlook") == s.IDENTITY + s.MAIL
+    assert env.auth.scopes_for("outlook") == s.IDENTITY + s.MAIL + s.MAIL_SHARED, \
+        "Outlook demande aussi la lecture des boîtes partagées"
     assert env.auth.scopes_for("outlook_calendar") == s.IDENTITY + s.CALENDAR
     assert env.auth.scopes_for("teams") == s.IDENTITY + s.TEAMS
     assert env.auth.scopes_for("onenote") == s.IDENTITY + s.NOTES
@@ -313,6 +315,29 @@ def test_les_scopes_d_avant_le_porteur_donnent_sharepoint_sans_reconnexion(env):
     assert env.auth.services_granted(SCOPE_FICHIERS) == ["sharepoint"]
     assert env.auth.services_granted("") == []
     assert env.auth.services_granted(SCOPE_COURRIER) == ["outlook"]
+
+
+def test_boites_partagees_optionnelles_un_compte_ancien_reste_reconnu(env):
+    """`Mail.Read.Shared` est demandé à la connexion Outlook mais ne FAIT pas le service :
+    un compte connecté avant garde Outlook, l'outil vérifie le scope à l'usage."""
+    s = env.coeur.scopes
+    assert env.auth.optional_scopes("outlook") == s.MAIL_SHARED
+    assert env.auth.optional_scopes("sharepoint") == ()
+    assert env.auth.services_granted(SCOPE_COURRIER) == ["outlook"]
+    assert not env.auth.has_scopes({"scopes": SCOPE_COURRIER}, s.MAIL_SHARED)
+    assert env.auth.has_scopes({"scopes": f"{SCOPE_COURRIER} Mail.Read.Shared"},
+                               s.MAIL_SHARED)
+    assert env.auth.SERVICE_SCOPES["outlook"] == "MAIL"
+
+
+def test_la_ligne_partagee_garde_mail_read_shared(env):
+    """Une ligne d'org ou d'équipe qui a Outlook peut porter son scope optionnel, connue
+    d'avant (renouvellement, `connector` absent) comme à la connexion ; jamais celui d'un
+    service qu'elle n'a pas."""
+    borne = env.auth._borne_partagee(SCOPE_COURRIER)
+    assert "Mail.Read.Shared" in borne
+    assert "Mail.Read.Shared" in env.auth._borne_partagee("", "outlook")
+    assert "Mail.Read.Shared" not in env.auth._borne_partagee(SCOPE_FICHIERS)
 
 
 def test_teams_admin_se_lit_a_l_usage(env):
@@ -870,6 +895,7 @@ def test_lien_d_approbation_demande_l_union_des_services(env):
     env.auth.admin_consent_url(SUB, ("outlook",))
     appel = env.coeur.auth.admin_consent_url.call_args
     assert appel.kwargs["tenant"] == "organizations"
+    assert set(appel.kwargs["scopes"]) == set(s.IDENTITY + s.MAIL + s.MAIL_SHARED)
     assert not set(s.TEAMS_ADMIN) & set(appel.kwargs["scopes"]), "TEAMS_ADMIN pour Teams seul"
     with pytest.raises(ValueError, match="Unknown Microsoft service"):
         env.auth.admin_consent_url(SUB, ("planner",))

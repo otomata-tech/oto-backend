@@ -622,9 +622,16 @@ def coffre(monkeypatch):
     """Le `meta` du compte que l'appel désigne, et les renouvellements demandés."""
     etat = {"scopes": _PARTAGE, "renouvellements": 0}
 
+    etat["compte"] = ("member", "42:sub-1")   # le compte PERSONNEL de l'appelant
+
     def resoudre(sub, service, account=None):
+        from oto_mcp.access.resolved_credential import ResolvedCredential
         assert service == "outlook"
-        return object(), {"scopes": etat["scopes"]}
+        entite, eid = etat["compte"]
+        rc = ResolvedCredential(provider="microsoft", secret="RT", is_platform=False,
+                                mode="user", entity_type=entite, entity_id=eid,
+                                account="jane@contoso.example")
+        return rc, {"scopes": etat["scopes"]}
 
     monkeypatch.setattr("oto_mcp.auth.microsoft.resolve_account", resoudre)
     return etat
@@ -724,4 +731,23 @@ def test_refus_sur_la_boite_dit_les_mots_de_la_lib_sans_repli(client, coffre):
         _tool("outlook")(mailbox=BOITE)
     assert str(refus) in str(e.value) and "ErrorAccessDenied" in str(e.value)
     assert client.search_messages.call_count == 1, "aucun repli sur la boîte de la personne"
+
+
+@pytest.mark.parametrize("compte", [
+    ("member", "42:collegue-preteuse"),   # prêté par une collègue
+    ("member", "7:collegue-preteuse"),    # prêté depuis une autre org
+    ("group", "49"),                      # le compte de l'équipe
+    ("org", "42"),                        # le compte de l'org
+])
+def test_mailbox_refuse_sur_un_compte_prete_ou_partage(client, coffre, compte):
+    coffre["compte"] = compte
+    with pytest.raises(McpError, match="only allowed on your own Outlook account"):
+        _tool("outlook")(mailbox=BOITE)
+    assert client.jetons == [], "refus avant tout jeton"
+    client.search_messages.assert_not_called()
+    # Sans `mailbox`, le même compte lit SA boîte, comme avant.
+    client.search_messages.return_value = []
+    _tool("outlook")()
+    client.search_messages.assert_called_once_with(None, folder=None, top=25, unread=None,
+                                                   mailbox=None)
 

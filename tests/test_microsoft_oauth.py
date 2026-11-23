@@ -330,14 +330,27 @@ def test_boites_partagees_optionnelles_un_compte_ancien_reste_reconnu(env):
     assert env.auth.SERVICE_SCOPES["outlook"] == "MAIL"
 
 
-def test_la_ligne_partagee_garde_mail_read_shared(env):
-    """Une ligne d'org ou d'équipe qui a Outlook peut porter son scope optionnel, connue
-    d'avant (renouvellement, `connector` absent) comme à la connexion ; jamais celui d'un
-    service qu'elle n'a pas."""
-    borne = env.auth._borne_partagee(SCOPE_COURRIER)
-    assert "Mail.Read.Shared" in borne
-    assert "Mail.Read.Shared" in env.auth._borne_partagee("", "outlook")
-    assert "Mail.Read.Shared" not in env.auth._borne_partagee(SCOPE_FICHIERS)
+def test_la_ligne_partagee_n_obtient_jamais_mail_read_shared(env):
+    """Une ligne d'org ou d'équipe ne porte JAMAIS un scope optionnel : ni au
+    renouvellement (`connector` absent), ni à la connexion Outlook qui le demande, ni
+    connue d'avant — ce qu'il ouvre ne sert que le compte propre de l'appelant."""
+    assert "Mail.Read.Shared" not in env.auth._borne_partagee(SCOPE_COURRIER)
+    assert "Mail.Read.Shared" not in env.auth._borne_partagee("", "outlook")
+    assert "Mail.Read.Shared" not in env.auth._borne_partagee(
+        f"{SCOPE_COURRIER} Mail.Read.Shared", "outlook")
+    assert {"Mail.ReadWrite", "Mail.Send"} <= env.auth._borne_partagee("", "outlook")
+
+
+def test_own_account_le_compte_personnel_de_l_appelant_seul(env):
+    from oto_mcp.access.resolved_credential import ResolvedCredential
+
+    def rc(entite, eid):
+        return ResolvedCredential(provider=PORTEUR, secret="RT", is_platform=False,
+                                  mode="user", entity_type=entite, entity_id=eid)
+    assert env.auth.own_account(SUB, rc("member", MEMBRE))
+    assert not env.auth.own_account(SUB, rc("member", f"{ORG}:une-collegue"))
+    assert not env.auth.own_account(SUB, rc("group", "49"))
+    assert not env.auth.own_account(SUB, rc("org", str(ORG)))
 
 
 def test_teams_admin_se_lit_a_l_usage(env):

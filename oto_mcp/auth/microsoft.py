@@ -151,6 +151,10 @@ SERVICE_ADMIN_TIER: dict[str, tuple[str, str]] = {
 #: connected before they were asked keeps its service; the tools that need them check
 #: them at use (`has_scopes`). Outlook: reading the shared or delegated mailboxes the
 #: person was given access to in Exchange (`Mail.Read.Shared`, no administrator needed).
+#: ⚠️ PERSONAL rows only: a row of the org or a team never holds them (`_borne_partagee`),
+#: and the tools serve them on the caller's OWN account only (`own_account`) — a lent or
+#: shared account would open every mailbox its holder reaches, which the sharing never
+#: consented to.
 SERVICE_OPTIONAL: dict[str, str] = {"outlook": "MAIL_SHARED"}
 
 _AUD = "microsoft"
@@ -250,6 +254,15 @@ def has_scopes(meta: dict, scopes: tuple[str, ...]) -> bool:
     (`admin_consent_url`), or an optional scope (`optional_scopes`) that an account
     connected before it was asked does not hold."""
     return _scopes().short(tuple(scopes)) <= _normalises((meta or {}).get("scopes"))
+
+
+def own_account(sub: str, rc) -> bool:
+    """Is the resolved credential `rc` the caller's OWN personal row — not a row of her
+    team or org, not an account a peer lent her? What an optional scope opens is served
+    on it only (`SERVICE_OPTIONAL`)."""
+    if rc.entity_type != credentials_store.MEMBER or not rc.entity_id:
+        return False
+    return rc.entity_id.split(":", 1)[-1] == sub
 
 
 def admin_scopes(service: str) -> tuple[str, ...]:
@@ -711,13 +724,15 @@ def finish_connection(etat: EtatConnexion, code: str) -> dict:
 
 def _borne_partagee(scopes, connector: Optional[str] = None) -> frozenset:
     """What a row of the org or a team may hold: its scopes, what THIS consent asks
-    (`connector`), and the optional scopes and administrator tier of those services —
-    never the holder's other consents, which the Entra token carries too."""
+    (`connector`), and the administrator tier of those services — never the holder's
+    other consents, which the Entra token carries too, and never an OPTIONAL scope
+    (`SERVICE_OPTIONAL`): those serve the holder's own account only (`own_account`)."""
     permis = _normalises(scopes) | (_scopes().short(scopes_for(connector))
                                     if connector else frozenset())
-    tiers = tuple(s for svc in services_granted(" ".join(permis))
-                  for s in optional_scopes(svc) + admin_scopes(svc))
-    return permis | _scopes().short(tiers)
+    tiers = tuple(s for svc in services_granted(" ".join(permis)) for s in admin_scopes(svc))
+    optionnels = _scopes().short(tuple(s for svc in SERVICE_OPTIONAL
+                                       for s in optional_scopes(svc)))
+    return (permis | _scopes().short(tiers)) - optionnels
 
 
 def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None,

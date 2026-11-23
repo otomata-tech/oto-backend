@@ -30,7 +30,9 @@ Graph does not expose the Outlook signature, so nothing is appended to a body.
 
 **Shared or delegated mailboxes** (`mailbox`, oto-now/connectors#283): `outlook` READS
 another mailbox the person was given access to in Exchange (search, get, attachment,
-folders), under `/users/{mailbox}`, still on her behalf. It needs the optional scope
+folders), under `/users/{mailbox}`, still on her behalf — on her OWN account only, never
+a lent one nor one of her team or org (`auth/microsoft.own_account`: the sharing did not
+consent to the holder's other mailboxes). It needs the optional scope
 `Mail.Read.Shared` (`auth/microsoft.SERVICE_OPTIONAL`), asked by the Outlook card since
 then: an account connected before is refused, told to reconnect Outlook once — after a
 single token renewal, which sees an administrator's approval given since. Graph's 403
@@ -226,8 +228,10 @@ confirm.
 was given access to in Exchange: name it in `mailbox` (its address) to READ it with
 op="search", "get", "attachment" or "folders". Ids found there are read again with the
 same `mailbox`. Drafts and every act stay on the person's own mailbox (`mailbox` is
-refused there). Without access in Exchange, the refusal names the mailbox; an Outlook
-connection older than this feature must be reconnected once — the refusal says so.
+refused there). Only on the person's OWN Outlook account: not on an account lent by a
+colleague, nor on a team's or the org's. Without access in Exchange, the refusal names the
+mailbox; an Outlook connection older than this feature must be reconnected once — the
+refusal says so.
 
 `op`:
 - **"search"** (default): messages, most recent first, without their body (`preview`
@@ -320,26 +324,36 @@ def register(mcp: FastMCP) -> None:
         """The Graph client of THIS caller, with their current token."""
         return MailClient(token(_SERVICE, renew=renew))
 
-    def _meta() -> dict:
-        """The vault `meta` of the account this call designates (`_account=`…)."""
+    def _compte() -> tuple:
+        """`(ResolvedCredential, meta)` of the account this call designates
+        (`_account=`…)."""
         try:
-            return ms_auth.resolve_account(access.current_user_sub_or_raise(),
-                                           _SERVICE)[1]
+            return ms_auth.resolve_account(access.current_user_sub_or_raise(), _SERVICE)
         except RuntimeError as e:
             raise bad(str(e))
 
     def _client_de_la_boite(mailbox: Optional[str]) -> MailClient:
         """The client for a read of `mailbox` — the person's own when None. Another
-        mailbox needs the optional scope `Mail.Read.Shared`: the vault learns an
+        mailbox is read on the caller's OWN account only: a lent account, or one of her
+        team or org, would open every mailbox its holder reaches, which the sharing never
+        consented to. It needs the optional scope `Mail.Read.Shared`: the vault learns an
         administrator's approval at a token renewal only, so a missing scope renews the
         token ONCE before refusing."""
         if mailbox is None:
             return _client()
+        rc, meta = _compte()
+        if not ms_auth.own_account(access.current_user_sub_or_raise(), rc):
+            raise bad(
+                f"Reading another mailbox ({mailbox}) is only allowed on your own Outlook "
+                f"account: `{rc.account}` is shared with you (a team's or the org's "
+                "account, or lent by a colleague), and sharing it does not open the other "
+                "mailboxes its holder can read. Connect your own Outlook account, or read "
+                "this account's own mailbox without `mailbox`. Nothing was read.")
         requis = ms_auth.optional_scopes(_SERVICE)
-        if ms_auth.has_scopes(_meta(), requis):
+        if ms_auth.has_scopes(meta, requis):
             return _client()
         c = _client(renew=True)
-        if not ms_auth.has_scopes(_meta(), requis):
+        if not ms_auth.has_scopes(_compte()[1], requis):
             raise bad(
                 f"Reading the mailbox {mailbox} needs the Microsoft permission "
                 "Mail.Read.Shared, which this Outlook connection predates: reconnect "

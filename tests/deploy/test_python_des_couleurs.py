@@ -227,7 +227,9 @@ def test_bg_python_sur_le_vrai_uv(tmp_path, uv_reel):
         (arbre / "pyproject.toml").write_text(
             '[project]\nname = "banc-bg-python"\nversion = "0"\nrequires-python = ">=3.10"\n'
             'dependencies = []\n\n[tool.uv]\npackage = false\n', encoding="utf-8")
-        shutil.rmtree(arbre / ".venv")      # la doublure : uv lock l'interrogerait
+        # Les doublures du banc (venv, verrou factice) : uv lock les lirait.
+        shutil.rmtree(arbre / ".venv")
+        (arbre / banc.VERROU_NOM).unlink()
         verrou = subprocess.run([UV, "lock", "--quiet", "--offline", "--no-config",
                                  "--python", str(bg_python)], cwd=arbre, env=env,
                                 capture_output=True, text=True)

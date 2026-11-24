@@ -32,6 +32,9 @@ unité de vidange (`BG_DRAIN`, `BG_DRAIN_UNIT`), mode du lanceur (`BG_LANCEUR`),
 des ports, arbres, amont et couleur qu'elle recevait déjà. **Aucune n'a de défaut** : une
 variable oubliée refuse le chargement en la nommant, et un pointeur de couleur absent est
 une panne nommée, plus une invitation à supposer « bleu ».
+Une seule variable est facultative et propre à notre box : `BG_PYTHON`, l'interpréteur de nos
+couleurs (`deploiement.md` § Le Python des couleurs) ; une cible ne la pose pas, son Python
+suit sa déclaration (§ Changer de Python).
 
 Le contrôle du trafic public après le reload de Caddy **attend, borné**, tant qu'aucune
 réponse HTTP ne revient (code 000) : au premier déploiement sur un nom d'hôte neuf, Caddy

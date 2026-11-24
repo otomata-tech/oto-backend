@@ -1,0 +1,176 @@
+### scénario prod-python-venv-garde : oto-backend.sh v1.2.3
+### code de sortie : 0
+### commandes
+flock -w 900 9
+flock -w 600 8
+date +%H:%M:%S
+date +%H:%M:%S
+systemctl is-active --quiet oto-mcp-drain-prod.service
+systemctl stop oto-mcp@green
+python3.12 -c import sys; print("%d.%d.%d" % sys.version_info[:3])
+python -c import sys; print("%d.%d.%d" % sys.version_info[:3])
+  (dans )
+date +%H:%M:%S
+date +%H:%M:%S
+git fetch --tags --force origin
+  (dans /opt/oto-mcp-green)
+git reset --hard v1.2.3
+  (dans /opt/oto-mcp-green)
+uv sync --frozen --quiet --python /opt/oto-mcp-python/cpython-3.12.14-linux-x86_64-gnu/bin/python3.12
+  (dans /opt/oto-mcp-green ; UV_PYTHON_DOWNLOADS=never)
+date +%H:%M:%S
+python scripts/installer_bac_a_sable.py /opt/oto-mcp-green/.bac-a-sable
+  (dans /opt/oto-mcp-green)
+date +%H:%M:%S
+git -C /opt/oto-mcp-green rev-parse HEAD
+  (dans /opt/oto-mcp-green)
+date -Is
+date +%H:%M:%S
+python3.12 -c import sys; print("%d.%d.%d" % sys.version_info[:3])
+python -c import sys; print("%d.%d.%d" % sys.version_info[:3])
+  (dans /opt/oto-mcp-green)
+date +%H:%M:%S
+date +%H:%M:%S
+systemctl start oto-mcp@green
+systemctl is-active --quiet oto-mcp@green
+curl -fsS --max-time 5 http://127.0.0.1:9107/.well-known/oauth-protected-resource -o /dev/null
+date +%H:%M:%S
+curl -s --max-time 5 -o /dev/null -w %{http_code} http://127.0.0.1:9107/api/mcp/tls-check?domain=probe.invalid
+date +%H:%M:%S
+cp -a /etc/caddy/upstream-oto-prod.conf /etc/caddy/upstream-oto-prod.conf.prev
+date -Is
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+systemctl reload caddy
+date +%H:%M:%S
+curl -fsS --max-time 20 -o /dev/null -w %{http_code} https://mcp.oto.cx/.well-known/oauth-protected-resource
+date +%H:%M:%S
+systemctl enable oto-mcp@green
+systemctl disable oto-mcp@blue
+systemctl disable oto-mcp
+ss -Htn state established ( sport = :9103 )
+systemd-run --collect --quiet --unit=oto-mcp-drain-prod --description=Vidange de la couleur blue du backend oto prod /opt/deploy/oto-mcp-drain.sh oto-mcp blue 9103 240
+date +%H:%M:%S
+date +%H:%M:%S
+journalctl -u oto-mcp@green -n 10 --no-pager
+install -m 0644 /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service /etc/systemd/system/oto-mcp-maintenance.service
+install -m 0644 /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer /etc/systemd/system/oto-mcp-maintenance.timer
+systemctl daemon-reload
+systemctl enable --now oto-mcp-maintenance.timer
+systemctl show -p NextElapseUSecRealtime --value oto-mcp-maintenance.timer
+install -m 0644 /opt/oto-mcp-green/deploy/oto-journal-archive.service /etc/systemd/system/oto-journal-archive.service
+install -m 0644 /opt/oto-mcp-green/deploy/oto-journal-archive.timer /etc/systemd/system/oto-journal-archive.timer
+systemctl daemon-reload
+systemctl enable --now oto-journal-archive.timer
+systemctl show -p NextElapseUSecRealtime --value oto-journal-archive.timer
+### sortie
+[12:00:00] verrou pris (/var/lock/oto-mcp-bluegreen-prod.lock)
+[12:00:00] prod: couleur en service = blue, cible = green (:9107)
+[12:00:00] venv de green déjà en Python 3.12.14 (BG_PYTHON) : gardé
+[12:00:00] install v1.2.3 dans /opt/oto-mcp-green (couleur green)
+[12:00:00] installé par le verrou : uv.lock e990828a8fd4
+[12:00:00] bac à sable posé : /opt/oto-mcp-green/.bac-a-sable
+[12:00:00] installé : 0123456789abcdef0123456789abcdef01234567
+[12:00:00] garde Python : /opt/oto-mcp-green/.venv rend Python 3.12.14, celui de BG_PYTHON
+[12:00:00] démarrage oto-mcp@green sur :9107
+[12:00:00] couleur green prête en Ns
+[12:00:00] tls-check répond sur :9107 (code 404 sur un domaine bidon — l'endpoint est là)
+[12:00:00] amont basculé sur green (9107) — reload caddy gracieux
+[12:00:00] trafic public OK sur https://mcp.oto.cx/.well-known/oauth-protected-resource
+[12:00:00] vidange de blue (:9103) confiée à oto-mcp-drain-prod — 0 connexion(s) au moment de la bascule, plafond 240s (journalctl -u oto-mcp-drain-prod)
+[12:00:00] === prod OK : blue -> green en Ns (démarrage Ns) — déploiement TERMINÉ, la vidange continue en fond ===
+oto-mcp-maintenance : timer actif, prochain tir Sun 2026-10-04 03:20:00 CEST
+oto-journal-archive : timer actif, prochain tir Sun 2026-10-04 03:20:00 CEST
+### erreurs
+### état final
+--- /etc/caddy/Caddyfile
+# Caddyfile du banc
+--- /etc/caddy/upstream-oto-prod.conf
+# Amont du backend oto prod — FICHIER GÉNÉRÉ, ne pas éditer à la main.
+# Réécrit par /opt/deploy/oto-mcp-bluegreen.sh à chaque bascule bleu/vert.
+# Couleur active : green (port 9107) — bascule du 2026-09-29T12:00:00+02:00.
+(oto_prod_upstream) {
+	reverse_proxy 127.0.0.1:9107 {
+		# Filet, plus le mécanisme : en bleu/vert l'amont est déjà chaud quand
+		# Caddy bascule. Gardé pour le cas d'un backend qui tombe et redémarre —
+		# la requête PATIENTE au lieu de prendre un 502 sur connection refused.
+		lb_try_duration 60s
+		lb_try_interval 250ms
+		# Course des connexions gardées ouvertes (502 mesuré le 14/09/2026 à
+		# 21:39:31Z sur /mcp : « read tcp …->127.0.0.1:9107: connection reset
+		# by peer »). uvicorn ferme une connexion inactive à 5 s
+		# (timeout_keep_alive, défaut) ; Caddy garde les siennes 2 min et peut
+		# réutiliser celle qu'uvicorn vient de fermer. On expire AVANT lui.
+		transport http {
+			keepalive 3s
+		}
+	}
+}
+(oto_prod_upstream_docshare) {
+	reverse_proxy 127.0.0.1:9107 {
+		header_up Host mcp.oto.cx
+		lb_try_duration 60s
+		lb_try_interval 250ms
+		# Course des connexions gardées ouvertes (502 mesuré le 14/09/2026 à
+		# 21:39:31Z sur /mcp : « read tcp …->127.0.0.1:9107: connection reset
+		# by peer »). uvicorn ferme une connexion inactive à 5 s
+		# (timeout_keep_alive, défaut) ; Caddy garde les siennes 2 min et peut
+		# réutiliser celle qu'uvicorn vient de fermer. On expire AVANT lui.
+		transport http {
+			keepalive 3s
+		}
+	}
+}
+(oto_prod_ask) {
+	ask http://127.0.0.1:9107/api/mcp/tls-check
+}
+--- /etc/caddy/upstream-oto-prod.conf.prev
+# amont d'avant la bascule
+--- /etc/oto-mcp/active-prod
+green
+--- /etc/systemd/system/oto-journal-archive.service
+# oto-journal-archive.service de la couleur green
+--- /etc/systemd/system/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur green
+--- /etc/systemd/system/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur green
+--- /etc/systemd/system/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur green
+--- /opt/oto-mcp-blue/deploy/lanceur_secrets.py
+# lanceur du tag
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur blue
+--- /opt/oto-mcp-blue/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-blue/scripts/installer_bac_a_sable.py
+# installateur du tag
+--- /opt/oto-mcp-green/.oto-deploy.json
+{"ref": "v1.2.3", "commit": "0123456789abcdef0123456789abcdef01234567", "deployed_at": "2026-09-29T12:00:00+02:00"}
+--- /opt/oto-mcp-green/deploy/lanceur_secrets.py
+# lanceur du tag
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur green
+--- /opt/oto-mcp-green/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-green/scripts/installer_bac_a_sable.py
+# installateur du tag
+--- /run/lock/oto-platform-memoire.lock
+--- /var/lock/oto-mcp-bluegreen-prod.lock
+### venvs
+blue : .venv 3.12.14
+green : .venv 3.12.14

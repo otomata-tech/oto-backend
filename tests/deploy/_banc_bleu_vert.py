@@ -44,6 +44,15 @@ la santé lit `/.well-known/oauth-protected-resource`, que le serveur monte sans
 interrupteur, au lieu de la métadonnée d'autorisation que seule la façade servait. Les
 références n'ont changé que de ce chemin, dans le `curl` local et dans `BG_PUBLIC`.
 
+Le Python des couleurs (`BG_PYTHON`, 24/11/2026) : notre wrapper le déclare. Les scénarios
+d'avant le rejouent SANS (la ligne `BG_PYTHON=` est retirée du wrapper du banc) : leurs
+références n'ont pas bougé d'un octet, c'est la preuve qu'une bibliothèque qui ne le reçoit
+pas fait les gestes d'avant. Les scénarios `prod-python-*` le gardent (variante
+`BANC_BG_PYTHON`) : l'interpréteur y est une doublure qui rend `BANC_BG_PYTHON_VERSION`
+(défaut 3.12.14), le venv de chaque couleur rend `BANC_VENV_VERSION` (défaut 3.10.12), un
+`uv venv` en pose un qui rend `BANC_UV_VENV_VERSION` (défaut 3.12.14) ; leur trace finit par
+la version du venv de chaque couleur (`### venvs`).
+
 La trace contient : chaque commande externe et ses arguments, dans l'ordre ; ce que
 le script écrit sur sa sortie ; son code de sortie ; et l'état final des fichiers
 qu'il écrit (amont Caddy, pointeur de couleur, coordonnée de version, unités posées).
@@ -124,6 +133,30 @@ SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
     # arrêté ni installé, la couleur en service n'a pas bougé.
     "prod-vidange-sans-fin": ("oto-backend.sh", [TAG], "prod", "blue",
                               {"BANC_VIDANGE_EN_COURS": "sans-fin"}),
+    # --- Le Python des couleurs (BG_PYTHON déclaré, comme sur la box) ---
+    # venv 3.10.12 de la couleur à installer : recréé sur BG_PYTHON, puis installé.
+    "prod-python-venv-recree": ("oto-backend.sh", [TAG], "prod", "blue",
+                                {"BANC_BG_PYTHON": "1"}),
+    # venv déjà en 3.12.14 : gardé, rien n'est recréé.
+    "prod-python-venv-garde": ("oto-backend.sh", [TAG], "prod", "blue",
+                               {"BANC_BG_PYTHON": "1", "BANC_VENV_VERSION": "3.12.14"}),
+    # `uv sync` échoue après la recréation : code ET venv d'avant remis, rien ne démarre.
+    "prod-python-sync-ko": ("oto-backend.sh", [TAG], "prod", "blue",
+                            {"BANC_BG_PYTHON": "1", "BANC_UV_SYNC_KO": "1",
+                             "BANC_SHA_AVANT": "fedcba9876543210fedcba9876543210fedcba98"}),
+    # `uv venv` échoue : l'ancien venv est remis, rien n'est installé.
+    "prod-python-uv-venv-ko": ("oto-backend.sh", [TAG], "prod", "blue",
+                               {"BANC_BG_PYTHON": "1", "BANC_UV_VENV_KO": "1"}),
+    # Le venv obtenu ne rend pas le patch de BG_PYTHON : la garde refuse, pas de bascule.
+    "prod-python-garde-refuse": ("oto-backend.sh", [TAG], "prod", "blue",
+                                 {"BANC_BG_PYTHON": "1", "BANC_UV_VENV_VERSION": "3.12.13",
+                                  "BANC_SHA_AVANT": "fedcba9876543210fedcba9876543210fedcba98"}),
+    # BG_PYTHON ne s'exécute pas : refus avant toute installation.
+    "prod-python-illisible": ("oto-backend.sh", [TAG], "prod", "blue",
+                              {"BANC_BG_PYTHON": "1", "BANC_BG_PYTHON_ILLISIBLE": "1"}),
+    # Le retour arrière ne lit pas BG_PYTHON : la couleur précédente repart sur son venv.
+    "prod-python-retour-arriere": ("oto-backend.sh", ["--rollback"], "prod", "green",
+                                   {"BANC_BG_PYTHON": "1"}),
     "vidange": ("oto-mcp-drain.sh", ["oto-mcp", "blue", "9103", "120"], "prod", "green", {}),
 }
 
@@ -143,7 +176,13 @@ case "$1 $3" in
     exit 3 ;;
 esac
 case "$1" in
-  is-active) [ -n "${BANC_DEMARRAGE_KO:-}" ] && exit 3; exit 0 ;;
+  # Une unité de couleur est active, sauf si son dernier geste dans la trace est un arrêt.
+  is-active)
+    [ -n "${BANC_DEMARRAGE_KO:-}" ] && exit 3
+    case "$(grep -E "^systemctl (start|stop) $3\$" "$BANC_TRACE" | tail -n 1)" in
+      "systemctl stop "*) exit 3 ;;
+    esac
+    exit 0 ;;
   show) echo "Sun 2026-10-04 03:20:00 CEST" ;;
 esac
 exit 0''',
@@ -162,20 +201,45 @@ case "$url" in
     printf 200 ;;
 esac
 exit 0''',
+    # Avec BANC_SHA_AVANT, chaque arbre est à cette tête jusqu'à un `reset --hard` : vers un
+    # sha, il y va ; vers un tag, il va à BANC_SHA. Sans : toujours BANC_SHA.
     "git": r'''
 echo "  (dans $(pwd))" >> "$BANC_TRACE"
+dossier=$(pwd); [ "$1" = -C ] && dossier=$2
+etat="$BANC_ETAT/tete$(echo "$dossier" | tr / _)"
+precedent=""
 for a in "$@"; do
   case "$a" in
     --short) echo "${BANC_SHA:0:7}"; exit 0 ;;
-    HEAD) echo "$BANC_SHA"; exit 0 ;;
+    HEAD)
+      if [ -n "${BANC_SHA_AVANT:-}" ]; then cat "$etat" 2>/dev/null || echo "$BANC_SHA_AVANT"
+      else echo "$BANC_SHA"; fi
+      exit 0 ;;
   esac
+  if [ "$precedent" = --hard ]; then
+    case "$a" in
+      [0-9a-f]*[0-9a-f]) [ ${#a} = 40 ] && echo "$a" > "$etat" || echo "$BANC_SHA" > "$etat" ;;
+      *) echo "$BANC_SHA" > "$etat" ;;
+    esac
+  fi
+  precedent=$a
 done
 exit 0''',
     "caddy": r'''[ -n "${BANC_CADDY_KO:-}" ] && exit 1; exit 0''',
-    # Comme le vrai `uv sync --frozen`, refuse un arbre sans verrou.
+    # Comme le vrai `uv sync --frozen`, refuse un arbre sans verrou. `uv venv` pose, au
+    # chemin donné en dernier, un venv dont l'interpréteur rend BANC_UV_VENV_VERSION.
     "uv": r'''
 echo "  (dans $(pwd) ; UV_PYTHON_DOWNLOADS=${UV_PYTHON_DOWNLOADS-<absent>})" >> "$BANC_TRACE"
+if [ "$1" = venv ]; then
+  [ -n "${BANC_UV_VENV_KO:-}" ] && exit 1
+  venv=${!#}
+  /bin/mkdir -p "$venv/bin"
+  /bin/cp "$BANC_ETAT/python-du-venv" "$venv/bin/python"
+  echo "${BANC_UV_VENV_VERSION:-3.12.14}" > "$venv/bin/version-banc"
+  exit 0
+fi
 [ -f uv.lock ] || { echo "uv : pas de uv.lock dans $(pwd)" >&2; exit 2; }
+[ -n "${BANC_UV_SYNC_KO:-}" ] && exit 1
 exit 0''',
     "ss": "exit 0",
     "systemd-run": "exit 0",
@@ -199,9 +263,17 @@ VERROU = "# uv.lock du banc\nversion = 1\n"
 
 # L'interpréteur du venv de la couleur : appelé par son chemin (jamais par le PATH),
 # il est posé dans chaque arbre et journalise comme une doublure.
+# `-c` (la lecture de sa version) : il rend celle de son venv (`bin/version-banc`).
 PYTHON_DU_VENV = ('#!/bin/bash\necho "python $*" >> "$BANC_TRACE"\n'
                   'echo "  (dans $(pwd))" >> "$BANC_TRACE"\n'
+                  '[ "$1" = -c ] && { cat "$(dirname "$0")/version-banc"; exit 0; }\n'
                   '[ -n "${BANC_BAC_A_SABLE_KO:-}" ] && exit 1\nexit 0\n')
+
+# BG_PYTHON, tel que le wrapper le déclare (réécrit sous la racine comme tout /opt/).
+BG_PYTHON = "/opt/oto-mcp-python/cpython-3.12.14-linux-x86_64-gnu/bin/python3.12"
+PYTHON_DE_BG = ('#!/bin/bash\necho "python3.12 $*" >> "$BANC_TRACE"\n'
+                '[ -n "${BANC_BG_PYTHON_ILLISIBLE:-}" ] && exit 1\n'
+                'echo "${BANC_BG_PYTHON_VERSION:-3.12.14}"\n')
 
 LANCEUR = '#!/bin/bash\nexec "$(cd "$(dirname "$0")" && pwd)/.venv/bin/oto-mcp"\n'
 LANCEUR_FIGE = "#!/bin/bash\nexec /opt/oto-mcp-blue/.venv/bin/oto-mcp\n"
@@ -214,6 +286,8 @@ PYPROJECT = ('dependencies = [\n'
 def _reecrire(texte: str, racine: str, variantes: dict[str, str] | None = None) -> str:
     for prefixe in ("/opt/", "/etc/", "/var/lock/", "/run/lock/"):
         texte = texte.replace(prefixe, racine + prefixe)
+    if not (variantes or {}).get("BANC_BG_PYTHON"):
+        texte = re.sub(r"(?m)^BG_PYTHON=.*\n", "", texte)
     if (variantes or {}).get("BANC_LANCEUR_PROPAGE"):
         texte = re.sub(r"(?m)^BG_LANCEUR=versionne$", "BG_LANCEUR=propage", texte)
     return texte
@@ -240,6 +314,8 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
         python = arbre / ".venv/bin/python"
         python.write_text(PYTHON_DU_VENV)
         python.chmod(0o755)
+        (arbre / ".venv/bin/version-banc").write_text(
+            variantes.get("BANC_VENV_VERSION", "3.10.12") + "\n")
         if not variantes.get("BANC_SANS_BAC_A_SABLE"):
             (arbre / "scripts").mkdir()
             (arbre / "scripts/installer_bac_a_sable.py").write_text("# installateur du tag\n")
@@ -258,8 +334,16 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
             for u in ("oto-mcp-maintenance.service", "oto-mcp-maintenance.timer",
                       "oto-journal-archive.service", "oto-journal-archive.timer"):
                 (arbre / "deploy" / u).write_text(f"# {u} de la couleur {couleur}\n")
+    if variantes.get("BANC_BG_PYTHON"):
+        bg_python = pathlib.Path(r + BG_PYTHON)
+        bg_python.parent.mkdir(parents=True)
+        bg_python.write_text(PYTHON_DE_BG)
+        bg_python.chmod(0o755)
     doublures = racine / "banc-bin"
     doublures.mkdir()
+    (doublures / "etat").mkdir()
+    (doublures / "etat/python-du-venv").write_text(PYTHON_DU_VENV)
+    (doublures / "etat/python-du-venv").chmod(0o755)
     for nom, corps in DOUBLURES.items():
         f = doublures / nom
         f.write_text('#!/bin/bash\necho "' + nom + ' $*" >> "$BANC_TRACE"\n' + corps + "\n")
@@ -273,11 +357,24 @@ def _etat(racine: pathlib.Path) -> list[str]:
     # est déjà dans la sortie (« installé par le verrou : uv.lock <sha12> »).
     for rel in sorted(p.relative_to(racine).as_posix() for p in racine.rglob("*")
                       if p.is_file() and not p.relative_to(racine).as_posix()
-                      .startswith(("banc-bin/", "opt/deploy/", "trace"))
+                      .startswith(("banc-bin/", "opt/deploy/", "opt/oto-mcp-python/", "trace"))
                       and "/.venv/" not in "/" + p.relative_to(racine).as_posix()
                       and p.name != VERROU_NOM):
         lignes.append(f"--- /{rel}")
         lignes.extend((racine / rel).read_text(encoding="utf-8").splitlines())
+    return lignes
+
+
+def _venvs(racine: pathlib.Path, env: str) -> list[str]:
+    """La version que rend le venv de chaque couleur, et ce qui reste mis de côté."""
+    lignes = []
+    for couleur in ("blue", "green"):
+        arbre = pathlib.Path(str(racine) + ARBRES[env] + "-" + couleur)
+        version = arbre / ".venv/bin/version-banc"
+        lignes.append(f"{couleur} : .venv "
+                      + (version.read_text().strip() if version.exists() else "absent")
+                      + (" ; .venv.avant-python présent"
+                         if (arbre / ".venv.avant-python").exists() else ""))
     return lignes
 
 
@@ -292,6 +389,7 @@ def rejouer(deploy: pathlib.Path, scenario: str) -> str:
             "PATH": f"{doublures}:/usr/bin:/bin",
             "BANC_TRACE": str(trace),
             "BANC_SHA": SHA,
+            "BANC_ETAT": str(doublures / "etat"),
             "LANG": "C.UTF-8",
             **variantes,
         }
@@ -304,6 +402,8 @@ def rejouer(deploy: pathlib.Path, scenario: str) -> str:
                   "### sortie", *fini.stdout.splitlines(),
                   "### erreurs", *fini.stderr.splitlines(),
                   "### état final", *_etat(racine)]
+        if variantes.get("BANC_BG_PYTHON"):
+            sortie += ["### venvs", *_venvs(racine, env)]
         texte = "\n".join(sortie).replace(str(racine), "") + "\n"
     # Les durées mesurées (`SECONDS`) dépendent de la machine ; rien d'autre ne varie.
     return re.sub(r"(?<=en )\d+s\b|(?<=démarrage )\d+s\b|(?<=après )\d+s\b", "Ns", texte)

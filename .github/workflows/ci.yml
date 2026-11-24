@@ -245,11 +245,12 @@ jobs:
       - name: Bancs de la garde d'exécution sous 3.10
         run: pytest -q tests/test_db_hors_boucle.py tests/test_lot1_sql_hors_boucle.py
 
-  # Le changement de Python d'une instance cible, avec le VRAI uv (celui de la box, posé
-  # par l'action) : quel interpréteur uv retient, ce que les doublures ne disent pas. Le
-  # banc exige deux interpréteurs gérés par uv (3.11, 3.12), posés ici ; ailleurs il est
-  # ignoré sans eux, ici leur absence est un échec (`OTO_BANC_UV_REEL_EXIGE`). `UV_PYTHON`,
-  # posé par setup-uv, est retiré : le banc choisit ses interpréteurs lui-même.
+  # Le changement de Python d'une instance cible, et celui des couleurs de notre box
+  # (`BG_PYTHON`), avec le VRAI uv (celui de la box, posé par l'action) : quel interpréteur
+  # uv retient, ce que les doublures ne disent pas. Les bancs exigent deux interpréteurs
+  # gérés par uv (3.11, 3.12), posés ici ; ici leur absence est un échec
+  # (`OTO_BANC_UV_REEL_EXIGE`). `UV_PYTHON`, posé par setup-uv, est retiré : les bancs
+  # choisissent leurs interpréteurs eux-mêmes.
   plancher-python-uv-reel:
     name: Python d'une instance cible, vrai uv
     runs-on: ubuntu-latest
@@ -266,7 +267,43 @@ jobs:
       - name: Banc du changement de Python, vrai uv
         env:
           OTO_BANC_UV_REEL_EXIGE: "1"
-        run: env -u UV_PYTHON pytest -q -p no:cacheprovider tests/deploy/test_plancher_python_cible_uv_reel.py
+        run: >-
+          env -u UV_PYTHON pytest -q -p no:cacheprovider
+          tests/deploy/test_plancher_python_cible_uv_reel.py
+          tests/deploy/test_python_des_couleurs.py::test_bg_python_sur_le_vrai_uv
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # LE VERROU S'INSTALLE EN ROUES CP312, SANS RIEN COMPILER.
+  #
+  # oto.cx passe en Python 3.12 (`BG_PYTHON`, 24/11/2026), le plancher `requires-python`
+  # reste 3.10 (`garde-plancher-python` installe le verrou sous 3.10). La suite (`test`)
+  # tourne déjà en 3.12 sur le verrou : ce job ne la double pas. Il répond à la question
+  # qu'elle ne pose pas — un paquet du verrou sans roue cp312 serait COMPILÉ en silence au
+  # `uv sync` de la box (compilateur, en-têtes, minutes) ou y échouerait. Ici, TOUT le
+  # verrou (tous les extras) dans un venv neuf, cache uv VIDE (une roue déjà construite
+  # ailleurs serait réutilisée), `--no-build` : une seule source à compiler rougit le job
+  # en la nommant. Le projet et oto-core (dépôt git, Python pur) se construisent par
+  # nature : ils sont exclus de l'installation, leurs dépendances non.
+  verrou-roues-cp312:
+    name: Le verrou s'installe en roues cp312
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install (par le verrou, 3.12)
+        uses: ./.github/actions/installer-par-le-verrou
+        with:
+          python-version: "3.12"
+      - name: Tout le verrou en roues cp312, sans compiler
+        env:
+          UV_PYTHON_DOWNLOADS: never
+        run: |
+          set -euo pipefail
+          UV_CACHE_DIR="$RUNNER_TEMP/cache-uv-vide" \
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/venv-cp312" \
+            uv sync --frozen --python 3.12 --all-extras --no-build \
+              --no-install-project --no-install-package oto-core
+          "$RUNNER_TEMP/venv-cp312/bin/python" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
 
   # ─────────────────────────────────────────────────────────────────────────────
   # LES CONSOMMATEURS DÉCLARÉS DE NOTRE API (#966).

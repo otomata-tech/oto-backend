@@ -57,6 +57,14 @@
 #                     propage  — mode HISTORIQUE, gardé jusqu'au lot 5b (retour arrière du
 #                                lot 5) : le lanceur `start-encrypted.sh` vit hors git dans
 #                                l'arbre et passe de la couleur en service à la nouvelle.
+#   BG_PYTHON         FACULTATIF : chemin EXACT de l'interpréteur des couleurs (au patch,
+#                     ex. /opt/oto-mcp-python/cpython-3.12.14-linux-x86_64-gnu/bin/python3.12).
+#                     Déclaré, une montée met le venv de la couleur qu'elle installe sur sa
+#                     version, `uv sync --python` l'y tient, et la couleur ne démarre que si
+#                     son venv rend exactement cette version (docs/deploiement.md § Le Python
+#                     des couleurs). Absent : les gestes d'avant, à l'identique — le venv
+#                     reste ce qu'il est. Jamais lu au `--rollback`. Les cibles ne le posent
+#                     pas (leur Python suit la déclaration, deploy/cible/deployer.sh).
 #
 # Garde FACULTATIVE, une fonction et non une variable : `bg_garde_avant_demarrage <arbre>`.
 # Si le wrapper la définit, `bg_run` l'appelle après l'installation du tag dans la couleur
@@ -223,7 +231,11 @@ bg_install() {
     bg_log "ERREUR : ${ref} ne porte pas de uv.lock (tag antérieur à #932) — rien n'est installé"
     return 1
   fi
-  UV_PYTHON_DOWNLOADS=never uv sync --frozen --quiet || return 1
+  # Avec BG_PYTHON, `uv sync` est tenu à cet interpréteur : le venv que `bg_python_venv`
+  # vient de mettre à sa version est gardé, jamais remplacé par un autre Python.
+  local python=()
+  [ -z "${BG_PYTHON:-}" ] || python=(--python "$BG_PYTHON")
+  UV_PYTHON_DOWNLOADS=never uv sync --frozen --quiet "${python[@]}" || return 1
   bg_log "installé par le verrou : uv.lock $(sha256sum uv.lock | cut -c1-12)"
   # Le bac à sable des fonctions et des recettes-code (ADR 0073, #1202), dans l'arbre de
   # la couleur : il suit le tag comme le code (`executor.DEFAUT`). Versions épinglées et
@@ -258,6 +270,123 @@ bg_install() {
   printf '{"ref": "%s", "commit": "%s", "deployed_at": "%s"}\n' \
     "$ref" "$BG_HEAD" "$(date -Is)" > "$tree/.oto-deploy.json" || return 1
   bg_log "installé : ${BG_HEAD}"
+}
+
+# ============================================================================
+# Le Python des couleurs (BG_PYTHON, facultatif) — docs/deploiement.md § Le Python des
+# couleurs. Tout ce qui suit est sans effet quand BG_PYTHON n'est pas déclaré.
+# ============================================================================
+
+# --- `bg_version_python <interpréteur>` : sa version exacte (x.y.z), lue en l'EXÉCUTANT.
+# --- Jamais d'après un chemin ni d'après le `home` de pyvenv.cfg : uv range ses
+# --- interpréteurs au patch (`cpython-3.12.14-…`) mais pose aussi un lien de version
+# --- MINEURE (`cpython-3.12-…`), et un venv créé depuis le chemin au patch inscrit ce lien
+# --- dans son `home`. Un `uv python install 3.12.15` déplacerait le lien, donc tous les
+# --- venvs, sans qu'aucun chemin écrit ne change : seule l'exécution le voit.
+bg_version_python() {
+  "$1" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null
+}
+
+# --- `bg_venv_recreer <couleur> <arbre> <interpréteur> [option d'uv venv…]` : recrée le
+# --- venv de l'arbre d'une couleur sur cet interpréteur, sans rien télécharger. Refus, sans
+# --- rien toucher, si la couleur sert ou pourrait servir : c'est la couleur en service, son
+# --- unité tourne, ou le pointeur est illisible. L'ancien venv est MIS DE CÔTÉ
+# --- (`.venv.avant-python`) et la tête du code notée : `bg_venv_conclure` les retire au
+# --- succès de l'installation, ou les remet ENSEMBLE à son échec — la couleur reste alors
+# --- le retour arrière qu'elle était.
+bg_venv_recreer() {
+  local couleur=$1 arbre=$2 interpreteur=$3 actif avant
+  shift 3
+  BG_VENV_ECARTE="" BG_VENV_TETE="" BG_VENV_AVANT=""
+  actif=$(bg_active) || { bg_log "REFUS — pointeur de couleur illisible : le venv de ${arbre} n'est pas touché"; return 1; }
+  if [ "$actif" = "$couleur" ]; then
+    bg_log "REFUS — ${couleur} est la couleur en service : son venv n'est pas touché"
+    return 1
+  fi
+  if systemctl is-active --quiet "${BG_UNIT}@${couleur}"; then
+    bg_log "REFUS — ${BG_UNIT}@${couleur} tourne encore : son venv n'est pas touché"
+    return 1
+  fi
+  avant=$(bg_version_python "$arbre/.venv/bin/python") || avant="absent ou illisible"
+  rm -rf "$arbre/.venv.avant-python"
+  if [ -e "$arbre/.venv" ]; then
+    BG_VENV_TETE=$(git -C "$arbre" rev-parse HEAD) \
+      || { bg_log "REFUS — tête de ${arbre} illisible : son venv n'est pas touché"; return 1; }
+    mv "$arbre/.venv" "$arbre/.venv.avant-python" || return 1
+    BG_VENV_ECARTE=$arbre BG_VENV_AVANT=$avant
+  fi
+  if ! UV_PYTHON_DOWNLOADS=never uv venv --quiet --seed --python "$interpreteur" "$@" "$arbre/.venv"; then
+    rm -rf "$arbre/.venv"
+    [ ! -e "$arbre/.venv.avant-python" ] || mv "$arbre/.venv.avant-python" "$arbre/.venv"
+    BG_VENV_ECARTE=""
+    bg_log "REFUS — venv non créé dans ${arbre} sur ${interpreteur} (l'ancien est remis)"
+    return 1
+  fi
+  bg_log "venv de ${couleur} recréé : Python ${avant} → $(bg_version_python "$arbre/.venv/bin/python") (l'ancien est gardé jusqu'à la fin de l'installation)"
+}
+
+# --- `bg_venv_conclure <couleur> <arbre> <code>`, après l'installation de la couleur dont
+# --- `bg_venv_recreer` a écarté le venv (sinon : rien). Succès (code 0) : l'ancien venv
+# --- part. Échec : la couleur reprend son code d'avant (`git reset --hard` sur sa tête
+# --- d'avant, si l'installation l'avait déplacée) ET son venv d'avant. Si le code ne peut
+# --- pas être remis, le venv d'avant ne l'est pas non plus (code neuf + venv ancien serait
+# --- pire) : il reste dans `.venv.avant-python`, et le journal dit que cette couleur n'est
+# --- PAS un retour arrière valable. Code de retour non nul = l'installation a échoué.
+bg_venv_conclure() {
+  local couleur=$1 arbre=$2 code=$3 tete
+  [ -n "${BG_VENV_ECARTE:-}" ] && [ "$BG_VENV_ECARTE" = "$arbre" ] || return 0
+  BG_VENV_ECARTE=""
+  if [ "$code" = 0 ]; then
+    rm -rf "$arbre/.venv.avant-python"
+    return 0
+  fi
+  tete=$(git -C "$arbre" rev-parse HEAD 2>/dev/null) || tete=""
+  if [ "$tete" != "$BG_VENV_TETE" ] && ! git -C "$arbre" reset --quiet --hard "$BG_VENV_TETE"; then
+    bg_log "ATTENTION : installation en échec et code d'avant (${BG_VENV_TETE}) NON remis dans ${arbre} : ${couleur} n'est PAS un retour arrière valable ; venv d'avant (Python ${BG_VENV_AVANT}) laissé dans ${arbre}/.venv.avant-python"
+    return 1
+  fi
+  rm -rf "$arbre/.venv"
+  if ! mv "$arbre/.venv.avant-python" "$arbre/.venv"; then
+    bg_log "ATTENTION : installation en échec et venv d'avant NON remis dans ${arbre} : ${couleur} n'est PAS un retour arrière valable"
+    return 1
+  fi
+  bg_log "installation en échec : ${couleur} remise à son état d'avant (code ${BG_VENV_TETE}, venv Python ${BG_VENV_AVANT}) — elle reste le retour arrière"
+  return 1
+}
+
+# --- `bg_python_venv <couleur> <arbre>`, avant l'installation de la couleur INACTIVE : son
+# --- venv est recréé sur BG_PYTHON s'il ne rend pas exactement sa version (au patch), et
+# --- seulement alors. Un BG_PYTHON qui ne s'exécute pas refuse la montée : rien n'est
+# --- installé. Sans BG_PYTHON : rien.
+bg_python_venv() {
+  local couleur=$1 arbre=$2 attendue actuelle
+  BG_VENV_ECARTE=""
+  [ -n "${BG_PYTHON:-}" ] || return 0
+  attendue=$(bg_version_python "$BG_PYTHON") \
+    || { bg_log "REFUS — BG_PYTHON (${BG_PYTHON}) ne s'exécute pas"; return 1; }
+  actuelle=$(bg_version_python "$arbre/.venv/bin/python") || actuelle="absent ou illisible"
+  if [ "$actuelle" = "$attendue" ]; then
+    bg_log "venv de ${couleur} déjà en Python ${attendue} (BG_PYTHON) : gardé"
+    return 0
+  fi
+  bg_venv_recreer "$couleur" "$arbre" "$BG_PYTHON"
+}
+
+# --- `bg_garde_python <arbre>`, après l'installation et AVANT le démarrage : le venv de la
+# --- couleur installée doit rendre exactement la version de BG_PYTHON, au patch près —
+# --- quoi qu'aient fait `uv venv` et `uv sync`. Sinon, refus nommé : la couleur ne démarre
+# --- pas, rien ne bascule. Sans BG_PYTHON : rien.
+bg_garde_python() {
+  local arbre=$1 attendue obtenue
+  [ -n "${BG_PYTHON:-}" ] || return 0
+  attendue=$(bg_version_python "$BG_PYTHON") || attendue="illisible"
+  obtenue=$(bg_version_python "$arbre/.venv/bin/python") || obtenue="illisible"
+  if [ "$attendue" != illisible ] && [ "$obtenue" = "$attendue" ]; then
+    bg_log "garde Python : ${arbre}/.venv rend Python ${obtenue}, celui de BG_PYTHON"
+    return 0
+  fi
+  bg_log "REFUS (garde Python) : ${arbre}/.venv rend Python ${obtenue}, BG_PYTHON (${BG_PYTHON}) rend ${attendue}"
+  return 1
 }
 
 # --- mode HISTORIQUE `BG_LANCEUR=propage` (retiré au lot 5b, #967) : le lanceur
@@ -458,13 +587,25 @@ bg_run() {
       bg_log "REFUS avant installation : rien n'est installé dans ${new} — ${BG_ENV} reste servie par ${old}, rien n'a basculé"
       exit 1
     fi
-    local installe=0
+    # Le Python des couleurs (BG_PYTHON) : venv recréé avant, garde après l'installation ;
+    # un échec de l'une ou de l'autre remet la couleur à son état d'avant (code et venv).
+    if ! bg_python_venv "$new" "$(bg_tree "$new")"; then
+      bg_log "REFUS avant installation : rien n'est installé dans ${new} — ${BG_ENV} reste servie par ${old}, rien n'a basculé"
+      exit 1
+    fi
+    local installe=0 motif="installation de ${ref} en échec"
     bg_install "$new" "$ref" || installe=$?
+    if [ "$installe" = 0 ] && ! bg_garde_python "$(bg_tree "$new")"; then
+      installe=1 motif="garde Python : le venv de ${new} ne rend pas la version de BG_PYTHON, ${new} ne démarre pas"
+    fi
+    if ! bg_venv_conclure "$new" "$(bg_tree "$new")" "$installe"; then
+      [ "$installe" != 0 ] || installe=1
+    fi
     if declare -F bg_apres_installation >/dev/null \
        && ! bg_apres_installation "$new" "$(bg_tree "$new")" "$installe"; then
       [ "$installe" != 0 ] || installe=1
     fi
-    [ "$installe" = 0 ] || bg_abort "$new" "installation de ${ref} en échec"
+    [ "$installe" = 0 ] || bg_abort "$new" "$motif"
     if [ "$BG_LANCEUR" = versionne ] && [ ! -f "$(bg_tree "$new")/deploy/lanceur_secrets.py" ]; then
       bg_abort "$new" "${ref} ne porte pas le lanceur versionné (deploy/lanceur_secrets.py) — tag antérieur à #967"
     fi

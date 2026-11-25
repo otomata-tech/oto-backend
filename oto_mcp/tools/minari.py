@@ -52,7 +52,7 @@ from urllib.parse import parse_qs, urlparse
 from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, output_projection
 from ..mcp_errors import McpError
 from ..connectors import verify as connector_verify
 
@@ -165,6 +165,32 @@ def _paged(envelope: Any) -> Any:
     return envelope
 
 
+_ADRESSE_APPEL = ("id",)
+
+
+def _choisis(page: Any, fields: Optional[List[str]]) -> Any:
+    """Une page d'appels réduite aux clés que l'appelant nomme (signal #1953 : 50
+    appels pesaient 44-46k caractères, au-delà de ce qu'un tour lit en ligne, et Minari
+    ne laisse pas réduire la page). `id` reste toujours, pour rouvrir un appel ;
+    l'enveloppe (`next_cursor`, la note de pagination) ne bouge pas, et la notice dit
+    ce qui a été écarté et ce qui était demandé mais absent."""
+    if not fields:
+        return page
+    voulus = list(dict.fromkeys(fields))
+    if output_projection.RAW not in voulus:
+        voulus += [k for k in _ADRESSE_APPEL if k not in voulus]
+    out, notice = output_projection.select_fields(page, voulus)
+    if notice is None:
+        return out
+    if notice.get("missing"):
+        notice = {**notice, "missing": [k for k in notice["missing"]
+                                        if k not in _ADRESSE_APPEL or k in fields]}
+        if not notice["missing"]:
+            notice.pop("missing")
+    return {**out, "selection": notice} if isinstance(out, dict) else \
+        {"result": out, "selection": notice}
+
+
 def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
     """"Test the connection" probe.
 
@@ -227,6 +253,7 @@ def register(mcp: FastMCP) -> None:
         list_id: Optional[List[str]] = None,
         cursor: Optional[str] = None,
         max_utterances: Optional[int] = None,
+        fields: Optional[List[str]] = None,
     ) -> object:
         """Calls made and received in Minari, with AI summaries and objections.
 
@@ -274,7 +301,14 @@ def register(mcp: FastMCP) -> None:
                 RE-SEND YOUR FILTERS WITH IT: the cursor is a position
                 (`started_at` + call id), not a saved query, so a cursor on its
                 own pages the whole journal and silently drops your filters.
-                Pages are fixed at 50 and cannot be enlarged.
+                Pages are fixed at 50 by Minari: neither larger nor smaller.
+            fields: "list" only — keep only these keys of each call (`id` is
+                always kept, so a call can still be opened), e.g.
+                `["started_at", "status", "duration", "contact", "summary"]`.
+                A full page of 50 calls can pass 40k characters; scan with
+                `fields`, then `op="get"` the calls worth reading. The envelope
+                (`next_cursor`, `has_more`) stays; `selection` names what was
+                left out and what was asked for but absent.
             max_utterances: "transcript" only — cap on returned lines
                 (default 200). The response states the true total and whether
                 it was truncated.
@@ -284,14 +318,14 @@ def register(mcp: FastMCP) -> None:
         if op == "list":
             _refuse_ignored(op, 'these arguments target ONE call — use op="get"',
                             call_id=call_id, max_utterances=max_utterances)
-            return _run(lambda: _paged(client.list_calls(
+            return _run(lambda: _choisis(_paged(client.list_calls(
                 start_date=start_date, end_date=end_date, user_id=user_id,
                 status=status, direction=direction, min_duration=min_duration,
                 search=search, transcript_search=transcript_search,
                 language=language, contact_id=contact_id, list_id=list_id,
-                cursor=cursor)))
+                cursor=cursor)), fields))
 
-        _refuse_ignored(op, 'these filters only apply to op="list"',
+        _refuse_ignored(op, 'these filters only apply to op="list"', fields=fields,
                         start_date=start_date, end_date=end_date, user_id=user_id,
                         status=status, direction=direction, min_duration=min_duration,
                         search=search, transcript_search=transcript_search,

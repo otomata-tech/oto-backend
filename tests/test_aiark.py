@@ -415,3 +415,23 @@ def test_search_does_not_trace_when_content_is_missing():
         _tool("linkedin_aiark_search").fn(op="people")
 
     trace.assert_not_called()
+
+
+def test_a_bare_domain_list_gets_its_matcher_envelope():
+    """#1937: `{"domain": ["example.com"]}` went out bare and AI Ark answered 400. The
+    plain-list matchers get `{"any": {"include": [...]}}`; a matcher already given, a
+    RANGE or the SMART wrapper pass unchanged."""
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+         patch("oto.tools.aiark.client.AiArkClient") as client_cls:
+        client_cls.return_value.search_people.return_value = {"content": [], "totalElements": 0}
+        rng = {"type": "RANGE", "range": [{"start": 1, "end": 50}]}
+        _tool("linkedin_aiark_search").fn(
+            op="people",
+            account={"domain": ["example.com"], "employeeSize": rng,
+                     "location": {"any": {"include": ["France"]}}},
+            contact={"seniority": "founder"})
+        kw = client_cls.return_value.search_people.call_args.kwargs
+    assert kw["account"] == {"domain": {"any": {"include": ["example.com"]}},
+                             "employeeSize": rng,
+                             "location": {"any": {"include": ["France"]}}}
+    assert kw["contact"] == {"seniority": {"any": {"include": ["founder"]}}}

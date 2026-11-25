@@ -433,3 +433,34 @@ def test_auth_error_names_the_three_real_causes():
     assert "phx_" in msg and "phc_" in msg
     assert "REGION" in msg
     assert "scopes" in msg
+
+
+# --- posthog_flag : une liste au-delà de sa première page ----------------------
+
+def test_flag_list_reaches_the_next_page_with_offset():
+    m, cls, patcher = _fn_with_mock_client()
+    try:
+        fn = _tool(m, "posthog_flag")
+        cls.return_value.list_feature_flags.return_value = {"results": []}
+        fn(op="list", limit=25, offset=25)
+        kwargs = cls.return_value.list_feature_flags.call_args.kwargs
+        assert kwargs["offset"] == 25 and kwargs["limit"] == 25
+        fn(op="list", limit=25)
+        assert "offset" not in cls.return_value.list_feature_flags.call_args.kwargs
+        cls.return_value.list_experiments.return_value = {"results": []}
+        fn(op="experiments", offset=10)
+        assert cls.return_value.list_experiments.call_args.kwargs["offset"] == 10
+    finally:
+        patcher.stop()
+
+
+def test_flag_offset_is_refused_where_it_means_nothing():
+    m, cls, patcher = _fn_with_mock_client()
+    try:
+        fn = _tool(m, "posthog_flag")
+        with pytest.raises(McpError, match="offset"):
+            fn(op="get", flag_id="7", offset=5)
+        with pytest.raises(McpError, match="offset"):
+            fn(op="list", offset=-1)
+    finally:
+        patcher.stop()

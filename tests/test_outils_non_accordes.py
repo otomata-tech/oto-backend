@@ -108,6 +108,76 @@ def test_la_recette_code_est_refusee_avant_tout_appel_en_nommant_tout(_travail, 
     assert "fix" not in recu["error"], "l'agent s'arrête : élargir sa liste n'est pas son geste"
 
 
+# ── citer n'est pas appeler (#1948) : seul l'appel sûr refuse avant le run ────
+
+_CORPS_BRANCHE = {"kind": "code", "entrypoint": "recipe:run", "sources": {"recipe.py": (
+    "async def helper(oto):\n"
+    "    return await oto.call('serper_search', {})\n"
+    "async def run(oto, params):\n"
+    "    rows = await oto.call('data_write', {'datastore': 1})\n"
+    "    if params.get('crm') != 'none':\n"
+    "        await oto.call('hubspot_object', {'op': 'search'})\n"
+    "    for r in await oto.call('oto_recipe', {}):\n"
+    "        await oto.call('folk_record', {})\n"
+    "    x = params.get('a') and await oto.call('apollo_match_person', {})\n"
+    "    try:\n"
+    "        await oto.call('data_rows', {})\n"
+    "    except Exception:\n"
+    "        await oto.call('lemlist_lead', {})\n"
+    "    return rows\n")},
+    "limits": {"max_calls": 5, "max_units": 1, "max_seconds": 10}}
+
+
+def test_les_appels_surs_de_l_entree_sans_ses_branches():
+    assert outils_cites.outils_inconditionnels(_CORPS_BRANCHE) == [
+        "data_write", "oto_recipe", "data_rows"]
+    # citer reste le plancher : toutes les branches y sont
+    assert "hubspot_object" in outils_cites.outils_cites(_CORPS_BRANCHE)
+
+
+def test_une_entree_illisible_ne_dit_rien_de_sur():
+    assert outils_cites.outils_inconditionnels(_CORPS_CODE) is None, "pas d'entrypoint"
+    casse = {**_CORPS_BRANCHE, "sources": {"recipe.py": "def run(:"}}
+    assert outils_cites.outils_inconditionnels(casse) is None
+    assert outils_cites.outils_inconditionnels(
+        {**_CORPS_BRANCHE, "entrypoint": "recipe:absent"}) is None
+    assert outils_cites.outils_inconditionnels(
+        {"tool": "lemlist_database"}) == ["lemlist_database"]
+
+
+def test_un_outil_qui_n_est_appele_que_dans_une_branche_ne_bloque_pas_le_run(
+        _travail, monkeypatch):
+    """La recette « sans CRM » : l'agent n'a pas le CRM, et son run ne l'appelle pas."""
+    lance = {}
+
+    async def bac(**kw):
+        lance.update(kw)
+        return {"ok": True, "result": {"n": 1}, "calls": 1, "units": 0, "refused": 0,
+                "stopped": None}
+    monkeypatch.setattr(code.pont_bac, "executer_avec_pont", bac)
+    monkeypatch.setattr(outils_du_travail.db, "charge_du_travail", lambda job: {
+        "tools": ["oto_recipe", "data_write", "data_rows"], "trigger_id": 7})
+    recu = asyncio.run(code.executer(_CORPS_BRANCHE, {"crm": "none"}, fastmcp=None,
+                                     sub="u", ecrire=True))
+    assert lance, "le code a tourné"
+    assert recu["ok"] is True and recu["result"] == {"n": 1}
+    assert recu["missing_tools"] == ["serper_search", "hubspot_object", "folk_record",
+                                     "apollo_match_person", "lemlist_lead"]
+    assert "tool_not_in_job" in recu["missing_tools_note"]
+
+
+def test_un_outil_manquant_appele_a_coup_sur_refuse_toujours_avant_tout_appel(
+        _travail, monkeypatch):
+    async def jamais(**kw):
+        raise AssertionError("le code ne doit pas tourner")
+    monkeypatch.setattr(code.pont_bac, "executer_avec_pont", jamais)
+    # `data_rows` (dans le `try`) manque à l'agent : il part à chaque run
+    recu = asyncio.run(code.executer(_CORPS_BRANCHE, {}, fastmcp=None, sub="u",
+                                     ecrire=True))
+    assert recu["code"] == "tool_not_in_job" and recu["calls"] == 0
+    assert "hubspot_object" in recu["missing_tools"], "le refus nomme TOUT ce qui manque"
+
+
 @pytest.fixture
 def _agent_7(monkeypatch):
     """L'agent 7 de `porteur`, tel que le travail 41 l'a reçu. Rend ce que

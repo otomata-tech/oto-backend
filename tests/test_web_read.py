@@ -556,3 +556,67 @@ def test_un_refus_serper_qui_n_est_pas_la_page_leve_toujours(monkeypatch):
                      serper=_erreur_serper(401))
     with pytest.raises(UpstreamHTTPError):
         lire(url="https://acme.fr")
+
+
+# ── les liens de la page, sur demande (#1947) ────────────────────────────────
+
+_HTML_LIENS = ("<html><head><title>Clients</title></head><body>"
+               + "<p>Nos clients racontent leur histoire, carte après carte.</p>" * 10
+               + '<a href="/fr/customers-story/alpha#top"><h3>Alpha</h3> Logistique</a>'
+               + '<a href="/fr/customers-story/alpha">Alpha</a>'
+               + '<a href="https://www.acme.fr/fr/customers-story/beta">Beta</a>'
+               + '<a href="/fr/pricing">Tarifs</a><a href="mailto:x@acme.fr">x</a>'
+               + '<a href="javascript:void(0)">menu</a></body></html>')
+
+
+def test_sans_demande_aucun_lien_n_est_servi(monkeypatch):
+    lire = _web_read(monkeypatch, fetch={"ok": True, "status": 200, "html": _HTML_LIENS,
+                                         "final_url": "https://www.acme.fr/fr/clients"})
+    out = lire(url="https://www.acme.fr/fr/clients")
+    assert "links" not in out
+
+
+def test_links_rend_les_liens_absolus_dedoublonnes(monkeypatch):
+    lire = _web_read(monkeypatch, fetch={"ok": True, "status": 200, "html": _HTML_LIENS,
+                                         "final_url": "https://www.acme.fr/fr/clients"})
+    out = lire(url="https://www.acme.fr/fr/clients", links=True)
+    hrefs = [l["href"] for l in out["links"]]
+    assert hrefs == ["https://www.acme.fr/fr/customers-story/alpha",
+                     "https://www.acme.fr/fr/customers-story/beta",
+                     "https://www.acme.fr/fr/pricing"]
+    assert out["links"][0]["text"] == "Alpha Logistique"
+    assert out["links_total"] == 3 and out["links_truncated"] is False
+    assert "customers-story" not in out["content"], "le texte reste du texte"
+
+
+def test_link_contains_filtre_et_vaut_links(monkeypatch):
+    lire = _web_read(monkeypatch, fetch={"ok": True, "status": 200, "html": _HTML_LIENS,
+                                         "final_url": "https://www.acme.fr/fr/clients"})
+    out = lire(url="https://www.acme.fr/fr/clients", link_contains="/customers-story/")
+    assert [l["text"] for l in out["links"]] == ["Alpha Logistique", "Beta"]
+
+
+def test_le_scraper_rend_les_liens_de_son_markdown(monkeypatch):
+    md = "# Clients\n\n" + "Texte. " * 30 + "\n[Alpha](https://acme.fr/customers-story/a) [Tarifs](https://acme.fr/p)"
+    lire = _web_read(monkeypatch, fetch={"ok": False, "verdict": "HTTP 403", "status": 403},
+                     serper={"markdown": md})
+    out = lire(url="https://acme.fr/clients", link_contains="customers-story")
+    assert out["chemin"] == "serper"
+    assert out["links"] == [{"href": "https://acme.fr/customers-story/a", "text": "Alpha"}]
+
+
+def test_le_navigateur_lit_le_dom_quand_on_veut_les_liens(monkeypatch):
+    vu = {}
+
+    async def _faux(url, as_html=False):
+        vu["as_html"] = as_html
+        return {"content": _HTML_LIENS, "title": "Clients",
+                "final_url": "https://www.acme.fr/fr/clients"}
+    lire = _web_read(monkeypatch, fetch={"ok": False, "verdict": "HTTP 403", "status": 403},
+                     serper={"markdown": ""})
+    monkeypatch.setattr(W.browserbase, "fetch_page_ephemeral", _faux)
+    monkeypatch.setattr(W.browserbase, "is_configured", lambda: True)
+    out = lire(url="https://www.acme.fr/fr/clients", browser=True, links=True)
+    assert vu["as_html"] is True
+    assert "<a" not in out["content"] and "Nos clients" in out["content"]
+    assert len(out["links"]) == 3

@@ -875,6 +875,11 @@ def register(mcp: FastMCP) -> None:
 
         Args by op:
         - `team` / `credits`: no argument (credits are what enrichment spends).
+          `credits` is what REMAINS, split by source (subscription, paid,
+          gifted, freemium): lemlist's API serves no monthly allowance or plan,
+          so a "below N % of the allowance" check needs the allowance from the
+          team itself, or a comparison with an earlier reading. Credits belong
+          to a lemlist TEAM: with several accounts, name one with `_account=`.
         - `senders`: optional `state` (campaign status) — members and the
           campaigns they send from.
         - `user`: `user_id`. `user_channels`: no argument — the mailboxes,

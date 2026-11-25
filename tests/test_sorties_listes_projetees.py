@@ -86,7 +86,7 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # par le client d'oto-core, `oto.tools.lemlist.activity_views`) — le défaut reste la liste brute.
 # 206 → 205 le 2026-11-21 : leexi_calls payé (op='search' : vue légère par défaut, chaque
 # colonne lourde devient sa taille ; `full=True` le brut, `select` choisit — signal #1917).
-_PLAFOND = 205
+_PLAFOND = 204
 
 
 def _debt() -> set[str]:

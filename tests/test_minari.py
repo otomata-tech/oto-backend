@@ -595,3 +595,32 @@ def test_deux_remarques_se_cumulent_au_lieu_de_secraser():
         assert "cursor" in out["note"]
     finally:
         p.stop()
+
+
+# --- minari_call op=list : une page qu'on peut lire (#1953) --------------------
+
+def test_fields_allege_chaque_appel_et_garde_l_enveloppe():
+    m, cls, p = _fn_with_mock_client()
+    try:
+        cls.return_value.list_calls.return_value = {
+            "data": [{"id": 7, "status": "connected", "summary": "x" * 900,
+                      "objections": [], "public_call_link": None}],
+            "has_more": True, "next_url": "https://api.minari.ai/v1/calls?cursor=abc"}
+        out = _tool(m, "minari_call")(op="list", fields=["status", "nope"])
+        assert out["data"] == [{"id": 7, "status": "connected"}]
+        assert out["next_cursor"] == "abc" and out["has_more"] is True
+        assert "summary" in out["selection"]["omitted"]
+        assert out["selection"]["missing"] == ["nope"]
+        sans = _tool(m, "minari_call")(op="list")
+        assert "summary" in sans["data"][0] and "selection" not in sans
+    finally:
+        p.stop()
+
+
+def test_fields_est_refuse_hors_de_la_liste():
+    m, cls, p = _fn_with_mock_client()
+    try:
+        with pytest.raises(McpError, match="fields"):
+            _tool(m, "minari_call")(op="get", call_id="7", fields=["status"])
+    finally:
+        p.stop()

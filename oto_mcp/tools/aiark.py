@@ -109,6 +109,31 @@ _DEAD_COMPANY_FILTERS: dict[str, dict[str, str]] = {
 }
 
 
+# ── Plain-list matchers given bare (#1937, 23/11/2026) ──────────────────────────
+# `account={"domain": ["example.com"]}` answered a bare 400 from AI Ark: these keys take
+# an include/exclude MATCHER, `{"any": {"include": [...]}}`, and a list or a string
+# alone skips the envelope. The intent is unambiguous, so the envelope is added here,
+# only for the keys documented in this module as plain-list matchers. Anything else
+# (a RANGE, the SMART wrapper of `name`) is passed as given.
+_LIST_MATCHERS: dict[str, tuple[str, ...]] = {
+    "account": ("domain", "location"),
+    "contact": ("location", "seniority"),
+}
+
+
+def _wrap_bare_matchers(side: str, filters: Optional[dict]) -> Optional[dict]:
+    if not isinstance(filters, dict):
+        return filters
+    out = dict(filters)
+    for key in _LIST_MATCHERS.get(side, ()):
+        v = out.get(key)
+        if isinstance(v, str):
+            v = [v]
+        if isinstance(v, list):
+            out[key] = {"any": {"include": v}}
+    return out
+
+
 def _reject_dead_filters(table: dict[str, dict[str, str]] = _DEAD_FILTERS,
                          **blocks) -> None:
     """Refuses a filter that AI Ark would accept without applying it (see `_DEAD_FILTERS`,
@@ -397,6 +422,9 @@ def register(mcp: FastMCP) -> None:
                 - employee size: {"employeeSize": {"type": "RANGE", "range": [{"start": 1000, "end": 5000}]}}
                 - a company's site: {"domain": {"any": {"include": ["example.com"]}}}
                   — plain list, NOT the SMART wrapper (that one is for `name` only).
+                  A bare list or string on `domain`/`location` (and on contact
+                  `location`/`seniority`) is wrapped into `{"any": {"include": […]}}`
+                  for you.
                 Combine keys in one object. Keys MEASURED to bite on
                 op="companies": `domain`, `employeeSize`, `location`.
                 `industries`, `technologies`, `naics` answered 400 under the forms
@@ -455,6 +483,8 @@ def register(mcp: FastMCP) -> None:
                 projection — it is the block repeated identically on every person
                 of the same company.
         """
+        account = _wrap_bare_matchers("account", account)
+        contact = _wrap_bare_matchers("contact", contact)
         _reject_dead_filters(account=account, contact=contact)
         if op == "people":
             result = _run(lambda c: c.search_people(

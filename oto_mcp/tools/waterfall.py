@@ -196,7 +196,11 @@ def register(mcp: FastMCP) -> None:
         own website, else a LinkedIn company search by name, kept only if its website is
         the domain). A search result counts only if
         its domain matches, or its name contains the name asked: a namesake never stops
-        the cascade. `employees_band` is the INSEE size band code, not a headcount.
+        the cascade. `employees_band` is a size BAND, never a headcount: the INSEE code
+        from the registry (`fr`), else the range the company DECLARES on its LinkedIn
+        page (lemlist, Pipecorn), often years old; `employees` is the headcount the
+        provider counts (LinkedIn members for lemlist). Both come from the same
+        source and may disagree (273 employees, band `51-200`): trust `employees`.
 
         {_ORDER_DOC}
 

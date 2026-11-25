@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Literal, Optional
+from urllib.parse import parse_qs, urlsplit
 
 from fastmcp import FastMCP
 
@@ -426,6 +427,14 @@ def register(mcp: FastMCP) -> None:
 
     # --- job postings --------------------------------------------------------
 
+    # Measured 23/11/2026 (signal #1945): a URL carrying `geoId`, `f_TPR` and `f_F=mrkt`
+    # gave 60 jobs in the right area and window, nearly none in marketing, and no job
+    # in the dataset carries a job-function field to filter on afterwards. The public
+    # (logged-out) search behind the actor drops the job-function filter; billing each
+    # unfiltered job while the caller believes it filtered is a wrong answer with no
+    # error, hence the refusal by name.
+    _FILTRES_IGNORES_JOBS = {"f_F": "job function"}
+
     @mcp.tool()
     def apify_linkedin_jobs(
         keywords: Optional[str] = None,
@@ -454,6 +463,8 @@ def register(mcp: FastMCP) -> None:
             location: as typed on LinkedIn (`"France"`, `"London, United Kingdom"`).
             search_urls: public LinkedIn jobs search URLs, built on
                 linkedin.com/jobs — used instead of `keywords`/`location`.
+                The job-function filter (`f_F=`) is NOT applied by this
+                scraper and is refused: narrow with keywords instead.
             company_ids: LinkedIn numeric company ids (`f_C=` in a search URL).
             date_posted: freshness filter.
             with_company: add the hiring company's details to each job.
@@ -464,6 +475,16 @@ def register(mcp: FastMCP) -> None:
         """
         if not (keywords or search_urls or company_ids):
             raise _bad("Give `keywords`, `search_urls` or `company_ids`.")
+        ignores = sorted({f for u in (search_urls or [])
+                          for f in _FILTRES_IGNORES_JOBS if f in parse_qs(urlsplit(u).query)})
+        if ignores:
+            raise _bad(
+                "This scraper reads LinkedIn's public job search, which does not apply "
+                f"{', '.join(f'`{f}` ({_FILTRES_IGNORES_JOBS[f]})' for f in ignores)}: "
+                "the run would return jobs of every kind, billed. Remove it from the URL "
+                "and narrow with `keywords` (e.g. \"marketing\") or the `keywords=` of the "
+                "URL, then filter on each job's `title`. Location (`geoId`) and date "
+                "(`f_TPR`) filters are applied.")
         sources = len(search_urls) if search_urls else 1
         return lancer_acteur(
             LINKEDIN_JOBS,

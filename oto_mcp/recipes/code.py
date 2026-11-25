@@ -137,6 +137,16 @@ def refus_hors_liste(manque: dict) -> dict:
                       "click (the agent's page shows them).")}
 
 
+def _part_a_coup_sur(corps: dict, manquants: list) -> bool:
+    """Un des `manquants` est-il appelé à chaque run ? Sans lecture sûre de l'entrée
+    (`None`), on refuse comme avant : le doute garde le plancher."""
+    surs = outils_cites.outils_inconditionnels(corps)
+    if surs is None:
+        return True
+    canon = outils_du_travail.deprecations.tool_canonique
+    return any(canon(n) in manquants for n in surs)
+
+
 async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
                    datastore: Any = None, ecrire: bool) -> dict:
     """Joue une recette-code VALIDÉE. `ecrire=False` = l'épreuve : aucune écriture,
@@ -145,12 +155,15 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
     seule la plateforme lit) ; `writes` compte les écritures chez un tiers TENTÉES, par
     nom déclaré."""
     lim = corps["limits"]
-    # Lancée par un agent hébergé : tout ce que le code CITE doit être dans la liste du
-    # travail. Jugé ici, avant le premier appel, et refusé UNE fois en nommant chaque
-    # outil manquant — sinon le code découvre un outil par exécution, après des écritures.
+    # Lancée par un agent hébergé : ce que le code CITE et que la liste du travail n'a
+    # pas est jugé ici, avant le premier appel. Refusé UNE fois, en nommant chaque outil
+    # manquant, dès que l'un d'eux part À COUP SÛR (`outils_inconditionnels`) — sinon le
+    # code découvrirait un outil par exécution, après des écritures. Un outil qui n'est
+    # appelé que dans une branche (le CRM d'une recette « sans CRM ») ne bloque plus le
+    # run (#1948, 23/11/2026) : il est dit dans le reçu, et l'appel reste jugé s'il part.
     manque = await run_in_threadpool(outils_du_travail.manquants,
                                      outils_cites.outils_cites(corps))
-    if manque:
+    if manque and _part_a_coup_sur(corps, manque["missing"]):
         return refus_hors_liste(manque)
     ecritures = pont.compteur_neuf()
     sortie = await pont_bac.executer_avec_pont(
@@ -176,6 +189,12 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
     else:
         recu["error"] = sortie.get("error")
     recu["done"] = bool(recu["ok"]) and recu["stopped"] is None
+    if manque:
+        recu["missing_tools"] = manque["missing"]
+        recu["missing_tools_note"] = (
+            f"this recipe can call {manque['missing']}, which this agent is not allowed "
+            "to use; this run did not need them up front, and any such call was refused "
+            f"({outils_du_travail.CODE}).")
     if not ecrire:
         recu["journal"] = sortie.get("journal") or ""
     return recu

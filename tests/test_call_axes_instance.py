@@ -216,6 +216,47 @@ def test_resolution_explicit_instance_beats_project_binding(resolution, monkeypa
     assert rc.secret == "SECRET-EXPLICITE"
 
 
+def test_resolution_named_account_beats_project_binding(resolution, monkeypatch):
+    # The project binds the `team2` account; the caller names `team1` with `_account=`.
+    # The binding is skipped and the named account goes through the cascade (guarded
+    # there like any named account) — never the bound row served under its own name,
+    # a silent swap of identity (the caller read team2's data believing it was team1's).
+    resolution[("org", "5", "zoho", "team2")] = "SECRET-BOUND"
+    _bind_project(monkeypatch, 7, [
+        {"target_type": "connecteur", "target_ref": "zoho",
+         "config": {"instance_ref": "org:5:zoho:team2"}}])
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+
+    class _Cascade(Exception):
+        pass
+
+    def _into_cascade(sub):   # the first step of the cascade: the binding was skipped
+        raise _Cascade()
+
+    from oto_mcp.access import scope as _scope
+    monkeypatch.setattr(_scope, "current_org", _into_cascade)
+    tok = session_org.set_call_account("team1")
+    try:
+        with pytest.raises(_Cascade):
+            access._resolve_credential_impl("zoho", "auto", "u")
+    finally:
+        session_org.reset_call_account(tok)
+
+
+def test_resolution_named_account_equal_to_binding_keeps_it(resolution, monkeypatch):
+    resolution[("org", "5", "zoho", "team2")] = "SECRET-BOUND"
+    _bind_project(monkeypatch, 7, [
+        {"target_type": "connecteur", "target_ref": "zoho",
+         "config": {"instance_ref": "org:5:zoho:team2"}}])
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+    tok = session_org.set_call_account("team2")
+    try:
+        rc = access._resolve_credential_impl("zoho", "auto", "u")
+    finally:
+        session_org.reset_call_account(tok)
+    assert rc.secret == "SECRET-BOUND" and rc.account == "team2"
+
+
 def test_resolution_multiple_bindings_actionable_error(resolution, monkeypatch):
     # 2 bindings zoho dans le projet, pas d'instance= → erreur qui LISTE les choix.
     _bind_project(monkeypatch, 7, [

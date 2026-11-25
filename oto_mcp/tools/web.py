@@ -34,6 +34,7 @@ accumulate-then-truncate — the lesson of the decompression bomb).
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from html.parser import HTMLParser
 from typing import Optional
@@ -210,6 +211,71 @@ def extract_text(html_str: str) -> tuple:
     return texte.strip(), p.title.strip()
 
 
+# ── the page's links, on request (#1947) ─────────────────────────────────────
+# The readable text drops every href: a step that must COLLECT links (« every
+# /customers-story/ link and its client name ») had only `as_html`, i.e. the whole
+# raw page (60k+ characters, beyond what a turn reads inline), to grep in a
+# sub-agent. `links=True` returns the anchors themselves, absolute and deduplicated,
+# beside the text — from the HTML on ① and ③, from the scraper's markdown on ②.
+_MAX_LINKS = 500
+_LIEN_MD = re.compile(r"\[([^\]]*)\]\((https?://[^)\s]+)")
+
+
+class _LinkExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.liens: list = []
+        self._courant: Optional[dict] = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            href = dict(attrs).get("href")
+            self._courant = {"href": href, "text": []} if href else None
+
+    def handle_data(self, data):
+        if self._courant is not None:
+            self._courant["text"].append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self._courant is not None:
+            self.liens.append((self._courant["href"], "".join(self._courant["text"])))
+            self._courant = None
+
+
+def _propres(paires, base: str, contient: Optional[str]) -> dict:
+    """`{links: [{href, text}], links_total, links_truncated}` — absolute http(s)
+    hrefs only, deduplicated (the first non-empty text wins), optionally filtered on
+    a substring of the href, capped at `_MAX_LINKS`."""
+    vus: dict = {}
+    for href, texte in paires:
+        absolu = urljoin(base, (href or "").strip())
+        if urlsplit(absolu).scheme not in ("http", "https"):
+            continue
+        absolu = absolu.split("#", 1)[0]
+        if contient and contient not in absolu:
+            continue
+        texte = " ".join((texte or "").split())[:200]
+        if absolu not in vus or (texte and not vus[absolu]):
+            vus[absolu] = texte
+    tous = [{"href": h, "text": t} for h, t in vus.items()]
+    return {"links": tous[:_MAX_LINKS], "links_total": len(tous),
+            "links_truncated": len(tous) > _MAX_LINKS}
+
+
+def extract_links(html_str: str, base: str, contient: Optional[str] = None) -> dict:
+    p = _LinkExtractor()
+    try:
+        p.feed(html_str)
+    # noqa: SILENT — the links found before the parser gave up are still returned
+    except Exception:  # noqa: BLE001 — monstrous HTML doesn't break the read
+        pass
+    return _propres(p.liens, base, contient)
+
+
+def extract_links_markdown(md: str, base: str, contient: Optional[str] = None) -> dict:
+    return _propres(((h, t) for t, h in _LIEN_MD.findall(md or "")), base, contient)
+
+
 # ── tier ①: bare HTTP fetch, streamed, guarded ───────────────────────────────
 def _fetch_http(url: str, deadline_s: float = _DEADLINE_S) -> dict:
     """{verdict, ok, status?, html?, final_url?} — redirects are walked
@@ -347,7 +413,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=LECTURE)
     async def web_read(url: str, browser: bool = False, as_html: bool = False,
-                       max_chars: int = _DEFAULT_MAX_CHARS) -> dict:
+                       max_chars: int = _DEFAULT_MAX_CHARS, links: bool = False,
+                       link_contains: Optional[str] = None) -> dict:
         """Read a PUBLIC web page, escalating until it yields — and always
         saying which path was used.
 
@@ -385,6 +452,12 @@ def register(mcp: FastMCP) -> None:
             as_html: True = raw HTML/DOM instead of readable text (①/③ only —
                 ② returns markdown).
             max_chars: cap on returned content (truncation is flagged).
+            links: True = also return the page's links, `links: [{href, text}]`
+                (absolute, deduplicated, at most 500; `links_total` and
+                `links_truncated` say if more exist) — the readable text
+                carries no href. Use it to collect links instead of `as_html`.
+            link_contains: keep only links whose href contains this text
+                (e.g. "/customers-story/"); implies `links=True`.
         """
         # Project perimeter (#605): resolved ONCE (DB read → outside the loop),
         # applied to the requested URL here and to the URL OBSERVED after redirect
@@ -394,6 +467,7 @@ def register(mcp: FastMCP) -> None:
         url_perimeter.refuse_if_excluded(url, per)
 
         cap = max(1, int(max_chars))
+        avec_liens = bool(links or link_contains)
         tentatives: list = []
         cout = {"serper_credits": 0, "browser_session": False}
         # A TRACED zero until tier ② deducts something: the biller reads an
@@ -404,7 +478,8 @@ def register(mcp: FastMCP) -> None:
         demande = urlsplit(url).hostname or ""
 
         def _sortie(chemin: str, content: str, title: str = "",
-                    final_url: Optional[str] = None) -> dict:
+                    final_url: Optional[str] = None,
+                    liens: Optional[dict] = None) -> dict:
             """Assembles the response — and never ASSERTS the final URL.
 
             Signal #491: this field copied the REQUESTED URL when the tier
@@ -427,6 +502,9 @@ def register(mcp: FastMCP) -> None:
                    "hote": {"demande": demande, "servi": servi,
                             "conforme": conforme},
                    "tentatives": tentatives, "cout": cout}
+            if avec_liens:
+                out.update(liens or {"links": [], "links_total": 0,
+                                     "links_truncated": False})
             if conforme is None:
                 out["avertissement"] = (
                     "Cannot confirm which site answered: the tier "
@@ -460,7 +538,10 @@ def register(mcp: FastMCP) -> None:
             contenu = res["html"] if as_html else texte
             if len(texte) >= _EMPTY_TEXT_CHARS:
                 tentatives.append({"cran": "http", "verdict": "read"})
-                return _sortie("http", contenu, title, res.get("final_url") or None)
+                base = res.get("final_url") or url
+                return _sortie("http", contenu, title, res.get("final_url") or None,
+                               extract_links(res["html"], base, link_contains)
+                               if avec_liens else None)
             tentatives.append({"cran": "http",
                                "verdict": f"empty shell ({len(texte)} useful chars)"})
         else:
@@ -494,7 +575,9 @@ def register(mcp: FastMCP) -> None:
             meta = scrape.get("metadata") or {}
             if len(md.strip()) >= _EMPTY_TEXT_CHARS:
                 tentatives.append({"cran": "serper", "verdict": "read"})
-                return _sortie("serper", md, str(meta.get("title") or ""))
+                return _sortie("serper", md, str(meta.get("title") or ""), None,
+                               extract_links_markdown(md, url, link_contains)
+                               if avec_liens else None)
             tentatives.append({"cran": "serper",
                                "verdict": f"empty shell ({len(md.strip())} chars)"})
 
@@ -509,19 +592,24 @@ def register(mcp: FastMCP) -> None:
             raise _bad("browser=true requested but Browserbase is not configured "
                        "on the platform side — report it (feedback signal=gap).")
         try:
-            page = await browserbase.fetch_page_ephemeral(url, as_html=as_html)
+            # Links need the DOM: fetched as HTML, then read as text here.
+            page = await browserbase.fetch_page_ephemeral(
+                url, as_html=as_html or avec_liens)
         except browserbase.BrowserbaseError as e:
             tentatives.append({"cran": "browser", "verdict": str(e)[:200]})
             raise _bad("The browser session failed too — the page is "
                        f"unreadable by all three tiers. Attempts: {tentatives}")
         cout["browser_session"] = True
         contenu = page.get("content") or ""
-        if not as_html:
-            # innerText is already "text" — no second extraction.
-            pass
+        liens = None
+        if avec_liens:
+            liens = extract_links(contenu, page.get("final_url") or url, link_contains)
+            if not as_html:
+                contenu = extract_text(contenu)[0]
+        # Otherwise innerText is already "text" — no second extraction.
         tentatives.append({"cran": "browser", "verdict": "read"})
         return _sortie("browser", contenu, page.get("title") or "",
-                       page.get("final_url") or None)
+                       page.get("final_url") or None, liens)
 
     @mcp.tool()
     async def web_image(url: str) -> ToolResult:

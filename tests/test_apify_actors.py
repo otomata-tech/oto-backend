@@ -452,3 +452,14 @@ def test_wttj_a_failed_run_still_shapes_its_items_and_never_raises():
     assert out["status"] == "TIMED-OUT" and out["run_id"] == RUN
     assert [j["reference"] for j in out["items"]] == ["ACME_j0b001", "ACME_j0b002"]
     assert "equality_indexes" not in out["items"][0]["organization"]
+
+
+def test_a_jobs_url_with_the_job_function_filter_is_refused_before_it_starts():
+    """#1945: the public search behind the actor drops `f_F` — 60 jobs of every kind
+    came back billed. Refused by name, with the way to narrow instead."""
+    url = "https://www.linkedin.com/jobs/search/?geoId=105015875&f_TPR=r86400&f_F=mrkt"
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+            patch("oto.tools.apify.client.ApifyClient") as cls:
+        with pytest.raises(McpError, match="f_F"):
+            _tool("apify_linkedin_jobs").fn(search_urls=[url])
+        cls.return_value.run.assert_not_called()

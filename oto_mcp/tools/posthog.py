@@ -494,6 +494,7 @@ def register(mcp: FastMCP) -> None:
         flag_id: Optional[str] = None,
         experiment_id: Optional[str] = None,
         limit: Optional[int] = None,
+        offset: Optional[int] = None,
         project_id: Optional[str] = None,
     ) -> object:
         """Feature flags and experiments — read-only.
@@ -507,28 +508,35 @@ def register(mcp: FastMCP) -> None:
             op: "list" (default) | "get" | "experiments" | "experiment".
             flag_id: REQUIRED by "get". experiment_id: REQUIRED by "experiment".
             limit, project_id: as elsewhere.
+            offset: "list"/"experiments" — skip that many items, to read the next
+                page (PostHog's `next` link carries the next offset). Default 0.
 
         """
         client = _client()
+        if offset is not None and offset < 0:
+            raise _bad("`offset` must be 0 or more")
+        page = {"offset": offset} if offset else {}
         if op == "list":
             _refuse_ignored(op, "use op='get' for a specific flag",
                             flag_id=flag_id, experiment_id=experiment_id)
             return _run(lambda: client.list_feature_flags(
-                project_id=project_id, limit=limit or _DEFAULT_LIMIT))
+                project_id=project_id, limit=limit or _DEFAULT_LIMIT, **page))
         if op == "experiments":
             _refuse_ignored(op, "the experiment list does not take these filters",
                             flag_id=flag_id, experiment_id=experiment_id)
             return _run(lambda: client.list_experiments(
-                project_id=project_id, limit=limit or _DEFAULT_LIMIT))
+                project_id=project_id, limit=limit or _DEFAULT_LIMIT, **page))
         if op == "get":
             if not flag_id:
                 raise _bad("op='get' requires `flag_id`")
-            _refuse_ignored(op, "op='get' targets a flag", experiment_id=experiment_id)
+            _refuse_ignored(op, "op='get' targets a flag", experiment_id=experiment_id,
+                            offset=offset)
             return _run(lambda: client.get_feature_flag(flag_id, project_id=project_id))
         if op == "experiment":
             if not experiment_id:
                 raise _bad("op='experiment' requires `experiment_id`")
-            _refuse_ignored(op, "op='experiment' targets an experiment", flag_id=flag_id)
+            _refuse_ignored(op, "op='experiment' targets an experiment", flag_id=flag_id,
+                            offset=offset)
             return _run(lambda: client.get_experiment(experiment_id, project_id=project_id))
         raise _bad("op must be 'list', 'get', 'experiments' or 'experiment'")
 

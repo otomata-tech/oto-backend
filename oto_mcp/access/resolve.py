@@ -186,10 +186,10 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # PROJECT binding (ADR 0038 B5): the call's project (`_project=`) binds an
     # instance for this provider → HARD resolution, RE-GUARDED for the CALLER (the
     # binding was guarded for whoever set it; the caller of a shared project
-    # may be another member). Explicit `_instance=` (above) takes precedence — the
-    # most specific token of the call.
+    # may be another member). `_instance=` and a NAMED account outrank it: a default, not a lock.
+    named = account if account is not None else session_org.current_call_account()
     bound = scope.project_pinned_instance(porteur)
-    if bound is not None:
+    if bound is not None and named in (None, "", bound.account or ""):
         if not heritage.instance_heritee(sub, bound):   # lent by a share (#480)
             rbac.guard_instance_access(sub, bound)
         return _resolve_pinned_instance(porteur, sub, bound)

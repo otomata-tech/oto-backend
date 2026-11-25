@@ -675,6 +675,9 @@ _SUB_COLUMNS = [
     ("apps", "created_by"), ("apps", "updated_by"), ("app_revisions", "edited_by"),
     # l'auteur du brouillon d'une app : il borne son aperçu, il suit la personne.
     ("apps", "draft_by"),
+    # la personne dont l'app PRÊTE l'accès (`op=act_as`) : ses droits, ils la suivent —
+    # laissée, l'app ne prêterait plus rien (l'ancien compte n'est membre de rien).
+    ("apps", "acts_as"),
     # à qui un consentement de geste d'app a été donné — c'est aussi le journal des
     # gestes d'app : il suit la personne. Un consentement non brûlé ne vaut que deux
     # minutes ; repointé, il ne gêne rien (aucune unicité sur `sub`).

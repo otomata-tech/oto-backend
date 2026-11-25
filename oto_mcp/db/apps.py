@@ -36,7 +36,17 @@ _CARTE = ("id, owner_type, owner_id, context_org_id, title, thumbnail, created_b
 # brouillon : de quoi dire au lecteur quelle version il ouvre. Jamais le brouillon
 # lui-même (`db/app_versions.py`), réservé à ses éditeurs.
 _VERSION = "drafts_enabled, published_at, version_note"
-_TOUT = _CARTE + ", manifest, html, " + _VERSION
+# Qui l'app PRÊTE, depuis quand, et si le prêt vaut pour le manifeste VIVANT (`docs/apps.md`
+# § Une app qui prête l'accès de quelqu'un). L'empreinte est calculée par PostgreSQL
+# (`md5(manifest::text)` : le texte d'un jsonb est canonique — clés ordonnées, espaces
+# normalisés), au prêt comme à la lecture : une liste dit l'état d'un prêt sans lire les
+# manifestes.
+_PRET_COURANT = "(acts_as IS NOT NULL AND acts_as_manifest = md5(manifest::text))"
+_PRET = f"acts_as, acts_as_at, {_PRET_COURANT} AS acts_as_current"
+# Le même, pour les listes (`a.` devant chaque colonne).
+_PRET_A = ("a.acts_as, a.acts_as_at, (a.acts_as IS NOT NULL AND "
+           "a.acts_as_manifest = md5(a.manifest::text)) AS acts_as_current")
+_TOUT = _CARTE + ", manifest, html, " + _VERSION + ", " + _PRET
 # Les révisions ORDINAIRES gardées par app ; les versions publiées, à part.
 MAX_REVISIONS = 50
 MAX_PUBLISHED = 200
@@ -99,7 +109,7 @@ def get_for_call(app_id: int) -> Optional[dict]:
     (`op=get`)."""
     with _connect() as conn:
         return conn.execute(
-            f"SELECT {_CARTE}, manifest FROM apps WHERE id = %s", (app_id,)).fetchone()
+            f"SELECT {_CARTE}, manifest, {_PRET} FROM apps WHERE id = %s", (app_id,)).fetchone()
 
 
 def _archives(archived: bool) -> str:
@@ -114,8 +124,8 @@ def list_for_projects(project_ids: Iterable[int], *, archived: bool = False) -> 
         return []
     with _connect() as conn:
         return conn.execute(
-            f"SELECT DISTINCT {', '.join('a.' + c.strip() for c in _CARTE.split(','))} "
-            f"FROM apps a JOIN app_projects f ON f.app_id = a.id "
+            f"SELECT DISTINCT {', '.join('a.' + c.strip() for c in _CARTE.split(','))}, "
+            f"{_PRET_A} FROM apps a JOIN app_projects f ON f.app_id = a.id "
             f"WHERE f.project_id = ANY(%s) AND {_archives(archived)} "
             "ORDER BY a.updated_at DESC, a.id DESC",
             (ids,),
@@ -141,8 +151,9 @@ def list_for_owners(owners: list[tuple[str, str]], *, archived: Optional[bool] =
     arch = "" if archived is None else f" AND {_archives(archived)}"
     with _connect() as conn:
         return conn.execute(
-            f"SELECT {', '.join('a.' + c.strip() for c in _CARTE.split(','))} FROM apps a "
-            f"WHERE ({' OR '.join(clauses)}){arch} ORDER BY a.updated_at DESC, a.id DESC",
+            f"SELECT {', '.join('a.' + c.strip() for c in _CARTE.split(','))}, {_PRET_A} "
+            f"FROM apps a WHERE ({' OR '.join(clauses)}){arch} "
+            "ORDER BY a.updated_at DESC, a.id DESC",
             tuple(params),
         ).fetchall()
 
@@ -157,7 +168,7 @@ def list_granted_to(principals: list[tuple[str, str]], *, archived: bool = False
     with _connect() as conn:
         cols = ', '.join('a.' + c.strip() for c in _CARTE.split(','))
         return conn.execute(
-            f"SELECT {cols}, max(g.permission) AS permission "
+            f"SELECT {cols}, {_PRET_A}, max(g.permission) AS permission "
             "FROM resource_grants g JOIN apps a ON a.id::text = g.resource_id "
             f"WHERE g.resource_type = 'app' AND {PARTAGE_VIVANT_G} "
             "AND (g.principal_type, g.principal_id) IN "
@@ -320,6 +331,12 @@ def ecrire_sous_verrou(conn, prior: dict, *, by: str, title: Optional[str] = Non
     if manifest is not None:
         sets.append("manifest = %s")
         params.append(Jsonb(manifest))
+        # Le prêt est FIGÉ sur le manifeste que sa personne a vu : réécrit par elle, il la
+        # suit ; par quelqu'un d'autre, l'app ne prête plus rien tant qu'elle ne l'a pas
+        # prêté à nouveau (`apps_appel._preteur`, `op=act_as`).
+        if prior.get("acts_as") and prior["acts_as"] == by:
+            sets.append("acts_as_manifest = md5((%s)::jsonb::text)")
+            params.append(Jsonb(manifest))
     if html is not None:
         sets.append("html = %s")
         params.append(html)
@@ -335,6 +352,53 @@ def ecrire_sous_verrou(conn, prior: dict, *, by: str, title: Optional[str] = Non
         f"UPDATE apps SET {', '.join(sets)} WHERE id = %s RETURNING {_TOUT}",
         (*params, app_id),
     ).fetchone()
+
+
+def set_acts_as(app_id: int, sub: Optional[str],
+                expected_rev: Optional[str] = None) -> Optional[dict]:
+    """L'app prête les droits de `sub`, sur son manifeste VIVANT de cet instant (lu sous
+    le verrou de la ligne : une écriture concurrente ne passe pas entre la lecture et
+    l'empreinte) — ou plus rien (`sub=None`). `expected_rev` : la version que la personne
+    a VUE ; une autre sous le verrou → `AppConflict`, rien n'est prêté (elle ne prête
+    pas un manifeste qu'elle n'a pas lu). Ni révision ni `updated_by` : le contenu de
+    l'app ne change pas. `None` = app inconnue. Le jugement (qui peut prêter, et quoi)
+    est celui de la capacité (`capabilities/apps.py`, `op=act_as`)."""
+    with _connect() as conn:
+        prior = conn.execute(
+            "SELECT title, manifest, html, thumbnail FROM apps WHERE id = %s FOR UPDATE",
+            (app_id,)).fetchone()
+        if prior is None:
+            return None
+        if expected_rev is not None:
+            courant = app_rev(prior["title"], prior["manifest"], prior["html"],
+                              prior["thumbnail"])
+            if courant != expected_rev:
+                raise AppConflict(courant)
+        return with_rev(conn.execute(
+            "UPDATE apps SET acts_as = %s, "
+            "acts_as_manifest = CASE WHEN %s::text IS NULL THEN NULL "
+            "ELSE md5(manifest::text) END, "
+            "acts_as_at = CASE WHEN %s::text IS NULL THEN NULL ELSE NOW() END "
+            f"WHERE id = %s RETURNING {_TOUT}",
+            (sub, sub, sub, app_id)).fetchone())
+
+
+def apps_act_as_de_l_org(org_id: int) -> Optional[bool]:
+    """Le réglage d'une org : ses apps peuvent-elles prêter (`orgs.apps_act_as`).
+    `None` = l'org n'a rien choisi (le défaut de l'instance s'applique, `apps_appel`)
+    ou n'existe pas."""
+    with _connect() as conn:
+        row = conn.execute("SELECT apps_act_as AS v FROM orgs WHERE id = %s",
+                           (int(org_id),)).fetchone()
+    return None if row is None or row["v"] is None else bool(row["v"])
+
+
+def poser_apps_act_as(org_id: int, valeur: Optional[bool]) -> bool:
+    """Pose le réglage (`None` = revenir au défaut de l'instance). Faux si l'org n'existe pas."""
+    with _connect() as conn:
+        row = conn.execute("UPDATE orgs SET apps_act_as = %s WHERE id = %s RETURNING id",
+                           (valeur, int(org_id))).fetchone()
+    return row is not None
 
 
 def set_archived(app_id: int, archived: bool) -> Optional[dict]:

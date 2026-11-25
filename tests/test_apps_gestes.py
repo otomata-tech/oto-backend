@@ -50,7 +50,9 @@ def s(monkeypatch):
                        (AUTEUR, 10): "viewer", (LECTEUR, 10): "viewer"},
            "jobs": [], "results": {}}
     droits = {(LECTEUR, "app"): True, (AUTEUR, "12", "read"): True,
-              (AUTEUR, "12", "write"): True}
+              (AUTEUR, "12", "write"): True,
+              # Le lecteur a son propre accès au tableau : l'app ne prête rien.
+              (LECTEUR, "12", "read"): True, (LECTEUR, "12", "write"): True}
 
     def can_access(sub, rtype, rid, want="read"):
         if rtype == "app":
@@ -185,6 +187,7 @@ def test_le_consentement_ne_vaut_que_pour_ses_arguments(s):
 
 def test_le_consentement_d_un_autre_lecteur_ne_sert_pas(s):
     s["droits"][(AUTRE, "app")] = True
+    s["droits"][(AUTRE, "12", "write")] = True
     jeton = consent(**ECRIRE)
     assert refus(call, ResolvedCtx(sub=AUTRE, org_id=ORG), consent=jeton, **ECRIRE).code == "consent_invalid"
 

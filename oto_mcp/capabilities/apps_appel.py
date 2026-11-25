@@ -68,6 +68,15 @@ Un agent se juge pareil, dans l'org de l'app : l'auteur par `_acces_agent.niveau
 (écrire pour lancer), le lecteur par `run_now` lui-même.
 Auteur inconnu ou qui a perdu l'accès : refus nommé, rien n'est servi.
 
+**Sauf quand l'app PRÊTE l'accès d'une personne nommée** (`_preteur`, `oto_apps
+op=act_as`) : un lecteur SANS accès propre à un tableau déclaré le lit — et, avec Use,
+l'écrit aux valeurs déclarées — avec les droits de cette personne, bornés au manifeste.
+Elle s'est nommée elle-même, le prêt est figé sur le manifeste qu'elle a vu, l'org de
+l'app le permet, le tableau déclare sa liste de champs, et elle pourrait le partager
+elle-même. Le store agit alors en son nom, l'org de l'appel épinglée sur celle de l'app
+(`_sous`) ; le journal des révisions garde le lecteur. Les agents ne se prêtent jamais.
+Sans prêt, refus nommé `app_author_not_lending`, qui dit pourquoi.
+
 **Ce que l'app voit est borné par son manifeste**, ici et non plus dans le front
 seul : champs déclarés (projection, filtres, tri, regroupement, mesures). Un manifeste
 stocké est déjà normalisé (`apps_manifeste.forme`) et ses tableaux sont des numéros.
@@ -81,12 +90,13 @@ import hashlib
 import json
 import re
 import secrets
-from typing import Any, Literal, Optional
+from contextlib import contextmanager
+from typing import Any, Iterator, Literal, Optional
 
 import psycopg
 from pydantic import BaseModel, Field
 
-from .. import client_trace, config, db, geste, ownership
+from .. import client_trace, config, db, geste, ownership, roles, session_org
 from . import _acces_agent
 from ._authz import ORG_MEMBER
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
@@ -236,6 +246,10 @@ class AppCallOut(BaseModel):
     total: Optional[int] = None
     groups: Optional[list[dict]] = None
     row: Optional[dict] = None
+    # write_cell / add_row : vrai quand l'écriture est passée par l'accès que l'app PRÊTE
+    # (`_preteur`) — le lecteur n'a pas d'accès propre au tableau : l'hôte ne propose
+    # pas de l'annuler par les routes de tableau, qui le lui refuseraient.
+    through_app: Optional[bool] = None
     job_id: Optional[int] = None
     runs: Optional[list[AppRun]] = None
     run: Optional[AppRun] = None
@@ -304,7 +318,10 @@ def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False,
         brouillon = db.app_versions.draft(int(app["id"]))
         if brouillon is None:
             raise _refus(404, "no_draft", "This app has no draft.")
-        app = {**app, "manifest": brouillon["manifest"], "updated_by": brouillon["by"]}
+        # Un aperçu de brouillon ne PRÊTE jamais (`_preteur`) : son manifeste n'est pas
+        # celui qu'une personne a prêté.
+        app = {**app, "manifest": brouillon["manifest"], "updated_by": brouillon["by"],
+               "_brouillon": True}
     # Après le brouillon : un lecteur qui le demande reçoit le refus du brouillon, qu'il
     # en existe un ou non — jamais un indice.
     if geste_ and not peut_cliquer(ctx.sub, int(app["id"])):
@@ -316,7 +333,12 @@ def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False,
     return app
 
 
-def _table(app: dict, alias: Optional[str], want: str = "read") -> tuple[str, dict]:
+def _table(app: dict, alias: Optional[str], viewer: str,
+           want: str = "read") -> tuple[str, dict, Optional[str]]:
+    """Le tableau DÉCLARÉ sous `alias`, et sous QUI il se lit ou s'écrit : `None` = le
+    lecteur, avec ses propres droits ; sinon la personne dont l'app PRÊTE l'accès
+    (`_preteur`), quand le lecteur n'en a pas. Ni l'un ni l'autre : refus nommé, qui dit
+    pourquoi l'app ne prête pas."""
     t = (app["manifest"].get("tables") or {}).get(alias or "")
     if not isinstance(t, dict) or not str(t.get("table") or "").isdigit():
         raise _refus(400, "undeclared_table", f"This app doesn't declare a table named “{alias}”.")
@@ -327,7 +349,87 @@ def _table(app: dict, alias: Optional[str], want: str = "read") -> tuple[str, di
     if not ownership.can_access(app["updated_by"], ownership.TYPE_RESSOURCE_DATASTORE, ns, want):
         raise _refus(403, "app_author_lost_access",
                      f"This app's author can no longer {want} table {ns}: the app can't either.")
-    return ns, t
+    if ownership.can_access(viewer, ownership.TYPE_RESSOURCE_DATASTORE, ns, want):
+        return ns, t, None
+    preteur, raison = _preteur(app, ns, t, want)
+    if preteur is None:
+        raise AuthzDenied(403, "app_author_not_lending",
+                     f"You can't {want} the table “{alias}” yourself, and this app doesn't "
+                     f"lend access to it: {raison}. Ask the app's owner to share the table "
+                     "with you, or to lend their access to this app.")
+    return ns, t, preteur
+
+
+def prets_permis(org_id: Optional[int]) -> bool:
+    """Les apps de l'org `org_id` peuvent-elles prêter l'accès d'une personne nommée :
+    le choix d'un admin de l'org, sinon le défaut de l'instance (`orgs/apps_act_as.py`)."""
+    from .orgs import apps_act_as
+    return apps_act_as.permis(org_id)
+
+
+def _preteur(app: dict, ns: str, t: dict, want: str) -> tuple[Optional[str], str]:
+    """`(qui, "")` quand l'app PRÊTE l'accès de `qui` à ce tableau pour `want`, sinon
+    `(None, pourquoi)`. Les gardes, toutes requises (`docs/apps.md` § Une app qui prête
+    l'accès de quelqu'un) :
+
+    - **une personne NOMMÉE** (`apps.acts_as`), qui s'est nommée elle-même — on ne prête
+      que ses propres droits —, jamais le dernier à avoir écrit l'app ;
+    - **FIGÉE sur le manifeste** qu'elle a prêté (`acts_as_current`, l'empreinte que
+      PostgreSQL compare à celle du manifeste vivant, `db/apps.py`) : réécrit par
+      quelqu'un d'autre, l'app ne prête plus rien jusqu'à un nouveau prêt ; jamais sur
+      un aperçu de brouillon ;
+    - **l'org de l'app le permet** (`prets_permis`), la personne en est membre et GÈRE
+      toujours l'app (`can_govern`) : c'est elle qui décide à qui l'app s'ouvre ;
+    - **des champs BORNÉS** : le tableau est déclaré avec sa liste de champs — un
+      tableau déclaré sans liste (tout lire, la recherche plein texte) ne se prête pas ;
+    - **la personne pourrait partager CE tableau** (`can_govern`) et en a le droit
+      `want` : prêter, c'est partager ce que l'app en montre, ce qu'elle pouvait faire
+      elle-même.
+
+    Les agents ne se prêtent pas : un lancement reste au nom du lecteur, avec ses
+    droits (`_agent`) — un invité ne fait jamais agir les connexions d'un autre."""
+    qui = app.get("acts_as")
+    if app.get("_brouillon"):
+        return None, "a draft preview never lends access"
+    if not qui:
+        return None, "nobody lends their access to this app"
+    if not app.get("acts_as_current"):
+        return None, ("its manifest changed since its access was lent, and must be lent "
+                      "again")
+    org = org_de_l_app(app)
+    if not prets_permis(org):
+        return None, "the app's organization doesn't let apps lend access"
+    if not roles.is_org_member(qui, int(org)):
+        return None, "the person who lent their access is no longer in the app's organization"
+    if not ownership.can_govern(qui, APP_RTYPE, str(app["id"])):
+        # Sans elle, ceux qui gèrent l'app après elle choisiraient à qui ses droits
+        # s'ouvrent : la personne nommée doit toujours décider qui voit l'app.
+        return None, "the person who lent their access no longer manages this app"
+    if not isinstance(t.get("fields"), list):
+        return None, "the table is declared without a list of fields"
+    if not ownership.can_govern(qui, ownership.TYPE_RESSOURCE_DATASTORE, ns):
+        return None, "the person who lent their access can't share this table"
+    if not ownership.can_access(qui, ownership.TYPE_RESSOURCE_DATASTORE, ns, want):
+        return None, f"the person who lent their access can't {want} this table"
+    return str(qui), ""
+
+
+@contextmanager
+def _sous(ctx: ResolvedCtx, app: dict, preteur: Optional[str]) -> Iterator[ResolvedCtx]:
+    """Le contexte sous lequel le store lit ou écrit : le lecteur, ou la personne dont
+    l'app prête l'accès — jamais SA session (elle n'est pas là) : un contexte neuf, et
+    l'org de l'APPEL épinglée sur l'org de l'app le temps du geste, pour que le store la
+    résolve là (`access.current_org`), et non dans l'org que le lecteur consulte. Le
+    journal des révisions garde le lecteur (`geste` : le porteur de la session)."""
+    if preteur is None:
+        yield ctx
+        return
+    org = int(org_de_l_app(app))
+    jeton = session_org.set_call_org(org)
+    try:
+        yield ResolvedCtx(sub=preteur, org_id=org, channel=ctx.channel)
+    finally:
+        session_org.reset_call_org(jeton)
 
 
 def _filtre(t: dict, raw: Any) -> Optional[str]:
@@ -426,6 +528,12 @@ def _resume(app: dict, action: str, target: dict, content: dict, text: str) -> d
             "target": target, "content": content, "text": text}
 
 
+def _comme(preteur: Optional[str]) -> str:
+    """Sous quels droits un geste écrit, tel que le résumé de l'hôte le dit."""
+    return ("with the access this app lends (recorded as your change)" if preteur
+            else "as you")
+
+
 def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
     """Juge un geste qui écrit ou lance — TOUT ce que l'appel jugera, sans rien
     faire — et rend `(faire, résumé)` : de quoi le faire, et ce que l'écran hôte
@@ -434,7 +542,7 @@ def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
     from .datastore import rows as R
 
     if inp.action == "write_cell":
-        ns, t = _table(app, inp.table, "write")
+        ns, t, preteur = _table(app, inp.table, ctx.sub, "write")
         allowed = (t.get("set") or {}).get(inp.field or "")
         if not allowed:
             raise _refus(403, "undeclared_write", f"This app may not change “{inp.field}”.")
@@ -448,19 +556,20 @@ def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
                          "An app's write names the row's `_revision` as it was shown.")
 
         def faire(_consent_id: int) -> dict:
-            row = R._update_row(ctx, R.UpdateRowInput(
-                datastore=ns, row_id=inp.row_id, patch={inp.field: inp.value},
-                expected_revision=inp.expected_revision))
-            return {"row": _projeter(t, row)}
+            with _sous(ctx, app, preteur) as qui:
+                row = R._update_row(qui, R.UpdateRowInput(
+                    datastore=ns, row_id=inp.row_id, patch={inp.field: inp.value},
+                    expected_revision=inp.expected_revision))
+            return {"row": _projeter(t, row), "through_app": preteur is not None}
         return faire, _resume(
             app, inp.action,
             {"table": inp.table, "table_id": ns, "row_id": inp.row_id, "field": inp.field},
             {"set": {inp.field: inp.value}},
             f"Set “{inp.field}” to “{inp.value}” on row {inp.row_id} of table "
-            f"“{inp.table}”, as you.")
+            f"“{inp.table}”, {_comme(preteur)}.")
 
     if inp.action == "add_row":
-        ns, t = _table(app, inp.table, "write")
+        ns, t, preteur = _table(app, inp.table, ctx.sub, "write")
         values = inp.values or {}
         cols = t.get("add") or []
         if not cols:
@@ -472,11 +581,12 @@ def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
             raise _refus(400, "empty_row", "The new row is empty.")
 
         def faire(_consent_id: int) -> dict:
-            row = R._append_row(ctx, R.AppendRowInput(datastore=ns, row=values))
-            return {"row": _projeter(t, row)}
+            with _sous(ctx, app, preteur) as qui:
+                row = R._append_row(qui, R.AppendRowInput(datastore=ns, row=values))
+            return {"row": _projeter(t, row), "through_app": preteur is not None}
         return faire, _resume(
             app, inp.action, {"table": inp.table, "table_id": ns}, {"row": values},
-            f"Add a row to table “{inp.table}”, as you: "
+            f"Add a row to table “{inp.table}”, {_comme(preteur)}: "
             + "; ".join(f"{k} = {_valeur(v)}" for k, v in values.items()) + ".")
 
     if inp.action == "upload_file":
@@ -986,7 +1096,7 @@ def _lire(ctx: ResolvedCtx, app: dict, action: str, alias: Optional[str], o: dic
     aucun jugement de tableau n'est partagé entre les lectures d'un lot."""
     from .datastore import rows as R
 
-    ns, t = _table(app, alias)
+    ns, t, preteur = _table(app, alias, ctx.sub)
 
     if action == "read_rows":
         order_by = o.get("order_by")
@@ -1002,13 +1112,15 @@ def _lire(ctx: ResolvedCtx, app: dict, action: str, alias: Optional[str], o: dic
         # jetée ensuite par `_projeter`. Les métadonnées que l'hôte relit (`_revision`
         # pour écrire contre la version montrée, les dates) sont demandées avec.
         champs = t.get("fields")
-        page = R._list_rows(ctx, R.ListRowsInput(
+        entree = R.ListRowsInput(
             datastore=ns, limit=min(max(_entier(o, "limit", 50), 1), MAX_ROWS),
             fields=(None if champs is None
                     else [f for f in champs if isinstance(f, str)] + sorted(_META - {"_id"})),
             offset=max(_entier(o, "offset", 0), 0), order_by=order_by,
             order_dir="asc" if o.get("order_dir") == "asc" else "desc",
-            q=q if isinstance(q, str) and q else None, filter=_filtre(t, o.get("filter"))))
+            q=q if isinstance(q, str) and q else None, filter=_filtre(t, o.get("filter")))
+        with _sous(ctx, app, preteur) as qui:
+            page = R._list_rows(qui, entree)
         return {"rows": [_projeter(t, r) for r in page.get("rows") or []],
                 "total": page.get("total")}
 
@@ -1029,9 +1141,10 @@ def _lire(ctx: ResolvedCtx, app: dict, action: str, alias: Optional[str], o: dic
         # Pas de `where` par métrique : il filtrerait sur un champ non déclaré.
         propres.append({"op": m["op"], **({"field": m["field"]} if m.get("field") else {}),
                         "label": m.get("label") if isinstance(m.get("label"), str) else f"m{i}"})
-    out = R._aggregate(ctx, R.AggregateInput(
-        datastore=ns, group_by=group_by, metrics=json.dumps(propres),
-        filter=_filtre(t, o.get("filter"))))
+    entree = R.AggregateInput(datastore=ns, group_by=group_by, metrics=json.dumps(propres),
+                              filter=_filtre(t, o.get("filter")))
+    with _sous(ctx, app, preteur) as qui:
+        out = R._aggregate(qui, entree)
     return {"groups": out.get("groups") or []}
 
 
@@ -1045,7 +1158,9 @@ CAPABILITIES += [
             "declared field to a declared value (with the row's `_revision`), add a "
             "row with declared columns, start a declared agent, follow its runs — "
             "or `batch` up to 10 reads, each answered as its own call in `results`. "
-            "Allowed only when BOTH the app's author and its viewer may do it, on "
+            "Allowed when the app's author may do it AND either the viewer may too, "
+            "or the app lends a named person's access to that table (`oto_apps "
+            "op=act_as`: tables declared with a field list, never agents), on "
             "tables and agents of the app's organization. Writing and "
             "starting need the Use role (or Edit/Manage) and `consent`, from "
             "`POST /api/me/apps/{app_id}/consent`. "
@@ -1060,6 +1175,12 @@ CAPABILITIES += [
                           "côté de `reads` — ou `reads` sans `action: batch`"),
             DeclaredError(400, "batch_too_large",
                           "batch : plus de `MAX_LECTURES_PAR_LOT` (10) lectures"),
+            DeclaredError(403, "app_author_not_lending",
+                          "le lecteur n'a pas d'accès propre au tableau, et l'app ne "
+                          "prête pas celui d'une personne nommée (`op=act_as`) — le "
+                          "message dit pourquoi : personne de nommé, manifeste changé "
+                          "depuis le prêt, org qui ne le permet pas, tableau sans liste "
+                          "de champs, prêteur qui ne peut pas partager le tableau"),
             DeclaredError(403, "app_view_only",
                           "un geste (write_cell, add_row, start_agent) par qui ne tient "
                           "que View (`viewer`) : il faut Use (`contributor`), Edit ou "

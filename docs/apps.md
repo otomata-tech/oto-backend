@@ -49,7 +49,8 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
   projection contenu `read`, refusé hors d'une app (400 `role_for_apps_only`) ; Edit = la
   modifier ; Manage = la repartager (gouvernance : propriétaire, admin, gérant). Use ne
   donne aucun droit sur ce que l'app touche : chaque geste reste jugé auteur ∩ lecteur
-  (ci-dessous). Un partage `viewer` d'avant ce rôle reste View : il ne clique plus —
+  (ci-dessous), sauf quand l'app PRÊTE l'accès d'une personne nommée (§ Une app qui
+  prête l'accès de quelqu'un). Un partage `viewer` d'avant ce rôle reste View : il ne clique plus —
   `oto-mcp maintenance apps-lecteurs-actifs` liste ceux qui cliquaient et, avec
   `--appliquer`, les passe en Use (`docs/commands.md`). Transférer l'app à l'org ou
   à une équipe la rend à tous leurs membres (propriétaires : ils cliquent).
@@ -142,7 +143,10 @@ et `batch`, un lot de lectures (plus bas).
   session. Le lecteur est jugé en exécutant POUR LUI les capacités existantes (lignes,
   agrégat). Auteur inconnu ou qui a perdu l'accès : 403 `app_author_unknown` /
   `app_author_lost_access` ; tableau sorti de l'org du projet depuis l'écriture :
-  403 `table_outside_project_org`.
+  403 `table_outside_project_org`. Un lecteur sans accès propre au tableau
+  (`ownership.can_access`, jugé avant le store) le lit si l'app le lui PRÊTE
+  (§ ci-dessous), sinon 403 `app_author_not_lending`, dont le message dit pourquoi —
+  l'écran hôte le montre tel quel (préfixe `app_author_`).
 - **Borné au manifeste, côté serveur** : projection aux champs déclarés (plus `_id`,
   `_revision`, les dates), filtre / tri / regroupement / mesure sur ces champs seuls,
   recherche plein texte seulement sans liste de champs. `limit` et `offset` sont des
@@ -194,6 +198,69 @@ et `batch`, un lot de lectures (plus bas).
 - **Journal** : l'appel est tracé comme toute requête REST (`tool_calls`, `kind=rest`),
   mais la route y est réduite (`/api/me/apps/:id/call`) : le numéro de l'app et le
   tableau lu n'y sont pas. Aucun journal d'audit des lectures n'existe à ce jour.
+
+### Une app qui prête l'accès de quelqu'un (`oto_apps op=act_as`)
+
+**Le cas** : une app partagée à quelqu'un — un invité d'une autre org surtout, qu'un
+partage en attente fait entrer par CETTE app et rien d'autre — qui n'a reçu aucun de
+ses tableaux. Auteur ∩ lecteur : l'app s'ouvre, chaque lecture échoue. Partager les
+tableaux un par un ouvre bien plus que l'app n'en montre (toutes les colonnes, sans
+borne de temps). **Le prêt** : l'app montre ce qu'elle déclare avec les droits d'une
+personne NOMMÉE, à qui elle est partagée, bornée par son manifeste — ce que cette
+personne pouvait déjà faire en partageant les tableaux elle-même, réduit à ce que l'app
+en montre.
+
+- **Une personne nommée, qui se nomme elle-même** : `op=act_as enabled=true` pose
+  `apps.acts_as` = l'appelant — on ne prête que ses propres droits, jamais « le dernier
+  à avoir écrit l'app ». Il faut GOUVERNER l'app (propriétaire, gérant, admin), être
+  membre de son org, et que l'org le permette (403 `act_as_off` sinon). `enabled=false`
+  retire le prêt (qui gouverne l'app, ou la personne nommée).
+- **Figé sur le manifeste** : `acts_as_manifest` = l'empreinte du manifeste vivant au
+  moment du prêt, `md5(manifest::text)` calculée par PostgreSQL (le texte d'un jsonb
+  est canonique) et comparée par lui (`acts_as_current`) : une liste dit l'état d'un
+  prêt sans lire un manifeste. Réécrit par la personne nommée, il la
+  suit (`ecrire_sous_verrou`, le seul point d'écriture de l'état vivant : update,
+  restore, publication d'un brouillon) ; par quelqu'un d'autre, l'app ne prête plus
+  rien jusqu'à un nouveau prêt — l'écriture le dit dans ses `warnings`. Un patch du
+  HTML ne change pas le manifeste : il ne fige rien (le HTML ne sort jamais du
+  manifeste, côté serveur). Un aperçu de brouillon ne prête jamais.
+- **Un réglage d'org, éteint par défaut** : `orgs.apps_act_as` (`oto_org_settings
+  domain=apps_act_as`, REST `/api/orgs/{id}/apps-act-as`) — le choix d'un admin, sinon
+  le défaut de l'instance `OTO_APPS_ACT_AS_DEFAULT` (éteint s'il n'est pas déclaré).
+  Éteint, aucune app de l'org ne prête ; le réglage de chaque app reste, inerte.
+- **Des champs bornés** : seul un tableau déclaré AVEC sa liste de champs se prête — un
+  tableau déclaré sans liste (tout lire, la recherche plein texte) non. Les écritures
+  restent celles du manifeste (`set` : champ et valeurs, `add` : colonnes).
+- **La personne pourrait partager CE tableau** (`ownership.can_govern`) et en a le droit
+  demandé : prêter, c'est partager ce que l'app en montre.
+- **Jamais un agent** : un lancement reste au nom du lecteur, avec ses droits
+  (`_agent`) — un invité ne fait pas agir les connexions, le forfait ou les clés d'un
+  autre. Pas de plafond de lancements à tenir : il n'y en a aucun.
+
+**Comment le store lit au nom de la personne** (`apps_appel._sous`) : un contexte neuf
+(`ResolvedCtx(sub=prêteur)`) — jamais sa session — et l'org de l'APPEL épinglée sur
+l'org de l'app (`session_org.set_call_org`) le temps du geste : sans elle,
+`access.current_org(prêteur)` rendrait l'org que le LECTEUR consulte (l'org de
+consultation REST n'est pas propre à un `sub`), où le prêteur n'est pas, et le tableau
+ne se résoudrait pas. Le journal des révisions garde le lecteur (`geste`, le porteur de
+la session) ; la réponse d'un geste prêté porte `through_app: true` — l'hôte ne propose
+pas de l'annuler par les routes de tableau, qui le refuseraient au lecteur.
+
+**Ce que voient les éditeurs** : `op=get` (et la réponse d'`op=act_as`) porte
+`acts_as` = `{sub, email, at, current, tables: {alias: null | pourquoi pas}}` — le
+jugement même de l'appel, tableau par tableau ; chaque carte d'`op=list` porte `lends`
+= `{sub, email, current}` (l'écran Apps › Settings) ; un lecteur n'en voit rien.
+
+**Qui décide de qui voit** : la personne nommée prête SES droits, mais quiconque peut
+repartager l'app (un gérant, le partage par défaut de l'org, un transfert à l'org)
+choisit à qui ils s'ouvrent. C'est pourquoi le prêt tombe quand elle ne gère plus l'app,
+et pourquoi l'écran le dit à qui prête.
+
+**Déploiement** : colonnes nullables (`20261124_1000_app_act_as`, fragment `PRET`),
+ordre indifférent avec le code. Personne ne gagne d'accès au tag : il faut une org qui
+le permet ET une personne qui prête. Gardé par `tests/test_apps_pret_db.py` (de bout en
+bout, lecteur d'une autre org, chaque garde retirée tour à tour) et
+`tests/test_apps_pret.py`.
 
 ### Écrire, ajouter, lancer, déposer — l'accord du lecteur, donné hors de l'app (`me.app.consent`, #1386)
 

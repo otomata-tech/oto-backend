@@ -162,3 +162,20 @@ ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS note TEXT;
 -- remplacé. NULL pour les révisions d'avant cette colonne.
 ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS saved_at TIMESTAMPTZ;
 """
+
+PRET = """
+-- Une app qui MONTRE ce qu'elle déclare avec les droits d'une personne NOMMÉE
+-- (`docs/apps.md` § Une app qui prête l'accès de quelqu'un) : à qui l'app est partagée
+-- lit ses tableaux sans les avoir reçus lui-même. NULL = l'app ne prête rien (la règle
+-- auteur ∩ lecteur, comme avant). Posé par `oto_apps op=act_as`, par la personne
+-- elle-même : on ne prête que ses propres droits.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS acts_as TEXT;
+-- L'empreinte du manifeste que cette personne a vu en prêtant : un manifeste réécrit par
+-- quelqu'un d'autre ne prête plus rien tant qu'elle ne l'a pas prêté à nouveau (figé).
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS acts_as_manifest TEXT;
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS acts_as_at TIMESTAMPTZ;
+-- Le réglage de l'ORG de l'app : ses apps peuvent-elles prêter. NULL = le défaut de
+-- l'instance (`OTO_APPS_ACT_AS_DEFAULT`, éteint s'il n'est pas déclaré) ; TRUE / FALSE =
+-- le choix d'un admin de l'org (`oto_org_settings domain=apps_act_as`).
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS apps_act_as BOOLEAN;
+"""

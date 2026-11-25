@@ -91,7 +91,7 @@ class OrgSettingsInput(BaseModel):
     op: Literal["get", "set", "preview"]
     domain: Literal["email", "mfa", "field_filters", "model_subscriptions", "time_saved",
                     "partage_par_defaut", "apify_charge_cap", "slack", "model_regions",
-                    "models"]
+                    "models", "apps_act_as"]
     org_id: int
     # email (set) :
     connector: Optional[str] = None          # scaleway | resend
@@ -129,6 +129,7 @@ class OrgSettingsInput(BaseModel):
     # tourne en Chine.
     allow_cn: Optional[bool] = None
     # models (set) : allumer ou éteindre UN modèle pour les agents de l'org.
+    # apps_act_as (set) : les apps de l'org peuvent-elles prêter l'accès d'une personne.
     model: Optional[str] = None
     enabled: Optional[bool] = None
 
@@ -207,6 +208,19 @@ def _slack(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     return {"org_id": inp.org_id, "mention_only": seule}
 
 
+def _apps_act_as(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
+    """Les apps de l'org peuvent-elles prêter l'accès d'une personne nommée
+    (`orgs/apps_act_as.py`) : le choix de l'org, sinon le défaut de l'instance."""
+    from .orgs import apps_act_as
+    if inp.op not in ("get", "set"):
+        raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
+    if inp.op == "set":
+        if inp.enabled is None:
+            raise AuthzDenied(400, "missing_enabled", "`enabled` (true|false) requis pour set.")
+        return apps_act_as.poser(inp.org_id, inp.enabled)
+    return apps_act_as.lire(inp.org_id)
+
+
 def _regions_de_modeles(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
     """Où l'org laisse tourner les modèles de ses agents (`db/regions_de_modeles.py`) :
     `allow_cn` — les modèles dont un hôte est en Chine. Défaut : TRUE, l'état de toutes
@@ -264,6 +278,8 @@ def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
         return _regions_de_modeles(ctx, inp)
     if inp.domain == "models":
         return _modeles_eteints(ctx, inp)
+    if inp.domain == "apps_act_as":
+        return _apps_act_as(ctx, inp)
     if inp.domain == "partage_par_defaut":
         return _partage_par_defaut(ctx, inp)
     if inp.domain == "model_subscriptions":
@@ -504,7 +520,11 @@ CAPABILITIES += [
             "already on it stops running with no fallback model (`model_disabled`), a job "
             "already queued on it is stopped at the claim; set returns `agents_on_model` "
             "= `count` + `ids` of the org's agents on that model, paused ones included; "
-            "the default model cannot be turned off (`model_is_default`)). "
+            "the default model cannot be turned off (`model_is_default`)) | apps_act_as "
+            "(may the org's apps lend a named person's access to the people they are "
+            "shared with — `oto_apps op=act_as`: set takes `enabled` true|false; get "
+            "returns `enabled` (what applies), `chosen` (null = no choice, the instance "
+            "default applies) and `instance_default`). "
             "op=get is member, set is org admin."),
         mcp="oto_org_settings",
     ),

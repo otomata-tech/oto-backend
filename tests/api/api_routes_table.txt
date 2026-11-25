@@ -158,6 +158,10 @@ GET,HEAD /api/orgs/{id}/model-regions -> _handler
 OPTIONS /api/orgs/{id}/model-regions -> options_handler
 PUT /api/orgs/{id}/model-regions -> _handler
 OPTIONS /api/orgs/{id}/model-regions -> options_handler
+GET,HEAD /api/orgs/{id}/apps-act-as -> _handler
+OPTIONS /api/orgs/{id}/apps-act-as -> options_handler
+PUT /api/orgs/{id}/apps-act-as -> _handler
+OPTIONS /api/orgs/{id}/apps-act-as -> options_handler
 GET,HEAD /api/orgs/{id}/models -> _handler
 OPTIONS /api/orgs/{id}/models -> options_handler
 PUT /api/orgs/{id}/models -> _handler

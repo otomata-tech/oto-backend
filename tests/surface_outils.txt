@@ -620,7 +620,7 @@ oto_admin_tenant	admin_add admin_remove admins disable enable get key_clear keys
 oto_admin_unipile_seat	list release	c3f70025b607665d
 oto_admin_user	get list set_role	fe90c33537874b74
 oto_admin_vault_health	-	fd3168d48576c83d
-oto_apps	archive create delete_draft file get list patch publish put_file read_file restore revision revisions set_drafts unarchive unfile update validate	16fb9d488cb7df0c
+oto_apps	act_as archive create delete_draft file get list patch publish put_file read_file restore revision revisions set_drafts unarchive unfile update validate	ea485c41b1212bf6
 oto_call	-	6b4ca33383bb0eba
 oto_clear_group	-	fd3168d48576c83d
 oto_clear_org	-	fd3168d48576c83d
@@ -650,7 +650,7 @@ oto_node_edit	create delete move update	e8856bdb2454bfca
 oto_node_rows	-	047893f7d081bd5b
 oto_org	accept_invite archive create invite list_invites list_loans reject_invite update	5c434083bbbc6421
 oto_org_monitoring	adoption agents_en_echec call calls connectors export gaps run runs signals summary tool_quality	52f8af9af69f2165
-oto_org_settings	get preview set	c1dde528b1cb0895
+oto_org_settings	get preview set	510ab71e277d8b1b
 oto_procedure	archive create delete describe fork get library_get library_list list publish rename set share_get share_publish share_readers share_set share_unpublish unarchive unpublish	95e5d9b6e91cef3a
 oto_procedure_comment	-	147f9e0286ed060e
 oto_procedure_comments	-	f9d839e28803009d

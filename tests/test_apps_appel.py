@@ -38,7 +38,10 @@ def seams(monkeypatch):
     rec = {"list": [], "agg": []}
     # Ce que chacun peut : par défaut, tout ; un test retire ce qu'il éprouve.
     droits = {(LECTEUR, "app"): True, (AUTEUR, "12", "read"): True,
-              (AUTEUR, "13", "read"): True}
+              (AUTEUR, "13", "read"): True,
+              # Le lecteur a son propre accès aux tableaux : l'app ne prête rien
+              # (`test_apps_pret.py` éprouve le prêt).
+              (LECTEUR, "12", "read"): True, (LECTEUR, "13", "read"): True}
     org_des_tableaux = {"12": ORG_DU_PROJET, "13": ORG_DU_PROJET}
 
     def can_access(sub, rtype, rid, want="read"):

@@ -113,17 +113,19 @@ def test_use_clique_avec_ses_propres_droits_sur_le_tableau(monde):
 
 
 def test_use_ne_donne_aucun_acces_au_tableau(monde):
-    """Use sans accès propre au tableau : ni lecture ni écriture par l'app."""
+    """Use sans accès propre au tableau, et une app qui ne prête rien : ni lecture ni
+    écriture par l'app — refusées nommément, l'accord compris (l'hôte ne montre pas un
+    geste qui échouerait)."""
     from oto_mcp.capabilities._types import AuthzDenied
     m = monde
     _partager_app(m, "contributor")
-    with pytest.raises(AuthzDenied):
+    with pytest.raises(AuthzDenied) as e:
         _appel(m, m["lecteur"], action="read_rows", table="leads")
+    assert (e.value.status, e.value.code) == (403, "app_author_not_lending")
     with _comme(m["lecteur"]):
-        accord = _accord(m, m["lecteur"], **_ecrire(m))
         with pytest.raises(AuthzDenied) as e:
-            _appel(m, m["lecteur"], consent=accord["consent"], **_ecrire(m))
-    assert e.value.code != "app_view_only"
+            _accord(m, m["lecteur"], **_ecrire(m))
+    assert (e.value.status, e.value.code) == (403, "app_author_not_lending")
     from oto_mcp.datastore.core import make_store
     (ligne,) = make_store(m["auteur"]).list_rows(str(m["ns_id"]))
     assert ligne["status"] == "open"

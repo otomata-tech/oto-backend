@@ -332,6 +332,14 @@ _REGLAGES: tuple[Variable, ...] = (
              "Absente, vide ou un non = l'hôte ne le gère pas. Toute autre valeur lève "
              "au démarrage.",
              ("oto_mcp/capabilities/apps.py:505",)),
+    Variable("OTO_APPS_ACT_AS_DEFAULT", Classe.REGLAGE, "",
+             "Le défaut de CETTE instance pour les orgs qui n'ont rien choisi : leurs apps "
+             "peuvent-elles prêter l'accès d'une personne nommée à qui elles sont "
+             "partagées (`oto_apps op=act_as`, `docs/apps.md` § Une app qui prête l'accès "
+             "de quelqu'un) : `1`, `true`, `yes`, `on`. Absente, vide ou toute autre "
+             "valeur = éteint. Le choix d'un admin d'org (`oto_org_settings "
+             "domain=apps_act_as`) passe devant. Lu à chaque appel.",
+             ("oto_mcp/capabilities/orgs/apps_act_as.py:53",)),
     Variable("OTO_RUNS_BLOQUES_COMPTES", Classe.REGLAGE, "",
              "Un travail `done` dont l'agent a conclu son run `blocked` ou `failed` "
              "(`run_finish`) compte comme un travail MORT pour le médecin des agents, "

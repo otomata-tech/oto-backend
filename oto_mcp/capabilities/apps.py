@@ -61,13 +61,15 @@ MAX_TITLE = 200
 MAX_PROJECTS = 200
 _THUMB_KEYS = {"image", "color", "emoji", "design"}
 _ECRITURES = frozenset({"create", "update", "patch", "archive", "unarchive", "restore",
-                        "file", "unfile", "publish", "delete_draft", "set_drafts"})
+                        "file", "unfile", "publish", "delete_draft", "set_drafts",
+                        "act_as"})
 
 
 class AppInput(BaseModel):
     op: Literal["list", "get", "create", "update", "patch", "archive", "unarchive",
                 "revisions", "revision", "restore", "validate", "file", "unfile",
-                "read_file", "put_file", "publish", "delete_draft", "set_drafts"]
+                "read_file", "put_file", "publish", "delete_draft", "set_drafts",
+                "act_as"]
     project_id: Optional[int] = Field(
         default=None, description="create: also file the new app in this project. "
         "file / unfile: the project. list: only the apps filed in it.")
@@ -98,7 +100,9 @@ class AppInput(BaseModel):
         "in the DRAFT, to preview it before publishing, instead of making it live.")
     enabled: Optional[bool] = Field(
         default=None, description="set_drafts: true = edits go to a draft that "
-        "op=publish makes live; false = every edit is live at once.")
+        "op=publish makes live; false = every edit is live at once. act_as: true = the "
+        "app shows what it declares with YOUR access to anyone it is shared with; "
+        "false = it lends nobody's access.")
     file_id: Optional[int] = Field(
         default=None, description="read_file: a file a person dropped in the app (its id "
         "comes with the run's input).")
@@ -129,6 +133,10 @@ class AppCard(BaseModel):
     # Peut-il en cliquer les boutons (Use, ou la modifier) ? Servi par `op=get` seul ;
     # absent d'une liste. Faux = View : le front désactive les gestes.
     can_use: Optional[bool] = None
+    # À qui peut la modifier : la personne dont l'app PRÊTE l'accès (`op=act_as`) —
+    # `{sub, email, current}`, `current` faux = son manifeste a changé depuis le prêt.
+    # Absent = rien de prêté, ou un lecteur. Le détail par tableau : `op=get` (`acts_as`).
+    lends: Optional[dict] = None
     title: str
     thumbnail: Optional[dict] = None
     created_by: Optional[str] = None
@@ -147,6 +155,9 @@ class AppView(AppCard):
     drafts_enabled: bool = False
     published_at: Optional[Any] = None
     version_note: Optional[str] = None
+    # À ses éditeurs seuls : la personne dont l'app PRÊTE l'accès (`op=act_as`), et ce
+    # que ce prêt sert vraiment, tableau par tableau (`_pret_vu`). Absent = rien de prêté.
+    acts_as: Optional[dict] = None
 
 
 class AppDraft(BaseModel):
@@ -307,17 +318,116 @@ def _cards(sub: str, rows: list[dict], writable: Optional[set[int]] = None) -> l
     lus = _projets_lisibles(sub, rangees)
     filed = {a: [p for p in pids if p in lus] for a, pids in rangees.items()}
     vis = db.apps.visibilites(_orgs_des_apps(rows))
-    return [{**r, "project_ids": filed.get(int(r["id"]), []),
-             "visibility": vis[int(r["id"])],
-             "can_edit": (int(r["id"]) in writable if writable is not None
-                          else _can(sub, r["id"], "write"))} for r in rows]
+    cartes = [{**r, "project_ids": filed.get(int(r["id"]), []),
+               "visibility": vis[int(r["id"])],
+               "can_edit": (int(r["id"]) in writable if writable is not None
+                            else _can(sub, r["id"], "write"))} for r in rows]
+    # Qui prête, aux éditeurs seuls — les adresses en UNE lecture pour la liste.
+    preteurs = {c["acts_as"] for c in cartes if c.get("can_edit") and c.get("acts_as")}
+    emails = db.emails_by_subs(list(preteurs)) if preteurs else {}
+    for c in cartes:
+        if c.get("can_edit") and c.get("acts_as"):
+            c["lends"] = {"sub": c["acts_as"], "email": emails.get(c["acts_as"]),
+                          "current": bool(c.get("acts_as_current"))}
+    return cartes
 
 
 def _view(sub: str, row: dict) -> dict:
     from . import apps_appel
+    pret = _pret_vu(row)
     row = _cards(sub, [row])[0]
     row["can_use"] = bool(row.get("can_edit")) or apps_appel.peut_cliquer(sub, int(row["id"]))
-    return {k: row[k] for k in AppView.model_fields if k in row}
+    view = {k: row[k] for k in AppView.model_fields if k in row and k != "acts_as"}
+    if row.get("can_edit") and pret is not None:
+        view["acts_as"] = pret
+    return view
+
+
+def _pret_vu(row: dict) -> Optional[dict]:
+    """Ce que l'app prête, dit à ses éditeurs : qui, depuis quand, et pour CHAQUE tableau
+    déclaré, `null` s'il se prête à qui n'a pas d'accès propre, sinon pourquoi pas
+    (`apps_appel._preteur`, le jugement même de l'appel). `None` = rien de prêté."""
+    from . import apps_appel
+    qui = row.get("acts_as")
+    if not qui:
+        return None
+    tables = {}
+    for alias, t in ((row.get("manifest") or {}).get("tables") or {}).items():
+        if isinstance(t, dict) and str(t.get("table") or "").isdigit():
+            _, raison = apps_appel._preteur(row, str(t["table"]), t, "read")
+            tables[alias] = raison or None
+    return {"sub": qui, "email": db.emails_by_subs([qui]).get(qui),
+            "at": row.get("acts_as_at"),
+            "current": bool(row.get("acts_as_current")),
+            "tables": tables}
+
+
+def _avertir_pret(avant: dict, apres: Optional[dict]) -> list[str]:
+    """Une écriture du manifeste par quelqu'un d'autre que la personne qui prête FIGE le
+    prêt (`db.apps.ecrire_sous_verrou`) : l'app ne prête plus rien. Dit à qui écrit."""
+    if not apres or not avant.get("acts_as"):
+        return []
+    if avant.get("acts_as_current") and not apres.get("acts_as_current"):
+        qui = db.emails_by_subs([avant["acts_as"]]).get(avant["acts_as"]) or "its lender"
+        return [f"This app no longer lends {qui}'s access: its manifest changed. People "
+                "without their own access to its tables can't read them until "
+                f"{qui} lends it again (oto_apps op=act_as enabled=true)."]
+    return []
+
+
+def _avec(extra: dict, avertis: list[str]) -> dict:
+    """`extra` (`_avertir`) avec des avertissements en plus."""
+    if not avertis:
+        return extra
+    return {**extra, "warnings": [*extra.get("warnings", []), *avertis]}
+
+
+def _preter(ctx: ResolvedCtx, row: dict, enabled: Optional[bool],
+            expected_rev: Optional[str] = None) -> dict:
+    """`op=act_as` : l'app montre ce qu'elle déclare avec les droits de l'APPELANT, à qui
+    elle est partagée (`enabled=true`), ou ne prête plus rien (`false`). On ne prête que
+    ses propres droits : la personne nommée est toujours l'appelant. Prêter appartient à
+    qui GOUVERNE l'app (propriétaire, gérant, admin) et à une org qui le permet, sur la
+    version qu'il a lue (`expected_rev`) ; cesser de prêter, à qui la gouverne et à la
+    personne nommée elle-même. **Jamais un agent hébergé** : sous un jeton de délégation
+    (`verrou_org.travail_de_la_requete`), prêter est refusé — c'est un geste de la
+    personne, comme publier ; cesser de prêter reste permis."""
+    from .. import roles, verrou_org
+    from . import apps_appel
+    _require(enabled is not None, "missing_enabled",
+             "`enabled` is required: true lends your access, false stops lending.")
+    rid, sub = str(row["id"]), ctx.sub
+    gouverne = ownership.can_govern(sub, APP_RTYPE, rid)
+    if not enabled:
+        _require(gouverne or row.get("acts_as") == sub, "forbidden",
+                 "Only who manages this app, or the person it lends, stops the lending.", 403)
+        out = db.apps.set_acts_as(int(row["id"]), None)
+        return {"app": _view(sub, out)} if _can(sub, row["id"], "read") else {"ok": True}
+    _require(verrou_org.travail_de_la_requete() is None, "act_as_from_agent",
+             "A hosted agent can't lend anyone's access: the person does it themselves.", 403)
+    org = org_de_l_app(row)
+    _require(gouverne, "forbidden",
+             "Only who manages this app (its owner, a manager) lends their access to it.", 403)
+    _require(org is not None and roles.is_org_member(sub, int(org)), "forbidden",
+             "You lend your access only to an app of an organization you belong to.", 403)
+    _require(apps_appel.prets_permis(org), "act_as_off",
+             "This app's organization doesn't let apps lend access: an org admin turns it "
+             "on (oto_org_settings domain=apps_act_as).", 403)
+    _require(expected_rev is not None, "missing_expected_rev",
+             "`expected_rev` is required (from op=get): you lend your access to the "
+             "version of the app you've read.")
+    try:
+        prete = db.apps.set_acts_as(int(row["id"]), sub, expected_rev)
+    except db.apps.AppConflict as e:
+        raise AuthzDenied(409, "conflict",
+                          f"This app changed since you read it (now at rev {e.current_rev}): "
+                          "read it again before lending your access to it.") from None
+    vue = _view(sub, prete)
+    refuses = {a: r for a, r in ((vue.get("acts_as") or {}).get("tables") or {}).items() if r}
+    out: dict = {"app": vue}
+    if refuses:
+        out["warnings"] = [f"Table “{a}” isn't lent: {r}." for a, r in sorted(refuses.items())]
+    return out
 
 
 def _avertir(manifest: Optional[dict], html: Optional[str]) -> dict:
@@ -427,8 +537,15 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
                             granted_by=db.MARQUE_PARTAGE_PAR_DEFAUT)
         return {"app": _view(sub, row), **extra}
 
+    if inp.op == "act_as" and inp.enabled is False and inp.app_id is not None:
+        # La personne nommée retire son prêt même si elle ne lit plus l'app : ses droits
+        # ne restent jamais ouverts faute d'y avoir accès.
+        prete = db.apps.get(int(inp.app_id))
+        if prete is not None and prete.get("acts_as") == sub:
+            return _preter(ctx, prete, False)
     row = _app_or_404(sub, inp.app_id,
-                      "read" if inp.op in ("get", "revisions", "read_file", "put_file") else "write")
+                      "read" if inp.op in ("get", "revisions", "read_file", "put_file",
+                                           "act_as") else "write")
     # L'org de l'APP, en plus de celle de l'appel (gardée par l'adaptateur) : l'app d'une
     # org suspendue se ferme à tous, invités d'une autre org compris.
     org_suspension.exiger(org_de_l_app(row))
@@ -448,13 +565,17 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
 
     if inp.op == "publish":
         out, extra = V.publier(ctx, row, inp.expected_rev, inp.note, _checked_manifest, _avertir)
-        return {"app": _view(sub, out), "target": "live", **extra}
+        return {"app": _view(sub, out), "target": "live",
+                **_avec(extra, _avertir_pret(row, out))}
 
     if inp.op == "delete_draft":
         return {"ok": V.supprimer(row, inp.expected_rev)}
 
     if inp.op == "set_drafts":
         return {"app": _view(sub, V.regler(row, inp.enabled))}
+
+    if inp.op == "act_as":
+        return _preter(ctx, row, inp.enabled, inp.expected_rev)
 
     if inp.op == "revisions":
         return {"revisions": db.apps.revisions(row["id"])}
@@ -531,7 +652,8 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         changed = _update(sub, row, inp.expected_rev, title=old["title"], manifest=manifest,
                           html=old["html"], thumbnail=old["thumbnail"], published=True,
                           note=V._note(inp.note))
-        return {"app": _view(sub, changed), "target": "live", **extra}
+        return {"app": _view(sub, changed), "target": "live",
+                **_avec(extra, _avertir_pret(row, changed))}
 
     if inp.op == "patch" and row.get("drafts_enabled"):
         # Une app à brouillon : le patch s'applique au BROUILLON (ou, sans lui, à l'état
@@ -584,7 +706,8 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
                      inp.html if inp.html is not None else row["html"])
     changed = _update(sub, row, inp.expected_rev, title=inp.title.strip() if inp.title else None,
                       manifest=manifest, html=inp.html, thumbnail=thumb)
-    return {"app": _view(sub, changed), "target": "live", **extra}
+    return {"app": _view(sub, changed), "target": "live",
+            **_avec(extra, _avertir_pret(row, changed))}
 
 
 def _thumb_of(inp: AppInput) -> Any:
@@ -701,7 +824,16 @@ def description_app(liens: bool) -> str:
             "read the draft with op=get `draft: true` and write against ITS rev "
             "(409 draft_exists if you pass the published rev while a draft exists). "
             "op=publish (`expected_rev` = the draft's rev, optional `note`) makes the draft "
-            "live for everyone and you its author; op=delete_draft drops it. "
+            "live for everyone and you its author; op=delete_draft drops it.\n"
+            "Lending: an open app reads with its viewer's OWN access — someone it's shared "
+            "with who can't read its tables gets an error. op=act_as (`app_id`, `enabled`, "
+            "and `expected_rev` from get to lend) "
+            "makes it show what it declares with YOUR access to anyone it's shared with: "
+            "tables declared with a `fields` list that you could share yourself, writes "
+            "bounded by the manifest, never agents (a run stays the viewer's). Frozen on "
+            "today's manifest — someone else changing it stops the lending until you lend "
+            "again — and only where the org allows it (oto_org_settings "
+            "domain=apps_act_as). op=get shows editors `acts_as`, table by table.\n"
             "create, update, patch, restore, publish and validate also return `warnings`: "
             "oto.rows / oto.aggregate calls that sort, filter, group or measure on a "
             "field the manifest doesn't declare (`_created_at` / `_updated_at` are "

@@ -35,6 +35,10 @@ GET,HEAD,POST /o/u/{token} -> outreach_unsubscribe
 GET,HEAD,POST /o/d/{token} -> digest_unsubscribe
 GET,HEAD /api/public/process-shares/{token} -> process_share_preview
 OPTIONS /api/public/process-shares/{token} -> options_handler
+GET,HEAD /api/public/community/processes -> community_processes
+OPTIONS /api/public/community/processes -> options_handler
+GET,HEAD /api/public/community/processes/{slug} -> community_process
+OPTIONS /api/public/community/processes/{slug} -> options_handler
 GET,HEAD,POST /o/r/{token} -> readers_digest_unsubscribe
 POST /api/orgs/{id}/logo -> org_logo_save
 OPTIONS /api/orgs/{id}/logo -> options_handler
@@ -430,6 +434,8 @@ PUT /api/admin/orgs/{id}/instructions/{slug} -> _handler
 OPTIONS /api/admin/orgs/{id}/instructions/{slug} -> options_handler
 DELETE /api/admin/orgs/{id}/instructions/{slug} -> _handler
 OPTIONS /api/admin/orgs/{id}/instructions/{slug} -> options_handler
+POST /api/admin/guide-library/{id}/moderation -> _handler
+OPTIONS /api/admin/guide-library/{id}/moderation -> options_handler
 GET,HEAD /api/me/guide-library -> _handler
 OPTIONS /api/me/guide-library -> options_handler
 GET,HEAD /api/me/guide-library/{slug} -> _handler

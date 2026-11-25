@@ -611,6 +611,10 @@ _SUB_COLUMNS = [
     # or c'est lui qui empêche `migrate_sub` d'échouer en entier sur une table
     # disparue. Cette ligne suit la table au lot D (#526).
     ("org_instruction_revisions", "set_by"), ("doctrine_library", "published_by"),
+    # La communauté : qui a installé une entrée, qui l'a retirée ou restaurée —
+    # colonnes d'AUTEUR, sans FK ni unicité : elles suivent la personne.
+    ("community_installs", "installed_by"), ("community_moderation", "removed_by"),
+    ("community_moderation", "restored_by"),
     # attribution (soft), dossier du 23/08 — qui a écrit/résolu/accordé quoi. Sans
     # repointage ces signatures pointaient un compte supprimé (affichage « inconnu »
     # au mieux, jointure vide au pire). `set_by` du coffre est HORS AAD (`_aad` =

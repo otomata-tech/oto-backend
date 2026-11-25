@@ -195,6 +195,10 @@ _KNOWN: dict[str, str] = {
     # Vitrine d'une procédure partagée par lien : surface ANONYME (le jeton est le
     # secret), l'adaptateur des capacités authentifie toujours.
     "/api/public/process-shares/{token}": NATURE,
+    # Vitrine de la communauté, lue au build du site : surface ANONYME par nature,
+    # métadonnées seules (jamais le corps, oto#84).
+    "/api/public/community/processes": NATURE,
+    "/api/public/community/processes/{slug}": NATURE,
     # Réception d'un upload signé (#105) : PAS de JWT, le jeton scellé de l'URL fait
     # foi (sub/org/cible, TTL, usage unique). Appelée par un `curl` d'agent (PUT) ou
     # le formulaire humain (POST/GET) — un tiers, hors session dashboard.

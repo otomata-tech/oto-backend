@@ -70,6 +70,7 @@ from . import billing_invoices  # noqa: F401 — me.billing.invoices.list (#488)
 import oto_mcp.capabilities.orgs.instructions  # noqa: F401 — org.{guide.*, instruction.*}
 # Bibliothèque publique de guides (marketplace) — list/get/publish/fork/unpublish.
 from . import guide_library  # noqa: F401 — library.{list,get,publish,fork,unpublish}
+import oto_mcp.capabilities.communaute  # noqa: F401 — library.moderate (retrait/restauration par le personnel)
 # Sélection de connecteurs (marketplace, ADR 0019) — me/select/pause/unselect.
 import oto_mcp.capabilities.connectors.selection  # noqa: F401 — connectors.{me,select,pause,unselect}
 import oto_mcp.capabilities.connectors.identities  # noqa: F401 — connectors.{identities,set_default_identity} (ADR 0024)

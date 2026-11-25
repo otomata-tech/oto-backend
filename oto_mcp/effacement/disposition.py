@@ -152,6 +152,11 @@ NON_EXPORTEES: dict[str, Decision] = {
     "agent_causes": sans_objet("catalogue de la plateforme des causes de panne d'agent, "
                                "une par empreinte de motif, sans org ni propriétaire"),
     "connector_schemas": sans_objet("cache des schémas d'outils"),
+    "community_moderation": sans_objet("retraits décidés par le personnel de la "
+                                       "plateforme : désignent une entrée de la "
+                                       "communauté, pas l'org (une entrée de l'org part "
+                                       "avec elle, son retrait devient orphelin et n'est "
+                                       "plus lu)"),
     "copilot_slack_events": expire("déduplication des messages Slack, quelques jours, "
                                    "sans propriétaire"),
     "runner_platform_workers": sans_objet("les exécutants de plateforme"),

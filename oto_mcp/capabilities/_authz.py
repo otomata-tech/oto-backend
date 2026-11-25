@@ -348,54 +348,57 @@ def PLATFORM_INVITE(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx
 
 
 def _refus_publication_bibliotheque() -> AuthzDenied:
-    """LE refus « publier dans la bibliothèque publique est réservé à la plateforme »
-    — une seule phrase, que lèvent la règle `LIBRARY_PUBLISHER` et le filet de
+    """LE refus « publier dans la communauté est réservé aux admins de l'org » — une
+    seule phrase, que lèvent la règle `LIBRARY_PUBLISHER` et le filet de
     `guide_library._publish` : le même mur ne se dit pas de deux façons.
 
     Il dit ce qui reste ouvert ET à qui : les procédures personnelles le sont à tout
     compte, le fork à tout membre de l'org active."""
     return AuthzDenied(
-        403, "publication_reservee_a_la_plateforme",
-        "Publier dans la bibliothèque publique est réservé aux super-administrateurs de "
-        "la plateforme : c'est une vitrine éditée par la plateforme. Ce qui reste "
-        "ouvert : tes procédures personnelles, et forker une "
-        "entrée de la bibliothèque dans ton org.")
+        403, "publication_reservee_aux_admins",
+        "Publier une procédure de ton org dans la communauté est réservé aux admins de "
+        "l'org : l'entrée est signée du nom de l'org. Ce qui reste ouvert : tes "
+        "procédures personnelles, et forker une entrée de la communauté dans ton org. "
+        "Demande à un admin de ton org de la publier.")
+
+
+def peut_publier_bibliotheque(sub: str, org_id: int) -> bool:
+    """Qui publie dans la communauté depuis `org_id` : un admin de cette org (l'entrée
+    est signée de son nom) ou un super_admin plateforme (signée Otomata)."""
+    return access.is_super_admin(sub) or roles.is_org_admin(sub, org_id)
 
 
 def LIBRARY_PUBLISHER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
-    """Publier dans la bibliothèque publique de guides : un super_admin plateforme,
-    depuis une org active.
+    """Publier dans la communauté (bibliothèque publique de guides) : un org_admin de
+    l'org ACTIVE, qui publie une procédure de cette org signée de son nom — ou un
+    super_admin plateforme, dont les entrées sont signées Otomata.
 
-    La bibliothèque publique est une vitrine éditée par la plateforme — ses entrées
-    sont signées Otomata. Le rôle se vérifie dans la règle que la capacité DÉCLARE,
-    pas seulement dans le handler : c'est la règle que lisent `platform_floor` et
-    `capacite_autorise` pour annoncer le droit, et un droit annoncé par une autre
-    condition que celle qui refuse finit par dériver en silence (#695).
+    Le rôle se vérifie dans la règle que la capacité DÉCLARE, pas seulement dans le
+    handler : c'est la règle que lisent `platform_floor` et `capacite_autorise` pour
+    annoncer le droit, et un droit annoncé par une autre condition que celle qui refuse
+    finit par dériver en silence (#695).
 
-    Ordre des refus : le rôle AVANT l'org active. Quand deux refus se disputent une
-    entrée, celui qui n'ouvre aucune porte parle en premier (#632) — dire « choisis
-    une org » à qui ne peut pas publier ne mènerait qu'à ce même refus, une étape plus
-    loin. L'org reste requise pour le super_admin : le corps publié se lit dans une
-    procédure de l'org active, injectée depuis l'état serveur comme `ORG_MEMBER`
-    (jamais d'un param client)."""
+    Ordre des refus : l'org active AVANT le rôle, parce que le rôle s'y lit — être admin
+    d'une AUTRE org ouvre la porte d'en choisir une, et le refus le dit. L'org est
+    injectée depuis l'état serveur comme `ORG_MEMBER` (jamais d'un param client) : le
+    corps publié se lit dans une procédure de cette org."""
     sub = _require_sub(raw)
-    if not access.is_super_admin(sub):
-        raise _refus_publication_bibliotheque()
     org_id = access.current_org(sub)
     if org_id is None:
         raise AuthzDenied(400, "no_active_org",
                           "Aucune org active — choisis-en une avec oto_use_org.")
+    if not peut_publier_bibliotheque(sub, org_id):
+        raise _refus_publication_bibliotheque()
     return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
 
 
 # Les règles dont AUCUN appel n'aboutit sans un rôle plateforme : elles se déclarent
 # ici, à côté de leur définition, pour qu'un changement de garde et son plancher ne
-# puissent pas partir chacun de leur côté. `LIBRARY_PUBLISHER` exige en plus une org
-# active, mais son plancher de rôle reste `super`.
+# puissent pas partir chacun de leur côté. `LIBRARY_PUBLISHER` n'en est plus : un
+# org_admin publie dans la communauté depuis son org.
 PLATFORM_ADMIN.platform_floor = "operator"
 SUPER_ADMIN.platform_floor = "super"
 PLATFORM_INVITE.platform_floor = "operator"
-LIBRARY_PUBLISHER.platform_floor = "super"
 
 
 def ADMIN_BY_OP(by_op: dict, *, field: str = "op"):

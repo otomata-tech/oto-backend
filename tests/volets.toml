@@ -687,8 +687,13 @@ sources = [
   "oto_mcp/db/guide_revisions.py",
   "oto_mcp/db/schema/guides.py",
   "oto_mcp/tools/guide_run.py",
+  # La communauté (bibliothèque publique) : publier, contrôler, modérer, compter.
+  "oto_mcp/capabilities/communaute.py",
+  "oto_mcp/contenu_publiable.py",
+  "oto_mcp/db/communaute.py",
 ]
-tests = ["tests/**/test_guide*.py"]
+tests = ["tests/**/test_guide*.py", "tests/**/test_communaute*.py",
+         "tests/**/test_contenu_publiable.py", "tests/**/test_publication_communaute.py"]
 
 [[volet]]
 nom = "procédures"

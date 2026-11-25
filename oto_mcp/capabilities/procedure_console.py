@@ -377,7 +377,7 @@ CAPABILITIES += [
             "archive": _ECRIRE, "unarchive": _ECRIRE,
             "delete": _SUPPRIMER,
             "library_list": SUB_ONLY, "library_get": SUB_ONLY,
-            # `publish` porte la règle de `library.publish` (super_admin plateforme) :
+            # `publish` porte la règle de `library.publish` (org_admin ou super_admin) :
             # elle tourne AVANT le handler, donc avant la garde d'agent — un compte
             # qui ne publiera nulle part n'est pas renvoyé vers le dashboard.
             "publish": LIBRARY_PUBLISHER, "fork": ORG_MEMBER, "unpublish": SUB_ONLY,

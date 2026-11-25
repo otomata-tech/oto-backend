@@ -213,3 +213,57 @@ CREATE INDEX IF NOT EXISTS idx_procedure_comments_parent
 CREATE INDEX IF NOT EXISTS idx_procedure_comments_auteur
     ON procedure_comments (auteur_sub);
 """
+
+# La COMMUNAUTÉ : ce que le personnel de la plateforme a retiré, et qui a installé quoi.
+#
+# Deux tables communes à tout ce qui se publie dans la communauté (`kind` : `procedure`
+# = une entrée de la bibliothèque publique ; d'autres genres la rejoindront), À CÔTÉ de
+# l'entrée publiée, jamais dedans : la publication est un upsert de son AUTEUR, la
+# modération un geste du personnel — une republication ne doit pas pouvoir lever un
+# retrait, et elle ne le peut pas puisqu'elle n'écrit pas ici.
+#
+# `community_moderation` : aucune ligne = listée. `state = 'removed'` = retirée par le
+# personnel (motif, qui, quand) ; restaurer repasse la ligne à `listed` en gardant le
+# dernier retrait (`removed_*`) et pose `restored_*`.
+#
+# `community_installs` : une ligne par installation réussie (un fork, pour une procédure)
+# — l'org où elle a été faite et le compte qui l'a faite (`installed_by`, colonne d'AUTEUR). Les compteurs servis
+# (`installs_total`, `installs_30d`) comptent des orgs DISTINCTES : réinstaller dix fois
+# dans la même org n'en fait pas une entrée populaire. L'org partie (ON DELETE CASCADE)
+# emporte ses installations.
+#
+# ⚠️ `entry_id` est un lien LOGIQUE, sans clé étrangère : il désigne une ligne d'une
+# table qui dépend de `kind`. Dépublier une entrée retire ses lignes dans la même
+# transaction (`db/communaute.purger`) ; une ligne orpheline restée n'est lue par aucune
+# requête (toutes partent de l'entrée publiée).
+COMMUNAUTE = """
+CREATE TABLE IF NOT EXISTS community_moderation (
+    kind TEXT NOT NULL CHECK (kind IN ('procedure', 'app')),
+    entry_id BIGINT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('listed', 'removed')),
+    reason TEXT NOT NULL DEFAULT '',
+    removed_by TEXT,
+    removed_at TIMESTAMPTZ,
+    restored_by TEXT,
+    restored_at TIMESTAMPTZ,
+    PRIMARY KEY (kind, entry_id)
+);
+CREATE INDEX IF NOT EXISTS idx_community_moderation_removed_by
+    ON community_moderation (removed_by) WHERE removed_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_community_moderation_restored_by
+    ON community_moderation (restored_by) WHERE restored_by IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS community_installs (
+    id BIGSERIAL PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('procedure', 'app')),
+    entry_id BIGINT NOT NULL,
+    org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    installed_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_community_installs_entry
+    ON community_installs (kind, entry_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_community_installs_org ON community_installs (org_id);
+CREATE INDEX IF NOT EXISTS idx_community_installs_installed_by
+    ON community_installs (installed_by) WHERE installed_by IS NOT NULL;
+"""

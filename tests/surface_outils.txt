@@ -305,7 +305,7 @@ gemini_image	estimate list_models	ca73694214b9f8e0
 gemini_image_act	create_image	cb1912ec6f665ff4
 github_act	create_branch	bad269b2d63e7a1e
 github_actions	artifact artifacts cancel delete_artifact delete_run dispatch download job jobs logs rerun rerun_failed run runs workflow workflows	b5ab722d87762b7b
-github_files	delete list read readme write	551b191d35304f2e
+github_files	delete list read readme write	7dfd92e8ade7fbce
 github_issues	add_labels assign comment comments create create_label create_milestone delete_comment get labels lock milestones remove_label search set_labels unassign unlock update update_comment	b820796df3f88eb3
 github_orgs	add_collaborator add_team_member collaborators get is_collaborator is_member me members membership my_orgs permission rate_limit remove_collaborator remove_member remove_team_member set_membership team team_members team_repos teams	d80a2b7ef730c2a6
 github_pulls	commits create files get merge merged remove_reviewers request_review review review_comment review_comments reviewers reviews search submit_review update update_branch	859355bc42715359

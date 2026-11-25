@@ -80,6 +80,51 @@ def image_format(octets: bytes) -> Optional[str]:
     return None
 
 
+#: JPEG start-of-frame markers that carry the size: C0-CF except DHT (C4), JPG (C8), DAC (CC).
+_JPEG_SOF = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+
+
+def image_dimensions(octets: bytes) -> Optional[tuple[int, int]]:
+    """`(width, height)` read from the HEADER of a png, jpeg or webp, else None.
+
+    No decoding (no Pillow in the backend): the size is a field of the header —
+    PNG's IHDR, a JPEG start-of-frame segment, a WebP `VP8 `/`VP8L`/`VP8X` chunk."""
+    fmt = image_format(octets)
+    if fmt == "png":
+        if octets[12:16] != b"IHDR" or len(octets) < 24:
+            return None
+        return int.from_bytes(octets[16:20], "big"), int.from_bytes(octets[20:24], "big")
+    if fmt == "jpeg":
+        i = 2
+        while i + 9 < len(octets):
+            if octets[i] != 0xFF:
+                return None
+            marker = octets[i + 1]
+            if marker == 0xFF:                      # fill byte
+                i += 1
+                continue
+            if marker == 0x01 or 0xD0 <= marker <= 0xD9:   # standalone markers
+                i += 2
+                continue
+            if marker in _JPEG_SOF:
+                return (int.from_bytes(octets[i + 7:i + 9], "big"),
+                        int.from_bytes(octets[i + 5:i + 7], "big"))
+            i += 2 + int.from_bytes(octets[i + 2:i + 4], "big")
+        return None
+    if fmt == "webp" and len(octets) >= 30:
+        chunk = octets[12:16]
+        if chunk == b"VP8 " and octets[23:26] == b"\x9d\x01\x2a":
+            return (int.from_bytes(octets[26:28], "little") & 0x3FFF,
+                    int.from_bytes(octets[28:30], "little") & 0x3FFF)
+        if chunk == b"VP8L" and octets[20] == 0x2F:
+            bits = int.from_bytes(octets[21:25], "little")
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+        if chunk == b"VP8X":
+            return (int.from_bytes(octets[24:27], "little") + 1,
+                    int.from_bytes(octets[27:30], "little") + 1)
+    return None
+
+
 class MediaUnavailable(RuntimeError):
     """Le stockage temporaire (S3) requis pour servir un binaire/gros fichier en
     URL signée est indisponible — l'appelant traduit en erreur de tool."""

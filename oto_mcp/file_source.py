@@ -194,13 +194,13 @@ def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
                 declared = r.headers.get("content-length")
                 if declared and int(declared) > max_bytes:
                     raise FileSourceError(
-                        f"fichier distant trop volumineux ({declared} > {max_bytes} octets).")
+                        f"source url: remote file too large ({declared} > {max_bytes} bytes).")
                 chunks, total = [], 0
                 for chunk in r.iter_bytes():
                     _reste(deadline)
                     total += len(chunk)
                     if total > max_bytes:
-                        raise FileSourceError(f"fichier distant > {max_bytes} octets.")
+                        raise FileSourceError(f"source url: remote file > {max_bytes} bytes.")
                     chunks.append(chunk)
                 data = b"".join(chunks)
                 mime = (r.headers.get("content-type")

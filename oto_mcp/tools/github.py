@@ -46,7 +46,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, egress
 from ..connectors import verify as connector_verify
-from . import github_index
+from . import github_binary, github_index
 from .lecture import ACTE
 
 #: The ops of each tool that return a LIST, and the body keys their default view
@@ -398,6 +398,10 @@ def register(mcp: FastMCP) -> None:
         message: Optional[str] = None,
         sha: Optional[str] = None,
         branch: Optional[str] = None,
+        source_url: Optional[str] = None,
+        content_base64: Optional[str] = None,
+        require_square: bool = False,
+        max_bytes: Optional[int] = None,
     ) -> Any:
         """GitHub — read and write repository files.
 
@@ -418,16 +422,26 @@ def register(mcp: FastMCP) -> None:
         or the default branch) — visible in history, and attributed to the
         token holder.
 
+        **An image (png/jpeg/webp) → `source_url`**: the server fetches,
+        checks and commits it — e.g. a catalogue `logo_url` with
+        `size=128&format=png&fallback=404`, or a generated image's URL.
+
         Args:
             op: read | list | readme | write | delete.
             owner: repository owner.
             repo: repository name.
             path: path of the file or directory.
             ref: branch, tag or SHA to read (default: default branch).
-            content: op='write' — the text content to write.
+            content: op='write' — the text content to write. Exactly one of
+                `content`, `source_url`, `content_base64`.
             message: op='write'/'delete' — the commit message.
             sha: op='write' (update) / 'delete' — the existing blob's sha.
             branch: op='write'/'delete' — the target branch.
+            source_url: op='write' — an https URL of a png/jpeg/webp the server
+                fetches and commits (svg, html refused; overwrite still needs `sha`).
+            content_base64: op='write' — an image's bytes in base64 (≤ 2 MB), same checks.
+            require_square: op='write' with an image — refuse unless width == height.
+            max_bytes: op='write' with an image — a lower size cap (default and max 2 MB).
         """
         c = _client()
         o, r = _repo(owner, repo, op)
@@ -443,10 +457,23 @@ def register(mcp: FastMCP) -> None:
         if op == "write":
             _need(path, "path", op)
             _need(message, "message", op)
-            if content is None:
-                raise _bad("op='write': `content` required (the text to write).")
-            return _run(lambda: c.create_or_update_file(
-                o, r, path, message, content, sha=sha, branch=branch))
+            given = [n for n, v in (("content", content), ("source_url", source_url),
+                                    ("content_base64", content_base64)) if v is not None]
+            if len(given) != 1:
+                raise _bad("op='write': exactly one of `content` (text), `source_url` "
+                           f"or `content_base64` (image) required; got {given or 'none'}.")
+            if content is not None:
+                return _run(lambda: c.create_or_update_file(
+                    o, r, path, message, content, sha=sha, branch=branch))
+            try:
+                data, info = github_binary.image_to_commit(
+                    path, source_url=source_url, content_base64=content_base64,
+                    max_bytes=max_bytes, require_square=require_square)
+            except github_binary.BinaryRefused as e:
+                raise _bad(f"op='write': {e}")
+            res = _run(lambda: c.create_or_update_file(
+                o, r, path, message, data, sha=sha, branch=branch))
+            return github_binary.receipt(res, path, branch, info)
         if op == "delete":
             _need(path, "path", op)
             _need(message, "message", op)

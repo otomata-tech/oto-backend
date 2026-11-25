@@ -108,6 +108,8 @@ SECRET_TOOL_ARGS: dict[str, frozenset] = {
     # A signed download link carries its credential in the query string. (Every
     # `{kind: "url"}` source is masked anyway, whatever the tool: `masquer_urls_des_valeurs`.)
     "oto_import": frozenset({"url"}),
+    # An image committed from a URL: generated-image links are often presigned.
+    "github_files": frozenset({"source_url"}),
     # Masked by default in PayFit's OUTPUT (NIR, health data): the same values passed
     # as a write's arguments must not reach the log in clear either. `payfit_act`
     # carries the writes; the readers still take the arguments of their old write ops

@@ -640,10 +640,12 @@ sources = [
   "oto_mcp/capabilities/apps_appel.py",
   "oto_mcp/capabilities/apps_html.py",
   "oto_mcp/capabilities/apps_versions.py",
+  "oto_mcp/capabilities/apps_bibliotheque.py",
   "oto_mcp/capabilities/remplacements.py",
   "oto_mcp/api/apps_files.py",
   "oto_mcp/db/apps.py",
   "oto_mcp/db/app_versions.py",
+  "oto_mcp/db/app_library.py",
   "oto_mcp/db/schema/apps.py",
   "oto_mcp/apps_lecteurs_actifs.py",
 ]
@@ -687,8 +689,13 @@ sources = [
   "oto_mcp/db/guide_revisions.py",
   "oto_mcp/db/schema/guides.py",
   "oto_mcp/tools/guide_run.py",
+  # La communauté (bibliothèque publique) : publier, contrôler, modérer, compter.
+  "oto_mcp/capabilities/communaute.py",
+  "oto_mcp/contenu_publiable.py",
+  "oto_mcp/db/communaute.py",
 ]
-tests = ["tests/**/test_guide*.py"]
+tests = ["tests/**/test_guide*.py", "tests/**/test_communaute*.py",
+         "tests/**/test_contenu_publiable.py", "tests/**/test_publication_communaute.py"]
 
 [[volet]]
 nom = "procédures"

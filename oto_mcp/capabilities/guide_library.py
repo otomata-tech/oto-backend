@@ -7,11 +7,14 @@ org). Co-déclarées MCP + REST (ADR 0009) :
 - lecture (`library.list`/`library.get`) = tout user authentifié (`SUB_ONLY`) ;
   la surface ANONYME pour la vitrine est servie à part par des routes écrites à
   la main dans `api.routes` (l'adaptateur REst des capacités authentifie toujours).
-- publication = **super_admin plateforme** seulement, déclaré dans la règle
-  d'autz `LIBRARY_PUBLISHER` (403 `publication_reservee_a_la_plateforme`) : la
-  bibliothèque publique est une vitrine éditée par la plateforme, ses entrées sont
-  signées **Otomata**. Le corps se lit dans l'**org active**, donc l'org reste
-  REQUISE — la règle l'exige APRÈS le rôle.
+- publication = **org_admin de l'org active** (entrée signée du NOM de l'org) ou
+  **super_admin plateforme** (signée **Otomata**), déclaré dans la règle d'autz
+  `LIBRARY_PUBLISHER` (403 `publication_reservee_aux_admins` pour un membre). Le corps
+  se lit dans l'**org active**, donc l'org reste REQUISE — la règle l'exige AVANT le
+  rôle, qui s'y lit. Le contenu passe un **contrôle automatique** avant toute écriture
+  (400 `contenu_refuse` : email, téléphone, clé d'API, URL à secret — `communaute.py`),
+  puis l'entrée est listée tout de suite ; le personnel la retire après coup
+  (`library.moderate`), et une republication ne lève pas un retrait.
 - fork = tout membre de l'**org active** (injectée par `ORG_MEMBER`, jamais d'un
   param client → verrou IDOR ; l'org est REQUISE même pour un platform-operator).
   Le PALIER de la copie suit le rôle réel (décision d'Alexis, 06/10/2026) : un
@@ -35,8 +38,10 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from .. import access, db, deprecations, org_store, ownership, procedure_diagram, roles
-from ._authz import (LIBRARY_PUBLISHER, ORG_MEMBER, SUB_ONLY,
-                     _refus_org_admin, _refus_publication_bibliotheque)
+from ..db import communaute as db_communaute
+from . import communaute
+from ._authz import (LIBRARY_PUBLISHER, ORG_MEMBER, SUB_ONLY, _refus_org_admin,
+                     _refus_publication_bibliotheque, peut_publier_bibliotheque)
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -46,6 +51,12 @@ class LibraryListInput(BaseModel):
     category: Optional[str] = None
     author_kind: Optional[str] = None    # 'otomata' | 'org'
     limit: int = 100
+    # Absent = dernière publication d'abord (le tri d'avant, inchangé pour qui ne
+    # demande rien) ; `trending` = installs_30d, `most_added` = installs_total, `new`.
+    sort: Optional[Literal["trending", "most_added", "new"]] = None
+    # Les entrées RETIRÉES que l'appelant peut voir (celles de son org s'il en est
+    # admin ; toutes pour un opérateur plateforme). Ignoré pour tout autre compte.
+    include_removed: bool = False
 
     @field_validator("limit")
     @classmethod
@@ -97,7 +108,7 @@ class UnpublishInput(BaseModel):
 LibraryVisibility = Literal["public", "unlisted"]
 
 
-class LibraryEntrySummary(BaseModel):
+class LibraryEntrySummary(communaute.ChampsCommunaute):
     """Une entrée du CATALOGUE : métadonnées seules. Le corps markdown n'y est
     jamais — c'est library.get qui le sert, par slug."""
     id: int = Field(description="Identifiant de l'entrée publiée — la clé qu'attend "
@@ -129,8 +140,12 @@ class LibraryEntrySummary(BaseModel):
     version: int = Field(description="Numéro de publication : incrémenté à chaque "
                                      "re-publication du même slug. 1 = jamais republiée.")
     created_at: str = Field(description="Première publication ('YYYY-MM-DD HH:MM:SS' UTC).")
-    updated_at: str = Field(description="Dernière re-publication — c'est la clé de tri "
-                                        "du catalogue (plus récentes d'abord).")
+    updated_at: str = Field(description="Dernière re-publication — la clé de tri du "
+                                        "catalogue quand `sort` est absent (plus "
+                                        "récentes d'abord).")
+    slots: list = Field(default_factory=list,
+                        description="Entités requises déclarées par la procédure : ce "
+                                    "qu'il faudra brancher après le fork.")
     snippet: Optional[str] = Field(
         default=None,
         description="Extrait du corps autour de la 1ʳᵉ occurrence de `query`. Présent "
@@ -139,7 +154,9 @@ class LibraryEntrySummary(BaseModel):
 
 
 class LibraryList(BaseModel):
-    """Catalogue filtré, plus récemment publiées d'abord, borné par `limit`.
+    """Catalogue filtré, trié par `sort` (absent = plus récemment publiées d'abord),
+    borné par `limit`. Les entrées retirées par le personnel n'y sont pas, sauf avec
+    `include_removed` pour qui peut les voir.
 
     ⚠️ Ne contient QUE les entrées `public` : une entrée `unlisted` existe et reste
     lisible par son slug exact (library.get), mais n'apparaît jamais ici. Une liste
@@ -147,7 +164,7 @@ class LibraryList(BaseModel):
     guides: list[LibraryEntrySummary]
 
 
-class LibraryEntry(BaseModel):
+class LibraryEntry(communaute.ChampsCommunaute):
     """Une entrée COMPLÈTE, corps inclus. ⚠️ Rendue à plat, sans enveloppe : les
     champs sont à la racine de la réponse (pas de clé d'enveloppe)."""
     id: int = Field(description="Identifiant de l'entrée publiée.")
@@ -192,14 +209,23 @@ class LibraryEntry(BaseModel):
 
 class PublishResult(BaseModel):
     """Accusé de publication. Une entrée déjà publiée sous le même slug public par
-    la plateforme est REMPLACÉE (corps, titre) et sa version incrémentée — publier
-    n'est donc pas toujours une création. Le slug d'une entrée appartenant à une
-    org est refusé, jamais repris : 409 `slug_taken`."""
+    le MÊME auteur (la même org, ou la plateforme) est REMPLACÉE (corps, titre) et sa
+    version incrémentée — publier n'est donc pas toujours une création. Le slug d'une
+    entrée d'un autre auteur est refusé, jamais repris : 409 `slug_taken`."""
     published: bool = Field(description="Toujours `true` : un échec ne rend pas "
-                                        "`published:false`, il lève (403 hors "
-                                        "super_admin plateforme, 404 guide absente, "
-                                        "409 nom déjà pris par une org). Ne pas le "
-                                        "tester comme un booléen d'issue.")
+                                        "`published:false`, il lève (403 "
+                                        "`publication_reservee_aux_admins` hors admin de "
+                                        "l'org, 400 `contenu_refuse` au contrôle "
+                                        "automatique, 404 guide absente, 409 nom déjà "
+                                        "pris par un autre auteur). Ne pas le tester "
+                                        "comme un booléen d'issue.")
+    author_kind: str = Field(description="'org' (signée du nom de l'org active) | "
+                                         "'otomata' (super_admin plateforme).")
+    author_display: str = Field(description="Le nom qui signe l'entrée au catalogue.")
+    moderation_state: communaute.ModerationState = Field(
+        default="listed",
+        description="'listed' : l'entrée est visible de tous dès maintenant. 'removed' : "
+                    "le personnel l'avait retirée, et la republier ne lève pas le retrait.")
     id: int = Field(description="Identifiant de l'entrée publiée — à conserver, c'est "
                                 "ce qu'attend library.unpublish.")
     slug: str = Field(description="Slug public RÉELLEMENT retenu, après normalisation : "
@@ -260,33 +286,18 @@ class UnpublishResult(BaseModel):
                     "voulu est déjà atteint.")
 
 
-def _require_org_admin(ctx: ResolvedCtx, what: str) -> int:
-    """Gate org_admin de l'org active (escalade platform_admin incluse) — et rend
-    l'org active, dont ces deux opérations ont besoin.
-
-    L'org est exigée AVANT l'escalade plateforme : publier lit un skill DANS une
-    org (`get_instruction(org_id, slug)`) et forker écrit DANS une org
-    (`org_instructions.org_id` NOT NULL). `author_kind='otomata'` ne nomme qu'un
-    AUTEUR — il ne fournit ni la source à publier ni la destination du fork. Sans
-    ce garde, un opérateur plateforme sans org active passait le gate avec
-    `org_id=None` : 500 (violation NOT NULL) au fork, 404 au message faux
-    (« absente de ton org active ») à la publication."""
-    if ctx.org_id is None:
-        raise AuthzDenied(400, "no_active_org",
-                          f"{what} demande une org active — choisis-en une avec oto_use_org.")
-    if access.is_platform_operator(ctx.sub):
-        return ctx.org_id
-    if not roles.is_org_admin(ctx.sub, ctx.org_id):
-        raise AuthzDenied(403, "forbidden", f"{what} requiert org_admin de ton org active.")
-    return ctx.org_id
+#: Les slugs publics qui ne désignent pas une entrée : des adresses de la communauté
+#: elle-même (`/community/apps` sur le site et dans l'application).
+SLUGS_RESERVES = frozenset({"apps"})
 
 
 def _author_for(ctx: ResolvedCtx) -> tuple[str, Optional[int], str]:
-    """Auteur affiché : platform-operator → Otomata ; sinon l'org active.
+    """Auteur affiché : super_admin plateforme → Otomata ; sinon l'org active (un
+    opérateur `admin` publie comme l'org dont il est admin, pas au nom d'Otomata).
 
     Lève plutôt que de publier un auteur vide : `author_display` est le seul axe
     de confiance affiché au catalogue, une entrée anonyme n'y a rien à faire."""
-    if access.is_platform_operator(ctx.sub):
+    if access.is_super_admin(ctx.sub):
         return "otomata", None, "Otomata"
     o = org_store.get_org(ctx.org_id)
     if not o:
@@ -300,9 +311,30 @@ def _author_for(ctx: ResolvedCtx) -> tuple[str, Optional[int], str]:
 
 
 def _list(ctx: ResolvedCtx, inp: LibraryListInput) -> dict:
-    return {"guides": org_store.list_library(
+    operateur = access.is_platform_operator(ctx.sub)
+    org_retirees = None
+    if inp.include_removed and not operateur and ctx.org_id is not None \
+            and roles.is_org_admin(ctx.sub, ctx.org_id):
+        org_retirees = ctx.org_id
+    rows = org_store.list_library(
         query=inp.query, category=inp.category, author_kind=inp.author_kind,
-        include_unlisted=False, limit=inp.limit)}
+        include_unlisted=False, limit=inp.limit, sort=inp.sort,
+        removed_for_org=org_retirees,
+        include_all_removed=bool(inp.include_removed and operateur))
+    return {"guides": [communaute.projeter(ctx.sub, r, privilegie=operateur or (
+        org_retirees is not None and r.get("author_org_id") == org_retirees))
+        for r in rows]}
+
+
+def _entree_visible(ctx: ResolvedCtx, slug: str) -> dict:
+    """L'entrée par slug, ou 404 — une entrée RETIRÉE n'existe que pour qui peut la voir
+    (même 404 qu'une entrée inconnue pour les autres)."""
+    entry = org_store.get_library_entry(slug=slug, include_unlisted=True,
+                                        include_removed=True)
+    if not entry or (entry.get("moderation_state") == "removed"
+                     and not communaute.peut_voir_retiree(ctx.sub, entry)):
+        raise AuthzDenied(404, "unknown_entry", f"Guide public `{slug}` inconnu.")
+    return communaute.projeter(ctx.sub, entry)
 
 
 def _get(ctx: ResolvedCtx, inp: LibraryGetInput) -> dict:
@@ -312,10 +344,7 @@ def _get(ctx: ResolvedCtx, inp: LibraryGetInput) -> dict:
     # (`_list` force `include_unlisted=False`) ni sur la surface anonyme. C'est un
     # partage par lien — pas un secret d'org. Un guide vraiment sensible ne se
     # publie pas (reste un skill d'org privé). Cf. CLAUDE.md §Bibliothèque.
-    entry = org_store.get_library_entry(slug=inp.slug, include_unlisted=True)
-    if not entry:
-        raise AuthzDenied(404, "unknown_entry", f"Guide public `{inp.slug}` inconnu.")
-    return entry
+    return _entree_visible(ctx, inp.slug)
 
 
 def _publish(ctx: ResolvedCtx, inp: PublishInput) -> dict:
@@ -323,13 +352,14 @@ def _publish(ctx: ResolvedCtx, inp: PublishInput) -> dict:
     # (`LIBRARY_PUBLISHER` : `library.publish`, `oto_procedure op=publish`) : c'est
     # elle qui refuse sur les faces servies, avant ce handler. Ce contrôle n'est qu'un
     # filet pour un appelant qui câblerait `_publish` sous une autre règle — même
-    # refus, même source, jamais une seconde phrase. L'entrée est signée Otomata
-    # (`_author_for`).
-    if not access.is_super_admin(ctx.sub):
+    # refus, même source, jamais une seconde phrase. L'entrée est signée de l'org, ou
+    # d'Otomata pour un super_admin (`_author_for`).
+    if ctx.org_id is None:
+        raise AuthzDenied(400, "no_active_org",
+                          "Publier demande une org active — choisis-en une avec oto_use_org.")
+    if not peut_publier_bibliotheque(ctx.sub, ctx.org_id):
         raise _refus_publication_bibliotheque()
-    # Super_admin ⊂ platform-operator : le gate ne garde ici que l'org active, où
-    # se lit le corps à publier.
-    org_id = _require_org_admin(ctx, "Publier")
+    org_id = ctx.org_id
     src = org_store.get_instruction("org", org_id, inp.slug)
     if not src:
         # Code d'aujourd'hui + code d'hier dans `details.legacy_code` : un code
@@ -338,12 +368,26 @@ def _publish(ctx: ResolvedCtx, inp: PublishInput) -> dict:
                           f"Guide `{inp.slug}` absent de ton org active.",
                           deprecations.details_avec_code_dhier("unknown_guide"))
     kind, author_org_id, display = _author_for(ctx)
+    public = org_store.normalize_slug(inp.public_slug or inp.slug)
+    if public in SLUGS_RESERVES:
+        # Même refus qu'un nom pris : le slug est l'adresse de l'entrée, et `apps` est
+        # celle de la page des apps de la communauté (site et application).
+        raise AuthzDenied(409, "slug_taken", f"Le nom `{public}` n'est pas disponible — "
+                          "publie sous un autre `public_slug`.")
+    title = inp.title if inp.title is not None else (src.get("title") or "")
+    description = (inp.description if inp.description is not None
+                   else (src.get("description") or ""))
+    # Le contrôle automatique, AVANT toute écriture : ce qui part ici est lu par tous
+    # les comptes, et ses métadonnées par le web entier (`/api/public/community`).
+    communaute.refuser_si_contenu({
+        "title": title, "description": description, "body_md": src["body_md"],
+        "category": inp.category or "", "tags": " ".join(map(str, inp.tags or [])),
+        "slots": " ".join(str(x.get("description") or "")
+                          for x in (src.get("slots") or []) if isinstance(x, dict))})
     try:
         row = org_store.publish_guide(
             slug=inp.public_slug or inp.slug,
-            title=inp.title if inp.title is not None else (src.get("title") or ""),
-            description=inp.description if inp.description is not None else (src.get("description") or ""),
-            body_md=src["body_md"], author_kind=kind, author_org_id=author_org_id,
+            title=title, description=description, body_md=src["body_md"], author_kind=kind, author_org_id=author_org_id,
             author_display=display, category=inp.category or "", tags=inp.tags or [],
             visibility=inp.visibility, source_org_id=org_id, source_slug=inp.slug,
             published_by=ctx.sub, slots=src.get("slots") or [],
@@ -361,8 +405,10 @@ def _publish(ctx: ResolvedCtx, inp: PublishInput) -> dict:
                           "n'est pas disponible — publie sous un autre `public_slug`.")
     # Publier une procédure sans schéma propage le manque à tous ses forks : le
     # signal part ici aussi, au même régime non bloquant (front tiers, issue #108).
+    etat = db_communaute.etat(org_store.KIND, row["id"])["state"]
     return {"published": True, "id": row["id"], "slug": row["slug"],
             "version": row["version"], "visibility": row["visibility"],
+            "author_kind": kind, "author_display": display, "moderation_state": etat,
             **procedure_diagram.diagram_check(src.get("body_md") or "")}
 
 
@@ -393,13 +439,11 @@ def _fork(ctx: ResolvedCtx, inp: ForkInput) -> dict:
                               f"Projet #{inp.project_id} introuvable ou non modifiable par "
                               "toi : rien n'a été forké. Choisis un projet où tu peux "
                               "écrire, ou forke sans `project_id`.")
-    entry = org_store.get_library_entry(slug=inp.slug, include_unlisted=True)
-    if not entry:
-        raise AuthzDenied(404, "unknown_entry", f"Guide public `{inp.slug}` inconnu.")
+    entry = _entree_visible(ctx, inp.slug)
     owner = ("org", org_id) if scope == "org" else ("user", ctx.sub)
     res = org_store.fork_library_entry(entry_id=entry["id"], owner_type=owner[0],
                                        owner_id=owner[1], new_slug=inp.new_slug,
-                                       set_by=ctx.sub)
+                                       set_by=ctx.sub, install_org_id=org_id)
     out = {"forked": True, "org_id": org_id, "scope": scope, "slug": res["slug"],
            "version": res["version"], "guide_id": res["guide_id"],
            "forked_from": res["forked_from"], "source_title": res["source_title"]}
@@ -414,23 +458,31 @@ def _fork(ctx: ResolvedCtx, inp: ForkInput) -> dict:
 
 
 def _unpublish(ctx: ResolvedCtx, inp: UnpublishInput) -> dict:
-    entry = org_store.get_library_entry(entry_id=inp.id, include_unlisted=True)
-    if not entry:
+    entry = org_store.get_library_entry(entry_id=inp.id, include_unlisted=True,
+                                        include_removed=True)
+    if not entry or (entry.get("moderation_state") == "removed"
+                     and not communaute.peut_voir_retiree(ctx.sub, entry)):
         raise AuthzDenied(404, "unknown_entry", "Entrée inconnue.")
     is_author = (entry["author_kind"] == "org" and entry.get("author_org_id") is not None
                  and roles.is_org_admin(ctx.sub, entry["author_org_id"]))
     if not (is_author or access.is_platform_operator(ctx.sub)):
         raise AuthzDenied(403, "forbidden", "Réservé à l'auteur ou à un admin plateforme.")
+    communaute.refuser_si_retiree(ctx.sub, entry)
     return {"unpublished": org_store.unpublish_guide(inp.id)}
 
 
 CAPABILITIES += [
     Capability(
         key="library.list", handler=_list, Input=LibraryListInput, authz=SUB_ONLY,
-        description="Browse/search the PUBLIC guide library (a marketplace of skills/"
-                    "templates). Each entry has an author (Otomata or a private creator). "
-                    "Filter by query / category / author_kind (otomata|org). Returns metadata "
-                    "+ snippet, not the full body — use oto_procedure op=library_get for that.",
+        description="Browse/search the COMMUNITY (public guide library: a marketplace of "
+                    "processes). Each entry has an author (Otomata or the org that "
+                    "published it) and install counters (installs_total, installs_30d = "
+                    "distinct orgs). Filter by query / category / author_kind "
+                    "(otomata|org); sort = trending | most_added | new (default: latest "
+                    "published first). Entries removed by platform staff are hidden "
+                    "(include_removed=true shows them to the author org's admins and to "
+                    "staff). Returns metadata + snippet, not the full body — use "
+                    "oto_procedure op=library_get for that.",
         Output=LibraryList,
         rest=RestBinding("GET", "/api/me/guide-library"),
     ),
@@ -446,22 +498,25 @@ CAPABILITIES += [
     Capability(
         key="library.publish", handler=_publish, Input=PublishInput,
         authz=LIBRARY_PUBLISHER,
-        description="Publish a named guide (skill) of your active org to the PUBLIC library "
-                    "so others can find and fork it. Reserved to platform super_admin "
-                    "accounts (403 publication_reservee_a_la_plateforme): the library is "
-                    "curated by the platform and its entries are signed Otomata. Still open: "
-                    "your personal procedures, and forking a library "
-                    "entry into your org. Needs an active org (the body is read from it). "
-                    "slug = the org skill to publish ; visibility = public | unlisted. "
-                    "Public names are unique and OWNED: re-publishing a platform entry bumps "
-                    "its version, a name held by an org is refused (409) — pick another "
-                    "public_slug.",
+        description="Publish a procedure of your active org to the COMMUNITY (public "
+                    "library) so other orgs can find and fork it. Org admins only (403 "
+                    "publication_reservee_aux_admins): the entry is signed with your org's "
+                    "name (a platform super_admin publishes as Otomata). Needs an active "
+                    "org (the body is read from it). An automatic check refuses content "
+                    "carrying email addresses, phone numbers, API keys/tokens or URLs with "
+                    "secrets (400 contenu_refuse, `details.found` = field + kind, never the "
+                    "value). Listed immediately; platform staff may remove it afterwards. "
+                    "slug = the org procedure to publish ; visibility = public | unlisted. "
+                    "Public names are unique and OWNED: re-publishing your own entry bumps "
+                    "its version, a name held by another author is refused (409) — pick "
+                    "another public_slug.",
         Output=PublishResult,
         rest=RestBinding("POST", "/api/me/guide-library/publish"),
     ),
     Capability(
         key="library.fork", handler=_fork, Input=ForkInput, authz=ORG_MEMBER,
-        description="Fork (copy) a public-library guide as a new versioned procedure. Open "
+        description="Fork (copy) a community (public-library) entry as a new versioned "
+                    "procedure, counted as one install for your active org. Open "
                     "to any member of your active org: an org_admin gets an org procedure, a "
                     "member a personal one — `scope` user|org overrides, org "
                     "needs org_admin. slug = the public entry ; new_slug optional (defaults "
@@ -473,7 +528,10 @@ CAPABILITIES += [
     Capability(
         key="library.unpublish", handler=_unpublish, Input=UnpublishInput, authz=SUB_ONLY,
         description="Remove a guide you published from the public library (author org_admin "
-                    "or platform admin). id = the library entry id.",
+                    "or platform admin). id = the library entry id. An entry removed by "
+                    "platform staff can't be unpublished by its author (403 "
+                    "entree_retiree): unpublishing then re-publishing would lift the "
+                    "removal.",
         Output=UnpublishResult,
         rest=RestBinding("DELETE", "/api/me/guide-library/{id}"),
     ),

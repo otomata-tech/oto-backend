@@ -9,11 +9,15 @@ transforme en procédure d'org versionnée.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Optional
 
 from . import instructions
 from ..db import _connect
+from ..db import communaute
 from ..db.guides import guide_du_slug
+
+logger = logging.getLogger(__name__)
 
 
 # --- bibliothèque publique de guides (marketplace) ---
@@ -40,6 +44,17 @@ _LIBRARY_META_COLS = (
     "id, slug, title, description, author_kind, author_org_id, author_display, "
     "category, tags, visibility, version, created_at, updated_at"
 )
+
+
+#: Le genre de ces entrées dans les tables de la communauté (`db/communaute.py`).
+KIND = "procedure"
+
+#: Les tris servis par `list_library` (`None` = dernière publication d'abord).
+SORTS = ("trending", "most_added", "new")
+
+
+def _prefixe(cols: str, alias: str) -> str:
+    return ", ".join(f"{alias}.{c.strip()}" for c in cols.split(","))
 
 
 class LibrarySlugTaken(Exception):
@@ -149,33 +164,52 @@ def publish_guide(*, slug: str, title: str = "", description: str = "",
 
 def list_library(*, query: Optional[str] = None, category: Optional[str] = None,
                  author_kind: Optional[str] = None, author_org_id: Optional[int] = None,
-                 include_unlisted: bool = False, limit: int = 100) -> list[dict]:
+                 include_unlisted: bool = False, limit: int = 100,
+                 sort: Optional[str] = None, removed_for_org: Optional[int] = None,
+                 include_all_removed: bool = False) -> list[dict]:
     """Liste/recherche la bibliothèque (métadonnées + `snippet`, SANS body complet).
     Par défaut visibility='public' uniquement (surface anonyme/vitrine) ;
     `include_unlisted` élargit (surface authentifiée). `query` = substring sur
-    title/description/body."""
-    where = [] if include_unlisted else ["visibility = 'public'"]
+    title/description/body.
+
+    Chaque entrée porte son état de modération et ses compteurs d'installations
+    (`db/communaute.jointures`). Une entrée RETIRÉE par le personnel n'est pas rendue,
+    sauf celles de l'org `removed_for_org` (l'appelant en est admin — décidé par la
+    capacité) ou toutes avec `include_all_removed` (opérateur plateforme).
+    `sort` ∈ `SORTS` ; `None` garde le tri historique (dernière publication d'abord)."""
+    if sort not in communaute.ORDRES:
+        raise ValueError(f"sort invalide ({'|'.join(SORTS)})")
+    where = [] if include_unlisted else ["e.visibility = 'public'"]
     params: list = []
+    if not include_all_removed:
+        if removed_for_org is not None:
+            where.append("(cm.state IS DISTINCT FROM 'removed' OR e.author_org_id = %s)")
+            params.append(int(removed_for_org))
+        else:
+            where.append("cm.state IS DISTINCT FROM 'removed'")
     q = (query or "").strip()
     if q:
         like = f"%{q}%"
-        where.append("(title ILIKE %s OR description ILIKE %s OR body_md ILIKE %s)")
+        where.append("(e.title ILIKE %s OR e.description ILIKE %s OR e.body_md ILIKE %s)")
         params += [like, like, like]
     if category:
-        where.append("category = %s")
+        where.append("e.category = %s")
         params.append(category)
     if author_kind:
-        where.append("author_kind = %s")
+        where.append("e.author_kind = %s")
         params.append(author_kind)
     if author_org_id is not None:
-        where.append("author_org_id = %s")
+        where.append("e.author_org_id = %s")
         params.append(author_org_id)
     clause = (" WHERE " + " AND ".join(where)) if where else ""
-    sel = _LIBRARY_META_COLS + (", body_md" if q else "")
+    cols_c, joins = communaute.jointures(KIND, "e")
+    sel = (_prefixe(_LIBRARY_META_COLS, "e") + ", e.slots, " + cols_c
+           + (", e.body_md" if q else ""))
+    ordre = communaute.ORDRES[sort].format(e="e")
     with _connect() as conn:
         rows = conn.execute(
-            f"SELECT {sel} FROM guide_library{clause} "
-            f"ORDER BY updated_at DESC LIMIT %s",
+            f"SELECT {sel} FROM guide_library e{joins}{clause} "
+            f"ORDER BY {ordre} LIMIT %s",
             tuple(params) + (int(limit),),
         ).fetchall()
     out = []
@@ -188,35 +222,47 @@ def list_library(*, query: Optional[str] = None, category: Optional[str] = None,
 
 
 def get_library_entry(*, entry_id: Optional[int] = None, slug: Optional[str] = None,
-                      include_unlisted: bool = False) -> Optional[dict]:
-    """Une entrée complète (avec body_md) par id OU slug. Respecte la visibilité :
-    sans `include_unlisted`, ne renvoie que les entrées publiques."""
+                      include_unlisted: bool = False,
+                      include_removed: bool = False) -> Optional[dict]:
+    """Une entrée complète (avec body_md) par id OU slug, avec son état de modération
+    et ses compteurs d'installations. Respecte la visibilité : sans
+    `include_unlisted`, ne renvoie que les entrées publiques ; sans `include_removed`,
+    jamais une entrée retirée par le personnel (qui peut la voir quand même se décide
+    dans la capacité, sur l'état rendu)."""
     if entry_id is None and not slug:
         raise ValueError("entry_id ou slug requis")
-    vis = "" if include_unlisted else " AND visibility = 'public'"
+    vis = "" if include_unlisted else " AND e.visibility = 'public'"
+    if not include_removed:
+        vis += " AND cm.state IS DISTINCT FROM 'removed'"
+    cols_c, joins = communaute.jointures(KIND, "e")
+    sel = f"{_prefixe(_LIBRARY_COLS, 'e')}, {cols_c} FROM guide_library e{joins}"
     with _connect() as conn:
         if entry_id is not None:
-            row = conn.execute(
-                f"SELECT {_LIBRARY_COLS} FROM guide_library WHERE id = %s{vis}",
-                (entry_id,),
-            ).fetchone()
+            row = conn.execute(f"SELECT {sel} WHERE e.id = %s{vis}",
+                               (entry_id,)).fetchone()
         else:
-            row = conn.execute(
-                f"SELECT {_LIBRARY_COLS} FROM guide_library WHERE slug = %s{vis}",
-                (instructions.normalize_slug(slug),),
-            ).fetchone()
+            row = conn.execute(f"SELECT {sel} WHERE e.slug = %s{vis}",
+                               (instructions.normalize_slug(slug),)).fetchone()
     return dict(row) if row else None
 
 
 def fork_library_entry(*, entry_id: int, owner_type: str, owner_id: int | str,
                        new_slug: Optional[str] = None,
-                       set_by: Optional[str] = None) -> dict:
+                       set_by: Optional[str] = None,
+                       install_org_id: Optional[int] = None) -> dict:
     """Copie une entrée de la bibliothèque en PROCÉDURE du palier `owner_type`/
     `owner_id` (`org` ou `user`, cf. `instructions.OWNER_TYPES`) sous un nouveau slug
     (défaut = slug source, suffixé -2/-3… si collision DANS CE PALIER). Réutilise
     set_instruction → la procédure forkée est versionnée (v1). Le palier est décidé
-    par l'appelant (la capacité, sur le rôle réel), jamais ici."""
-    entry = get_library_entry(entry_id=entry_id, include_unlisted=True)
+    par l'appelant (la capacité, sur le rôle réel), jamais ici — comme le droit de
+    forker une entrée retirée par le personnel (lue ici sans filtre).
+
+    `install_org_id` = l'org où le fork est fait : l'installation y est notée
+    (`community_installs`) une fois la procédure écrite. Une note qui échoue ne défait
+    pas le fork (la procédure existe déjà) : elle se journalise, le compteur perd un
+    point."""
+    entry = get_library_entry(entry_id=entry_id, include_unlisted=True,
+                              include_removed=True)
     if not entry:
         raise ValueError("entrée de bibliothèque inconnue")
     otype, oid = instructions._owner(owner_type, owner_id)
@@ -235,6 +281,13 @@ def fork_library_entry(*, entry_id: int, owner_type: str, owner_id: int | str,
         slots=entry.get("slots") or [],
     )
     cree = instructions.get_instruction(otype, oid, slug) or {}
+    if install_org_id is not None:
+        try:
+            communaute.noter_installation(KIND, entry["id"], org_id=install_org_id,
+                                          sub=set_by)
+        except Exception:
+            logger.exception("installation non notée (entrée %s, org %s)",
+                             entry["id"], install_org_id)
     return {
         "owner_type": otype, "owner_id": oid, "slug": slug, "version": version,
         "guide_id": cree.get("id"), "forked_from": entry["id"],
@@ -243,7 +296,10 @@ def fork_library_entry(*, entry_id: int, owner_type: str, owner_id: int | str,
 
 
 def unpublish_guide(entry_id: int) -> bool:
-    """Retire une entrée publiée. False si elle n'existait pas."""
+    """Retire une entrée publiée, avec son état de modération et ses installations
+    (même transaction). False si elle n'existait pas."""
     with _connect() as conn:
-        cur = conn.execute("DELETE FROM guide_library WHERE id = %s", (entry_id,))
-        return (cur.rowcount or 0) > 0
+        with conn.transaction():
+            cur = conn.execute("DELETE FROM guide_library WHERE id = %s", (entry_id,))
+            communaute.purger(conn, KIND, entry_id)
+            return (cur.rowcount or 0) > 0

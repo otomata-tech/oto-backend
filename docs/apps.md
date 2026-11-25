@@ -476,3 +476,69 @@ brouillon d'une app qu'une fois le tag en prod.
 `op=list` prend les `project_ids` dont lister les apps (au plus 200 — ceux que
 l'écran tient déjà), juge l'accès à tous en une passe (`ownership.can_access_many`)
 et rend des **cartes** : jamais le HTML, qui pèse des dizaines de Ko par app.
+
+## Communauté — publier une app, installer celle d'une autre org
+
+Capacités `apps.library.*` (`capabilities/apps_bibliotheque.py`, table `app_library`,
+`db/app_library.py`), sœurs de la bibliothèque de procédures et sur la même mécanique
+commune (`capabilities/communaute.py` : contrôle automatique, modération par le personnel,
+compteurs d'installations, vitrine anonyme — `docs/rest-api.md` §Bibliothèque).
+
+- **Publier** (`POST /api/me/app-library/publish`, session interactive seule) : un
+  org_admin de l'org de l'app, depuis cette org (`LIBRARY_PUBLISHER`, signée du nom de
+  l'org ; un super_admin signe Otomata). L'instantané prend la version **vivante** (pas le
+  brouillon) : HTML, titre, description, catégorie, tags, vignette (`image`/`color`/`emoji`),
+  manifeste RÉDUIT (`tables` par alias : `fields`, `set`, `add` ; `files`, `height`) et le
+  SCHÉMA de chaque tableau déclaré (lu avec les droits du publieur). **Jamais** une ligne,
+  un agent (`agents_dropped` les compte), un numéro de tableau, un compte de connecteur. Un
+  `ref` vers un tableau de l'app devient `"@alias"` ; vers un tableau qu'elle ne déclare
+  pas, un `text`. Contrôle automatique sur HTML, métadonnées, schémas et manifeste (400
+  `contenu_refuse`). Slug possédé : republier le sien = version + 1, celui d'un autre
+  auteur = 409 `slug_taken` ; les ids des modèles d'app du front (`crm`, `sales`, `outreach`,
+  `seo`, `finance`, `abm`, `dashboard`, `review`, `kanban`, `form`, `dropzone`, `blank` —
+  `SLUGS_RESERVES`) sont réservés, même refus.
+- **Installer** (`POST /api/me/app-library/install`, tout membre de l'org active) : chaque
+  tableau naît VIDE de son schéma — personnel à l'installeur, dans l'org active, nommé
+  comme chez l'auteur (suffixé si pris) —, sauf `map_tables: {alias: numéro}` qui branche
+  un tableau de l'installeur ; les `@alias` deviennent les numéros neufs ; le manifeste est
+  jugé comme une écriture de l'installeur (`_checked_manifest` : 400 `invalid_manifest`
+  s'il ne lit pas un tableau branché) ; l'app naît PRIVÉE à l'installeur (le partage par
+  défaut de l'org ne s'applique pas), rangée dans `project_id` si demandé. Un refus défait
+  les tableaux créés. Une installation est notée (`community_installs`, `kind='app'`).
+- **Lire** : `GET /api/me/app-library[/{slug}]` (le HTML, le manifeste et les schémas au
+  `get` seulement, pour l'aperçu sur données d'exemple) ; vitrine anonyme
+  `GET /api/public/community/apps[/{slug}]` : champs fermés (`communaute.vitrine_app` —
+  titre, description, auteur, catégorie, tags, vignette, `tables: [{alias, name, fields}]`,
+  compteurs, dates), jamais le HTML.
+- **Retirer** : `library.moderate` avec `kind=app` ; dépublier : `DELETE
+  /api/me/app-library/{id}` (auteur ou personnel) — les copies installées restent.
+
+### ⚠️ Installer le code d'une autre org — ce que le cadre isolé laisse sortir
+
+Installer une app, c'est faire tourner le HTML d'un TIERS avec les droits de l'installeur
+(auteur ∩ lecteur, et l'installeur devient l'auteur de sa copie). Ce que tient le cadre
+(front, `src/lib/tulina-page.ts`, banc `security-tests/app-frame/` dans trois moteurs) :
+origine opaque (`sandbox="allow-scripts allow-forms"`), `connect-src 'none'`, `webrtc
+'block'`, ni worker ni cadre chargé d'une URL, `form-action 'none'`, navigation sortante
+coupée par le document-garde. Les données ne passent que par le pont `oto`, borné au
+manifeste et jugé au serveur. Ce qui reste ouvert, et qu'une app malveillante peut
+utiliser :
+
+1. **Les CDN autorisés** (`script-src`/`style-src`/`img-src`/`font-src` sur cdnjs, jsDelivr,
+   unpkg, Google Fonts) : une requête peut porter des données dans son CHEMIN. Elles vont
+   au CDN, pas à l'auteur — mais un CDN qui publie des statistiques de téléchargement par
+   fichier d'un paquet (jsDelivr en publie) laisserait l'auteur d'un paquet relire des
+   chemins demandés qui encodent des données. Canal caché à bas débit : **plausible, NON
+   démontré** (l'attaque n'a pas été construite, `docs/conventions.md`).
+2. **Les liens sortants** (`open-link`, si l'instance les ouvre) : l'adresse entière est
+   montrée et confirmée par la personne, mais elle peut porter des données.
+3. **Les gestes** : un clic dans l'app vaut accord ; elle peut écrire dans les tableaux
+   qu'elle déclare (ceux créés à l'installation, ou ceux branchés par `map_tables`).
+4. **L'écran** : une app peut imiter une interface et demander à la personne de saisir
+   ce qu'elle ne devrait pas.
+
+D'où `reviewed=true`, **exigé** pour installer une entrée signée par une autre org (400
+`review_required`) : c'est un cran d'intention, pas un contrôle. Fermer le canal 1
+demanderait d'épingler les ressources de CDN (versions et chemins figés, ou un miroir
+servi par l'instance) — décision à prendre avant d'ouvrir la publication des apps à
+toutes les orgs.

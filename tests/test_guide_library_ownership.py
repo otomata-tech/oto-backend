@@ -19,9 +19,9 @@ Ce que ces tests figent :
   message faux à la publication) et une entrée d'org ne part jamais sans auteur
   affichable.
 
-Publier est réservé au super_admin plateforme
-(`tests/test_publication_reservee_a_la_plateforme.py`) : `_publish` signe donc
-toujours Otomata. Les entrées signées par une ORG s'écrivent ici par le store
+Qui publie, et sous quel nom (un org_admin au nom de son org, un super_admin au nom
+d'Otomata), est figé par `tests/test_publication_communaute.py`. Ici le banc publie en
+super_admin (Otomata) ; les entrées signées par une ORG s'écrivent par le store
 lui-même — c'est son contrat, quel que soit l'appelant, et ce sont elles que la
 plateforme ne doit jamais reprendre.
 """
@@ -119,6 +119,8 @@ def surface(monkeypatch):
     # Le rôle se pose à sa SOURCE : `is_super_admin` et `is_platform_operator` en
     # dérivent tous deux, comme dans le système.
     monkeypatch.setattr(lib.access, "get_user_role", lambda sub: "super_admin")
+    # L'état de modération se lit hors du faux magasin (`db/communaute.py`).
+    monkeypatch.setattr(lib.db_communaute, "etat", lambda kind, i: {"state": "listed"})
     return store
 
 

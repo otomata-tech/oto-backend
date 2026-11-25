@@ -474,6 +474,9 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("doctrine_library", "slots"), ("function_versions", "sources"),
         # Une app : ses tableaux, champs, agents et sa vignette — des ids, jamais un sub.
         ("apps", "manifest"), ("apps", "thumbnail"), ("apps", "draft_manifest"),
+        # L'instantané d'une app publiée dans la communauté : manifeste réduit (alias,
+        # champs), vignette, schémas des tableaux — aucun principal.
+        ("app_library", "manifest"), ("app_library", "thumbnail"), ("app_library", "tables"),
         ("app_revisions", "manifest"), ("app_revisions", "thumbnail"),
         ("function_versions", "test_report"), ("grants", "constraints"),
         ("jev_jobs", "counters"), ("jev_jobs", "errors"), ("jev_jobs", "params"),

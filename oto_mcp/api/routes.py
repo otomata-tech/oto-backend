@@ -941,6 +941,16 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         # le jeton est le secret ; jamais le corps (capabilities/partages_procedure.py).
         Route("/api/public/process-shares/{token}", public.process_share_preview, methods=["GET"]),
         Route("/api/public/process-shares/{token}", options_handler, methods=["OPTIONS"]),
+        # Vitrine de la COMMUNAUTÉ (build du site, SEO) : sans auth, métadonnées seules
+        # (capabilities/communaute.vitrine) — jamais le corps, jamais un id d'org.
+        Route("/api/public/community/processes", public.community_processes, methods=["GET"]),
+        Route("/api/public/community/processes", options_handler, methods=["OPTIONS"]),
+        Route("/api/public/community/processes/{slug}", public.community_process, methods=["GET"]),
+        Route("/api/public/community/processes/{slug}", options_handler, methods=["OPTIONS"]),
+        Route("/api/public/community/apps", public.community_apps, methods=["GET"]),
+        Route("/api/public/community/apps", options_handler, methods=["OPTIONS"]),
+        Route("/api/public/community/apps/{slug}", public.community_app, methods=["GET"]),
+        Route("/api/public/community/apps/{slug}", options_handler, methods=["OPTIONS"]),
         # Désinscription du résumé des LECTEURS — même régime que la ligne au-dessus,
         # route, jeton (`typ`) et table distincts.
         Route("/o/r/{token}", public.readers_digest_unsubscribe, methods=["GET", "POST"]),

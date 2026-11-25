@@ -534,40 +534,62 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   - **fiche admin user** : `GET /api/admin/users/{sub}` = identité + accès effectif par provider (`status_for`) + grants + datastores + orgs (membership).
   - platform admin : `GET|POST /api/admin/orgs`, `GET /api/admin/orgs/{id}` (+ entitlements), `GET /api/admin/entitlements` (droits déclarés de toute la plateforme, filtrés et paginés — `docs/droits-declares.md`), `…/members*`, `…/secrets/{provider}`, `POST|DELETE /api/admin/orgs/{id}/entitlements/{datastore}`, `GET /api/admin/datastore-grants`, `POST|DELETE /api/admin/users/{sub}/datastore-grants/{datastore}`
   - secrets : jamais la clé en réponse (provider/base_url/set_at/set_by) ; providers per-user (slack/linkedin/google/whatsapp) refusés en `400` ; listing lu du coffre canonique `credentials_store` (legacy `org_secrets` plus dual-written sous chiffrement). Gating org_admin/membre via `org_store.get_org_role` (platform admin toujours autorisé). Révocation lazy sur sessions MCP ouvertes. Contrat front : `oto-app/docs/ORG_API_CONTRACT.md`.
-- **Bibliothèque publique de guides** (marketplace de skills, table `doctrine_library`) :
-  capacités `library.*` (`capabilities/guide_library.py`, montage auto MCP+REST) —
+- **Bibliothèque publique de guides = la COMMUNAUTÉ** (marketplace de procédures, table `doctrine_library`
+  lue par sa vue `guide_library`) : capacités `library.*` (`capabilities/guide_library.py`, montage auto
+  MCP+REST) et ce qui est commun à tout genre publié (`capabilities/communaute.py`, `db/communaute.py`) —
   `library.list/get` (`SUB_ONLY`, MCP `oto_procedure` op=library_list/library_get + REST
-  `GET /api/me/guide-library[/{slug}]`), `library.publish` (`LIBRARY_PUBLISHER` :
-  **super_admin plateforme seulement**, depuis le 14/09/2026 — MCP `oto_procedure` op=publish +
-  REST `POST /api/me/guide-library/publish`), `library.fork` (`ORG_MEMBER`, palier selon le
+  `GET /api/me/guide-library[/{slug}]`), `library.publish` (`LIBRARY_PUBLISHER`, MCP `oto_procedure`
+  op=publish + REST `POST /api/me/guide-library/publish`), `library.fork` (`ORG_MEMBER`, palier selon le
   rôle en handler, MCP `oto_procedure` op=fork + REST `POST /api/me/guide-library/fork`),
-  `library.unpublish` (auteur/PLATFORM_ADMIN, `DELETE /api/me/guide-library/{id}`).
-  **Qui publie** : la bibliothèque publique est une vitrine éditée par la plateforme, donc
-  seul un `super_admin` y publie. La règle est DÉCLARÉE (`_authz.LIBRARY_PUBLISHER`, plancher
-  `super`) sur les deux entrées qui mènent à `_publish` — `library.publish` et la branche
-  `publish` d'`oto_procedure` — pour que `capacite_autorise` annonce le droit par la même
-  condition que celle qui refuse (#695) ; `_publish` garde un filet qui lève le même refus.
-  Un org_admin ou un opérateur `admin` reçoit 403 `publication_reservee_a_la_plateforme`,
-  AVANT l'exigence d'org active et toute lecture de la procédure source ; le refus dit ce qui
-  reste ouvert — ses procédures personnelles, et le fork pour tout membre de l'org active. Un super_admin
-  sans org active reçoit 400 `no_active_org` (le corps publié s'y lit). ⚠️ Côté MCP la règle
-  d'autz tourne avant le handler : hors super_admin, le refus de plateforme parle le premier ;
-  pour un super_admin, la garde d'agent `publication_reservee_a_l_humain` (inchangée) le
-  renvoie au dashboard.
-  **Auteur** = `otomata`. Une entrée signée par une `org` reste possédée par elle : la
-  plateforme ne la reprend pas (409 `slug_taken`), son org_admin peut la dépublier.
+  `library.unpublish` (auteur/PLATFORM_ADMIN, `DELETE /api/me/guide-library/{id}`), `library.moderate`
+  (`PLATFORM_ADMIN`, REST seule `POST /api/admin/guide-library/{id}/moderation`).
+  **Qui publie** (décision produit du 25/11/2026, qui remplace « publication réservée à la plateforme »
+  du 14/09/2026) : tout **org_admin de l'org active** publie une procédure de cette org, **signée du nom
+  de l'org** (`author_kind='org'`) ; un **super_admin** publie au nom d'Otomata ; un opérateur `admin`
+  publie comme l'org dont il est admin, jamais au nom d'Otomata. Un membre reçoit 403
+  `publication_reservee_aux_admins` (le refus dit ce qui reste ouvert). La règle est DÉCLARÉE
+  (`_authz.LIBRARY_PUBLISHER`, plus de plancher plateforme) sur les deux entrées qui mènent à `_publish`,
+  pour que `capacite_autorise` annonce le droit par la condition qui refuse (#695) ; `_publish` garde un
+  filet qui lève le même refus. L'org active est exigée AVANT le rôle (400 `no_active_org`) : le rôle s'y
+  lit. ⚠️ Côté MCP, la garde d'agent `publication_reservee_a_l_humain` (inchangée) renvoie au dashboard.
+  **Contrôle automatique** avant toute écriture (`contenu_publiable.py`, fonction pure) : titre,
+  description, corps, catégorie, tags, descriptions de slots qui portent une adresse email (hors domaines
+  d'exemple RFC 2606/6761), un numéro de téléphone, une clé ou un jeton d'API (formes connues, longues
+  chaînes hex/base64 de forme secrète) ou une URL à secret (`user:pass@`, paramètre `token`/`key`/…) →
+  400 `contenu_refuse`, `details.found = [{field, kind}]` (`kind` ∈ `email` | `phone` | `secret` |
+  `url_with_secret`), **jamais la valeur**. Ce n'est pas une approbation : l'entrée est listée tout de
+  suite.
+  **Modération après coup** (`community_moderation`, à côté de l'entrée) : le personnel RETIRE une entrée
+  (`action=remove`, `reason` obligatoire) ou la RESTAURE (`action=restore`). Une entrée retirée disparaît
+  de `list`/`get`/`fork` (404 `unknown_entry`, celui d'une entrée inconnue) et de la vitrine anonyme, pour
+  tous sauf les admins de l'org autrice et les opérateurs plateforme, qui la lisent avec
+  `moderation: {state, reason, removed_by, removed_at}` (et la listent avec `include_removed=true`). Une
+  REPUBLICATION ne lève pas un retrait (`PublishResult.moderation_state` le dit), et l'auteur ne
+  dépublie pas une entrée retirée (403 `entree_retiree` : dépublier puis republier ferait une entrée
+  neuve sans retrait) — seul le personnel la dépublie.
+  **Installations** (`community_installs`) : chaque fork réussi est noté (entrée, org active, compte) ;
+  `installs_total` / `installs_30d` = orgs DISTINCTES, servis sur `list` et `get`. `library.list` prend
+  `sort` ∈ `trending` (installs_30d) | `most_added` (installs_total) | `new` (création) ; sans `sort`, le
+  tri d'avant (dernière publication d'abord).
+  Une entrée signée par une `org` reste possédée par elle : un autre auteur ne la reprend pas (409
+  `slug_taken`), son org_admin peut la dépublier. Le slug public `apps` est RÉSERVÉ (adresse de la
+  page des apps de la communauté, site et application) : même refus 409 `slug_taken`.
   **Fork** réutilise `org_store.set_instruction` (`fork_library_entry`) → procédure
   versionnée dont le palier suit le rôle réel dans l'org active (décision du 06/10/2026) :
   procédure d'org pour un org_admin, procédure PERSONNELLE pour un membre ; `scope=user|org`
   le précise, `org` sans org_admin = 403 (le refus d'org_admin, qui nomme le palier ouvert).
   `project_id` rattache la copie au projet (lien `procedure`), écriture sur le projet
-  vérifiée AVANT le fork (403 `project_not_writable`, rien de copié). **Aucune surface
-  ANONYME** : les vitrines `GET /api/guide-library[/{slug}]` (marché) et
-  `GET /api/guides/library[/{slug}]` (guides plateforme), servies sans jeton au build de
-  oto.cx, sont retirées avec leurs alias `/api/doctrines/library[/{slug}]`
-  (otomata-tech/oto#84) — elles rendaient le corps complet à n'importe qui, et la version
-  servie survivait au nettoyage du dépôt. La face authentifiée `/api/me/guide-library`
-  sert la ligne entière — `library.fork`/`library.unpublish` visent une entrée par `id`.
+  vérifiée AVANT le fork (403 `project_not_writable`, rien de copié).
+  **Vitrine ANONYME, métadonnées seules** (`api/public.py`, build de la page communauté du site) :
+  `GET /api/public/community/processes?sort=&category=&limit=` (défaut 100, plafond 200) →
+  `{processes: [...]}` et `GET /api/public/community/processes/{slug}` → une entrée ; champs FERMÉS
+  (`communaute.CHAMPS_VITRINE` + `slots` réduits à `name`/`type`/`connector`) — jamais `body_md`, jamais
+  `author_org_id`/`source_org_id`/`published_by`/`id` ; seules les entrées `public` et listées (404
+  indistinct sinon) ; `Cache-Control: public, max-age=300` ; seau anti-martelage des surfaces anonymes.
+  Les anciennes vitrines `GET /api/guide-library[/{slug}]` et `GET /api/guides/library[/{slug}]`, qui
+  rendaient le corps complet à n'importe qui, restent retirées (otomata-tech/oto#84). La face
+  authentifiée `/api/me/guide-library` sert la ligne entière — `library.fork`/`library.unpublish`
+  visent une entrée par `id`.
   ⚠️ Les chemins `/api/me/guide-library…` s'appelaient `/api/me/doctrines/…` jusqu'au
   2026-08-28 (#519) ; les anciens ont répondu **308** jusqu'à leur retrait le
   23/11/2026 (lot D) et rendent désormais 404 — cf. `docs/alias-deprecies.md`.

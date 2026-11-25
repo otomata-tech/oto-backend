@@ -70,6 +70,7 @@ from . import billing_invoices  # noqa: F401 — me.billing.invoices.list (#488)
 import oto_mcp.capabilities.orgs.instructions  # noqa: F401 — org.{guide.*, instruction.*}
 # Bibliothèque publique de guides (marketplace) — list/get/publish/fork/unpublish.
 from . import guide_library  # noqa: F401 — library.{list,get,publish,fork,unpublish}
+import oto_mcp.capabilities.communaute  # noqa: F401 — library.moderate (retrait/restauration par le personnel)
 # Sélection de connecteurs (marketplace, ADR 0019) — me/select/pause/unselect.
 import oto_mcp.capabilities.connectors.selection  # noqa: F401 — connectors.{me,select,pause,unselect}
 import oto_mcp.capabilities.connectors.identities  # noqa: F401 — connectors.{identities,set_default_identity} (ADR 0024)
@@ -201,6 +202,8 @@ from . import node_rows  # noqa: F401 — me.node.rows (lignes d'un tableau, cur
 import oto_mcp.capabilities.docs.core  # noqa: F401 — me.doc (oto_doc, POST /api/me/docs) — pages d'un projet
 import oto_mcp.capabilities.apps  # noqa: F401 — me.app (oto_apps, POST /api/me/apps) — apps d'un projet
 import oto_mcp.capabilities.apps_appel  # noqa: F401 — me.app.call (POST /api/me/apps/{app_id}/call) — une app ouverte, auteur ∩ lecteur
+# La bibliothèque d'apps de la communauté — après `apps`, dont elle réutilise les gardes.
+import oto_mcp.capabilities.apps_bibliotheque  # noqa: F401 — apps.library.{list,get,publish,install,unpublish}
 from . import uploads  # noqa: F401 — me.upload_url (oto_upload_url) — push out-of-bande de gros contenu (#105)
 # Journal de travail du datastore (ADR 0046 b4) — parcours d'une ligne + activité du tableau.
 import oto_mcp.capabilities.datastore.activity  # noqa: F401 — me.datastore.{row_activity,activity} (REST-only)

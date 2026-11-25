@@ -162,3 +162,45 @@ ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS note TEXT;
 -- remplacé. NULL pour les révisions d'avant cette colonne.
 ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS saved_at TIMESTAMPTZ;
 """
+
+# La BIBLIOTHÈQUE d'apps de la communauté : l'instantané publié d'une app, qu'une autre
+# org installe. Sœur de la bibliothèque de guides (`procedures.py`), et pas la même
+# table : une app n'est pas une procédure, et ce qu'elle emporte est autre — son HTML,
+# son manifeste RÉDUIT (les alias de tableaux et ce qu'elle y lit et écrit ; jamais un
+# numéro de tableau, jamais un agent), et le SCHÉMA de chaque tableau déclaré (`tables` :
+# `{alias: {name, schema}}`, les liens entre tableaux récrits en alias). Jamais une
+# ligne, jamais un identifiant de connecteur. Modération et installations : les tables
+# communes de la communauté (`community_*`, `kind = 'app'`).
+#
+# `slug` est l'adresse publique et il est POSSÉDÉ (comme celui de la vue `guide_library`) :
+# republier le sien incrémente `version`, viser celui d'un autre auteur est refusé.
+# `author_org_id` ON DELETE SET NULL : l'entrée d'une org effacée part avec elle par
+# l'effacement (classement), la FK ne fait que tenir la ligne sans org entre-temps.
+# `source_app_id` : traçabilité, sans FK (l'app source peut disparaître).
+APP_LIBRARY = """
+CREATE TABLE IF NOT EXISTS app_library (
+    id BIGSERIAL PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT '',
+    tags TEXT[] NOT NULL DEFAULT '{}',
+    thumbnail JSONB,
+    html TEXT NOT NULL,
+    manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+    tables JSONB NOT NULL DEFAULT '{}'::jsonb,
+    author_kind TEXT NOT NULL CHECK (author_kind IN ('otomata', 'org')),
+    author_org_id BIGINT REFERENCES orgs(id) ON DELETE SET NULL,
+    author_display TEXT NOT NULL DEFAULT '',
+    visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'unlisted')),
+    source_app_id BIGINT,
+    version INTEGER NOT NULL DEFAULT 1,
+    published_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_app_library_author ON app_library (author_kind, author_org_id);
+CREATE INDEX IF NOT EXISTS idx_app_library_category ON app_library (category);
+CREATE INDEX IF NOT EXISTS idx_app_library_published_by
+    ON app_library (published_by) WHERE published_by IS NOT NULL;
+"""

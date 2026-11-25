@@ -984,7 +984,7 @@
   "tests/test_public_doc_page_tenant.py": 1.17,
   "tests/test_publication_exige_appartenance_1176.py": 2.31,
   "tests/test_publication_reservee_a_l_humain.py": 0.03,
-  "tests/test_publication_reservee_a_la_plateforme.py": 0.05,
+  "tests/test_publication_communaute.py": 0.05,
   "tests/test_published_project_instructions.py": 0.03,
   "tests/test_quota_affiche_le_barreau_qui_repond.py": 0.21,
   "tests/test_rail_poignees.py": 0.03,

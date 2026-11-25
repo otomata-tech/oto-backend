@@ -77,8 +77,9 @@ qu'elle existe. `is_new_account` = l'org cible est perso ET la fiche ne porte ni
 Le corps devient lisible par quiconque se crée un compte : c'est une ouverture au web.
 `op=share_publish` est donc refusé à un agent (`_publication.refuser_si_agent`, 403
 `publication_reservee_a_l_humain`) ; retirer, régler et lire les lecteurs lui restent
-ouverts. La bibliothèque publique n'est pas touchée : elle reste éditée par la plateforme
-(`LIBRARY_PUBLISHER`), et un partage n'est listé nulle part.
+ouverts. La bibliothèque publique (la communauté) est un geste distinct : un org_admin y
+publie au nom de son org (`LIBRARY_PUBLISHER`, `docs/rest-api.md` §Bibliothèque), et un
+partage par lien n'est listé nulle part.
 
 ## Le résumé quotidien
 

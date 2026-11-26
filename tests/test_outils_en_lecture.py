@@ -94,11 +94,11 @@ async def test_les_lectures_stripe_et_http_get_sont_declarees():
 @pytest.mark.asyncio
 async def test_les_lecteurs_lemlist_sont_declares_en_lecture():
     """Une recette compare les leads d'un tableau aux campagnes avant de pousser :
-    lister, lire une campagne, ses leads, ses activités, un résultat d'enrichissement."""
+    lister, lire une campagne, ses leads, ses activités, un résultat d'enrichissement, un appel."""
     servis = {t.name: t for t in await _outils()}
     for nom in ("lemlist_status", "lemlist_list_campaigns", "lemlist_get_campaign",
                 "lemlist_get_campaign_stats", "lemlist_get_activities", "lemlist_get_leads",
-                "lemlist_enrich_result"):
+                "lemlist_enrich_result", "lemlist_call"):
         assert en_lecture(servis[nom]), nom
     for nom in ("lemlist_campaign", "lemlist_lead", "lemlist_create_lead",
                 "lemlist_enrich", "lemlist_enrich_bulk", "lemlist_launch_lead"):

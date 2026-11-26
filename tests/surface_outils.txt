@@ -401,6 +401,7 @@ leexi_teams	create delete get list update	ac4733fa900884fc
 leexi_users	create deactivate get list update	05c116a9c187cad3
 lemlist_act	create_persona delete_persona send_email send_linkedin send_whatsapp	1e5f55d5e8d7f4fc
 lemlist_add_lead_variables	-	c031defa598058a0
+lemlist_call	get statuses	a530395b32fb74f3
 lemlist_campaign	batch_stats create duplicate export_email export_leads export_start export_status pause reports statutes update	1c2c7b36f1dd8adc
 lemlist_campaign_auto_review	-	9b13aa770fb0e63d
 lemlist_campaign_start	-	0fcf76c93412d4a7

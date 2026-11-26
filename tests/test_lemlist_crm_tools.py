@@ -32,7 +32,7 @@ CRM_TOOLS = {
     "lemlist_unsubscribe", "lemlist_task", "lemlist_watchlist",
     "lemlist_database", "lemlist_team", "lemlist_mailbox",
     "lemlist_deliverability", "lemlist_webhook",
-    "lemlist_delete_activity_transcript",
+    "lemlist_delete_activity_transcript", "lemlist_call",
 }
 
 
@@ -69,6 +69,7 @@ def test_le_second_module_est_charge_par_le_boot_reel(all_tools):
     ("lemlist_mailbox", "lemlist_crm", {}),
     ("lemlist_deliverability", "lemlist_crm", {}),
     ("lemlist_webhook", "lemlist_crm", {}),
+    ("lemlist_call", "lemlist_crm", {}),
     ("lemlist_act", "lemlist_crm",
      {"message": "x", "send_user_id": "usr_1"}),
     ("lemlist_lead", "lemlist", {}),
@@ -1079,3 +1080,137 @@ def test_un_runtimeerror_hors_de_la_vue_n_est_pas_renomme():
             with pytest.raises(RuntimeError) as exc:
                 _tool("lemlist_database").fn(op="people", **view)
             assert not isinstance(exc.value, McpError)
+
+
+# --- Calls: the transcript read server-side, the signed links named as such ----------
+
+_SIGNED = "https://files.example.test/calls/act_1.json?X-Signature=abc"
+
+
+def _a_call(**extra):
+    return {"success": True, "data": {
+        "_id": "act_1", "direction": "outbound", "duration": 125, "callStatus": "answered",
+        "hasRecording": True, "hasTranscript": True,
+        "recordingUrl": "https://files.example.test/calls/act_1.mp3?X-Signature=abc",
+        "transcriptUrl": _SIGNED, **extra}}
+
+
+def test_un_appel_rend_sa_transcription_et_sort_les_liens_signes():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_call.return_value = _a_call()
+        inst.get_call_transcript.return_value = {
+            "text": "Hello, this is Marie.",
+            "utterances": [{"speaker": "A", "start": 0.0, "end": 1.2, "text": "Hello, this is Marie."}]}
+        out = _tool("lemlist_call").fn(op="get", call_id="act_1")
+
+    inst.get_call.assert_called_once_with("act_1")
+    inst.get_call_transcript.assert_called_once()
+    assert inst.get_call_transcript.call_args.args == (_SIGNED,)
+    assert out["call"]["_id"] == "act_1" and out["call"]["duration"] == 125
+    # Les liens signés ne restent pas dans l'appel, où ils passeraient pour des adresses.
+    assert "transcriptUrl" not in out["call"] and "recordingUrl" not in out["call"]
+    assert out["signed_links"]["transcript_url"] == _SIGNED
+    assert "24 hours" in out["signed_links"]["expires"]
+    assert out["transcript"]["text"] == "Hello, this is Marie."
+    assert out["transcript"]["truncated"] is False
+    assert out["transcript"]["utterances"][0]["speaker"] == "A"
+
+
+def test_sans_transcription_demandee_ou_presente_rien_nest_telecharge():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_call.return_value = _a_call()
+        out = _tool("lemlist_call").fn(op="get", call_id="act_1", include_transcript=False)
+        assert "transcript" not in out
+        inst.get_call.return_value = _a_call(hasTranscript=False, transcriptUrl=None)
+        out = _tool("lemlist_call").fn(op="get", call_id="act_1")
+        assert out["transcript"] is None
+        assert "transcript_url" not in out["signed_links"]
+        inst.get_call_transcript.assert_not_called()
+
+
+def test_une_longue_transcription_est_coupee_et_le_dit():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_call.return_value = _a_call()
+        many = [{"speaker": "A", "text": "word " * 20} for _ in range(400)]
+        inst.get_call_transcript.return_value = {"text": "x" * 500, "utterances": many}
+        out = _tool("lemlist_call").fn(op="get", call_id="act_1", max_chars=100)
+
+    assert out["transcript"]["truncated"] is True
+    assert out["transcript"]["text"].startswith("x" * 100)
+    assert "400 more characters" in out["transcript"]["text"]
+    assert "utterances" not in out["transcript"]
+    assert out["transcript"]["utterances_omitted"] == 400
+
+
+def test_un_lien_expire_rend_lappel_et_une_erreur_sans_la_signature():
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_call.return_value = _a_call()
+        inst.get_call_transcript.side_effect = UpstreamHTTPError(403, "AccessDenied", url=_SIGNED)
+        out = _tool("lemlist_call").fn(op="get", call_id="act_1")
+        assert out["call"]["_id"] == "act_1"
+        assert "HTTP 403" in out["transcript_error"] and "expired" in out["transcript_error"]
+
+        import requests
+        inst.get_call_transcript.side_effect = requests.ConnectionError(
+            f"Max retries exceeded with url: {_SIGNED}")
+        out = _tool("lemlist_call").fn(op="get", call_id="act_1")
+        assert "X-Signature" not in out["transcript_error"]
+        assert "ConnectionError" in out["transcript_error"]
+
+
+def test_la_transcription_passe_par_la_session_gardee_sans_exceptions_declarees():
+    """Le lien vient de la réponse d'un tiers, pas d'un opérateur : la session donnée
+    au client est celle d'`egress_transport`, sans les exceptions de `OTO_EGRESS_ALLOW`."""
+    from oto_mcp.egress_transport import AdaptateurEpingle, Politique
+
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_call.return_value = _a_call()
+        inst.get_call_transcript.return_value = {"text": "Hello", "utterances": []}
+        _tool("lemlist_call").fn(op="get", call_id="act_1")
+
+    session = inst.get_call_transcript.call_args.kwargs["session"]
+    adaptateur = session.get_adapter(_SIGNED)
+    assert isinstance(adaptateur, AdaptateurEpingle)
+    assert adaptateur._politique == Politique("lemlist", "transcriptUrl", False)
+    assert session.trust_env is False
+
+
+def test_un_bug_pendant_la_transcription_n_est_pas_change_en_transcript_error():
+    """Seuls le réseau, un fichier illisible et une erreur de l'amont deviennent
+    `transcript_error` : un bug remonte."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.get_call.return_value = _a_call()
+        inst.get_call_transcript.side_effect = KeyError("text")
+        with pytest.raises(KeyError):
+            _tool("lemlist_call").fn(op="get", call_id="act_1")
+        inst.get_call_transcript.side_effect = ValueError("the call transcript is not JSON")
+        out = _tool("lemlist_call").fn(op="get", call_id="act_1")
+        assert out["transcript_error"] == (
+            "the transcript could not be read: the call transcript is not JSON")
+
+
+def test_les_issues_dappel_se_lisent_et_un_appel_sans_id_est_refuse():
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        inst.list_call_statuses.return_value = {"success": True, "data": [
+            {"key": "answered", "label": "Answered", "callAnswered": True}]}
+        out = _tool("lemlist_call").fn(op="statuses")
+        assert out == {"statuses": [{"key": "answered", "label": "Answered", "callAnswered": True}]}
+        with pytest.raises(Exception, match="call_id"):
+            _tool("lemlist_call").fn(op="get")
+        inst.get_call.assert_not_called()

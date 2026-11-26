@@ -26,7 +26,7 @@ the connector mirrors the **141 documented routes**, without exception. by famil
 **inbox** — `lemlist_inbox` (conversations, drafts, labels) and `lemlist_act` (the direct sends, and the personas of the shared base)
 **unsubscribes** — `lemlist_unsubscribe`: ⚠️ **two distinct lists** (values: emails, domains written `@example.com`, LinkedIn URLs, phones — `get`/`add`/… and `var_*` are the same list; a contact's do-not-contact flag); writing to one does not write to the other. `get`/`var_get` answer `unsubscribed: false` for a value not on the list, not an error; for an address its domain `@<domain>` is checked too (`matched` says which value answered)
 **signals** — `lemlist_watchlist`: companies that are hiring, fundraising, job changes, visiting your website… (website visitors: section below)
-**the rest** — `lemlist_task`, `lemlist_database` (shared base, read-only: people, companies, filters, personas — pass `compact=True` on people/companies, section below; saving or deleting a persona is `lemlist_act`), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities` (pass `compact=True`, section below)
+**the rest** — `lemlist_task`, `lemlist_database` (shared base, read-only: people, companies, filters, personas — pass `compact=True` on people/companies, section below; saving or deleting a persona is `lemlist_act`), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities` (pass `compact=True`, section below), `lemlist_call` (one call and its transcript, section below)
 
 ## usage — website visitors
 
@@ -72,6 +72,15 @@ two surfaces send **indirectly**, and stay visible by saying so: a watch list se
 - `fields=["type", "lead.variables.email"]` keeps only those keys (dotted path for a nested key, lists traversed, never an index); a key an event lacks is skipped. with `compact=True`, each field named is taken from the full event and REPLACES the short view's key of the same first level. a malformed list is refused before any request.
 - neither given: the events as lemlist sends them. both apply with `all_pages=True` too.
 - a view applies to a list only: an answer lemlist sends as something else is refused as `lemlist_activities_not_a_list` — call again without `fields` and `compact` to read it whole.
+
+## usage — reading calls
+
+`lemlist_call(op="get", call_id=…)` reads one call (lemlist's own dialer, Aircall, Ringover, or one pushed by the API): direction, numbers, start and end, duration, outcome (`callStatus`), note, and the ids of its contact, lead, campaign and task.
+- **finding calls**: lemlist has no route that lists them. read the activities (`lemlist_get_activities`, `activity_type` `aircallDone`, `aircallEnded`, `aircallInterested`, `aircallNotInterested`, `callTranscriptDone`…, with `compact=True`). an activity's `_id` (`act_…`) is the call's id; a call's `externalId` (the dialer's own id) works too
+- **the transcript comes inline**: with `include_transcript` (the default) the server downloads it and returns `transcript.text`, cut at `max_chars` (default 60,000, `truncated` says when), with `utterances` (who spoke, when) when they are small, else `utterances_omitted`. if it cannot be read, `transcript_error` says why and the call still comes back
+- ⚠️ **`signed_links` expire 24 hours after lemlist issues them** (`recording_url` MP3, `transcript_url` JSON): never store them in a table or a doc. read the call again for fresh ones
+- "what does each outcome mean?" → `lemlist_call(op="statuses")`: the team's call outcomes, custom ones included, with whether each counts as answered, positive or negative, and pauses the lead's campaigns
+- a 402 from lemlist means the team's plan does not include the calls API
 
 ## note — lemlist API pitfalls
 

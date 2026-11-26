@@ -32,6 +32,7 @@ THEIR data, so a user key is required, no platform quota.
 from __future__ import annotations
 
 import html
+import json
 import re
 from typing import Literal, Optional
 
@@ -40,7 +41,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
-from .. import access
+from .. import access, egress_transport
 from .lecture import ACTE, LECTURE
 
 
@@ -148,6 +149,60 @@ def _unsub_page(rows, limit: int, offset: Optional[int]) -> dict:
     full = isinstance(rows, list) and len(rows) >= min(limit, _UNSUB_DEFAULT_PAGE)
     return {"limit": limit, "offset": offset or 0,
             "next_offset": (offset or 0) + len(rows) if full else None}
+
+
+# --- Calls: the transcript inline, the signed links named as such -----------------
+# A call carries two links lemlist signs for 24 hours (`recordingUrl`, `transcriptUrl`).
+# Left inside the call, they read like permanent addresses an agent can store in a
+# table and open next week. They come out under `signed_links`, saying they expire, and
+# the transcript is read here so that no agent has to fetch a signed link itself.
+
+#: Characters of transcript text served by default: a one-hour call is ~50 000.
+_CALL_TEXT_DEFAULT = 60_000
+#: Utterances (speaker and timing per turn) are served when their JSON stays under
+#: this; past it they roughly double the answer, and the text already holds the words.
+_CALL_UTTERANCES_MAX = 30_000
+_SIGNED_LINKS = {"recordingUrl": "recording_url", "transcriptUrl": "transcript_url"}
+
+
+def _call_record(answer):
+    """The call inside lemlist's `{success, data}`, or the answer itself when bare."""
+    if isinstance(answer, dict) and isinstance(answer.get("data"), dict):
+        return dict(answer["data"])
+    return dict(answer) if isinstance(answer, dict) else answer
+
+
+def _transcript_error(e: Exception) -> str:
+    """Why the transcript is missing, never with the signed link in it: a network error
+    from `requests` prints the whole URL, signature included, so only its kind is said."""
+    status = getattr(e, "status_code", None)
+    if status:
+        return (f"lemlist's signed transcript link answered HTTP {status}: it may have "
+                "expired, read the call again")
+    if isinstance(e, ValueError) and not isinstance(e, requests.RequestException):
+        return f"the transcript could not be read: {e}"
+    return f"the transcript could not be downloaded ({type(e).__name__}); try again"
+
+
+def _readable_transcript(raw, max_chars: int) -> dict:
+    """`{text, utterances}` from lemlist, made safe to serve: the text cut at
+    `max_chars` (saying so), the utterances only when small."""
+    raw = raw if isinstance(raw, dict) else {"text": raw if isinstance(raw, str) else None}
+    utterances = raw.get("utterances") if isinstance(raw.get("utterances"), list) else None
+    text = raw.get("text")
+    if not isinstance(text, str):
+        text = "\n".join(str(u.get("text", "")) for u in utterances or []
+                         if isinstance(u, dict)) or None
+    out: dict = {"text": text, "truncated": False}
+    if text and len(text) > max_chars:
+        out["text"] = text[:max_chars] + f" [... truncated, {len(text) - max_chars} more characters]"
+        out["truncated"] = True
+    if utterances is not None:
+        if len(json.dumps(utterances, ensure_ascii=False)) <= _CALL_UTTERANCES_MAX:
+            out["utterances"] = utterances
+        else:
+            out["utterances_omitted"] = len(utterances)
+    return out
 
 
 def register(mcp: FastMCP) -> None:
@@ -1072,4 +1127,84 @@ def register(mcp: FastMCP) -> None:
         """
         client, is_platform = _client()
         result = client.delete_activity_recording_transcript(activity_id)
+        return result
+
+    # --- Calls ------------------------------------------------------------------
+
+    @mcp.tool(annotations=LECTURE)
+    def lemlist_call(
+        op: Literal["get", "statuses"],
+        call_id: Optional[str] = None,
+        include_transcript: bool = True,
+        max_chars: Optional[int] = None,
+    ) -> dict:
+        """Read a call (lemlist's own dialer, Aircall, Ringover, or one pushed by
+        the API) with its transcript, or the team's call outcomes. Reads only.
+
+        No route lists calls: find them with `lemlist_get_activities`
+        (`activity_type` `aircallDone`, `aircallEnded`, `aircallInterested`,
+        `aircallNotInterested`, `callTranscriptDone`…). The activity's `_id` is
+        the call's id.
+
+        Args by op:
+        - `get`: `call_id`, the call's `_id` (`act_…`) or its `externalId`.
+          Returns `call`: `direction` (`inbound`/`outbound`), `from`, `to`,
+          `startedAt`, `endedAt`, `duration` (seconds), `callStatus` (a key of
+          `op="statuses"`), `note`, `phoneProvider` (`twilio` is lemlist's own
+          dialer, then `aircall`, `ringover`, `api`), `hasRecording`,
+          `hasTranscript`, and the `contactId`, `leadId`, `campaignId`, `taskId`
+          and `userId`.
+          With `include_transcript` (default true) and a transcript on the call,
+          `transcript` holds its `text`, cut at `max_chars` (default 60 000;
+          `truncated` says when), and its `utterances` when they are small
+          (otherwise `utterances_omitted`, their count). A transcript that
+          cannot be read is `transcript_error`; the call still comes back.
+          `signed_links` (`recording_url` MP3, `transcript_url` JSON) EXPIRE
+          24 hours after lemlist issues them: never store them. Read the call
+          again for fresh ones.
+        - `statuses`: the team's call outcomes, custom ones included: `key`,
+          `label`, `callAnswered`, `callPositive`, `callNegative`,
+          `pausesCampaigns`.
+
+        A 402 from lemlist means the team's plan does not include the calls API.
+        """
+        client, is_platform = _client()
+        if op == "statuses":
+            answer = client.list_call_statuses()
+            if isinstance(answer, dict) and isinstance(answer.get("data"), list):
+                answer = answer["data"]
+            return {"statuses": answer}
+        if op != "get":
+            raise _bad(f'unknown op "{op}" — expected: get, statuses')
+        _need(call_id=call_id)
+        if max_chars is not None and max_chars < 1:
+            raise _bad("`max_chars` must be at least 1")
+        call = _call_record(client.get_call(call_id))
+        if not isinstance(call, dict):
+            return {"call": call}
+        links = {name: call.pop(key) for key, name in _SIGNED_LINKS.items() if call.get(key)}
+        result: dict = {"call": call}
+        if links:
+            result["signed_links"] = {
+                **links,
+                "expires": "24 hours after lemlist issued them; read the call again for fresh links",
+            }
+        if include_transcript:
+            if not links.get("transcript_url"):
+                result["transcript"] = None
+            else:
+                from oto.tools.common.errors import UpstreamHTTPError
+                try:
+                    # The link comes from lemlist's answer, not from an operator: it is
+                    # fetched through the guarded session, with no declared exceptions.
+                    with egress_transport.session(connector="lemlist", field="transcriptUrl",
+                                                  exceptions_declarees=False) as http:
+                        raw = client.get_call_transcript(links["transcript_url"], session=http)
+                except (requests.RequestException, ValueError, UpstreamHTTPError) as e:
+                    # A network, file or upstream failure: the call still comes back,
+                    # with `transcript_error` naming it. A bug is not caught here.
+                    result["transcript_error"] = _transcript_error(e)
+                else:
+                    result["transcript"] = _readable_transcript(
+                        raw, max_chars or _CALL_TEXT_DEFAULT)
         return result

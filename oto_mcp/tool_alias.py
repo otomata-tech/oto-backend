@@ -112,8 +112,9 @@ def _is_connector_namespace(prefix: str) -> bool:
 
 
 def _tenant_entry(sub: Optional[str]):
-    """L'entrée de registre du tenant TIERS de ce compte, ou None (compte de la
-    plateforme, sub absent, registre illisible).
+    """L'entrée de registre du tenant de ce compte qui DÉCLARE quelque chose à
+    afficher, ou None (primaire sans préfixe, sub absent, registre illisible) — cf.
+    `_entry_of_tenant`.
 
     **Aucun accès DB** — le registre d'émetteurs est en mémoire (bâti au boot). C'est
     ce qui autorise l'appel depuis un middleware, dans la boucle (serveur MONO-LOOP).
@@ -129,12 +130,27 @@ def _tenant_entry(sub: Optional[str]):
 
 
 def _entry_of_tenant(slug: Optional[str]):
-    """L'entrée de registre du tenant TIERS `slug`, ou None (tenant primaire, aucun).
-    Sans filet : chaque appelant décide du sien."""
+    """L'entrée de registre du tenant `slug`, ou None (aucun, ou primaire muet).
+    Sans filet : chaque appelant décide du sien.
+
+    Le tenant PRIMAIRE n'a d'entrée ici que s'il DÉCLARE un préfixe valide
+    (`tenants.tool_prefix` de sa ligne, repris par `tenancy.build`) : même règle que
+    pour un tiers — rien n'est renommé par défaut —, mais plus stricte sur un point.
+    Un tiers sans préfixe garde son `title` de handshake (son nom sert déjà la
+    découverte) ; un primaire sans préfixe ne change RIEN, ni noms, ni `serverInfo`.
+    C'est ce qui garde une instance dont le primaire ne déclare rien à l'octet d'avant.
+
+    ⚠️ Exception CIRCONSCRITE au nom des outils : `tenancy.entry_for_slug` continue de
+    rendre None pour le primaire (liens, palette, `dashboard_url`) — une ligne en base
+    n'y repeint pas la plateforme, et son `name` n'est pas repris par le registre."""
     from . import tenancy
-    if not slug or slug == tenancy.primary_slug():
+    if not slug:
         return None
-    return next((e for e in tenancy.current().entries() if e.slug == slug), None)
+    entry = next((e for e in tenancy.current().entries() if e.slug == slug), None)
+    if entry is not None and slug == tenancy.primary_slug() \
+            and not normalize_prefix(getattr(entry, "tool_prefix", "")):
+        return None
+    return entry
 
 
 def declared_prefix_of_tenant(slug: Optional[str]) -> str:
@@ -192,6 +208,43 @@ def prefix_for(sub: Optional[str]) -> str:
     return prefix
 
 
+def sert_aussi_l_ancien_nom(sub: Optional[str]) -> bool:
+    """Le compte reçoit-il AUSSI l'ancien nom `oto_<x>` à côté de `<préfixe>_<x>` ?
+
+    Oui pour un compte du tenant PRIMAIRE dont la ligne déclare un préfixe : ses
+    procédures, guides, allowlists et réglages de client citent `oto_*` depuis
+    toujours, et le client a déjà approuvé ces noms. Lui retirer `oto_*` du jour au
+    lendemain ferait redemander chaque permission. L'ancien nom reste donc LISTÉ et
+    appelable, marqué déprécié (`avis_ancien_nom`) — sans date de retrait : il part
+    quand les consommateurs ont suivi, rien de daté (règle du 25/09/2026).
+
+    Non pour un tenant tiers : il n'a jamais été servi sous `oto_*` (son préfixe est
+    appliqué depuis sa déclaration), et lui lister `oto_*` réintroduirait la marque de
+    la plateforme dans son produit. Il garde l'appel sous les deux noms, comme avant.
+    Non pour un travail du runner (`prefix_for` lui rend `""`). Fail-open : False."""
+    if not prefix_for(sub):
+        return False
+    try:
+        from . import tenancy
+        return tenancy.current().tenant_of(sub) == tenancy.primary_slug()
+    except Exception:  # noqa: BLE001 — un doublon d'affichage ne casse pas une liste
+        logger.warning("tenant du compte illisible : ancien nom non servi (fail-open)",
+                       exc_info=True)
+        return False
+
+
+def avis_ancien_nom(nom_public: str) -> str:
+    """L'avis en tête de la DESCRIPTION de l'ancien nom `oto_<x>`. Sans date : aucune
+    n'est fixée."""
+    return f"⚠️ Ancien nom, utiliser `{nom_public}`. "
+
+
+def avis_d_appel_ancien_nom(ancien: str, nom_public: str) -> str:
+    """L'avis en tête de la RÉPONSE d'un appel fait sous l'ancien nom `oto_<x>`."""
+    return (f"⚠️ `{ancien}` est un ancien nom, utiliser `{nom_public}` (même outil, "
+            "mêmes arguments).")
+
+
 def server_identity_for(sub: Optional[str]) -> tuple[str, str]:
     """`(name, title)` que le handshake `initialize` doit annoncer — `("", "")` =
     inchangé (compte de la plateforme, tenant sans déclaration, erreur).
@@ -208,8 +261,28 @@ def server_identity_for(sub: Optional[str]) -> tuple[str, str]:
     # comme ses noms d'outils (`prefix_for`).
     if entry is None or sert_un_worker():
         return ("", "")
-    return (normalize_prefix(getattr(entry, "tool_prefix", "")),
-            str(getattr(entry, "name", "") or ""))
+    return (normalize_prefix(getattr(entry, "tool_prefix", "")), _title_of(entry))
+
+
+def _title_of(entry) -> str:
+    """Le libellé humain du handshake. Le primaire n'a pas de `name` au registre (il
+    n'en reprend que le préfixe, cf. `tenancy.build`) : son libellé est la marque
+    DÉCLARÉE de l'instance (`OTO_BRAND_NAME`), celle qui a semé sa ligne. Illisible ⟹
+    pas de `title`, l'identifiant suffit (fail-open)."""
+    name = str(getattr(entry, "name", "") or "")
+    if name:
+        return name
+    try:
+        from . import tenancy
+        if getattr(entry, "slug", None) != tenancy.primary_slug():
+            return ""
+        # Import tardif : la marque tire l'email, qui tire la base.
+        from .email_brand import nom_instance
+        return nom_instance()
+    except Exception:  # noqa: BLE001 — un libellé ne casse pas un handshake
+        logger.warning("marque de l'instance illisible : handshake sans title",
+                       exc_info=True)
+        return ""
 
 
 def public(name: str, prefix: str) -> str:

@@ -469,6 +469,20 @@ le moteur) : l'appel compte l'alias dans le journal et l'avis tombe une fois en 
 la réponse qui joue la recette. ⚠️ Jusqu'au 18/11/2026, le pont cherchait l'ancien nom
 dans le catalogue et rendait `unknown_tool` — le même appel passait par `oto_call`.
 
+### Les outils de la plateforme sous le préfixe du tenant primaire (21/11/2026)
+
+**Sans date de retrait.** Sur une instance dont le tenant primaire déclare un
+`tool_prefix` (`docs/tenants.md`), ses comptes reçoivent les outils de la plateforme sous
+`<préfixe>_x`, et l'ancien nom `oto_x` reste listé et appelable à côté. Il part quand les
+consommateurs ont suivi (règle du 25/09/2026), rien de daté ; l'usage se compte au
+journal `tool_calls` (`args.deprecated_name`). Le mécanisme n'est pas
+`deprecations.TOOLS`, qui porte une table fixe et une date : le doublon dépend du préfixe
+de l'instance (`tool_alias.sert_aussi_l_ancien_nom`, `middleware/alias`).
+
+| Surface | Ancien nom | Nouveau nom | Forme |
+| --- | --- | --- | --- |
+| Outil MCP | `oto_x` (tout outil de la plateforme) | `<préfixe>_x` | les deux listés et appelables, comptes du tenant primaire seulement ; l'ancien porte « ⚠️ Ancien nom, utiliser `<préfixe>_x` » en tête de sa description et de chaque réponse ; `data_*`, `run_*`, `feedback`, connecteurs inchangés ; stockage en canonique |
+
 ### Pourquoi les clés de capacité n'ont pas d'alias
 
 Une clé de capacité ne sort du serveur qu'à deux endroits : `/api/admin/capabilities`

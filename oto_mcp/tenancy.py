@@ -203,12 +203,18 @@ def normalize_issuer(issuer) -> Optional[str]:
 
 
 def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
-          tenants: Iterable[Mapping] = ()) -> dict:
+          tenants: Iterable[Mapping] = (), primary_tool_prefix: str = "") -> dict:
     """`{issuer: TenantIssuer}` — le registre.
 
     `primary_issuer` et `drain_issuers` viennent de l'ENV et portent tous deux le
     tenant `oto` : le drain est un second émetteur du même tenant, pas un tenant.
     `tenants` vient de la base (lignes `slug`/`issuer`/`jwks_uri`).
+
+    `primary_tool_prefix` est la SEULE déclaration de la ligne primaire que le
+    registre reprend (`load_primary_tool_prefix`) : le nom sous lequel ses comptes
+    voient les outils `oto_*` (`tool_alias`). Ni émetteur, ni nom, ni hosts, ni
+    palette — l'env et notre charte gardent tout le reste. Vide (le défaut, et toute
+    instance dont le primaire ne déclare rien) = l'entrée d'avant, à l'octet près.
 
     Trois refus, tous loggés ET alertés (`_refus`) — chacun ferait qualifier un
     sub sous le mauvais tenant, c'est-à-dire pointer la mauvaise serrure du coffre :
@@ -239,9 +245,9 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
                                     logto_mgmt=_normalize_mgmt(logto_mgmt, slug))
 
     primaire = primary_slug()
-    _put(primaire, primary_issuer)
+    _put(primaire, primary_issuer, tool_prefix=primary_tool_prefix)
     for drain in drain_issuers or ():
-        _put(primaire, drain)
+        _put(primaire, drain, tool_prefix=primary_tool_prefix)
 
     for row in tenants or ():
         # Pas de `.strip()` : le slug entre dans le sub, donc il vaut EXACTEMENT ce
@@ -538,6 +544,58 @@ def require_primary_tenant(sub: Optional[str], action: str) -> Optional[str]:
             f"de {slug!r} — cet acte doit être porté par le tenant propriétaire du "
             f"compte.")
     return sub
+
+
+class PrefixeOutilsIndetermine(RuntimeError):
+    """La base est illisible et l'instance ne déclare pas le préfixe d'outils de son
+    tenant primaire (`OTO_TOOL_PREFIX`) : on ne sait pas sous quel nom servir les
+    outils. Lever plutôt que servir `oto_*` à une instance qui en déclare un."""
+
+
+# Le repli DÉCLARÉ du `tool_prefix` de la ligne primaire, quand la base ne se lit pas.
+_ENV_TOOL_PREFIX = "OTO_TOOL_PREFIX"
+
+
+def load_primary_tool_prefix() -> str:
+    """Le `tool_prefix` du tenant primaire : celui de SA LIGNE en base, sinon celui que
+    l'instance déclare (`OTO_TOOL_PREFIX`), sinon une ERREUR.
+
+    - **Base lisible** : la ligne fait foi, la variable n'est qu'un repli. Une variable
+      posée qui diverge de la ligne est un refus alerté (`_refus`) : à la prochaine
+      base illisible, l'instance changerait de noms d'outils sans le dire.
+    - **Base illisible, variable posée** : la variable, loggée.
+    - **Base illisible, variable absente** : `PrefixeOutilsIndetermine`. Sans la base,
+      rien ne dit que la ligne ne déclare pas de préfixe ; rendre `""` servirait
+      `oto_*` à une instance qui en déclare un, sans une erreur. Le boot s'arrête
+      (il venait de lire la base pour le schéma : le cas est une coupure dans la
+      fenêtre de démarrage) et un rechargement à chaud garde le registre d'avant
+      (`server.reload_tenant_registry`).
+
+    La valeur n'est pas jugée ici : `tool_alias.normalize_prefix` juge, à l'usage,
+    celle de la base comme celle de la variable.
+    """
+    declare = os.environ.get("OTO_TOOL_PREFIX") or ""
+    try:
+        from . import db
+        en_base = str(db.primary_tenant_tool_prefix() or "")
+    except Exception as exc:
+        if not declare:
+            raise PrefixeOutilsIndetermine(
+                "préfixe d'outils du tenant primaire indéterminé : la base est "
+                f"illisible et l'instance ne déclare pas {_ENV_TOOL_PREFIX}. Rétablir "
+                "la base ; une instance dont la ligne primaire déclare un "
+                f"`tool_prefix` pose aussi {_ENV_TOOL_PREFIX} à cette valeur "
+                "(docs/tenants.md).") from exc
+        logger.warning("registre d'émetteurs : préfixe d'outils du tenant primaire "
+                       "illisible en base — repli sur %s=%r", _ENV_TOOL_PREFIX,
+                       declare, exc_info=True)
+        return declare
+    if declare and declare != en_base:
+        _refus("registre d'émetteurs : %s=%r diverge de `tool_prefix` de la ligne "
+               "primaire (%r) — la ligne fait foi ; corriger l'une ou l'autre, sinon "
+               "une base illisible renommerait les outils", _ENV_TOOL_PREFIX, declare,
+               en_base)
+    return en_base
 
 
 def load_tenants() -> list:

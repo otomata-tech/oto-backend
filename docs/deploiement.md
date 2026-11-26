@@ -194,6 +194,56 @@ Lu dans les workflows (`release.yml` et `deploy*.yml` du backend, `tag-release.y
   un tag posé depuis Actions sur le dashboard et laissé là, c'est une version gravée et rien
   de déployé.
 
+## Le Python des couleurs (`BG_PYTHON`)
+
+Décision du 24/11/2026 : oto.cx (la box `oto-platform`) passe en **Python 3.12**, le plancher
+du code ne bouge pas (`requires-python = ">=3.10"`, gardé en CI par `syntaxe-plancher` et
+`garde-plancher-python`). Le moyen : une variable facultative de la bibliothèque bleu/vert,
+déclarée par notre wrapper.
+
+- **`BG_PYTHON` = le chemin EXACT de l'interpréteur, au patch.** Déclaré dans
+  `deploy/oto-backend.sh` : `/opt/oto-mcp-python/cpython-3.12.14-linux-x86_64-gnu/bin/python3.12`,
+  interpréteur géré par uv posé par infra AVANT toute livraison. Le déploiement ne
+  télécharge jamais de Python (`UV_PYTHON_DOWNLOADS=never`). Les instances cibles ne le
+  posent pas : leur Python suit leur déclaration (`instance-cible.md` § Changer de Python).
+- **Règle de recréation.** À chaque montée, avant l'installation, le venv de la couleur
+  qu'on installe — l'INACTIVE, jamais celle qui sert — est comparé à BG_PYTHON en les
+  exécutant (`sys.version_info[:3]`). Même version au patch : rien. Sinon il est recréé
+  (`uv venv --seed --python "$BG_PYTHON"`), puis `uv sync --frozen --python "$BG_PYTHON"`
+  le remplit. L'ancien venv est gardé (`.venv.avant-python`) jusqu'à la fin de
+  l'installation ; à son échec, la couleur reprend son code ET son venv d'avant : elle reste
+  le retour arrière. Une couleur en service ou dont l'unité tourne est refusée, rien n'est
+  touché.
+- **Garde avant démarrage.** Après l'installation, `.venv/bin/python` doit rendre exactement
+  la version de BG_PYTHON, au patch près. Sinon : refus nommé (« garde Python »), la couleur
+  est remise à son état d'avant, ne démarre pas, rien ne bascule.
+- **Le retour arrière ne lit pas BG_PYTHON** : il redémarre la couleur précédente sur son
+  venv. Pendant la transition, les deux couleurs n'ont pas le même Python : la première
+  montée passe l'inactive en 3.12, la suivante l'autre ; un retour entre les deux repart en
+  3.10, et c'est voulu.
+- **Sans BG_PYTHON**, la bibliothèque fait les gestes d'avant à l'octet près (preuve :
+  `tests/deploy/gestes_bleu_vert/`, scénarios d'avant rejoués sans la variable).
+- ⚠️ **Piège du lien de version mineure.** uv range l'interpréteur au patch
+  (`cpython-3.12.14-…`) mais pose aussi un lien `cpython-3.12-…`, et un venv créé depuis le
+  chemin au patch inscrit CE LIEN dans le `home` de son `pyvenv.cfg`. Un
+  `uv python install 3.12.15` dans `/opt/oto-mcp-python` déplacerait le lien, donc tous les
+  venvs, en silence. Toute vérification lit donc la version en EXÉCUTANT l'interpréteur
+  (`python -V`, `sys.version_info`), jamais le chemin ni `pyvenv.cfg` : c'est ce que fait la
+  garde, qui refuserait la montée suivante. Changer de patch se prévoit : poser le nouvel
+  interpréteur, changer `BG_PYTHON` dans le wrapper dans le même geste, puis monter un tag
+  (deux montées pour les deux couleurs).
+
+⚠️ **La bibliothèque et le wrapper de la box sont des copies posées À LA MAIN**
+(`/opt/deploy/oto-mcp-bluegreen.sh`, `/opt/deploy/oto-backend.sh`), pas celles du tag. Une
+fusion dans `main` ne change rien sur la box : ce comportement n'existe qu'une fois la
+bibliothèque recopiée puis le wrapper qui déclare BG_PYTHON recopié (dans cet ordre : une
+bibliothèque neuve sans BG_PYTHON fait les gestes d'avant ; un wrapper neuf sur l'ancienne
+bibliothèque est ignoré), et éprouvé sur une montée réelle avant de dire « livré ».
+
+Bancs : `tests/deploy/test_python_des_couleurs.py` (doublures, scénarios `prod-python-*`) et
+son banc au vrai uv, CI seulement (job `plancher-python-uv-reel`). Le verrou entier
+s'installe en roues cp312 sans rien compiler : job `verrou-roues-cp312` de `ci.yml`.
+
 ## Gestes d'exploitation : un trailer par geste, recopié dans les notes du tag
 
 Une PR qui exige un **geste d'exploitation** (une commande à jouer à la main autour de la

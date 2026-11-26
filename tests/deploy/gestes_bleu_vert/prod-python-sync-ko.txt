@@ -1,0 +1,93 @@
+### scénario prod-python-sync-ko : oto-backend.sh v1.2.3
+### code de sortie : 1
+### commandes
+flock -w 900 9
+flock -w 600 8
+date +%H:%M:%S
+date +%H:%M:%S
+systemctl is-active --quiet oto-mcp-drain-prod.service
+systemctl stop oto-mcp@green
+python3.12 -c import sys; print("%d.%d.%d" % sys.version_info[:3])
+python -c import sys; print("%d.%d.%d" % sys.version_info[:3])
+  (dans )
+systemctl is-active --quiet oto-mcp@green
+python -c import sys; print("%d.%d.%d" % sys.version_info[:3])
+  (dans )
+git -C /opt/oto-mcp-green rev-parse HEAD
+  (dans )
+uv venv --quiet --seed --python /opt/oto-mcp-python/cpython-3.12.14-linux-x86_64-gnu/bin/python3.12 /opt/oto-mcp-green/.venv
+  (dans  ; UV_PYTHON_DOWNLOADS=never)
+python -c import sys; print("%d.%d.%d" % sys.version_info[:3])
+  (dans )
+date +%H:%M:%S
+date +%H:%M:%S
+git fetch --tags --force origin
+  (dans /opt/oto-mcp-green)
+git reset --hard v1.2.3
+  (dans /opt/oto-mcp-green)
+uv sync --frozen --quiet --python /opt/oto-mcp-python/cpython-3.12.14-linux-x86_64-gnu/bin/python3.12
+  (dans /opt/oto-mcp-green ; UV_PYTHON_DOWNLOADS=never)
+git -C /opt/oto-mcp-green rev-parse HEAD
+  (dans /opt/oto-mcp-green)
+git -C /opt/oto-mcp-green reset --quiet --hard fedcba9876543210fedcba9876543210fedcba98
+  (dans /opt/oto-mcp-green)
+date +%H:%M:%S
+date +%H:%M:%S
+date +%H:%M:%S
+journalctl -u oto-mcp@green -n 50 --no-pager
+systemctl stop oto-mcp@green
+date +%H:%M:%S
+### sortie
+[12:00:00] verrou pris (/var/lock/oto-mcp-bluegreen-prod.lock)
+[12:00:00] prod: couleur en service = blue, cible = green (:9107)
+[12:00:00] venv de green recréé : Python 3.10.12 → 3.12.14 (l'ancien est gardé jusqu'à la fin de l'installation)
+[12:00:00] install v1.2.3 dans /opt/oto-mcp-green (couleur green)
+[12:00:00] installation en échec : green remise à son état d'avant (code fedcba9876543210fedcba9876543210fedcba98, venv Python 3.10.12) — elle reste le retour arrière
+[12:00:00] ÉCHEC: installation de v1.2.3 en échec
+[12:00:00] --- journal de la couleur green ---
+[12:00:00] couleur green arrêtée — prod reste servie par blue, rien n'a basculé
+### erreurs
+### état final
+--- /etc/caddy/Caddyfile
+# Caddyfile du banc
+--- /etc/caddy/upstream-oto-prod.conf
+# amont d'avant la bascule
+--- /etc/oto-mcp/active-prod
+blue
+--- /opt/oto-mcp-blue/deploy/lanceur_secrets.py
+# lanceur du tag
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur blue
+--- /opt/oto-mcp-blue/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-blue/scripts/installer_bac_a_sable.py
+# installateur du tag
+--- /opt/oto-mcp-green/deploy/lanceur_secrets.py
+# lanceur du tag
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.service
+# oto-journal-archive.service de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-journal-archive.timer
+# oto-journal-archive.timer de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur green
+--- /opt/oto-mcp-green/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-green/scripts/installer_bac_a_sable.py
+# installateur du tag
+--- /run/lock/oto-platform-memoire.lock
+--- /var/lock/oto-mcp-bluegreen-prod.lock
+### venvs
+blue : .venv 3.10.12
+green : .venv 3.10.12

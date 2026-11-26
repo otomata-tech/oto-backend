@@ -58,6 +58,13 @@ BG_DRAIN_UNIT=oto-mcp-drain-prod
 # Notre lanceur est celui DU TAG (deploy/lanceur_secrets.py, secrets par nom sous /prod) :
 # rien n'est propagé d'une couleur à l'autre. Box passée le 30/09/2026 (#967, lot 5).
 BG_LANCEUR=versionne
+# Le Python des couleurs (24/11/2026 : oto.cx en 3.12, `requires-python` inchangé à >=3.10).
+# Chemin EXACT, au patch : l'interpréteur géré par uv posé par infra, jamais téléchargé au
+# déploiement. Une montée recrée le venv de la couleur qu'elle installe s'il ne rend pas
+# cette version, et refuse de démarrer une couleur qui ne la rend pas ; le retour arrière
+# n'y touche pas. ⚠️ Changer de patch = poser le nouvel interpréteur PUIS changer cette
+# ligne, jamais l'inverse : docs/deploiement.md § Le Python des couleurs.
+BG_PYTHON=/opt/oto-mcp-python/cpython-3.12.14-linux-x86_64-gnu/bin/python3.12
 
 . /opt/deploy/oto-mcp-bluegreen.sh
 

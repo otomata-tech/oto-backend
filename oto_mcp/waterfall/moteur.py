@@ -3,9 +3,10 @@ one step run on its key, its limits and the call's time budget; the receipt."""
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastmcp import FastMCP
+from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 
 from .. import outils_du_travail, session_org
@@ -173,6 +174,12 @@ def _read_find(step: Step, result, inputs: dict, attempt: dict):
         return None
     attempt.update(status="found")
     return found
+
+
+# A call's paid-step limit, as the schema shows it: at least 1, omitted = no limit.
+# `_limits` refuses 0 too; carrying the bound in the schema lets a caller see it
+# before the call instead of learning it from the refusal.
+PaidSteps = Optional[Annotated[int, Field(ge=1)]]
 
 
 def _limits(max_paid_steps: Optional[int], apify_max_usd: Optional[float]) -> dict:

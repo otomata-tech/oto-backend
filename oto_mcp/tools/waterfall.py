@@ -10,7 +10,7 @@ from fastmcp import FastMCP
 from ..waterfall.email import EMAIL_STEPS
 from ..waterfall.entrees import _company_inputs, _people_inputs, _person_inputs, _tech_inputs
 from ..waterfall.gens import PEOPLE_STEPS
-from ..waterfall.moteur import _limits, _run_cascade
+from ..waterfall.moteur import PaidSteps, _limits, _run_cascade
 from ..waterfall.personne import PERSON_STEPS
 from ..waterfall.qualification import _qualify_args
 from ..waterfall.societe import COMPANY_STEPS
@@ -86,8 +86,9 @@ _COMMON_ARGS = """            providers: the steps to try for THIS call, in this
                 calling anything. `planned` is not a promise: the connector's activation
                 for your org is only checked by the real call.
             max_paid_steps: at most this many PAID provider calls for this lookup (free
-                steps don't count); the steps past it are skipped. Omitted = no limit —
-                the default: set it when spend matters more than finding.
+                steps don't count); the steps past it are skipped. At least 1 — 0 is
+                refused (to spend nothing, use `dry_run`). Omitted = no limit — the
+                default: set it when spend matters more than finding.
             apify_max_usd: a cost ceiling for each Apify run of this lookup (≥ 0.50 —
                 Apify refuses less; above your organization's ceiling per run, $25
                 unless its admins set another, the step is refused). Omitted = the
@@ -128,7 +129,7 @@ def register(mcp: FastMCP) -> None:
         full_name: Optional[str] = None, domain: Optional[str] = None,
         company_name: Optional[str] = None, linkedin_url: Optional[str] = None,
         providers: Optional[list[str]] = None, dry_run: bool = False,
-        max_paid_steps: Optional[int] = None, apify_max_usd: Optional[float] = None,
+        max_paid_steps: PaidSteps = None, apify_max_usd: Optional[float] = None,
     ) -> dict:
         inputs = _person_inputs(first_name, last_name, full_name, domain,
                                 company_name, linkedin_url, None)
@@ -173,7 +174,7 @@ def register(mcp: FastMCP) -> None:
         last_name: Optional[str] = None, full_name: Optional[str] = None,
         domain: Optional[str] = None, company_name: Optional[str] = None,
         providers: Optional[list[str]] = None, dry_run: bool = False,
-        max_paid_steps: Optional[int] = None, apify_max_usd: Optional[float] = None,
+        max_paid_steps: PaidSteps = None, apify_max_usd: Optional[float] = None,
     ) -> dict:
         inputs = _person_inputs(first_name, last_name, full_name, domain,
                                 company_name, linkedin_url, None)
@@ -216,7 +217,7 @@ def register(mcp: FastMCP) -> None:
         company_name: Optional[str] = None, domain: Optional[str] = None,
         siren: Optional[str] = None, country: Optional[str] = None,
         providers: Optional[list[str]] = None, dry_run: bool = False,
-        max_paid_steps: Optional[int] = None, apify_max_usd: Optional[float] = None,
+        max_paid_steps: PaidSteps = None, apify_max_usd: Optional[float] = None,
         qualify: Optional[dict] = None, qualify_min: Optional[float] = None,
         show_unqualified: bool = False,
     ) -> dict:
@@ -263,7 +264,7 @@ def register(mcp: FastMCP) -> None:
         full_name: Optional[str] = None, domain: Optional[str] = None,
         company_name: Optional[str] = None,
         providers: Optional[list[str]] = None, dry_run: bool = False,
-        max_paid_steps: Optional[int] = None, apify_max_usd: Optional[float] = None,
+        max_paid_steps: PaidSteps = None, apify_max_usd: Optional[float] = None,
         qualify: Optional[dict] = None, qualify_min: Optional[float] = None,
         show_unqualified: bool = False,
     ) -> dict:
@@ -322,7 +323,7 @@ def register(mcp: FastMCP) -> None:
         roles: Optional[list[str]] = None, country: Optional[str] = None,
         limit: int = 10,
         providers: Optional[list[str]] = None, dry_run: bool = False,
-        max_paid_steps: Optional[int] = None, apify_max_usd: Optional[float] = None,
+        max_paid_steps: PaidSteps = None, apify_max_usd: Optional[float] = None,
         qualify: Optional[dict] = None, qualify_min: Optional[float] = None,
         show_unqualified: bool = False, full: bool = False,
     ) -> dict:
@@ -375,7 +376,7 @@ def register(mcp: FastMCP) -> None:
         domain: Optional[str] = None, company_name: Optional[str] = None,
         technologies: Optional[list[str]] = None,
         providers: Optional[list[str]] = None, dry_run: bool = False,
-        max_paid_steps: Optional[int] = None, apify_max_usd: Optional[float] = None,
+        max_paid_steps: PaidSteps = None, apify_max_usd: Optional[float] = None,
     ) -> dict:
         inputs = _tech_inputs(company_name, domain, technologies)
         return await _run_cascade(mcp, "waterfall_tech", "tech", TECH_STEPS, inputs,

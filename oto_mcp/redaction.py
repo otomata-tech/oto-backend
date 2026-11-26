@@ -300,7 +300,7 @@ def is_empty_payload(payload) -> bool:
     - une **clé de collection reconnue** (`_COLLECTION_KEYS`) dont la valeur est une
       liste sans élément.
 
-    Quatre contradictions le disqualifient, parce qu'elles portent une information que
+    Cinq contradictions le disqualifient, parce qu'elles portent une information que
     la phrase effacerait :
     - une collection reconnue NON vide, ou un compteur non nul — la structure est
       alors rendue telle quelle plutôt que d'affirmer un vide qu'elle dément ;
@@ -308,6 +308,8 @@ def is_empty_payload(payload) -> bool:
       un plafond, ou assortie d'un conseil, n'est pas une absence de résultat ;
     - un **accusé d'écriture** (`ok`, `deleted`, `failed`, `imported`, `would_*`…) :
       « opération réussie, 0 élément » n'est pas « rien trouvé ».
+    - un **`result` peuplé** à la racine (objet, nombre, texte) : la valeur rendue par
+      `oto_function op=run` à côté d'un `files: []` n'est pas « rien trouvé ».
 
     Une clé de collection reconnue dont la valeur n'est PAS une liste (`data` porte
     souvent un objet) n'est ni un signal ni une contradiction : elle est ignorée. Le
@@ -336,7 +338,17 @@ def is_empty_payload(payload) -> bool:
         vide = True
     if not vide:
         return False
-    return not _porte_une_notice(payload) and not _est_un_accuse_d_ecriture(payload)
+    return (not _porte_une_notice(payload) and not _est_un_accuse_d_ecriture(payload)
+            and not _porte_un_resultat(payload))
+
+
+def _porte_un_resultat(payload: dict) -> bool:
+    """A root `result` that holds a VALUE (an object, a number, a non-empty string…)
+    contradicts an empty sibling collection: `oto_function op=run` answers
+    `{result: {...}, files: [], …}` for every function that writes no file, and the
+    empty `files` used to turn that whole answer into the "no result" sentence. Only
+    None / [] / {} / "" leave it silent; a populated list already returned above."""
+    return "result" in payload and payload["result"] not in (None, [], {}, "")
 
 
 def _enveloppe_vide(payload) -> bool:

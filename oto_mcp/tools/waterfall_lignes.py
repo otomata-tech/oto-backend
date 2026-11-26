@@ -43,7 +43,7 @@ from ..datastore import par_reference as pr
 from ..mcp_errors import McpError
 from ..waterfall import entrees, qualification
 from ..waterfall.etape import _runnable
-from ..waterfall.moteur import _limits, _run_cascade, juger_comptes
+from ..waterfall.moteur import PaidSteps, _limits, _run_cascade, juger_comptes
 from ..waterfall.plan import STEPS_BY_NAMESPACE
 from .lecture import ACTE, documente
 
@@ -539,7 +539,7 @@ def register(mcp: FastMCP) -> None:
             filter: Optional[dict] = None,
             batch_size: int = LOT_DEFAUT,
             providers: Optional[list[str]] = None,
-            max_paid_steps: Optional[int] = None, apify_max_usd: Optional[float] = None,
+            max_paid_steps: PaidSteps = None, apify_max_usd: Optional[float] = None,
             qualify: Optional[dict] = None, qualify_min: Optional[float] = None,
             roles: Optional[list[str]] = None, people_per_row: int = 10,
             technologies: Optional[list[str]] = None,

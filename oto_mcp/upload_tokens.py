@@ -135,6 +135,29 @@ def verify(token: str, typ: str = "upload") -> Optional[dict]:
     return data
 
 
+def why_refused(token: str, typ: str = "upload") -> str:
+    """Why `verify` refused `token`, in one sentence for the caller: EXPIRED (signed,
+    right family, past `exp`) or ALTERED (anything else). Both stay
+    `invalid_or_expired_token`; the sentence tells a caller who minted the link seconds
+    ago that the TTL is not the problem — the URL it sent is not the one it was given
+    (an agent retyping a long signed link into a shell command is the usual cause)."""
+    try:
+        p_b64, sig_b64 = token.split(".", 1)
+        payload = _b64url_decode(p_b64)
+        signed = hmac.compare_digest(
+            _b64url_decode(sig_b64), hmac.new(_secret(), payload, hashlib.sha256).digest())
+        data = json.loads(payload) if signed else None
+    # noqa: SILENT — an unreadable token is the "altered" answer
+    except Exception:
+        data = None
+    if isinstance(data, dict) and data.get("typ") == typ:
+        return ("This link has expired (it lives 15 minutes and serves once): mint "
+                "a new one.")
+    return ("This link is not the one that was issued: its signature does not match. "
+            "Send the URL exactly as `oto_upload_url` returned it (copy it, never "
+            "retype it), or mint a new one.")
+
+
 def target_label(target: dict, lang: str = "en") -> str:
     """Libellé humain de la cible (page d'upload GET, servie SANS authentification).
     Pas de secret, pas de contenu — et depuis oto#86, plus aucun IDENTIFIANT

@@ -270,12 +270,12 @@ def test_network_relations_absent_sub_key_is_refused(client):
         _tool("linkedin_unipile_network")(op="relations", fields=["user.nickname"])
 
 
-def test_network_handle_requires_the_shared_secret(client):
-    """`invitation_id` et `shared_secret` viennent du MÊME item : sans le second,
-    l'appel amont échoue — autant le dire ici."""
-    with pytest.raises(McpError, match="shared_secret"):
-        _tool("linkedin_unipile_act")(op="accept_invitation", invitation_id="i1")
-    client.handle_invitation.assert_not_called()
+def test_accept_invitation_needs_only_the_item_id(client):
+    """The invitations listing serves no `shared_secret` and Unipile v2 answers by
+    the id alone: asking for it sent callers hunting for a field that isn't there."""
+    _tool("linkedin_unipile_act")(op="accept_invitation",
+                                  invitation_id="RECEIVED_1_abc")
+    client.handle_invitation.assert_called_once_with("RECEIVED_1_abc", "", "accept")
 
 
 # --- compte premium & recruiter -----------------------------------------------

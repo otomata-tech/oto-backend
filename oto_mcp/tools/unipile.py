@@ -1859,8 +1859,10 @@ def register(mcp: FastMCP) -> None:
           a `linkedin_unipile_search` / `linkedin_unipile_profile` result; `message` =
           note ≤300 characters.
         - **"accept_invitation"** / **"decline_invitation"**: answers a RECEIVED
-          invitation — `invitation_id` AND `shared_secret` from the SAME item of
-          `linkedin_unipile_network(op="invitations", direction="received")`.
+          invitation — `invitation_id` = the item's `id`, exactly as
+          `linkedin_unipile_network(op="invitations", direction="received")` serves
+          it (the whole `RECEIVED_…` string, never cut). Nothing else is needed: the
+          listing's items carry no `shared_secret`, and LinkedIn no longer asks for one.
         - **"cancel_invitation"**: withdraws a SENT invitation (`invitation_id` of a
           `direction="sent"` item).
 
@@ -1888,8 +1890,9 @@ def register(mcp: FastMCP) -> None:
             provider_id: op="invite" — recipient's LinkedIn provider id.
             message: op="invite" — accompanying note (≤300 characters).
             invitation_id: accept_invitation / decline_invitation / cancel_invitation.
-            shared_secret: accept_invitation / decline_invitation — LinkedIn token of
-                the same item (required).
+            shared_secret: accept_invitation / decline_invitation — no longer used
+                (the invitation's `id` is enough); accepted and ignored so older
+                callers keep working.
             identifier: endorse / update_member — the member.
             skill_endorsement_id: op="endorse" — id of the skill to endorse.
             api: op="update_member" — 'sales_navigator' or 'recruiter'.
@@ -1953,9 +1956,11 @@ def register(mcp: FastMCP) -> None:
 
         if op in ("accept_invitation", "decline_invitation"):
             iid = _need(invitation_id, "invitation_id", op)
-            secret = _need(shared_secret, "shared_secret", op)
+            # Unipile v2 answers a received invitation by its id alone; the
+            # client keeps `shared_secret` in its signature for compatibility only.
             return unipile_client().handle_invitation(
-                iid, secret, "accept" if op == "accept_invitation" else "decline")
+                iid, shared_secret or "",
+                "accept" if op == "accept_invitation" else "decline")
 
         if op == "cancel_invitation":
             iid = _need(invitation_id, "invitation_id", op)

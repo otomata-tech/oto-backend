@@ -205,7 +205,7 @@ def test_l_acteur_linkedin_porte_chaque_geste(m, client, op, args, appel):
 @pytest.mark.parametrize("op,args,manque", [
     ("publish_post", {}, "text"),
     ("comment_post", {"text": "t"}, "post_id"),
-    ("accept_invitation", {"invitation_id": "i"}, "shared_secret"),
+    ("accept_invitation", {}, "invitation_id"),
     ("endorse", {"identifier": "x"}, "skill_endorsement_id"),
     ("update_member", {"identifier": "x", "api": "recruiter"}, "action"),
 ])

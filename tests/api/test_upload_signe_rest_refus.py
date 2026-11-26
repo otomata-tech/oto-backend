@@ -125,6 +125,18 @@ def test_un_jeton_qui_ne_tient_pas_n_ecrit_rien(client, journal, cas, fabrique):
     _rien_n_a_ete_ecrit(journal)
 
 
+def test_le_refus_dit_si_le_lien_a_expire_ou_a_ete_altere(client, journal):
+    """Same code either way, but the sentence differs: a caller who minted the link
+    seconds ago must learn the URL it sent was altered, not that the TTL is short."""
+    expire = client.put(f"/api/upload/{_jeton(ttl=-1)}", content=b"x")
+    assert "expired" in expire.json()["detail"]
+    altere = client.put(f"/api/upload/{_jeton().split('.')[0][:-2]}AA."
+                        f"{_jeton().split('.')[1]}", content=b"x")
+    assert altere.json()["error"] == "invalid_or_expired_token"
+    assert "not the one that was issued" in altere.json()["detail"]
+    _rien_n_a_ete_ecrit(journal)
+
+
 def test_un_state_oauth_signe_du_meme_secret_n_est_pas_un_jeton_d_upload(client, journal):
     """Le champ `typ` porte tout le poids : le secret HMAC est PARTAGÉ avec les states
     OAuth. Sans lui, un state capturé dans une URL de rappel — une valeur qui transite

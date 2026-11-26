@@ -402,3 +402,27 @@ def test_le_comptage_se_juge_sur_l_outil_VISE(nom, args, attendu):
 
     from oto_mcp.middleware.empty_result import _comptage_demande
     assert _comptage_demande(SimpleNamespace(name=nom, arguments=args)) is attendu
+
+
+def test_le_resultat_d_une_fonction_sans_fichier_garde_sa_structure():
+    """`oto_function op=run` answers `{function, version, result, warnings, files, log,
+    duration_ms}`. A function that writes no file sends `files: []` — a recognised empty
+    collection — beside its populated `result`: that whole answer was rendered as
+    "Aucun résultat pour cette recherche." The populated `result` contradicts it."""
+    reponse = {"function": "f", "version": 2, "result": {"occurrence_id": "abc"},
+               "warnings": [], "files": [], "log": "", "duration_ms": 12}
+    texte, structure = _servir(_banc(_outil_vide(reponse), nom="oto_function"),
+                               nom="oto_function")
+    assert redaction.is_empty_payload(reponse) is False
+    assert "occurrence_id" in texte
+    assert structure == reponse
+    # A scalar value is a value too (a function may return 0).
+    assert redaction.is_empty_payload({**reponse, "result": 0}) is False
+
+
+def test_une_fonction_qui_ne_rend_rien_et_n_ecrit_rien_reste_vide():
+    """Counter-case, unchanged: `result: None` and `files: []` — the function returned
+    nothing and wrote nothing, so the "no result" sentence is still the truthful answer."""
+    reponse = {"function": "f", "version": 2, "result": None, "warnings": [],
+               "files": [], "log": "", "duration_ms": 12}
+    assert redaction.is_empty_payload(reponse) is True

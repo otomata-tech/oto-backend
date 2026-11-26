@@ -163,9 +163,11 @@ async def upload_receive(request: Request) -> JSONResponse:
     **PUT** = un agent avec shell y pousse le corps brut (`curl --data-binary`) ;
     **POST** multipart `file` = le formulaire humain (fallback claude.ai). On
     matérialise en RÉAPPLIQUANT l'autz de la cible. Accusé léger, jamais le body."""
-    payload = upload_tokens.verify(request.path_params.get("token", ""))
+    jeton = request.path_params.get("token", "")
+    payload = upload_tokens.verify(jeton)
     if payload is None:
-        return _json_error(request, 401, "invalid_or_expired_token")
+        return _json_error(request, 401, "invalid_or_expired_token",
+                           upload_tokens.why_refused(jeton))
     plafond = upload_tokens.max_bytes()
     try:
         if request.method == "POST":

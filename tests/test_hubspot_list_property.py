@@ -253,12 +253,15 @@ def test_membership_writes_need_a_non_empty_id_list(client, ids):
     client.add_list_memberships.assert_not_called()
 
 
-def test_adding_and_removing_together_uses_a_single_revision(client):
-    _tool("hubspot_list")(op="add_members", list_id="9", record_ids=["1"],
-                          remove_record_ids=["2"])
-    client.add_and_remove_list_memberships.assert_called_once_with(
-        "9", record_ids_to_add=["1"], record_ids_to_remove=["2"])
-    client.add_list_memberships.assert_not_called()
+def test_add_members_only_adds(client):
+    """Ajouter ne retire jamais : le retrait passe par remove_members, classé à part."""
+    with pytest.raises(TypeError, match="remove_record_ids"):
+        _tool("hubspot_list")(op="add_members", list_id="9", record_ids=["1"],
+                              remove_record_ids=["2"])
+    _tool("hubspot_list")(op="add_members", list_id="9", record_ids=["1"])
+    client.add_list_memberships.assert_called_once_with("9", ["1"])
+    client.add_and_remove_list_memberships.assert_not_called()
+    client.remove_list_memberships.assert_not_called()
 
 
 def test_copy_from_keeps_target_then_source_order(client):

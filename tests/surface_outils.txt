@@ -352,7 +352,7 @@ hithorizons_company	-	36fc9a5218e00cb1
 hithorizons_search_company	-	530beeeaa3916bf0
 hithorizons_search_unstructured	-	0f6e4340c8bcc0b0
 hithorizons_suggestions	-	4ac99ee53791b6e7
-hubspot_list	add_members clear_members copy_from create delete get members record_lists remove_members restore search update	705967c3471303e0
+hubspot_list	add_members clear_members copy_from create delete get members record_lists remove_members restore search update	df0037b6edf56562
 hubspot_object	add_note associations create delete get list merge search update	0f24f0f1118038d4
 hubspot_owners	-	99334726611ccf58
 hubspot_pipeline	get list	040ec5ffc0b3e249

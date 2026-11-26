@@ -50,3 +50,11 @@ def test_un_remplacement_qui_ne_change_rien_est_refuse():
     # Chaque edit change, la liste entière ne change rien : refusée aussi.
     with pytest.raises(RemplacementRefuse, match="exactly as it was"):
         appliquer("a b", [{"find": "a", "replace": "x"}, {"find": "x", "replace": "a"}])
+
+
+def test_un_find_ambigu_nomme_ses_lignes():
+    with pytest.raises(RemplacementRefuse, match=r"appears 3 times \(lines 2, 4, 5\)"):
+        appliquer("a\nxx\nb\nxx\nxx", [{"find": "xx", "replace": "y"}])
+    texte = "\n".join(["k"] * 9)
+    with pytest.raises(RemplacementRefuse, match=r"lines 1, 2, 3, 4, 5, …"):
+        appliquer(texte, [{"find": "k", "replace": "y"}])

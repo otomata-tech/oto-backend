@@ -47,6 +47,7 @@ from .. import db, interrupteurs, org_suspension, ownership
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .apps_html import avertissements
+from . import apps_source
 from . import apps_versions as V
 from .apps_manifeste import auteur, forme, org_de_l_app
 from .orgs import partage_par_defaut
@@ -67,7 +68,7 @@ _ECRITURES = frozenset({"create", "update", "patch", "archive", "unarchive", "re
 class AppInput(BaseModel):
     op: Literal["list", "get", "create", "update", "patch", "archive", "unarchive",
                 "revisions", "revision", "restore", "validate", "file", "unfile",
-                "read_file", "put_file", "publish", "delete_draft", "set_drafts"]
+                "read_file", "put_file", "publish", "delete_draft", "set_drafts", "source"]
     project_id: Optional[int] = Field(
         default=None, description="create: also file the new app in this project. "
         "file / unfile: the project. list: only the apps filed in it.")
@@ -89,7 +90,17 @@ class AppInput(BaseModel):
     archived: Optional[bool] = None
     draft: Optional[bool] = Field(
         default=None, description="get: read the app's DRAFT (its manifest, HTML and "
-        "rev) instead of its published version — editors only.")
+        "rev) instead of its published version — editors only. source: true = the "
+        "draft, false = the live text (default: the text a patch writes to).")
+    lines: Optional[list[int]] = Field(
+        default=None, description="source: [first, last] — those lines of the HTML, "
+        "numbered (1-based).")
+    search: Optional[str] = Field(
+        default=None, description="source: plain text to find in the HTML, any case "
+        "(2 to 300 characters) — the matching lines, numbered.")
+    context: Optional[int] = Field(
+        default=None, description="source with `search`: lines shown around each match "
+        "(0 to 10, default 2).")
     note: Optional[str] = Field(
         default=None, description="publish / restore: what this version changes, shown "
         "in the app's history (500 characters).")
@@ -188,6 +199,9 @@ class AppOut(BaseModel):
     # create, update, restore, validate, patch : ce que le HTML demande hors du
     # manifeste (`apps_html.py`) — un avertissement, l'app est écrite quand même.
     warnings: Optional[list[str]] = None
+    # source : le HTML par morceaux (`apps_source.py`) — plan, recherche ou lignes ;
+    # avec `rev` et `target`, le texte qu'un `patch` écrirait.
+    source: Optional[dict] = None
     # patch : un reçu, jamais le HTML — l'op existe pour ne pas le faire transiter.
     rev: Optional[str] = None
     replaced: Optional[int] = None
@@ -428,7 +442,8 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         return {"app": _view(sub, row), **extra}
 
     row = _app_or_404(sub, inp.app_id,
-                      "read" if inp.op in ("get", "revisions", "read_file", "put_file") else "write")
+                      "read" if inp.op in ("get", "revisions", "read_file", "put_file", "source")
+                      else "write")
     # L'org de l'APP, en plus de celle de l'appel (gardée par l'adaptateur) : l'app d'une
     # org suspendue se ferme à tous, invités d'une autre org compris.
     org_suspension.exiger(org_de_l_app(row))
@@ -442,6 +457,29 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         # Le brouillon n'est NOMMÉ qu'à qui peut modifier l'app : un lecteur n'en sait rien.
         draft = V.resume(db.app_versions.draft(row["id"])) if view["can_edit"] else None
         return {"app": view, **({"draft": draft} if draft else {})}
+
+    if inp.op == "source":
+        # Le texte qu'un `patch` écrirait, par défaut : pour un éditeur d'une app à
+        # brouillon, le brouillon s'il y en a un (`V.base_du_patch`), sinon l'état vivant
+        # dont il naîtra — et le `rev` à passer au patch. `draft: true` exige le brouillon
+        # (éditeurs, `V.lire`), `draft: false` lit le vivant. Un lecteur ne lit que le vivant.
+        if inp.draft:
+            lu, _ = V.lire(row, _can(sub, row["id"], "write"))
+            html, rev, cible = lu["html"], lu["rev"], "draft"
+        else:
+            courant = (db.app_versions.draft(row["id"])
+                       if inp.draft is None and row.get("drafts_enabled")
+                       and _can(sub, row["id"], "write") else None)
+            if courant is not None:
+                html, rev, cible = courant["html"], courant["rev"], "draft"
+            else:
+                html, rev, cible = row.get("html") or "", row["rev"], "live"
+        try:
+            morceau = apps_source.lire(html, lines=inp.lines, search=inp.search,
+                                       context=inp.context)
+        except apps_source.SourceRefusee as e:
+            raise AuthzDenied(400, "invalid_source", str(e)) from None
+        return {"source": morceau, "rev": rev, "target": cible}
 
     if inp.op == "revision":
         return {"revision": V.version(row, inp.revision_id)}
@@ -686,7 +724,15 @@ def description_app(liens: bool) -> str:
             "`expected_rev` from get → 409 if it changed) / patch (`app_id`, `edits`: "
             "exact find → replace in the HTML, each `find` unique, all or nothing; "
             "returns `rev`, `replaced` and `warnings`, never the HTML — prefer it to "
-            "update for any change smaller than the whole page) / archive / unarchive / "
+            "update for any change smaller than the whole page) / source (`app_id`: the "
+            "HTML in pieces, to change a large app WITHOUT op=get — alone: its outline, "
+            "each style, script, function, section and id with its line range and size; "
+            "`search` (plain text, any case) → the matching lines, numbered, `context` "
+            "lines around, and `exact` = how often that text matches as a `find`; `lines` "
+            "[first, last] → those lines, numbered like cat -n (leave the number and tab "
+            "out of a `find`); 40,000 characters a reply; with the `rev` and `target` a "
+            "patch writes to — on an app with drafts, its draft, or the live text a draft "
+            "starts from) / archive / unarchive / "
             "revisions (each with `published_at` and `note` when it was a published "
             "version) / revision (`revision_id`: one version in full, to read or compare "
             "before restoring; editors) / restore (`revision_id`, optional `note`; "

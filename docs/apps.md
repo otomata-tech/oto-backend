@@ -113,7 +113,24 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
   écriture concurrente n'est jamais écrasée sans un mot). Il rend un **reçu** (`rev`,
   `replaced`, `warnings`), jamais le HTML : l'op existe pour qu'un agent change une
   ligne d'une app de 40 000 caractères en deux cents jetons, au lieu de la réécrire
-  entière — ce qui coupait l'agent intégré à `max_tokens`.
+  entière — ce qui coupait l'agent intégré à `max_tokens`. Un `find` ambigu nomme les
+  lignes de ses premières occurrences (`lines 120, 480, …`), à relire avec `op=source`.
+- **`op=source` lit le HTML par morceaux** (`capabilities/apps_source.py`) — de quoi
+  écrire un `find` sans `op=get`, qui sert l'app entière (une app de 500 000 caractères,
+  quelque 150 000 jetons, ne passe plus dans un tour de modèle). Seule : le **plan**, en
+  texte compact (chaque `<style>`/`<script>`, fonction et classe aux deux premiers niveaux,
+  grande déclaration, commentaire de section décoré, élément à `id`, avec ses lignes et sa
+  taille ; au-delà de `MAX_PLAN` entrées tombent les plus petites, jamais la fin). Les
+  fins suivent un compte d'accolades qui saute chaînes, gabarits, commentaires et
+  regex — le code d'un agent est souvent sans retrait. `search` : un texte LITTÉRAL, sans
+  casse (jamais une regex d'agent sur un million de caractères), en lignes numérotées avec
+  `context` lignes autour ; `exact` compte les occurrences à la casse près. `lines` :
+  [première, dernière], numérotées comme `cat -n`. 40 000 caractères par réponse ; une
+  ligne au-delà de 4 000 est coupée, ou fenêtrée autour de l'occurrence (texte exact).
+  **Le texte lu est celui qu'un `patch` écrirait** : pour un éditeur d'une app à
+  brouillon, le brouillon s'il existe, sinon l'état vivant dont il naîtra, avec le `rev`
+  et la `target` à reprendre ; `draft: true` exige le brouillon (éditeurs), `draft:
+  false` lit le vivant ; un lecteur ne lit que le vivant. Lecture : ni bêta ni écriture.
 - **Chaque tableau déclaré est rangé par son NUMÉRO** (résolu à l'écriture pour
   l'auteur) : un nom résoudrait dans l'org active de qui le lit.
 - **`set`, `add`, `agents` bornent les gestes** de l'appel d'une app (plus bas).

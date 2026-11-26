@@ -634,3 +634,54 @@ def test_patch_sans_lire_ce_que_l_app_declare_est_refuse(seams, monkeypatch):
     e = _refus(lambda: A._app(CTX, A.AppInput(op="patch", app_id=5,
                                               edits=[{"find": "x", "replace": "y"}])))
     assert (e.status, e.code) == (403, "would_break_app") and seams["update"] == []
+
+
+# ── op=source : le HTML par morceaux, le texte qu'un patch écrirait ──────────
+
+def _brouillon(monkeypatch, html="<p>draft</p>"):
+    monkeypatch.setattr(db.apps, "get", lambda i: dict(ROW, id=i, drafts_enabled=True)
+                        if i == 5 else None)
+    monkeypatch.setattr(db.app_versions, "draft", lambda i: {
+        "manifest": {}, "html": html, "rev": "d1", "by": "u1", "at": "t"})
+
+
+def test_source_lit_le_vivant_sans_brouillon(seams):
+    out = A._app(CTX, A.AppInput(op="source", app_id=5, search="<p>"))
+    assert out["target"] == "live" and out["rev"] == "abc"
+    assert out["source"]["matches"] == 1
+
+
+def test_source_lit_le_brouillon_qu_un_patch_ecrirait(seams, monkeypatch):
+    _brouillon(monkeypatch)
+    out = A._app(CTX, A.AppInput(op="source", app_id=5, lines=[1]))
+    assert out["target"] == "draft" and out["rev"] == "d1"
+    assert "draft" in out["source"]["text"]
+    # `draft: false` : le vivant, explicitement.
+    out = A._app(CTX, A.AppInput(op="source", app_id=5, lines=[1], draft=False))
+    assert out["target"] == "live" and "<p>x</p>" in out["source"]["text"]
+
+
+def test_un_lecteur_ne_lit_jamais_le_brouillon(seams, monkeypatch):
+    _brouillon(monkeypatch)
+    seams["rights"]["write"] = False
+    out = A._app(CTX, A.AppInput(op="source", app_id=5, lines=[1]))
+    assert out["target"] == "live" and "draft" not in out["source"]["text"]
+    assert _refus(lambda: A._app(CTX, A.AppInput(op="source", app_id=5, draft=True))).code \
+        == "draft_editors_only"
+
+
+def test_source_sans_ecriture_ni_beta(seams):
+    seams["rights"]["write"] = False
+    seams["beta"] = False
+    A._app(CTX, A.AppInput(op="source", app_id=5))
+    assert seams["options"] == []
+
+
+def test_source_draft_true_sans_brouillon_est_refuse(seams):
+    assert _refus(lambda: A._app(CTX, A.AppInput(op="source", app_id=5, draft=True))).code \
+        == "no_draft"
+
+
+def test_source_refus_nomme(seams):
+    assert _refus(lambda: A._app(CTX, A.AppInput(op="source", app_id=5, lines=[0]))).code \
+        == "invalid_source"

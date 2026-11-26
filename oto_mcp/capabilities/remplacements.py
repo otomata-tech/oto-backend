@@ -27,6 +27,25 @@ from typing import Any, Optional
 MAX_EDITS = 50
 
 
+# Les lignes nommées d'un `find` ambigu, au plus : de quoi relire autour (`op=source`).
+MAX_LIGNES_NOMMEES = 5
+
+
+def _lignes(texte: str, find: str) -> str:
+    """« lines 12, 480 » : où se trouvent les premières occurrences de `find`, dans le
+    texte tel qu'il est à cet edit (après les précédents). Un seul passage."""
+    lignes, pos, ligne, vu = [], texte.find(find), 1, 0
+    while pos >= 0 and len(lignes) < MAX_LIGNES_NOMMEES:
+        ligne += texte.count("\n", vu, pos)
+        vu = pos
+        if not lignes or lignes[-1] != ligne:
+            lignes.append(ligne)
+        pos = texte.find(find, pos + 1)
+    suite = ", …" if pos >= 0 else ""
+    return ("line " if len(lignes) == 1 and not suite else "lines ") \
+        + ", ".join(map(str, lignes)) + suite
+
+
 class RemplacementRefuse(ValueError):
     """La liste ne s'applique pas : `str(e)` dit pourquoi, à l'agent qui l'a écrite."""
 
@@ -62,8 +81,8 @@ def appliquer(texte: str, edits: Any, *, max_len: Optional[int] = None) -> tuple
         if not tous and (n > 1 or texte.find(find, texte.find(find) + 1) >= 0):
             fois = f"{n} times" if n > 1 else "more than once (overlapping)"
             raise RemplacementRefuse(
-                f"{quoi}.find appears {fois}: add surrounding text until it is unique, "
-                "or set \"all\": true. Nothing was written.")
+                f"{quoi}.find appears {fois} ({_lignes(texte, find)}): add surrounding "
+                "text until it is unique, or set \"all\": true. Nothing was written.")
         if max_len is not None and len(texte) + n * (len(replace) - len(find)) > max_len:
             raise RemplacementRefuse(
                 f"{quoi} would make the text longer than {max_len} characters. "

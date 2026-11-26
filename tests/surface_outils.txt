@@ -621,7 +621,7 @@ oto_admin_tenant	admin_add admin_remove admins disable enable get key_clear keys
 oto_admin_unipile_seat	list release	c3f70025b607665d
 oto_admin_user	get list set_role	fe90c33537874b74
 oto_admin_vault_health	-	fd3168d48576c83d
-oto_apps	archive create delete_draft file get list patch publish put_file read_file restore revision revisions set_drafts unarchive unfile update validate	16fb9d488cb7df0c
+oto_apps	archive create delete_draft file get list patch publish put_file read_file restore revision revisions set_drafts source unarchive unfile update validate	9a3d265894a4df18
 oto_call	-	6b4ca33383bb0eba
 oto_clear_group	-	fd3168d48576c83d
 oto_clear_org	-	fd3168d48576c83d

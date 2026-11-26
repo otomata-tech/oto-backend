@@ -711,3 +711,16 @@ docstring of `oto_mcp/datastore/formule.py`.
   column has no result type: sorting is **textual** — correct for a rank
   "1"…"5" or a name, wrong for multi-digit numbers (`"10"` before
   `"9"`, oto-backend#1034).
+
+## 10. Credit the tool that FOUND a value: `via`
+
+Each cell remembers which tool found the value it holds (`GET …/column-sources`), and the table header shows it ("Filled by Hunter 62% · other 38%"). Jev, the waterfalls and recipes are credited on their own. When YOU looked a value up with another tool and then write it yourself, say so:
+
+```
+apollo_match_person(...)            # found the email
+data_write(datastore=…, id=…, via="apollo_match_person", row={"email": "…"})
+```
+
+- `via` counts only for a tool that SUCCEEDED in the same run (`run_start`, then `_run_id=` on every call). Otherwise the write still happens, unattributed, and the reply says why (`via_dropped`). It never blocks a write.
+- Never a platform tool (`data_*`, `oto_*`, `run_*`). Omit it when you established the value yourself.
+- Without `via`, the cell counts as "other".

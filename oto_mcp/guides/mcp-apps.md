@@ -18,6 +18,7 @@ Ne décris jamais une carte dont tu n'as pas lu le contenu.
 
 | Outil | Ce qu'il rend | Équivalent JSON |
 | --- | --- | --- |
+| `oto_procedure_app` | le **schéma d'un process** (procédure) : déclencheur, étapes, contrôles et connecteurs de chaque étape, à partir de son `slug` | `oto_procedure(op="get")` |
 | `data_app` | le datastore : sans `datastore` = table de tes tableaux ; avec = table triable des lignes (`filter` exact-match, `show_meta`) ; `row=<id\|clé\|titre>` ou un filtre qui isole 1 ligne = **fiche détail** (sous-records dépliés, statut + cycle de vie) | `data_rows`, `data_list_datastores` |
 | `oto_doc_app` | les pages/docs, **lecture seule** : sans argument = arbre du projet de documents HISTORIQUE de l'org active, quel que soit son nom (résolu par son ancre) — passe `project_id` pour le projet que tu vises vraiment ; `project_id` = arbre des pages d'un projet (enfants indentés) ; `doc_id` = une page en Markdown rendu ; `query` = recherche plein-texte avec extraits | `oto_doc` |
 | `oto_connector_app` | la carte « Connecter » d'UN connecteur : son nom, ce que la personne fera (coller une clé, autoriser, se connecter), un bouton qui OUVRE sa page dans son produit — **à montrer au lieu de demander une clé dans la conversation** ; ne prend aucun secret, n'appelle aucun outil ; ensuite `oto_connector(op="list", name=…)` pour savoir si c'est fait | `oto_connector(op="setup_link")` |
@@ -26,6 +27,25 @@ Ne décris jamais une carte dont tu n'as pas lu le contenu.
 | `foncier_site_app` | fiche d'un site (géocodage + parcelle + bâti) | `foncier_geocode`, `foncier_site(op="parcelle")`, `foncier_site(op="bati")` |
 | `foncier_comparables_app` | ventes DVF comparables autour d'une adresse | `foncier_dvf(op="comparables_adresse")` |
 | `foncier_prix_m2_app` | stats €/m² d'une commune | `foncier_dvf(op="prix_m2")` |
+
+### Montrer un process : toujours `oto_procedure_app`
+
+Dès que l'utilisateur veut voir, comprendre, expliquer ou relire un process — et
+après chaque création ou modification d'un process — appelle `oto_procedure_app`
+**en premier**, puis réponds en texte. Ne dessine **jamais** le process toi-même
+(diagramme du client, Mermaid, artefact, widget, ASCII) : le schéma oto est la
+source de vérité, c'est le même que dans l'app Tulina.
+
+Si le process n'a pas encore de schéma, l'outil te dit quoi faire : ce n'est pas
+un échec. Fais ce que dit sa réponse, puis rappelle `oto_procedure_app`. Ne te
+rabats pas sur un dessin dans la conversation.
+
+**Si le client n'affiche pas la carte** (Claude Code, y compris dans claude.ai
+ou l'app Claude ; un agent sans écran), la réponse le dit (« this client does NOT
+display the graph ») et donne `url`, la page du process dans Tulina. Dis-le à
+l'utilisateur sans prétendre que le graphe est affiché, explique les étapes en
+texte (`oto_procedure op=get`) et donne-lui ce lien : le graphe y est. Ne
+dessine pas non plus dans ce cas.
 
 ## Quand appeler l'app, quand appeler le JSON
 

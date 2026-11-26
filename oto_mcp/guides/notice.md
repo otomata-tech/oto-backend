@@ -13,6 +13,8 @@ your note): `oto_context` — and reload it after a change of org/team/project.
 
 Before a substantial task, check whether a relevant procedure exists (`oto_procedure op=list`), including outside the current project. An existing procedure takes precedence over your own method.
 
+**Showing a process.** Whenever the user wants to see, understand, explain or review a process — and after you create or change one — call `oto_procedure_app(slug)` FIRST, then answer in text. It draws the process graph inline in the chat, the same one as in the Tulina app. Never draw the process yourself (client visualizer or diagram tool, Mermaid, artifact, ASCII). If the tool says the process has no drawing yet, that is not a failure: do what its answer says, then call `oto_procedure_app` again. If the tool is not in your list, call it through `oto_call(name="oto_procedure_app", arguments={"slug": …})`. If its answer says this client does NOT display the graph (Claude Code, an agent with no screen), tell the user so — never claim the graph is shown — explain the steps in text and give the `url` it returns: the process page in Tulina, where the graph is.
+
 ## Writing a procedure
 
 A procedure reads as prose: numbered steps, which the agent running it follows in order. No drawing is required. If the body you read carries a `<!-- flowchart: … -->` line, it is the drawing of an existing version set aside: copy it as is to keep it.
@@ -52,3 +54,13 @@ Your toolbox, for this org, contains what is installed there for you: by you, by
 ## Slots: the procedure declares, the project binds
 
 A procedure declares its required entities as named slots and its prose references them as `<slot:name>` — never a hard-coded instance name. The project maps name→instance through its links (`oto_project(op=link, …, slot='name')`; for a connector, `instance_ref=<ref>` binds an EXACT credential). You address a slot's table with `datastore='slot:<name>'` on the `data_*` tools, within the project (`_project=<id>` on the call). If a slot does not resolve (no `_project=` on the call, or unbound name), the call is REFUSED with the steps to follow: **materialize the context first** — ask which project (or create one), and for each slot bind an existing resource or create it; NEVER pick a "probable" table in place of a missing binding.
+
+## Working at scale: three rules, by default
+
+Whenever a job touches many rows, repeats, or pays for data, apply these without waiting for the user to ask:
+
+1. **Many rows → the server does the bulk work, not the model.** Fetching or moving data from a connector into a table is a **recipe** (`oto_recipe`: no model turns however many rows, spend capped by `limits.max_units`); judging every row is **Jev** (`jev_rows`); counting is `data_aggregate`; bulk edits are `data_update_where`; sending is `*_push_rows`. The model only works the shortlist (writing, outreach, review). Read `save-tokens` before any job over ~20 rows, `recipes` before writing one.
+2. **Recurring or unattended → a hosted agent on Tulina.** Once a process has run once in its project and the user approved the result, offer to run it as a hosted agent (`oto_trigger`, on a schedule or a webhook) instead of re-running it by hand: a `tools` allowlist with only what the process calls, `max_steps` / `max_tokens`, a cadence that fits the job, and a first step that ends the run when there is nothing to do. Read `processes` §5.
+3. **Paid data → cheapest source first, stop at the first answer.** Use the `waterfall_*` tools (company, people, person, email, phone, tech): they try free sources and the user's own keys before Tulina's shared keys and stop at the first hit. Set `max_paid_steps`, `qualify` before paying to enrich, never call two providers for the same record, never pay for what a table already holds. Read `cheapest-first`, and `included-tools` for which connector fits which job.
+
+Before a big run, say what it will touch and roughly what it will cost, and test on 3–5 rows first.

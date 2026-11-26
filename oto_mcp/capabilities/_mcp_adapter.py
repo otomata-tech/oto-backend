@@ -67,12 +67,6 @@ def _org_param_reserved(cap: Capability) -> bool:
     return cap.mcp is not None and "_org" not in cap.Input.model_fields
 
 
-def reserved_org_tool_names(capabilities: list[Capability]) -> frozenset:
-    """Noms des tools MCP où `_org=` est injecté comme axe-contexte → pilote
-    `CallContextMiddleware` (pose la ContextVar `_CALL_ORG` autour de toute la chaîne)."""
-    return frozenset(cap.mcp for cap in capabilities if _org_param_reserved(cap))
-
-
 def _make_tool(cap: Capability):
     org_reserved = _org_param_reserved(cap)
     async def _tool(**kwargs):

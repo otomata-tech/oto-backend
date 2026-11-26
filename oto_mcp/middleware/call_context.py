@@ -126,19 +126,17 @@ class CallContextMiddleware(Middleware):
     dernier donc INNERMOST). ContextVar per-tâche (isolée par appel) ; reset en `finally`.
 
     Garde d'appartenance au point d'entrée : `_org=` dont le sub n'est pas membre lève un
-    McpError **actionnable**, jamais un repli silencieux vers une autre org. Ne s'active
-    que pour les tools de capacité, où `_org` est injecté au schéma par l'adaptateur
-    (le préfixe `_` écarte toute collision avec un champ métier `org`, issue #250).
+    McpError **actionnable**, jamais un repli silencieux vers une autre org. `_org=` est
+    un axe comme les autres (`call_axes.ORG`), accepté par tout outil servi (le préfixe
+    `_` écarte toute collision avec un champ métier `org`, issue #250).
     """
-
-    def __init__(self, reserved_org_tools):
-        self._org = frozenset(reserved_org_tools)
 
     async def on_list_tools(self, context, call_next):
         """Advertise les axes-contexte plats (`_account=`, …) dans le schéma des tools
         CONCERNÉS (sélectif, `call_axes.axes_for`) → claude.ai sait les envoyer. Sans
-        ça, `additionalProperties:false` ferait rejeter l'axe côté client. Les tools
-        de capacité (`_org=`) sont schématisés par `_mcp_adapter`, pas ici."""
+        ça, `additionalProperties:false` ferait rejeter l'axe côté client. Une propriété
+        déjà déclarée (le `_org` d'une capacité, par `_mcp_adapter`) est gardée telle
+        quelle (`inject_schema`)."""
         tools = await call_next(context)
         # Axe compte DYNAMIQUE : annoncé sur les connecteurs où l'appelant détient
         # plusieurs clés (une requête, threadpool — chemin inbound mono-loop). Sans sub
@@ -240,13 +238,11 @@ class CallContextMiddleware(Middleware):
                 if actif:
                     undo.append((session_org.reset_session_run,
                                  session_org.set_session_run(actif)))
-            # `_org=` (tools de capacité) : posé ici, retiré des kwargs par `_make_tool`.
-            if name in self._org and args.get("_org") is not None:
-                undo.append((session_org.reset_call_org, await self._pin_org(args["_org"])))
-            # Axes plats (`_account=`, … — connecteurs/data) : lus des args BRUTS, posés,
-            # puis RETIRÉS des arguments avant le dispatch (la fonction du tool ne les
-            # déclare pas → elle validerait en erreur sinon). Les seams de résolution
-            # existants (resolve_credential…) lisent la ContextVar.
+            # Axes (`_org=`, `_account=`, …) : lus des args BRUTS, posés, puis RETIRÉS des
+            # arguments avant le dispatch (la fonction du tool ne les déclare pas → elle
+            # validerait en erreur sinon ; une capacité, qui déclare `_org`, le reçoit à
+            # None). Les seams de résolution existants (resolve_credential…) lisent la
+            # ContextVar.
             for axis in call_axes.axes_for_call(name):
                 if axis.param in args:
                     undo.extend(await axis.pin_for(args.pop(axis.param), name))
@@ -269,7 +265,7 @@ class CallContextMiddleware(Middleware):
             # appels qui passaient, et réveillerait les gardes anti-agent d'`oto_fleet`
             # sur un chemin qui ne les a jamais vues. Élargir la CORRÉLATION est un
             # autre lot, avec sa propre mesure ; ici on ne fait que cesser de refuser.
-            if name not in call_axes.RUN_SELF_HANDLED:
+            if name not in call_axes.SELF_HANDLED:
                 args.pop(call_axes.RUN.param, None)
             # L'org du RUN (#639) : APRÈS les axes — un `_org=`/`_project=` explicite a
             # déjà posé l'org et garde la priorité ; sinon un appel qui porte un run se
@@ -312,9 +308,3 @@ class CallContextMiddleware(Middleware):
         outil = await context.fastmcp_context.fastmcp.get_tool(name)
         return getattr(outil, "parameters", None)
 
-    @staticmethod
-    async def _pin_org(org):
-        # Garde partagée (`resolve_org_guarded`) = MÊME résolution qu'`oto_use_org` +
-        # McpError propre (ce middleware est outermost → une exception opaque serait
-        # invisible à Sentry, vécu prod 2026-07-04). Idem l'axe plat `_org=` et oto_call.
-        return session_org.set_call_org(await call_axes.resolve_org_guarded(org))

@@ -150,7 +150,7 @@ class _Ctx:
 
 @pytest.mark.asyncio
 async def test_on_list_tools_advertises_only_where_applicable():
-    mw = CallContextMiddleware(reserved_org_tools=set())
+    mw = CallContextMiddleware()
     tools = [
         _Tool("zoho_record", {"type": "object", "properties": {}}),
         _Tool("serper_search", {"type": "object", "properties": {}}),
@@ -169,7 +169,7 @@ async def test_on_list_tools_advertises_only_where_applicable():
 @pytest.mark.asyncio
 async def test_on_list_tools_advertises_account_where_the_caller_has_several_keys(monkeypatch):
     from oto_mcp.middleware import call_context as mwmod
-    mw = CallContextMiddleware(reserved_org_tools=set())
+    mw = CallContextMiddleware()
     tools = [_Tool("serper_search", {"type": "object", "properties": {}}),
              _Tool("hunter_domain_search", {"type": "object", "properties": {}})]
 
@@ -187,7 +187,7 @@ async def test_on_list_tools_advertises_account_where_the_caller_has_several_key
 
 @pytest.mark.asyncio
 async def test_on_call_tool_pins_account_on_keyed_tool_even_if_not_advertised():
-    mw = CallContextMiddleware(reserved_org_tools=set())
+    mw = CallContextMiddleware()
     seen = {}
 
     async def _next(ctx):
@@ -203,7 +203,7 @@ async def test_on_call_tool_pins_account_on_keyed_tool_even_if_not_advertised():
 
 @pytest.mark.asyncio
 async def test_on_call_tool_strips_axis_and_poses_contextvar():
-    mw = CallContextMiddleware(reserved_org_tools=set())
+    mw = CallContextMiddleware()
     args = {"id": "42", "_account": "boulot"}
     seen = {}
 
@@ -223,7 +223,7 @@ async def test_on_call_tool_strips_axis_and_poses_contextvar():
 
 @pytest.mark.asyncio
 async def test_on_call_tool_ignores_axis_on_non_applicable_tool():
-    mw = CallContextMiddleware(reserved_org_tools=set())
+    mw = CallContextMiddleware()
     args = {"query": "x", "_account": "boulot"}  # oto_whoami n'expose pas _account=
 
     async def _next(ctx):

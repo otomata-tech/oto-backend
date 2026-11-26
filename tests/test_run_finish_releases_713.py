@@ -121,7 +121,7 @@ def _claim_sans_run_id(ctx, ns: str, worker: str) -> dict:
         return await outil.run(c.message.arguments)
 
     async def _go():
-        return await CallContextMiddleware(frozenset()).on_call_tool(mctx, _next)
+        return await CallContextMiddleware().on_call_tool(mctx, _next)
 
     return asyncio.run(_go()).structured_content
 

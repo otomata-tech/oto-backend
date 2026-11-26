@@ -127,7 +127,7 @@ def _ecrire(arguments: dict):
         return await outil.run(c.message.arguments)
 
     async def _go():
-        return await CallContextMiddleware(frozenset()).on_call_tool(ctx, _next)
+        return await CallContextMiddleware().on_call_tool(ctx, _next)
 
     return asyncio.run(_go()).structured_content
 
@@ -191,7 +191,7 @@ async def test_le_journal_stampe_l_org_du_run(surface):
         row["org_id"] = access.current_org(row.get("sub"))     # server._calllog_sink
         rows.append(row)
 
-    mcp.add_middleware(CallContextMiddleware(frozenset()))
+    mcp.add_middleware(CallContextMiddleware())
     async def identite():
         return {"sub": SUB}
 
@@ -312,7 +312,7 @@ async def test_oto_call_dispatche_aussi_dans_l_org_du_run(surface, monkeypatch):
     def serper_sonde() -> dict:
         return {"org": access.current_org(SUB)}
 
-    mcp.add_middleware(CallContextMiddleware(frozenset()))
+    mcp.add_middleware(CallContextMiddleware())
     async with Client(mcp) as c:
         res = await c.call_tool("oto_call", {"name": "serper_sonde",
                                              "arguments": {"_run_id": run}})

@@ -97,7 +97,7 @@ def test_le_middleware_pose_la_face_sur_le_vrai_chemin_et_la_retire(monkeypatch)
         vu["agent"] = aga.appel_d_agent()
         return "ok"
 
-    m = mw.CallContextMiddleware(frozenset())
+    m = mw.CallContextMiddleware()
     assert asyncio.run(m.on_call_tool(_Ctx(), call_next)) == "ok"
     assert vu == {"dedans": session_org.FACE_MCP, "agent": True}
     # …et la variable est RENDUE : une face qui fuit d'un appel au suivant masquerait

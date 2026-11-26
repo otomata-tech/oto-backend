@@ -4,8 +4,8 @@
 claude.ai renouvelle le `Mcp-Session-Id` à CHAQUE appel → tout état de session serveur
 (compte de connecteur actif, projet actif, run en cours) est perdu d'un appel au
 suivant. La parade : porter le contexte en **identifiants d'appel** explicites plutôt
-qu'en bracelet serveur. Pour les tools de capacité, `_org=` est injecté par
-`_mcp_adapter` ; pour les tools **plats** (connecteurs, `data_*`), les axes vivent ici.
+qu'en bracelet serveur. Les axes vivent ici, pour tous les tools ; sur une capacité,
+`_mcp_adapter` déclare en plus `_org` dans la signature (le schéma garde la sienne).
 
 Mécanisme (zéro modification des fonctions de tools) :
   1. `on_list_tools` (middleware) advertise l'axe dans le schéma des tools CONCERNÉS
@@ -125,9 +125,8 @@ def require_axis_sub(axis: str) -> str:
 async def resolve_org_guarded(org: object) -> int:
     """Résout un `_org=` (id ou nom) → org_id, gardé par la MÊME résolution qu'`oto_use_org`
     (`org_store.resolve_org_for_user` : appartenance réelle du sub). McpError PROPRE en cas
-    d'échec — jamais une exception opaque. Partagé par le middleware (org= des capacités,
-    `CallContextMiddleware._pin_org`), l'axe plat `_org=` et `oto_call(_org=)`. DB en
-    threadpool (chemin inbound chaud, mono-loop)."""
+    d'échec — jamais une exception opaque. Partagé par l'axe `_org=` (middleware et
+    `oto_call`). DB en threadpool (chemin inbound chaud, mono-loop)."""
     org_id = require_axis_int(org, "_org")
     sub = require_axis_sub("_org")
     # Un jeton de délégation n'agit que dans l'org de son travail (`verrou_org.py`) :
@@ -450,8 +449,8 @@ def _is_work_tool(name: str) -> bool:
 # Spine « surface de travail » : ces tools oto_* AGISSENT dans un déroulé (lier un
 # tableau, poser un doc, partager une ressource) — un agent qui propage run_id comme
 # le prescrivent les instructions run_start/finish ne doit pas se faire rejeter
-# (« Unexpected keyword argument », feedback #168). SEULEMENT l'axe run_id : org=
-# leur est déjà injecté par `_mcp_adapter` (capacités), pas de double-traitement.
+# (« Unexpected keyword argument », feedback #168). SEULEMENT l'axe run_id : `_org=`
+# est accepté partout (`_accepts_org`).
 # `oto_fleet` (#830) : pas pour corréler un travail, mais parce que ses deux gardes
 # anti-agent (`not_from_a_run`, `not_your_own_fleet`) se décident sur le run de
 # l'appel — et que le runner hébergé ne pose `_run_id` QUE sur un outil qui le
@@ -515,40 +514,54 @@ RUN = CallAxis(
 )
 
 
-# Les tools qui DÉCLARENT `_run_id` dans leur propre signature et le traitent
-# eux-mêmes : le middleware ne doit pas le leur retirer avant le dispatch, sinon il
+# Les tools qui DÉCLARENT `_org` et `_run_id` dans leur propre signature et les traitent
+# eux-mêmes : le middleware ne doit pas les leur retirer avant le dispatch, sinon il
 # leur mange un paramètre déclaré. Aujourd'hui `oto_call` seul — il rejoue la boucle
-# d'axes pour sa CIBLE (`tools/meta`), donc le jeton doit lui parvenir intact.
-# ⚠️ Une liste par nom rouille en silence : `test_call_axes_run.py` vérifie que
-# chacun de ces noms déclare bien le paramètre sur la surface servie.
-RUN_SELF_HANDLED: frozenset[str] = frozenset({"oto_call"})
+# d'axes pour sa CIBLE (`tools/meta`), donc les jetons doivent lui parvenir intacts.
+# ⚠️ Une liste par nom rouille en silence : `test_run_id_jamais_un_refus.py` vérifie
+# que chacun de ces noms déclare bien les deux paramètres sur la surface servie.
+SELF_HANDLED: frozenset[str] = frozenset({"oto_call"})
 
 
-# ── Axe _org= (org d'exécution de l'appel — connecteurs + data + whoami) ───────
+# ── Axe _org= (org d'exécution de l'appel — TOUT outil servi) ─────────────────
+
+def _accepts_org(name: str) -> bool:
+    """`_org=` est accepté par TOUT outil servi, sauf ceux qui le déclarent et le
+    traitent eux-mêmes (`SELF_HANDLED`).
+
+    La notice servie au handshake dit « `_org`… sur chaque appel » ; l'axe, lui, était
+    ouvert outil par outil : les capacités le recevaient de `_mcp_adapter`, les tools de
+    travail et une liste nominative de tools écrits à la main d'ici. Un tool écrit à la
+    main hors de la liste le refusait (« Unexpected keyword argument ») — vécu sur
+    `oto_tool_schema`, et `oto_doc_app` était dans le même cas. Et `oto_call`, qui rejoue
+    cette boucle pour sa CIBLE, ne posait pas l'org d'une cible capacité : le jeton était
+    avalé par `strip_unconsumed_axes` et la cible tournait sous l'org maison, sans erreur.
+    Une liste par nom rouille ; la classe se ferme ici, et
+    `tests/test_jetons_de_contexte_acceptes.py` l'impose à chaque outil servi.
+
+    Sur une capacité, le schéma garde la propriété `_org` que lui donne l'adaptateur
+    (`inject_schema` ne remplace pas une propriété déclarée) : seule la pose passe par
+    cet axe, la même pour tous. La garde est celle d'`oto_use_org`
+    (`resolve_org_guarded`) ; sur un outil qui ne lit pas l'org, la pose est inerte."""
+    return name not in SELF_HANDLED
+
 
 def _is_org_scopable_tool(name: str) -> bool:
-    """Tool PLAT dont l'action dépend de l'org (résolution de credential/visibilité/
-    données) : tools de TRAVAIL (connecteurs + `data_*`) + `oto_whoami` (lecture de
-    l'identité effective) + les **verbes de run** (#290 — l'org d'un run est celle sous
-    laquelle il se déroule, pas l'org d'habitude de celui qui l'ouvre ; c'est elle que
-    `runs.org_id` gèle et que scope la lentille d'org). Les CAPACITÉS reçoivent déjà
-    `_org=` par `_mcp_adapter` (elles ne sont pas des tools de travail → exclues ici, pas
-    de double-traitement).
-
-    L'axe `_group=` partage ce prédicat : un run ouvert sous une équipe co-pose l'org
-    parente, invariant `groupe ⊂ org` par construction (cf. `_pin_group`)."""
+    """Tool PLAT qui accepte `_group=` : tools de TRAVAIL (connecteurs + `data_*`) +
+    `oto_whoami` (lecture de l'identité effective) + les **verbes de run** (#290 —
+    l'équipe d'un run est celle sous laquelle il se déroule) + les tools écrits à la main
+    qui lisent dans l'org et l'équipe actives. Un run ouvert sous une équipe co-pose
+    l'org parente, invariant `groupe ⊂ org` par construction (cf. `_pin_group`)."""
     return (_is_work_tool(name) or name == "oto_whoami" or name in _RUN_VERBS
             or name in _LECTURES_D_ORG_ECRITES_A_LA_MAIN)
 
 
 # Tools `oto_*` écrits à la main (`@mcp.tool` brut, ni capacité ni tool de travail) qui
-# LISENT dans l'org active : sans l'axe, un compte multi-org ne peut viser que son org
-# maison. `oto_procedure_app` cherche la procédure par `access.current_org` /
-# `current_group`, comme `oto_procedure op=get` (capacité, qui reçoit `_org=` par
-# `_mcp_adapter`) — les deux doivent atteindre la même org.
+# LISENT dans l'org et l'équipe actives : sans `_group=`, un membre d'équipe ne peut
+# viser que son contexte par défaut. `oto_procedure_app` cherche la procédure par
+# `access.current_org` / `current_group`, comme `oto_procedure op=get`.
 # `email_send` (#1355) : il envoie depuis une adresse de l'org ACTIVE
-# (`access.current_org`) — sans l'axe, l'envoi partait de l'org maison quand le run en
-# visait une autre, et `_org=` était refusé comme champ inconnu.
+# (`access.current_org`).
 _LECTURES_D_ORG_ECRITES_A_LA_MAIN = frozenset({"oto_procedure_app", "email_send",
                                                "oto_connector_app", "oto_webhook_app"})
 
@@ -572,7 +585,7 @@ ORG = CallAxis(
             "Org (id) de CET APPEL. `oto_list_orgs()`."
         ),
     },
-    applies=_is_org_scopable_tool,
+    applies=_accepts_org,
     pin=_pin_org_flat,
 )
 

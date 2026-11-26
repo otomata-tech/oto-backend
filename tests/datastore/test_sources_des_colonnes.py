@@ -108,7 +108,7 @@ def mcp(compte, monkeypatch):
 
     m = FastMCP("t-sources")
     register_all(m)
-    m.add_middleware(CallContextMiddleware(frozenset()))
+    m.add_middleware(CallContextMiddleware())
     m.add_middleware(ToolCallLogger(sink, server="t", identity=identite))
     return m
 

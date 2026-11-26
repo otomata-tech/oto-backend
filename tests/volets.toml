@@ -65,6 +65,8 @@ tests = [
   # La surface d'outils servie, figée ; le lecteur des descriptions, qui sert les connecteurs inscrits.
   "tests/test_surface_outils_figee.py",
   "tests/test_decrits.py",
+  # Chaque jeton de contexte accepté par chaque outil servi : un outil neuf, où qu'il naisse.
+  "tests/test_jetons_de_contexte_acceptes.py",
 ]
 
 [complete]

@@ -208,7 +208,7 @@ def _serveur(monkeypatch, *, kind="delegation", run_du_jeton="r1"):
 
     monkeypatch.setattr(db, "run_ouvert_du_jeton", lire)
     m = FastMCP("t-run-repris")
-    m.add_middleware(CallContextMiddleware(frozenset()))
+    m.add_middleware(CallContextMiddleware())
     outils_run.register(m)
 
     @m.tool()

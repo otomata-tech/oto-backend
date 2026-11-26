@@ -48,7 +48,7 @@ def _par_le_middleware(nom: str, arguments: dict, handler):
     async def _next(c):
         return handler(dict(c.message.arguments))
 
-    return asyncio.run(CallContextMiddleware(frozenset()).on_call_tool(ctx, _next))
+    return asyncio.run(CallContextMiddleware().on_call_tool(ctx, _next))
 
 
 @pytest.fixture

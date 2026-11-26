@@ -24,8 +24,9 @@ def test_procedure_app_advertises_org_in_listing():
 
 
 def test_other_meta_tools_unchanged():
-    # L'entrée est nominative : elle n'ouvre pas l'axe à tout le spine `oto_*`.
-    assert "_org" not in _params("oto_create_org")
+    # L'entrée est nominative : elle n'ouvre pas `_group` à tout le spine `oto_*`
+    # (`_org`, lui, est accepté partout — `tests/test_jetons_de_contexte_acceptes.py`).
+    assert "_group" not in _params("oto_create_org")
 
 
 # ── #1355 : la notice exige `_run_id` sur chaque appel d'un run ───────────────

@@ -253,7 +253,7 @@ async def test_the_middleware_pins_the_active_run_from_the_stack():
         vu["explicite"] = session_org.current_call_run()
         return "ok"
 
-    await CallContextMiddleware(frozenset()).on_call_tool(ctx, _call_next)
+    await CallContextMiddleware().on_call_tool(ctx, _call_next)
 
     assert vu["run"] == "run-empile", (
         "sans jeton explicite, le run ACTIF de la pile doit être vu du datastore — "

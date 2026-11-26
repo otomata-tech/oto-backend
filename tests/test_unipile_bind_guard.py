@@ -317,7 +317,7 @@ def test_la_reconciliation_passe_par_la_garde(scene, monkeypatch):
         {"id": "acc_tout_neuf", "provider": "linkedin",
          "created_at": "2099-01-01 00:00:00+00", "name": "Le pirate"}])
     _pending(PIRATE, scene["org_pirate"])
-    assert unipile_connect.reconcile_pending(PIRATE)["bound"]
+    assert unipile_connect.reconcile_pending(PIRATE, account_id="acc_tout_neuf")["bound"]
     assert "acc_tout_neuf" in vus, (
         "la réconciliation n'a pas consulté la garde partagée — elle en a une à "
         "elle, ou aucune")

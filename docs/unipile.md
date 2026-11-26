@@ -498,14 +498,17 @@ personne. Un compte n'est désormais lié que s'il est identifié SANS ambiguït
   (`POST /api/me/unipile/reconcile`) ou par l'agent (`linkedin_unipile_account(op="status",
   account_id=…)`) ; il restreint à ce compte, sans lever aucune garde ;
 - **une ligne morte du sub** (preuve de propriété, reconnexion qui réutilise le compte) —
-  seule candidate vivante ;
-- **un candidat vivant UNIQUE, sans preuve**, seulement si aucune demande d'un AUTRE sub
-  (même canal, même population de clé — plateforme ou BYO) n'attend dans une fenêtre qui le
-  couvre. Le nom du lien (notre nonce) ne revient pas dans `/accounts` : la seule chose
-  vérifiable sans retour navigateur est l'absence de concurrent, que nos pendings disent.
+  seule candidate vivante.
 
-Tout le reste — plusieurs vivants, ou un seul qu'un autre pourrait réclamer — rend
-`reason: ambiguous_candidates`, n'écrit rien, journalise les candidats et **laisse le
+⚠️ **Un candidat unique ne prouve RIEN** (lot « preuve exigée », même classe qu'ADA 3.2.2
+pour OAuth, #1900/#1914). Le pending dit qui a DEMANDÉ le lien, jamais qui l'a parcouru : un
+lien transféré à quelqu'un d'autre, parcouru avec SON compte, rattachait ce compte à l'auteur
+du lien — seul candidat, personne d'autre n'attendait. L'`account_id`, lui, n'arrive que dans
+le navigateur qui a parcouru l'assistant. Sans lui ni ligne morte : `reason: proof_required`,
+rien n'est écrit, le pending reste. Le front relit l'`account_id` au retour
+(`?unipile=connected&account_id=…`) et lie de lui-même ; un agent doit le faire repasser.
+
+Plusieurs vivants sans indice rendent `reason: ambiguous_candidates`, n'écrit rien, journalise les candidats et **laisse le
 pending** : l'appel suivant porteur de l'`account_id` liera. Deux connexions simultanées
 sans indice restent donc refusées toutes deux jusqu'à ce que l'une passe l'`account_id`
 (ou que les demandes expirent, 1 h) — c'est le prix de ne plus deviner.
@@ -585,8 +588,8 @@ un test la tient sur ces formes. L'inventaire vient de
 `list_accounts`, déjà lu par la réconciliation : la lecture d'un compte par identifiant
 n'était pas nécessaire. **Ce qui restait** — un compte qu'un TIERS crée sur la clé partagée
 APRÈS votre demande et avant sa propre réconciliation passait le plancher — est fermé par
-oto#247 : sans l'indice `account_id`, la réconciliation refuse dès qu'une autre demande
-attend dans la même fenêtre (`ambiguous_candidates`, plus haut).
+oto#247, puis la preuve exigée : sans l'indice `account_id` (ni ligne morte du sub), la
+réconciliation ne lie plus rien (`proof_required`, plus haut).
 
 **Consolidation « tout en clé plateforme » (2026-07-16).** Clé plateforme rotée en v2 (scope
 PLATFORM, label `env`) ; tous les BYO unipile supprimés ; **option comp** posée pour les orgs

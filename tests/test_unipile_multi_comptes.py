@@ -378,7 +378,6 @@ def test_la_reconciliation_lie_dans_l_emplacement_demande(monkeypatch, demandes,
     monkeypatch.setattr(db, "bound_unipile_account_ids", lambda: {"A"})
     monkeypatch.setattr(db, "foreign_unipile_account_ids", lambda sub: set())
     monkeypatch.setattr(db, "dead_unipile_account_ids_for", lambda sub, prov: set())
-    monkeypatch.setattr(db, "unipile_pending_floors_elsewhere", lambda *a: [])
     monkeypatch.setattr(db, "resolve_unipile_pending", lambda nonce: None)
     ecrit = {}
     monkeypatch.setattr(db, "set_unipile_account",

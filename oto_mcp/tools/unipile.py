@@ -819,8 +819,9 @@ def account_status(provider: str = "LINKEDIN",
 
     `account_id_hint` = the `account_id` that the flow's return page carries in
     its address, relayed by the agent: it is the PROOF that the agent side lacks
-    (oto#247). Without it, the reconciliation refuses to choose between several accounts
-    connected in the same window on the shared key (`ambiguous_candidates`).
+    (oto#247). Without it, only a reconnection of the person's own account (a dead row)
+    is linked: a NEW account is refused (`proof_required`), since the pending row says who
+    asked for the link, not who went through it.
     """
     from .. import unipile_connect
     from ..connectors import identities as connector_identities
@@ -1378,11 +1379,12 @@ def register(mcp: FastMCP) -> None:
         The user opens the URL, logs in to their account (login/2FA/captcha —
         everything happens in this hosted page), then returns to the connections
         page of THEIR product. ⚠️ There is NO webhook (#581): the account is
-        LINKED by reconciliation, under your identity, within the hour following this link.
-        For LinkedIn, it is `linkedin_unipile_account(op="status")` that triggers it
-        — call it when the person says they are done (`binding` says why nothing
-        was linked). For the other channels, the linking happens when the person
-        reopens their connections page. This is THE messaging onboarding entry point
+        LINKED by reconciliation, under your identity, within the hour following this link,
+        and only on PROOF: that return page links it by itself when the person is signed
+        in there. Otherwise, ask the person for the `account_id=…` that the return page's
+        address carries and pass it to `linkedin_unipile_account(op="status",
+        account_id=…)` — without it a new account is refused (`proof_required`;
+        `binding` says why nothing was linked). This is THE messaging onboarding entry point
         from the agent (feedback #131).
 
         A messaging account is PER-PERSON: if it is already connected in

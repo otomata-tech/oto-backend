@@ -530,25 +530,6 @@ def list_unipile_pending_for_sub(sub: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def unipile_pending_floors_elsewhere(sub: str, provider: str,
-                                     platform_seat: bool) -> list:
-    """Horodatages des pendings VIVANTS (<1h) des AUTRES `sub`, même canal, même
-    population de clé (`platform_seat`) — ceux qui pourraient réclamer le même
-    compte fraîchement créé.
-
-    La réconciliation sans preuve (oto#247) : sur une clé PARTAGÉE, un compte
-    candidat n'est attribuable à `sub` que si personne d'autre n'attend dans la
-    même fenêtre. Siège plateforme et clé BYO ne listent pas les mêmes comptes :
-    on ne compare qu'une population à elle-même."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT created_at FROM unipile_pending WHERE sub <> %s AND provider = %s "
-            "AND platform_seat = %s AND created_at >= NOW() - INTERVAL '1 hour'",
-            (sub, provider, platform_seat),
-        ).fetchall()
-    return [r["created_at"] for r in rows]
-
-
 def bound_unipile_account_ids() -> set:
     """Tous les `account_id` déjà attribués — bindings vivants ET soft-déconnectés
     (une ligne morte d'un TIERS prouve que le compte est à lui : jamais adoptable

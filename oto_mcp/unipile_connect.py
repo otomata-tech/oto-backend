@@ -397,8 +397,8 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
 # correlate on return. So we LIST the Unipile accounts, NOT already linked, of the right
 # provider, created AFTER the pending row (the floor avoids rebinding a pre-existing seat
 # of a third party) — and we only link what is identified WITHOUT ambiguity (oto#247):
-# the `account_id` returned on return, a dead row of the sub (proof of ownership), or a
-# UNIQUE candidate that nobody else is waiting for. Otherwise, named refusal. Idempotent. The
+# the `account_id` returned on return, or a dead row of the sub (proof of ownership).
+# Otherwise, named refusal (`proof_required`, `ambiguous_candidates`). Idempotent. The
 # v1 linking webhook, a dormant twin path, was removed on 2026-08-29 (#581).
 
 def _parse_dt(v):
@@ -446,18 +446,6 @@ def _rien(reason: str, detail: str) -> dict:
     return {"bound": False, "accounts": [], "reason": reason, "detail": detail}
 
 
-def _attendu_ailleurs(sub: str, pend: dict, provider: str, created) -> bool:
-    """Is a request from ANOTHER `sub` (same channel, same key population) waiting
-    in a window that covers this account created at `created`? Unreadable date ⟹ yes:
-    we cannot rule it out."""
-    planchers = db.unipile_pending_floors_elsewhere(
-        sub, provider, bool(pend.get("platform_seat")))
-    if created is None:
-        return bool(planchers)
-    return any(created >= _parse_dt(f) - unipile_binding.MARGE_HORLOGE
-               for f in planchers)
-
-
 def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
     """Links the account(s) freshly connected by `sub` without depending on the
     webhook. No-op if no pending row / no key / no new account.
@@ -472,11 +460,13 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
     ⚠️ **Without it, we no longer choose** (oto#247). The key is SHARED: two
     people connecting in the same window make both accounts
     candidates for each, and "the most recent alive" linked an account to the
-    wrong person. Without a hint, an account is only linked if it is the ONLY
-    live candidate AND (a dead row of `sub` proves it is theirs, OR no
-    other `sub` has a pending request, same channel, whose window covers it).
-    Otherwise: `ambiguous_candidates` refusal, nothing is written, the pending row stays —
-    a call carrying the `account_id` will link it."""
+    wrong person. And a single candidate proves nothing either: the pending row
+    says who ASKED for the link, not who went through it — a link forwarded to
+    someone else bound THEIR account to its author. Without a hint, an account is
+    only linked if it is the ONLY live candidate AND a dead row of `sub` proves it
+    is theirs (reconnection). Otherwise: `proof_required` (or `ambiguous_candidates`),
+    nothing is written, the pending row stays — a call carrying the `account_id`
+    will link it."""
     pendings = db.list_unipile_pending_for_sub(sub)
     if not pendings:
         return _rien("no_pending",
@@ -578,13 +568,30 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
         vivants = [(created, a, p) for created, a, p in cand
                    if client.account_alive(a["id"])]
         chosen, prov = (vivants[0][1], vivants[0][2]) if len(vivants) == 1 else (None, None)
-        # Without proof (neither hint nor row of the sub), a single candidate only belongs to `sub`
-        # if nobody else is waiting for an account in the same window.
+        # PROOF REQUIRED: an account is bound only on the `account_id` of the return page
+        # (it lands in the browser that went through the wizard, and nowhere else) or on
+        # a dead row of `sub` (a reconnection of THEIR account). The pending row says who
+        # ASKED for the link, never who went through it: a link sent to someone else
+        # would bind THEIR account to whoever made the link, by a mere "single candidate
+        # in the window" — the class closed for OAuth by #1900/#1914 (ADA 3.2.2).
         sans_preuve = chosen is not None and not account_id and not prov.a_moi
-        if len(vivants) > 1 or (sans_preuve and _attendu_ailleurs(
-                sub, pend, provider, prov.cree_le)):
-            # oto#247: several alive candidates, or a single one that a request from
-            # ANOTHER sub could claim — and no proof to decide (the hint
+        if sans_preuve:
+            logger.info("reconcile unipile: no proof, nothing bound sub=%s provider=%s",
+                        sub, provider)
+            motifs.append({
+                "nonce": pend.get("nonce"), "provider": provider,
+                "reason": "proof_required",
+                "detail": (f"A new {provider} account may be yours, but nothing proves "
+                           "that the person who went through the link is you: nothing "
+                           "was linked. Finish the link's flow through to its return "
+                           "page while signed in — it links the account by itself. From "
+                           "an agent, pass back the `account_id=…` that the return "
+                           "page's address carries (`POST /api/me/unipile/reconcile`, or "
+                           "`linkedin_unipile_account(op=\"status\", account_id=…)`)."),
+            })
+            continue
+        if len(vivants) > 1:
+            # oto#247: several alive candidates and no proof to decide (the hint
             # restricts to one account, so `vivants` never has two with it).
             # "The most recent" linked one person's account to another: we no longer
             # guess. The pending row stays, a call carrying the `account_id` will link.

@@ -11,8 +11,8 @@ fournisseur est simulé :
 
 1. deux comptes éligibles, aucune preuve ⟹ refus nommé des deux côtés, rien d'écrit ;
 2. l'`account_id` du retour ⟹ le bon rattachement, et la scène se dénoue pour l'autre ;
-3. un seul compte neuf, mais l'autre personne attend toujours ⟹ refus ;
-4. un seul compte neuf, personne d'autre n'attend ⟹ lié.
+3. un seul compte neuf, sans indice ⟹ refus, que quelqu'un d'autre attende ou non :
+   la demande dit qui a DEMANDÉ le lien, pas qui l'a parcouru (lien transféré).
 """
 from __future__ import annotations
 
@@ -98,9 +98,11 @@ def test_l_account_id_lie_le_bon_et_denoue_la_scene(scene):
     out = unipile_connect.reconcile_pending(A, account_id=ACC_A)
     assert out["bound"] is True and out["accounts"][0]["account_id"] == ACC_A
     assert out["accounts"][0]["org_id"] == scene["org_a"]
-    # A a consommé sa demande, ACC_A est pris : pour B il ne reste qu'un candidat, et
-    # plus personne d'autre n'attend — la liaison est sûre sans indice.
+    # A a consommé sa demande, ACC_A est pris : pour B il ne reste qu'un candidat —
+    # qui ne prouve toujours rien sans l'indice de SA page de retour.
     out = unipile_connect.reconcile_pending(B)
+    assert out["bound"] is False and out["reason"] == "proof_required"
+    out = unipile_connect.reconcile_pending(B, account_id=ACC_B)
     assert out["bound"] is True and out["accounts"][0]["account_id"] == ACC_B
     assert _liaisons() == [(A, ACC_A), (B, ACC_B)]
     assert _pendings() == []
@@ -113,37 +115,22 @@ def test_un_seul_compte_neuf_mais_l_autre_attend_refus(scene):
 
     scene["comptes"].append(_compte(ACC_B, "Personne B"))
     out = unipile_connect.reconcile_pending(A)
-    assert out["bound"] is False and out["reason"] == "ambiguous_candidates"
+    assert out["bound"] is False and out["reason"] == "proof_required"
     assert _liaisons() == []
     # B, porteur de son indice, lie le sien.
     assert unipile_connect.reconcile_pending(B, account_id=ACC_B)["bound"]
     assert _liaisons() == [(B, ACC_B)]
 
 
-def test_un_seul_compte_neuf_personne_d_autre_n_attend_lie(scene):
+def test_un_lien_transfere_ne_rattache_pas_le_compte_de_qui_l_a_parcouru(scene):
+    """A demande un lien et l'envoie à quelqu'un, qui le parcourt avec SON compte. Seul
+    candidat, personne d'autre n'attend : avant, il était rattaché à A. Sans l'indice de
+    la page de retour (arrivée dans le navigateur de l'autre, pas chez A), rien."""
     from oto_mcp import unipile_connect
 
     _exec("DELETE FROM unipile_pending WHERE sub = %s", (B,))
-    scene["comptes"].append(_compte(ACC_A, "Personne A"))
+    scene["comptes"].append(_compte(ACC_B, "Celle qui a parcouru le lien"))
     out = unipile_connect.reconcile_pending(A)
-    assert out["bound"] is True and _liaisons() == [(A, ACC_A)]
-
-
-def test_la_concurrence_ne_compare_qu_une_population_de_cle(scene):
-    """Une demande BYO (autre clé, autres comptes) ou sur un autre canal n'est pas un
-    concurrent pour un siège plateforme LinkedIn ; une demande expirée non plus."""
-    from oto_mcp import db
-
-    _exec("DELETE FROM unipile_pending WHERE sub = %s", (B,))
-    db.create_unipile_pending("nonce_byo", B, scene["org_b"], "LINKEDIN",
-                              platform_seat=False)
-    db.create_unipile_pending("nonce_wa", B, scene["org_b"], "WHATSAPP",
-                              platform_seat=True)
-    db.create_unipile_pending("nonce_vieux", B, scene["org_b"], "LINKEDIN",
-                              platform_seat=True)
-    _exec("UPDATE unipile_pending SET created_at = NOW() - INTERVAL '2 hours' "
-          "WHERE nonce = 'nonce_vieux'")
-    assert db.unipile_pending_floors_elsewhere(A, "LINKEDIN", True) == []
-    assert len(db.unipile_pending_floors_elsewhere(A, "LINKEDIN", False)) == 1
-    # Les demandes du sub lui-même ne sont jamais des concurrentes.
-    assert db.unipile_pending_floors_elsewhere(B, "LINKEDIN", False) == []
+    assert out["bound"] is False and out["reason"] == "proof_required"
+    assert _liaisons() == []
+    assert _pendings() == [A], "un refus ne consomme pas la demande"

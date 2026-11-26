@@ -21,14 +21,8 @@ def _acc(aid, name, provider="linkedin", created="2026-07-16 12:45:00+00"):
     return {"id": aid, "name": name, "provider": provider, "created_at": created}
 
 
-def _setup(monkeypatch, pendings, accounts, bound=None, dead=None, alive_ids=None,
-           ailleurs=None):
+def _setup(monkeypatch, pendings, accounts, bound=None, dead=None, alive_ids=None):
     monkeypatch.setattr(uc.db, "list_unipile_pending_for_sub", lambda s: pendings)
-    # Les demandes en attente des AUTRES subs (oto#247) : aucune par défaut.
-    vus_ailleurs = []
-    monkeypatch.setattr(uc.db, "unipile_pending_floors_elsewhere",
-                        lambda s, p, seat: vus_ailleurs.append((s, p, seat))
-                        or list(ailleurs or []))
     monkeypatch.setattr(uc.db, "bound_unipile_account_ids", lambda: set(bound or []))
     # La garde partagée (#559) lit les lignes d'autrui en base ; ici tout est stubé —
     # sans ce stub le fichier ne passe que si un test voisin a laissé DATABASE_URL.
@@ -43,7 +37,7 @@ def _setup(monkeypatch, pendings, accounts, bound=None, dead=None, alive_ids=Non
     monkeypatch.setattr(core, "make_unipile_client",
                         lambda **k: types.SimpleNamespace(
                             list_accounts=lambda: accounts, account_alive=alive))
-    calls = {"set": [], "resolved": [], "ailleurs": vus_ailleurs}
+    calls = {"set": [], "resolved": []}
     monkeypatch.setattr(uc.db, "set_unipile_account",
                         lambda *a, **k: calls["set"].append((a, k)))
     monkeypatch.setattr(uc.db, "resolve_unipile_pending",
@@ -55,7 +49,10 @@ def test_binds_newest_after_pending(monkeypatch):
     accounts = [_acc("acc_old", "Seat", created="2026-07-16 11:00:00+00"),
                 _acc("acc_new", "Me", created="2026-07-16 12:45:00+00")]
     calls = _setup(monkeypatch, [_pend()], accounts)
-    out = uc.reconcile_pending("sub1")
+    # Un siège antérieur à la demande ne se lie pas, même désigné.
+    assert uc.reconcile_pending("sub1", account_id="acc_old")["bound"] is False
+    assert calls["set"] == []
+    out = uc.reconcile_pending("sub1", account_id="acc_new")
     assert out["bound"] is True
     assert out["accounts"][0]["account_id"] == "acc_new"
     assert calls["set"][0][0][:2] == ("sub1", "acc_new")  # (sub, account_id)
@@ -73,7 +70,8 @@ def test_skips_dead_session_keeps_the_only_alive(monkeypatch):
     accounts = [_acc("acc_alive", "Sain", created="2026-07-16 12:45:00+00"),
                 _acc("acc_dead", "MortNé", created="2026-07-16 12:50:00+00")]
     calls = _setup(monkeypatch, [_pend()], accounts, alive_ids={"acc_alive"})
-    out = uc.reconcile_pending("sub1")
+    assert uc.reconcile_pending("sub1", account_id="acc_dead")["reason"] == "candidates_dead"
+    out = uc.reconcile_pending("sub1", account_id="acc_alive")
     assert out["accounts"][0]["account_id"] == "acc_alive"
 
 
@@ -205,7 +203,7 @@ def test_une_liaison_REUSSIE_ne_porte_aucune_raison(monkeypatch):
     """Pas d'écart, pas de bruit : le succès ne s'encombre pas d'un champ d'échec."""
     _setup(monkeypatch, [_pend()], [_acc("A", "bon")])
     monkeypatch.setattr(uc.db, "resolve_unipile_pending", lambda n: None)
-    out = uc.reconcile_pending("u1")
+    out = uc.reconcile_pending("u1", account_id="A")
     assert out["bound"] is True
     assert "reason" not in out and "detail" not in out
 
@@ -247,10 +245,11 @@ def test_une_liaison_consomme_les_demandes_doublons_du_meme_canal(monkeypatch):
     pendings = [_pend(nonce="N1"), _pend(nonce="N2"), _pend(nonce="W", provider="WHATSAPP")]
     calls = _setup(monkeypatch, pendings,
                    [_acc("acc_li", "Moi"), _acc("acc_wa", "+33", provider="whatsapp")])
-    out = uc.reconcile_pending("sub1")
-    assert sorted(a["account_id"] for a in out["accounts"]) == ["acc_li", "acc_wa"]
+    out = uc.reconcile_pending("sub1", account_id="acc_li")
+    assert [a["account_id"] for a in out["accounts"]] == ["acc_li"]
     assert calls["resolved"].count("N1") == 1 and "N2" in calls["resolved"]
-    assert "W" in calls["resolved"]
+    # L'indice ne désigne que le compte LinkedIn : la demande WhatsApp attend le sien.
+    assert "W" not in calls["resolved"]
     assert len([s for s in calls["set"] if s[0][1] == "acc_li"]) == 1
 
 
@@ -276,7 +275,7 @@ def test_la_date_du_fournisseur_se_lit_sous_toutes_ses_formes():
 
 def test_une_date_iso_en_z_se_lie(monkeypatch):
     calls = _setup(monkeypatch, [_pend()], [_acc("acc_new", "Moi", created="2026-07-16T12:45:00.123Z")])
-    assert uc.reconcile_pending("sub1")["bound"] is True
+    assert uc.reconcile_pending("sub1", account_id="acc_new")["bound"] is True
 
 
 # ── oto#247 : sans preuve, on ne choisit pas entre comptes simultanément éligibles ──
@@ -314,19 +313,12 @@ def test_deux_candidats_avec_account_id_lie_le_bon(monkeypatch):
         assert calls["resolved"] == ["N"]
 
 
-def test_account_id_lie_meme_quand_un_autre_attend(monkeypatch):
-    """L'indice EST la preuve : une demande concurrente ne le remet pas en cause."""
-    calls = _setup(monkeypatch, [_pend()], [_acc("acc_a", "A")], ailleurs=[PEND_TS])
-    out = uc.reconcile_pending("sub1", account_id="acc_a")
-    assert out["bound"] is True and calls["ailleurs"] == []
-
-
-def test_ligne_morte_du_sub_est_une_preuve_meme_si_un_autre_attend(monkeypatch):
+def test_ligne_morte_du_sub_est_une_preuve(monkeypatch):
     """Reconnexion : Unipile réutilise le compte, la ligne morte du sub prouve qu'il est
-    à lui — seul candidat vivant, il se relie même si quelqu'un d'autre attend."""
+    à lui — seul candidat vivant, il se relie sans indice."""
     calls = _setup(monkeypatch, [_pend()],
                    [_acc("acc_mine", "Moi", created="2026-07-16 11:00:00+00")],
-                   bound={"acc_mine"}, dead={"acc_mine"}, ailleurs=[PEND_TS])
+                   bound={"acc_mine"}, dead={"acc_mine"})
     out = uc.reconcile_pending("sub1")
     assert out["bound"] is True and out["accounts"][0]["account_id"] == "acc_mine"
 
@@ -342,33 +334,19 @@ def test_ligne_morte_ET_compte_neuf_vivants_REFUS(monkeypatch):
     assert out["reason"] == "ambiguous_candidates" and calls["set"] == []
 
 
-def test_candidat_unique_sans_preuve_mais_un_autre_attend_REFUS(monkeypatch):
-    """Le cas qui reste quand l'autre personne n'a pas fini : un SEUL compte neuf, mais
-    une demande d'un autre sub dont la fenêtre le couvre — il peut être le sien."""
-    calls = _setup(monkeypatch, [_pend()], [_acc("acc_b", "B")],
-                   ailleurs=[datetime(2026, 7, 16, 12, 43, tzinfo=timezone.utc)])
-    out = uc.reconcile_pending("sub1")
-    assert out["reason"] == "ambiguous_candidates" and calls["set"] == []
-    # Comparé à la bonne population : même canal, même clé (siège plateforme).
-    assert calls["ailleurs"] == [("sub1", "LINKEDIN", True)]
-
-
-def test_candidat_unique_sans_preuve_personne_d_autre_n_attend_LIE(monkeypatch):
-    """La décision pour un candidat unique sans preuve : il est lié. Sur la clé,
-    personne d'autre n'a de demande en attente qui le couvre — il ne peut donc être
-    attribué qu'à ce sub (le nonce ne revient pas dans `/accounts`, c'est la seule
-    chose vérifiable sans retour navigateur). Refuser ici rendrait la face agent
-    inutilisable pour le cas nominal, sans rien protéger."""
+def test_candidat_unique_sans_preuve_REFUS(monkeypatch):
+    """Un seul compte neuf, personne d'autre n'attend, aucune preuve : refus. La demande
+    dit qui a DEMANDÉ le lien, pas qui l'a parcouru — un lien transféré à quelqu'un
+    d'autre rattachait SON compte à l'auteur du lien (même classe qu'ADA 3.2.2 pour
+    OAuth). La preuve est l'`account_id` de la page de retour, que le front relit."""
     calls = _setup(monkeypatch, [_pend()], [_acc("acc_a", "A")])
     out = uc.reconcile_pending("sub1")
+    assert out["bound"] is False and out["reason"] == "proof_required"
+    assert calls["set"] == [] and calls["resolved"] == []
+    assert "account_id=" in out["detail"] and "acc_a" not in str(out)
+
+
+def test_candidat_unique_avec_account_id_LIE(monkeypatch):
+    calls = _setup(monkeypatch, [_pend()], [_acc("acc_a", "A")])
+    out = uc.reconcile_pending("sub1", account_id="acc_a")
     assert out["bound"] is True and out["accounts"][0]["account_id"] == "acc_a"
-
-
-def test_candidat_unique_une_demande_ailleurs_trop_recente_ne_le_couvre_pas(monkeypatch):
-    """Une demande d'un autre sub posée APRÈS la création du compte (au-delà de la
-    marge d'horloge) ne peut pas le réclamer : elle ne bloque rien."""
-    calls = _setup(monkeypatch, [_pend()],
-                   [_acc("acc_a", "A", created="2026-07-16 12:45:00+00")],
-                   ailleurs=[datetime(2026, 7, 16, 12, 55, tzinfo=timezone.utc)])
-    assert uc.reconcile_pending("sub1")["bound"] is True
-

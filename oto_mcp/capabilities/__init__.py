@@ -156,6 +156,7 @@ from . import partages_procedure  # noqa: F401 — org.instruction.share.{get,wr
 # Console procédures (ADR 0047 B2) — oto_procedure (guide membre + bibliothèque publique).
 from . import procedure_console  # noqa: F401 — org.procedure.console
 from . import commentaires_procedure  # noqa: F401 — me.procedure.{comments,comment,delete_comment}
+from . import commentaires_doc  # noqa: F401 — me.doc.{comments,comment,delete_comment}
 # Console org/équipe (ADR 0047 B3) — oto_org, oto_org_settings, oto_group, oto_scheduled_emails.
 from . import org_console  # noqa: F401 — org.console + org.settings.console + group.console + org.scheduled_emails.console
 # Export du journal d'audit org-scopé (oto-backend#67) — REST-only, org_admin.

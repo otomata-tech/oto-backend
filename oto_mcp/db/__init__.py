@@ -97,6 +97,8 @@ from . import (
     datastore_commentaires,
     # NON aplati, même raison : `db.procedure_commentaires.<fn>`.
     procedure_commentaires,
+    # NON aplati, même raison : `db.doc_commentaires.<fn>`.
+    doc_commentaires,
     # NON aplati : `creer`/`lire`/`decider` sont trop communs — `db.demandes_acces.<fn>`.
     demandes_acces,
     # NON aplati : `noter`/`lire`/`purger` sont trop communs — `db.slack_agent_posts.<fn>`.

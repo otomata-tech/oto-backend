@@ -299,3 +299,31 @@ CREATE TABLE IF NOT EXISTS project_file_texts (
 CREATE INDEX IF NOT EXISTS idx_project_file_texts_retry
     ON project_file_texts(file_id) WHERE status = 'failed';
 """
+
+# commentaires des personnes sur une page de mémoire
+COMMENTAIRES = """
+-- COMMENTAIRES d'une page (doc) : ce que les personnes qui la lisent en disent, à côté
+-- de son texte (`docs/commentaires-de-procedure.md` §Pages de mémoire). Même forme que
+-- `procedure_comments`, sans `version` (une page n'a pas de numéro de version). Ce
+-- n'est PAS une écriture de la page : ni révision, ni `updated_at`.
+-- FK vers la PAGE, en cascade : une page supprimée emporte ses commentaires.
+-- `deleted_at` : retrait doux, l'index des lectures est donc PARTIEL ; l'index sur
+-- `auteur_sub` sert la fusion de comptes (`migrate_sub` repointe la colonne).
+CREATE TABLE IF NOT EXISTS doc_comments (
+    id BIGSERIAL PRIMARY KEY,
+    doc_id BIGINT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+    parent_id BIGINT REFERENCES doc_comments(id) ON DELETE CASCADE,
+    quote TEXT,
+    quote_prefix TEXT,
+    auteur_sub TEXT,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_doc_comments_page
+    ON doc_comments (doc_id, id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_doc_comments_parent
+    ON doc_comments (parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_doc_comments_auteur
+    ON doc_comments (auteur_sub);
+"""

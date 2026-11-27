@@ -53,3 +53,24 @@ Le but est qu'un commentaire ne freine jamais l'adoption ni la mise à jour d'un
   servent aucun.
 
 Tests : `tests/test_commentaires_procedure.py`.
+
+## Pages de mémoire (20/11/2026)
+
+Les pages de mémoire (docs) ont les mêmes commentaires, à l'identique :
+`GET|POST /api/me/docs/{doc_id}/comments`, `DELETE …/comments/{comment_id}`
+(`capabilities/commentaires_doc.py`, table `doc_comments`, `db/doc_commentaires.py`).
+
+- **Même forme servie** que pour une procédure — fils, `quote`/`quote_prefix`,
+  `reply_to`, racine retirée servie `deleted: true` tant qu'elle a des réponses — sauf
+  `version`, toujours `null` (une page n'a pas de numéro de version) ; la réponse de
+  lecture porte `doc_id` (pas de `slug` ni de `version`).
+- **Accès** : lire ET écrire = lire la page (`docs.common.acces_a_la_page` : par son
+  projet, ou par un partage de CETTE page) ; une page illisible est un `404
+  doc_not_found`. Retirer : l'auteur, ou qui gouverne la page (son projet).
+- **Pas une écriture de la page** : ni révision, ni `updated_at`. Une page supprimée
+  emporte ses commentaires (FK en cascade).
+- **REST seule** : aucun outil agent (un agent lit et écrit la page par `oto_doc`).
+  Sous un jeton de délégation, refusés comme ceux d'une procédure
+  (`403 comments_outside_job`). Le lien public d'une page n'en sert aucun.
+
+Tests : `tests/test_commentaires_doc.py`.

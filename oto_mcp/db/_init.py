@@ -741,6 +741,20 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # ordre indifférent.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_OUTILS_ANNULES):
         conn.execute(runner_triggers.DDL_COLONNE_OUTILS_ANNULES)
+    # Commentaires de CELLULE et de COLONNE d'un tableau (`datastore_commentaires`) —
+    # les mêmes ordres que la révision `20261125_1710_doc_cell_comments` : ordre
+    # indifférent. Chacun gardé par le catalogue : sur une base à jour, aucun verrou.
+    from . import datastore_commentaires as _commentaires_tableau
+    if _colonne_absente(conn, "datastore_row_comments", _commentaires_tableau.COLONNE_CIBLE):
+        conn.execute(_commentaires_tableau.DDL_COLONNE_CIBLE)
+    if conn.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = "
+            "'datastore_row_comments' AND column_name = 'row_id' AND is_nullable = 'NO'"
+    ).fetchone():
+        conn.execute(_commentaires_tableau.DDL_LIGNE_FACULTATIVE)
+    conn.execute(_commentaires_tableau.DDL_CONTRAINTE_CIBLE)
+    if _index_absent(conn, _commentaires_tableau.INDEX_COLONNE):
+        conn.execute(_commentaires_tableau.DDL_INDEX_COLONNE)
     # Le message au client et les messages Slack partis, sur l'épisode (`alertes_slack`) —
     # les mêmes que pose la révision `20261109_2120_alertes_slack` : ordre indifférent.
     from . import alertes_slack

@@ -27,6 +27,11 @@ This module is PURE (no I/O, no `oto_mcp` import at module level): from a served
   account itself, is not served on it;
 - the ACCESS LEVELS (`auth.access_levels`, since 13/11/2026): the declaration `connectors.access_levels` reads like a
   hand-written connector's `ACCESS_LEVELS`, its default level included (`auth.default_level`);
+- the SETTINGS of an account (`connector.settings`, since 23/11/2026): an address (`url`), a tenant name (`text`) or a
+  closed choice, each a NOT secret field of the account, kept beside its secret under the description's names
+  (`access.resolve_credential_fields`) and given to the engine as `settings=`, which validates each value and guards
+  an address built from one (https only, never a private host, no redirect); never with the platform key, whose
+  account holds no setting;
 - the ACCESS of a connector that opens by several (`connector.accesses`, since oto-core v1.243.0): oto 1 serves ONE
   of them, named in `ACCES_SERVIS`, and reads the description as that access sees it (`charger`); a connector with
   several accesses and none named here is refused at load, never served by a default one;
@@ -261,10 +266,17 @@ def compte_de_service(description: dict) -> bool:
     return description["connector"]["auth"]["kind"] == _AUTH_A_COMPTE_DE_SERVICE
 
 
+def reglages(description: dict) -> tuple:
+    """The settings of an account the description declares (`connector.settings`), in its order; `()` without."""
+    return tuple(description["connector"].get("settings") or ())
+
+
 def champ_du_coffre(description: dict) -> str:
     """The name of the credential field in the vault: `key` for a key, the description's own for a service account
-    (`providers._model._decrit`)."""
-    return secret_unique(description)["name"] if compte_de_service(description) else CHAMP_DE_CLE
+    or for a key kept beside settings (`providers._model._decrit`: the account's fields are then one record)."""
+    if compte_de_service(description) or reglages(description):
+        return secret_unique(description)["name"]
+    return CHAMP_DE_CLE
 
 
 def _refus_du_moteur(description: dict, f: dict) -> Optional[str]:
@@ -318,9 +330,12 @@ def refus_de_montage(description: dict) -> list[str]:
         champs_du_compte(description)
     except DescriptionNonServie as e:
         raisons.append(str(e).split(": ", 1)[1])
-    if "settings" in connecteur:
-        # The engine resolves them, but oto 1 keeps no setting of a described account to give it.
-        raisons.append("connector.settings")
+    if reglages(description):
+        if "platform" in connecteur["modes"]:
+            raisons.append("connector.settings with mode platform: the shared key's account holds no setting")
+        champs = {c["name"] for c in connecteur.get("credential") or []} | {CHAMP_DE_CLE}
+        for nom in sorted(champs & {r["name"] for r in reglages(description)}):
+            raisons.append(f"connector.settings: {nom} is also a credential field")
     for f in description["functions"]:
         raisons += _refus_de_la_fonction(description, f)
         if any(a in f["input"]["properties"] and "pagination" not in f for a in ARGUMENTS_DE_PAGINATION):

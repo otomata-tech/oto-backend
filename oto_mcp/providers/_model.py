@@ -633,7 +633,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
 
 
 def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota=None,
-            tool_note="") -> Connector:
+            tool_note="", settings_help=None) -> Connector:
     """Registry entry of a connector served by the GENERIC READER of its description
     (`tools/decrits.py`), which runs it by the library's engine: its label, namespace,
     modes and credential fields are READ in the description (`oto.connectors.descriptions`),
@@ -649,6 +649,13 @@ def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota
     private key holds spaces that the default cleanup would strip. A login and a password
     (`basic`) are two fields under the description's names, the login not secret
     (`secret_kind="fields"`); `key_help` is then `{field name: help}`, one per field.
+
+    The account's settings (`connector.settings`: an address, a tenant name, a closed choice) are NOT secret
+    fields of the same record, after the credential's, and `settings_help` is `{setting name: help}`, one per
+    setting (what to type: "the address you log in to, https://…"). A key beside settings is then kept under the
+    description's field name, as a login and a password are (`secret_kind="fields"`, resolved by
+    `access.resolve_credential_fields`): the account is one record. A `choice` setting is a closed select, its
+    default making it optional; the engine validates every value at each call and guards an address built from one.
 
     A description with mode `platform` takes `platform_key_open` and `default_quota`:
     whether the shared key serves every org or only the granted ones, and its daily
@@ -666,6 +673,7 @@ def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota
     if "platform" not in modes and set(plateforme.values()) != {None}:
         raise ValueError(f"{name}: no mode platform, no `platform_key_open` nor `default_quota`")
     reglages = {k: v for k, v in plateforme.items() if v is not None}
+    champs_de_reglage = _champs_de_reglage(name, description, settings_help)
     if descriptions.identifiant_et_mot_de_passe(description):
         champs = descriptions.champs_du_compte(description)
         if not isinstance(key_help, dict) or set(key_help) != {c["name"] for c in champs}:
@@ -675,15 +683,34 @@ def _decrit(name, *, help, href, key_help, platform_key_open=None, default_quota
             name, [connecteur["namespace"]], auth_modes=modes, keyed=False, secret_kind="fields",
             label=connecteur["label"], help=help, href=href, decrit=True, tool_note=tool_note,
             credential_fields=tuple(CredentialField(c["name"], c["label"], secret=c.get("secret") is True,
-                                                    help=key_help[c["name"]]) for c in champs),
+                                                    help=key_help[c["name"]]) for c in champs) + champs_de_reglage,
             **reglages,
         )
     secret = descriptions.secret_unique(description)
     champ = CredentialField(descriptions.champ_du_coffre(description), secret["label"], secret=True,
                             help=key_help, whitespace_significant=descriptions.compte_de_service(description))
-    cle = not descriptions.compte_de_service(description)
+    cle = not descriptions.compte_de_service(description) and not champs_de_reglage
     return _c(
         name, [connecteur["namespace"]], auth_modes=modes, keyed=cle,
         secret_kind="api_key" if cle else "fields", label=connecteur["label"], help=help, href=href,
-        credential_fields=(champ,), decrit=True, tool_note=tool_note, **reglages,
+        credential_fields=(champ, *champs_de_reglage), decrit=True, tool_note=tool_note, **reglages,
     )
+
+
+def _champs_de_reglage(name, description, settings_help) -> tuple:
+    """The NOT secret fields of the account's settings (`connector.settings`), one per setting, `settings_help`
+    naming the help of each; `()` without settings, where `settings_help` is refused."""
+    from ..connectors import descriptions  # lazy: this module stays pure
+
+    declares = descriptions.reglages(description)
+    noms = [r["name"] for r in declares]
+    if not declares:
+        if settings_help is not None:
+            raise ValueError(f"{name}: no setting in the description, no `settings_help`")
+        return ()
+    if not isinstance(settings_help, dict) or set(settings_help) != set(noms):
+        raise ValueError(f"{name}: `settings_help` names the help of each setting ({', '.join(noms)})")
+    return tuple(
+        CredentialField(r["name"], r["label"], secret=False, help=settings_help[r["name"]],
+                        required="default" not in r, choices=tuple(r.get("choices") or ()))
+        for r in declares)

@@ -188,6 +188,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "chat",
     # seventh service (2026-10-02) — same shape, `bigquery` consent only.
     "bigquery",
+    # Neighbour of `bigquery` by trade (data warehouse), read-only SQL on the
+    # customer's own account, served by the generic reader of its description.
+    "snowflake",
     # eighth service (2026-10-08) — same shape, `adwords` consent only, read-only tools.
     "google_ads",
     # ninth service (2026-11-15) — same shape, `webmasters.readonly` consent only,

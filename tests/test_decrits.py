@@ -270,8 +270,11 @@ def test_a_sensitive_function_without_effect_is_refused_at_mount():
     (lambda d: d["functions"][0].update({"output": {"file": {"from": "body"}}}), "essai.get_account: a rendered file"),
     (lambda d: d["functions"][0]["call"].update({"files": {}}), r"essai.get_account: a multipart body \(call.files\)"),
     (lambda d: d["functions"][0].pop("call"), "essai.get_account: a function without call"),
-    (lambda d: d["connector"].update(settings=[{"name": "region", "type": "choice", "choices": ["eu"]}]),
-     "connector.settings"),
+    (lambda d: d["connector"].update(settings=[{"name": "region", "type": "choice", "choices": ["eu"]}],
+                                     modes=["byo_org", "platform"]),
+     "connector.settings with mode platform"),
+    (lambda d: d["connector"].update(settings=[{"name": "api_key", "label": "K", "type": "url"}]),
+     "connector.settings: api_key is also a credential field"),
     (lambda d: d["connector"]["credential"].append({"name": "secret", "label": "S", "secret": True}),
      "the credential is not one secret of the account"),
     (lambda d: d["connector"].update(auth={"kind": "oauth2_user"}), "the credential is not one secret"),
@@ -1097,3 +1100,236 @@ def test_demodesk_probe_reads_who_the_key_is(demodesk, vendeur):
     vendeur.answers.append((401, {"error": {"message": "Invalid"}}))
     with pytest.raises(connector_verify.NonAutorise):
         sonde({"key": "k"}, {})
+
+
+# --- the settings of an account (23/11/2026): an address beside the key ---------------------------------------------
+
+
+def _a_reglage() -> dict:
+    """`essai` on an address its account sets (`url`), cited by `base_url`."""
+    d = essai.description()
+    d["connector"]["base_url"] = "{instance_url}/api"
+    d["connector"]["settings"] = [{"name": "instance_url", "label": "Instance address", "type": "url"}]
+    return d
+
+
+def _resoudre_vers(adresse: str):
+    import socket
+
+    def resolver(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (adresse, port))]
+    return resolver
+
+
+@pytest.fixture
+def a_reglage(vendeur, monkeypatch):
+    """`essai` on an address, mounted; `resolve_credential_fields` answers `etat["champs"]`, the instance resolves to
+    a public address (the engine's guard, no network)."""
+    from oto.tools.common import url_guard
+    etat = {"champs": {"api_key": "key-0", "instance_url": "https://send.example.test"}, "demandes": []}
+
+    def resoudre(nom, *a, **k):
+        etat["demandes"].append(nom)
+        return dict(etat["champs"])
+    monkeypatch.setattr(decrits.access, "resolve_credential_fields", resoudre)
+    monkeypatch.setattr(decrits.access, "resolve_api_key", lambda *a, **k: pytest.fail("a key alone is not read"))
+    monkeypatch.setattr(url_guard.socket, "getaddrinfo", _resoudre_vers("93.184.216.34"))
+    outils = {t.name: t for t in decrits.monter(FastMCP("essai"), "essai", _a_reglage())}
+    yield outils, etat
+    connector_verify._REGISTRY.pop("essai", None)
+    connector_verify._COUVERTURE.pop("essai", None)
+
+
+def test_decrit_keeps_a_setting_as_a_field_of_the_record(monkeypatch):
+    """The key and the address are one record (`secret_kind="fields"`), the key under the description's name, the
+    address not secret, its help from `settings_help`; a setting without its help, or a help without a setting,
+    raises at import."""
+    from oto_mcp.providers._model import _decrit
+    monkeypatch.setattr(descriptions, "charger", lambda nom: _a_reglage())
+    c = _decrit("essai", help="h", href="https://example.test", key_help="the token",
+                settings_help={"instance_url": "the address you log in to"})
+    assert (c.keyed, c.secret_kind, c.decrit) == (False, "fields", True)
+    assert [(f.name, f.label, f.secret, f.help, f.required) for f in c.secret_fields] == [
+        ("api_key", "Essai API key", True, "the token", True),
+        ("instance_url", "Instance address", False, "the address you log in to", True)]
+    with pytest.raises(ValueError, match="`settings_help` names the help of each setting"):
+        _decrit("essai", help="h", href="https://example.test", key_help="the token")
+    monkeypatch.setattr(descriptions, "charger", lambda nom: essai.description())
+    with pytest.raises(ValueError, match="no setting in the description"):
+        _decrit("essai", help="h", href="https://example.test", key_help="k", settings_help={"x": "y"})
+
+
+def test_a_call_goes_to_the_address_of_the_account_with_its_key(a_reglage, vendeur):
+    outils, etat = a_reglage
+    vendeur.answers.append((200, {"id": 7, "credits": 3}))
+    assert _appel(outils["essai"], op="get_account") == {"id": 7, "credits": 3}
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert envoi["url"] == "https://send.example.test/api/account"
+    assert envoi["headers"]["x-key"] == "key-0" and etat["demandes"] == ["essai"]
+
+
+def test_an_account_without_its_address_is_refused_before_sending(a_reglage, vendeur):
+    outils, etat = a_reglage
+    etat["champs"] = {"api_key": "key-0"}
+    with pytest.raises(McpError, match="lacks instance_url: set it again on the connector"):
+        _appel(outils["essai"], op="get_account")
+    assert vendeur.requests == []
+
+
+@pytest.mark.parametrize("adresse, resolue", [("http://send.example.test", "93.184.216.34"),
+                                              ("https://send.example.test", "10.0.0.7")])
+def test_an_address_that_is_not_public_https_is_refused_before_sending(a_reglage, vendeur, monkeypatch, adresse,
+                                                                       resolue):
+    from oto.tools.common import url_guard
+    outils, etat = a_reglage
+    etat["champs"]["instance_url"] = adresse
+    monkeypatch.setattr(url_guard.socket, "getaddrinfo", _resoudre_vers(resolue))
+    with pytest.raises(McpError, match="settings stop this call") as refus:
+        _appel(outils["essai"], op="get_account")
+    assert "send.example.test" not in str(refus.value) and vendeur.requests == []
+
+
+def test_the_probe_reads_the_address_from_the_fields_tested(a_reglage, vendeur):
+    vendeur.answers.append((200, {"id": 7, "credits": 3}))
+    connector_verify._REGISTRY["essai"]({"api_key": "key-1", "instance_url": "https://other.example.test"}, {})
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert envoi["url"] == "https://other.example.test/api/account" and envoi["headers"]["x-key"] == "key-1"
+    with pytest.raises(RuntimeError, match="settings are refused: setting instance_url is not set"):
+        connector_verify._REGISTRY["essai"]({"api_key": "key-1"}, {})
+
+
+def test_a_choice_left_empty_takes_its_default(vendeur, monkeypatch):
+    """A `choice` with a default is an optional field: left empty, the call goes to the default's address, never
+    refused as missing; given, to its own."""
+    d = essai.description()
+    d["connector"]["base_url"] = "https://{region}.example.test"
+    d["connector"]["settings"] = [{"name": "region", "label": "Region", "type": "choice", "choices": ["eu", "us"],
+                                   "default": "eu"}]
+    champs = {"api_key": "key-0"}
+    monkeypatch.setattr(decrits.access, "resolve_credential_fields", lambda nom, *a, **k: dict(champs))
+    outils = {t.name: t for t in decrits.monter(FastMCP("essai"), "essai", d)}
+    try:
+        vendeur.answers += [(200, {"id": 7, "credits": 3}), (200, {"id": 7, "credits": 3})]
+        _appel(outils["essai"], op="get_account")
+        champs["region"] = "us"
+        _appel(outils["essai"], op="get_account")
+    finally:
+        connector_verify._REGISTRY.pop("essai", None)
+        connector_verify._COUVERTURE.pop("essai", None)
+    assert [essai.envoyee(r)["url"] for r in vendeur.requests] == [
+        "https://eu.example.test/account", "https://us.example.test/account"]
+
+
+def test_a_described_destination_is_a_url_setting_the_engine_guards():
+    """`test_egress_guard` judges the tool files; a described connector has none. Its call path is the engine's, which
+    guards an address built from a `url` setting at each request (https only, every resolved address public, no
+    redirect). So a NOT secret field of a described connector that names a destination is such a setting, never a
+    field the engine would not guard."""
+    for c in descriptions.inscrits():
+        url = {r["name"] for r in descriptions.reglages(descriptions.charger(c.name)) if r["type"] == "url"}
+        for champ in c.secret_fields:
+            if not champ.secret and any(m in champ.name.lower() for m in ("url", "host", "domain")):
+                assert champ.name in url, (c.name, champ.name)
+
+
+
+# --- Snowflake: a token and the account identifier, read-only SQL ----------------------------------------------------
+
+
+@pytest.fixture
+def snowflake(vendeur, monkeypatch):
+    """The real description mounted as the registry inscribes it, the token and the account by
+    `resolve_credential_fields`."""
+    from oto.tools.common import url_guard
+    champs = {"token": "pat-0", "account": "myorg-myaccount"}
+    monkeypatch.setattr(decrits.access, "resolve_credential_fields", lambda nom, *a, **k: dict(champs))
+    monkeypatch.setattr(url_guard.socket, "getaddrinfo", _resoudre_vers("93.184.216.34"))
+    yield {t.name: t for t in decrits.monter(FastMCP("snowflake"), "snowflake", descriptions.charger("snowflake"))}
+    connector_verify._REGISTRY.pop("snowflake", None)
+    connector_verify._COUVERTURE.pop("snowflake", None)
+
+
+def test_snowflake_is_inscribed_with_its_token_and_its_account(snowflake):
+    c = providers.REGISTRY["snowflake"]
+    assert (c.namespaces, c.auth_modes, c.secret_kind, c.keyed, c.decrit) == (
+        ("snowflake",), frozenset({"byo_user", "byo_org"}), "fields", False, True)
+    assert [(f.name, f.secret) for f in c.secret_fields] == [("token", True), ("account", False)]
+    assert descriptions.refus_de_montage(descriptions.charger("snowflake")) == []
+    assert set(snowflake) == {"snowflake", "snowflake_act"}
+    assert snowflake["snowflake"].annotations == LECTURE and snowflake["snowflake_act"].annotations == ACTE
+    assert sorted(effets.EFFETS["snowflake_act"]["detruire"].split()) == ["cancel_statement", "execute_statement"]
+    assert "execute_statement" not in snowflake["snowflake"].description
+
+
+def test_snowflake_runs_a_read_on_the_account_with_the_token_type(snowflake, vendeur):
+    vendeur.answers.append((200, {"code": "090001", "statementHandle": "h", "statementStatusUrl": "/api/v2/statements/h",
+                                  "resultSetMetaData": {"numRows": 1}, "data": [["ACME", "12"]]}))
+    rendu = _appel(snowflake["snowflake"], op="run_query", statement="SELECT name, n FROM T WHERE c = ? LIMIT 5",
+                   bindings={"1": {"type": "TEXT", "value": "FR"}}, warehouse="WH", max_rows=5)
+    assert "ACME" in json.dumps(rendu) and "statementStatusUrl" not in json.dumps(rendu)
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["url"]) == ("POST", "https://myorg-myaccount.snowflakecomputing.com/api/v2/statements")
+    assert envoi["headers"]["authorization"] == "Bearer pat-0"
+    assert envoi["headers"]["x-snowflake-authorization-token-type"] == "PROGRAMMATIC_ACCESS_TOKEN"
+    assert envoi["body"]["parameters"] == {"multi_statement_count": "1", "query_tag": "oto", "rows_per_resultset": 5}
+    assert envoi["body"]["bindings"] == {"1": {"type": "TEXT", "value": "FR"}} and envoi["body"]["warehouse"] == "WH"
+
+
+@pytest.mark.parametrize("sql", ["DELETE FROM T", "drop table t", "GRANT ROLE R TO USER U", "CALL p()",
+                                 "/* x */ SELECT 1", "SELECT 1 ->> DROP TABLE T", "SHOW TABLES ->> DELETE FROM T",
+                                 "WITH p AS PROCEDURE () RETURNS INT LANGUAGE SQL AS 'BEGIN DELETE FROM T; RETURN 1; END' CALL p()"])
+def test_snowflake_refuses_what_does_not_open_like_a_read_before_sending(snowflake, vendeur, sql):
+    with pytest.raises(Exception):
+        _appel(snowflake["snowflake"], op="run_query", statement=sql)
+    assert vendeur.requests == []
+
+
+def test_snowflake_async_answers_the_handle_at_once(snowflake, vendeur):
+    vendeur.answers.append((202, {"code": "333334", "message": "Asynchronous execution in progress.",
+                                  "statementHandle": "01b2c3d4-0000-1111-0000-00000000abcd",
+                                  "statementStatusUrl": "/api/v2/statements/01b2c3d4-0000-1111-0000-00000000abcd"}))
+    rendu = _appel(snowflake["snowflake"], op="run_query", statement="SELECT * FROM BIG", **{"async": True})
+    assert "01b2c3d4-0000-1111-0000-00000000abcd" in json.dumps(rendu) and "333334" in json.dumps(rendu)
+    assert essai.envoyee(vendeur.requests[0])["query"] == [("async", "true")]
+
+
+def test_snowflake_a_sql_error_reaches_the_agent_with_snowflakes_message(snowflake, vendeur):
+    vendeur.answers.append((422, {"code": "002003", "sqlState": "42S02", "statementHandle": "h",
+                                  "message": "SQL compilation error:\nObject 'NOPE' does not exist or not authorized."}))
+    with pytest.raises(Exception) as e:
+        _appel(snowflake["snowflake"], op="run_query", statement="SELECT * FROM NOPE")
+    assert "does not exist or not authorized" in str(e.value) and "pat-0" not in str(e.value)
+
+
+def test_snowflake_executes_one_statement_async_on_the_act_side(snowflake, vendeur):
+    vendeur.answers.append((202, {"code": "333334", "statementHandle": "01b2c3d4-0000-1111-0000-00000000abcd",
+                                  "statementStatusUrl": "/api/v2/statements/01b2c3d4-0000-1111-0000-00000000abcd"}))
+    rendu = _appel(snowflake["snowflake_act"], op="execute_statement", statement="UPDATE T SET a = 1 WHERE b = 2",
+                   warehouse="WH")
+    assert "01b2c3d4-0000-1111-0000-00000000abcd" in json.dumps(rendu)
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert envoi["query"] == [("async", "true")] and envoi["body"]["statement"] == "UPDATE T SET a = 1 WHERE b = 2"
+    assert envoi["body"]["parameters"] == {"multi_statement_count": "1", "query_tag": "oto"}
+
+
+@pytest.mark.parametrize("sql", ["UPDATE T SET a = 1 ->> DROP TABLE U",
+                                 "ALTER USER U ADD PROGRAMMATIC ACCESS TOKEN X ROLE_RESTRICTION = 'R'",
+                                 "ALTER USER U ADD PAT X", "alter user u rotate pat x"])
+def test_snowflake_act_refuses_a_chain_and_a_token_before_sending(snowflake, vendeur, sql):
+    with pytest.raises(Exception):
+        _appel(snowflake["snowflake_act"], op="execute_statement", statement=sql)
+    assert vendeur.requests == []
+
+
+def test_snowflake_a_5xx_on_a_write_is_sent_once_and_not_retryable(snowflake, vendeur):
+    vendeur.answers.append((503, {"message": "unavailable"}))
+    with pytest.raises(decrits.RefusNomme) as e:
+        _appel(snowflake["snowflake_act"], op="execute_statement", statement="DELETE FROM T WHERE a = 1")
+    assert len(vendeur.requests) == 1 and e.value.retryable is False
+
+
+def test_snowflake_cancels_a_statement(snowflake, vendeur):
+    vendeur.answers.append((200, {"code": "000604", "message": "SQL execution canceled"}))
+    _appel(snowflake["snowflake_act"], op="cancel_statement", statement_handle="01b2c3d4-0000-1111-0000-00000000abcd")
+    envoi = essai.envoyee(vendeur.requests[0])
+    assert (envoi["method"], envoi["path"]) == ("POST", "/api/v2/statements/01b2c3d4-0000-1111-0000-00000000abcd/cancel")

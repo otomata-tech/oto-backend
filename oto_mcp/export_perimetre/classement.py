@@ -155,6 +155,7 @@ CLASSEMENT: dict[str, Table] = {
                               comptes=("sub",)),
     "doc_links": indirecte(Via("docs", ("from_doc",))),
     "doc_change_requests": indirecte(_DOCS),
+    "doc_comments": indirecte(_DOCS),
     "doc_embeddings": indirecte(_DOCS),
     "doc_chunk_embeddings": indirecte(_DOCS),
     "aux_embeddings": indirecte(

@@ -114,6 +114,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.embeddings.EMBED_FILE,    # file d'indexation : réservations, échecs, tokens du jour
     schema.users.EMPREINTES_2FA,     # empreinte des facteurs de double authentification d'un compte
     schema.users.REVOCATIONS_COMPTES,  # instant avant lequel les jetons d'un compte sont refusés
+    schema.projects.COMMENTAIRES,    # commentaires des personnes sur une page de mémoire
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

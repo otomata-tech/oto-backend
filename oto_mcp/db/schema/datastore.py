@@ -155,14 +155,22 @@ COMMENTAIRES = """
 -- `deleted_at` : un commentaire retiré ne se sert plus, il ne se détruit pas : toute
 -- lecture le filtre, l'index des lignes est donc PARTIEL (le vivant seul). L'index
 -- sur `auteur_sub` sert la fusion de comptes (`migrate_sub` repointe la colonne).
+--
+-- La CIBLE d'un commentaire (20/11/2026) : `row_id` seul = la ligne ; `row_id` ET
+-- `column_key` = une CELLULE ; `column_key` seul = une COLONNE du tableau. Jamais aucun
+-- des deux. Sur une base d'avant, la colonne, le relâchement de `row_id` et la contrainte
+-- sont posés par le démarrage (`db/datastore_commentaires.py::DDL_CIBLE`) et par la
+-- révision `20261125_1710_doc_cell_comments`.
 CREATE TABLE IF NOT EXISTS datastore_row_comments (
     id BIGSERIAL PRIMARY KEY,
     ns_id BIGINT NOT NULL REFERENCES user_datastores(id) ON DELETE CASCADE,
-    row_id TEXT NOT NULL,
+    row_id TEXT,
+    column_key TEXT,
     auteur_sub TEXT,
     body TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at TIMESTAMPTZ
+    deleted_at TIMESTAMPTZ,
+    CONSTRAINT datastore_row_comments_cible CHECK (row_id IS NOT NULL OR column_key IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_datastore_row_comments_ligne
     ON datastore_row_comments (ns_id, row_id, id) WHERE deleted_at IS NULL;

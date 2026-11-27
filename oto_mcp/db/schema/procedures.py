@@ -208,7 +208,14 @@ CREATE TABLE IF NOT EXISTS procedure_comments (
     auteur_sub TEXT,
     body TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at TIMESTAMPTZ
+    deleted_at TIMESTAMPTZ,
+    -- Une SUGGESTION (`db/suggestions_commentaires.py`) : le texte proposé à la place
+    -- de `quote` (racine seule ; '' = retirer le passage, NULL = un commentaire), puis
+    -- qui l'a acceptée ou refusée, et quand.
+    suggestion TEXT,
+    resolution TEXT,
+    resolved_by TEXT,
+    resolved_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_procedure_comments_procedure
     ON procedure_comments (instruction_id, id) WHERE deleted_at IS NULL;

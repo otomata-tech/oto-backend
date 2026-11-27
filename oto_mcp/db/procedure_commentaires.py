@@ -14,7 +14,7 @@ from typing import Optional
 from ._conn import _connect
 
 _COLONNES = ("id, instruction_id, parent_id, version, quote, quote_prefix, auteur_sub, body, "
-             "created_at, deleted_at")
+             "created_at, deleted_at, suggestion, resolution, resolved_by, resolved_at")
 
 # Ce qui se sert : le vivant, et la RACINE retirée d'un fil qui a encore des réponses
 # vivantes — servie comme « commentaire supprimé », pour que le fil garde son passage.
@@ -51,14 +51,14 @@ def compter(instruction_id: int) -> int:
 
 def ajouter(instruction_id: int, *, version: Optional[int], auteur_sub: Optional[str],
             body: str, parent_id: Optional[int] = None, quote: Optional[str] = None,
-            quote_prefix: Optional[str] = None) -> dict:
+            quote_prefix: Optional[str] = None, suggestion: Optional[str] = None) -> dict:
     with _connect() as conn:
         return dict(conn.execute(
             f"INSERT INTO procedure_comments (instruction_id, parent_id, version, quote, "
-            f"quote_prefix, auteur_sub, body) VALUES (%s, %s, %s, %s, %s, %s, %s) "
-            f"RETURNING {_COLONNES}",
+            f"quote_prefix, auteur_sub, body, suggestion) VALUES (%s, %s, %s, %s, %s, %s, "
+            f"%s, %s) RETURNING {_COLONNES}",
             (int(instruction_id), parent_id, version, quote, quote_prefix, auteur_sub,
-             body)).fetchone())
+             body, suggestion)).fetchone())
 
 
 def lire(instruction_id: int, comment_id: int, *, servi: bool = False) -> Optional[dict]:
@@ -81,3 +81,11 @@ def retirer(comment_id: int) -> bool:
         return conn.execute(
             "UPDATE procedure_comments SET deleted_at = now() "
             "WHERE id = %s AND deleted_at IS NULL", (int(comment_id),)).rowcount == 1
+
+
+def resoudre(instruction_id: int, comment_id: int, *, resolution: str,
+             sub: Optional[str]) -> Optional[dict]:
+    """Accepte ou refuse une suggestion EN ATTENTE (`db/suggestions_commentaires.py`)."""
+    from . import suggestions_commentaires as sc
+    return sc.resoudre("procedure_comments", "instruction_id", instruction_id, comment_id,
+                       resolution=resolution, sub=sub, colonnes=_COLONNES)

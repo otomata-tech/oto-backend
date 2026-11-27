@@ -714,9 +714,12 @@ sources = [
   "oto_mcp/capabilities/node_procedure_ref.py",
   "oto_mcp/db/partages_procedure.py",
   "oto_mcp/db/procedure_commentaires.py",
+  "oto_mcp/capabilities/commentaires_doc.py",
+  "oto_mcp/db/doc_commentaires.py",
+  "oto_mcp/db/suggestions_commentaires.py",
   "oto_mcp/db/schema/procedures.py",
 ]
-tests = ["tests/**/test_procedure*.py", "tests/**/test_partages_procedure*.py", "tests/**/test_node_procedure_ref.py", "tests/**/test_commentaires_procedure.py"]
+tests = ["tests/**/test_procedure*.py", "tests/**/test_partages_procedure*.py", "tests/**/test_node_procedure_ref.py", "tests/**/test_commentaires_procedure.py", "tests/**/test_commentaires_doc.py", "tests/**/test_suggestions_commentaires.py", "tests/test_migration_20261126_suggestions.py"]
 
 [[volet]]
 nom = "projets"

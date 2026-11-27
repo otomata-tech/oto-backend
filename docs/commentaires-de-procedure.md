@@ -53,3 +53,57 @@ Le but est qu'un commentaire ne freine jamais l'adoption ni la mise à jour d'un
   servent aucun.
 
 Tests : `tests/test_commentaires_procedure.py`.
+
+## Pages de mémoire (20/11/2026)
+
+Les pages de mémoire (docs) ont les mêmes commentaires, à l'identique :
+`GET|POST /api/me/docs/{doc_id}/comments`, `DELETE …/comments/{comment_id}`
+(`capabilities/commentaires_doc.py`, table `doc_comments`, `db/doc_commentaires.py`).
+
+- **Même forme servie** que pour une procédure — fils, `quote`/`quote_prefix`,
+  `reply_to`, racine retirée servie `deleted: true` tant qu'elle a des réponses — sauf
+  `version`, toujours `null` (une page n'a pas de numéro de version) ; la réponse de
+  lecture porte `doc_id` (pas de `slug` ni de `version`).
+- **Accès** : lire ET écrire = lire la page (`docs.common.acces_a_la_page` : par son
+  projet, ou par un partage de CETTE page) ; une page illisible est un `404
+  doc_not_found`. Retirer : l'auteur, ou qui gouverne la page (son projet).
+- **Pas une écriture de la page** : ni révision, ni `updated_at`. Une page supprimée
+  emporte ses commentaires (FK en cascade).
+- **REST seule** : aucun outil agent (un agent lit et écrit la page par `oto_doc`).
+  Sous un jeton de délégation, refusés comme ceux d'une procédure
+  (`403 comments_outside_job`). Le lien public d'une page n'en sert aucun.
+
+Tests : `tests/test_commentaires_doc.py`.
+
+## Suggestions (26/11/2026)
+
+Une **suggestion** est un commentaire racine qui cite un passage (`quote`) et propose le
+texte qui le remplacerait (`suggestion` ; `""` = retirer le passage). Le mode
+« suggestion » d'un traitement de texte, porté par les fils existants : une équipe
+propose un changement sans écrire la procédure ou la page, et qui peut l'écrire décide.
+
+- **Colonnes** `suggestion`, `resolution` (`accepted` | `rejected`), `resolved_by`,
+  `resolved_at` sur `procedure_comments` et `doc_comments`
+  (`db/suggestions_commentaires.py`, révision `20261126_1200_suggestions`, posées aussi au
+  démarrage). NULL = un commentaire ordinaire.
+- **Poser** : `POST …/comments` avec `quote` + `suggestion` ; `body` devient un mot
+  facultatif. Refusé sans `quote`, avec `reply_to`, ou identique au passage. Qui lit
+  peut suggérer (même accès que commenter) ; l'outil agent `oto_procedure_comment`
+  l'accepte aussi.
+- **Résoudre** : `POST …/comments/{comment_id}/resolve` `{resolution}` (REST seule), une
+  seule fois (`409 suggestion_not_pending`). Droit : **écrire** le texte — pour une
+  procédure, la règle de `op=set` à son palier (la sienne ; l'équipe en membre ; l'org en
+  admin) ou la gouverner ; pour une page, écrire son projet. Sinon
+  `403 cannot_resolve_suggestion`. Le responsable (`owner_sub`) reste un nom, pas un droit.
+- **Résoudre n'écrit rien.** Le passage est une ancre du texte affiché, pas du markdown :
+  l'application remplace le passage dans son éditeur, enregistre la nouvelle version par
+  le chemin ordinaire (qui garde ses propres droits), PUIS marque la suggestion acceptée.
+  Aucune écriture ne lit, n'exige ni ne vérifie une suggestion en attente.
+- **Servi** : chaque commentaire porte `suggestion`, `resolution`, `resolved_by`(`_email`),
+  `resolved_at`, `can_resolve` ; la lecture porte `suggestions: true` (un serveur plus
+  ancien l'omet — et rangerait une suggestion comme un simple commentaire : l'application
+  n'offre « Suggérer » que si elle le lit) et `can_edit`.
+- **Texte tiers** : sur la face agent, `suggestion` est servi enclos (`texte_tiers.cloture`,
+  balise `suggested-text`) ; la face REST le rend tel quel.
+
+Tests : `tests/test_suggestions_commentaires.py`, `tests/test_migration_20261126_suggestions.py`.

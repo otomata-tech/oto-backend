@@ -555,6 +555,9 @@ _SUB_COLUMNS = [
     # Qui a écrit un commentaire de procédure : une signature d'auteur (`mine`, le droit
     # de retirer le sien), hors PK, indexée, UPDATE nu.
     ("procedure_comments", "auteur_sub"),
+    # Qui a accepté ou refusé une suggestion de commentaire : une signature, hors PK,
+    # sans unicité : UPDATE nu (de même sur `doc_comments`, plus bas).
+    ("procedure_comments", "resolved_by"),
     # l'HISTORIQUE de la personne (dossier du 23/08 — ces lignes survivaient au merge
     # rattachées à un identifiant mort, donc invisibles au compte fusionné : déroulés
     # et activité perdus de vue, déclencheurs orphelins) :
@@ -691,6 +694,9 @@ _SUB_COLUMNS = [
     # - qui a écrit un commentaire de ligne : une signature d'auteur (`mine`, le droit
     #   de retirer le sien se lisent par elle), hors PK, indexée, UPDATE nu.
     ("datastore_row_comments", "auteur_sub"),
+    # - qui a écrit un commentaire de page : même signature, même UPDATE nu.
+    ("doc_comments", "auteur_sub"),
+    ("doc_comments", "resolved_by"),
     # - qui a demandé un accès, et qui l'a décidé : des signatures (la boîte « envoyées »
     #   se lit par la première), hors PK, indexées. Le demandeur est sous index unique
     #   partiel : dédoublonné d'abord par `_UNIQUE_INDEX_SUB_TABLES`, puis repointé ici.

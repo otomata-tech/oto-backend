@@ -84,6 +84,20 @@ def test_une_recette_lit_les_comptes_et_les_exports_d_une_campagne_lemlist_sans_
     assert not any(d.startswith("lemlist_campaign") for d in ec.declarables())
 
 
+def test_une_recette_lit_les_membres_d_une_liste_hubspot_sans_rien_y_ecrire():
+    """Dédoublonner des listes HubSpot commence par en lire les membres. `members` et
+    `record_lists` ne sont pas des verbes de `effets.LIRE` : sans entrée forcée, la
+    lecture était une écriture, refusée en épreuve, et la recette impubliable (21/11/2026).
+    Rien ne s'écrit : `add_members` retire aussi (`remove_record_ids`), `update` réécrit
+    des critères, et retirer ou vider une liste détruit."""
+    for op in ("search", "get", "members", "record_lists"):
+        assert ec.juger("hubspot_list", {"op": op}) == ("lire", None), op
+    for op in ("create", "update", "add_members", "remove_members", "clear_members",
+               "copy_from", "delete", "restore"):
+        assert ec.juger("hubspot_list", {"op": op})[0] == "refus", op
+    assert not any(d.startswith("hubspot_list") for d in ec.declarables())
+
+
 def test_une_recette_lit_les_watch_lists_les_desinscriptions_et_les_fiches_lemlist():
     """Lire les prises d'une watch list, la liste de désinscription et les fiches du CRM
     lemlist avant de pousser : des lectures, sans déclaration. Tout ce qui crée, modifie,

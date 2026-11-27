@@ -57,6 +57,14 @@ ECRITURES: dict[str, Ecriture] = {
     "folk_record": Ecriture(frozenset({"search", "get"}),
                             frozenset({"create", "update", "add_to_group"})),
     "attio_record": Ecriture(frozenset({"search", "get"}), frozenset({"create", "update"})),
+    # Ses lectures portent des verbes que `effets.LIRE` ne connaît pas (`members`,
+    # `record_lists`) : sans cette entrée, lire les membres d'une liste était une
+    # « écriture », refusée en épreuve, donc impubliable (dédoublonnage de listes, 21/11/2026).
+    # Aucune écriture ouverte : `add_members` retire aussi (`remove_record_ids`), `update`
+    # réécrit les critères d'une liste dynamique, et ce qui retire ou vide une liste
+    # (`remove_members`, `clear_members`, `delete`) est une destruction. Refusés.
+    "hubspot_list": Ecriture(frozenset({"search", "get", "members", "record_lists"}),
+                             frozenset()),
     "pipedrive_record": Ecriture(frozenset({"get"}), frozenset({"create", "update"})),
     "salesforce_record": Ecriture(frozenset({"get"}),
                                   frozenset({"create", "update", "upsert"})),

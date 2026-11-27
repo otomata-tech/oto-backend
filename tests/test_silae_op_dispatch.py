@@ -16,9 +16,10 @@ Quatre familles de garanties :
   3. les documents : rendus par `file_content.render_for_agent` (jamais de base64 dans
      le contexte), REFUSÉS sans appel amont tant que la politique de l'org masque un
      champ ;
-  4. **le mutisme des écritures** : `SilaeClient` porte 4 méthodes qui MODIFIENT la paie.
-     Aucune n'est exposée — on joue toutes les ops et on exige qu'aucune ne soit touchée,
-     plus un contrôle statique des deux modules.
+  4. **le mutisme des écritures DES LECTEURS** : `SilaeClient` porte 4 méthodes qui
+     MODIFIENT la paie. Seul `silae_act` les sert (`tests/test_silae_act.py`) — ici on joue
+     toutes les ops des lecteurs et on exige qu'aucune ne soit touchée, plus un contrôle
+     statique des deux modules lecteurs.
 """
 import asyncio
 from pathlib import Path

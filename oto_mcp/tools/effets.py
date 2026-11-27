@@ -984,6 +984,9 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "signwell_template": {"lire": "get", "ecrire": "create update", "envoyer": "create_document", "detruire": "delete"},
     # registers a webhook: data then leaves to its URL (decided: a send)
     "signwell_webhook": {"lire": "list", "envoyer": "create", "detruire": "delete"},
+    # payroll entries the next payslip computation uses; add_hours with ajouter=False
+    # REPLACES the month's value without keeping it (decided: destroys, whatever `ajouter`)
+    "silae_act": {"ecrire": "add_variable_element add_bonus set_entries_confirmed", "detruire": "add_hours"},
     "silae_declaration": {"lire": "dsn_list dsn_content states"},
     "silae_dossier": {"lire": "list numbers collective_agreements current_period establishments organisms"},
     "silae_employee": {"lire": "list get jobs from_internal_id"},

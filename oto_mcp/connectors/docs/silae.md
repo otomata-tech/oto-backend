@@ -26,4 +26,14 @@ every call targets **one dossier** (`numero_dossier`); pay months are written `A
 ## note — personal data and documents
 
 nothing is masked by default: employee records, payslips and the dsn carry names, nir and pay in clear until the org sets a field-filter policy for `silae`. a filter cannot see inside a file, so **reports and dsn contents are refused while that policy masks anything**.
-the connector **never writes** to silae: no variable element, bonus, hours, entry confirmation, payslip control nor declaration setting goes out of it.
+the readers (`silae_dossier`, `silae_employee`, `silae_payslip`, `silae_variables_to_enter`, `silae_report`, `silae_declaration`) **never write** to silae. no payslip control, payslip deletion, pay cycle nor declaration setting goes out of the connector at all.
+
+## usage — entering payroll items (`silae_act`)
+
+`silae_act` is the only tool that writes, and only what the next payslip computation will use. it is served at the **`full` access level only**: `read` is the default, an org admin opens `full` on the connector. it also needs silae's "usage interne rh" contract (1B) and a subscription key that opens these functions (a 403 otherwise).
+- `op="add_variable_element"` — `matricule_salarie`, `periode`, `code`, and `montant` OR `valeur_chaine`: a variable pay element for one employee and one month; the code must exist in a bonus profile the computation uses (`silae_variables_to_enter` lists the dossier's codes)
+- `op="add_bonus"` — same, plus optional `prime_nette`, `intitule_bulletin` (≤ 45 characters) and `intitule_court` (≤ 10)
+- `op="add_hours"` — `code`, `nombre` and `ajouter`: `true` ADDS to the month's value, `false` REPLACES it
+- `op="set_entries_confirmed"` — `confirmer_heures` and/or `confirmer_primes`: confirms the month's entries for the whole dossier
+- silae refuses an entry on a payslip already computed: delete that payslip in silae first
+- `dry_run=true` checks everything and returns the call it would make, without calling silae: show it to the person who validates, then call again without it

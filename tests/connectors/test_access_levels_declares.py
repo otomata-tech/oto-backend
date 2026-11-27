@@ -39,7 +39,7 @@ def _population(montes: dict) -> dict[str, list[str]]:
 
 
 def test_il_y_a_des_connecteurs_a_niveaux(montes):
-    assert set(_population(montes)) == set(al.DECLARED) == {"zoho", "zohodesk", "payfit", "zohosign",
+    assert set(_population(montes)) == set(al.DECLARED) == {"zoho", "zohodesk", "payfit", "zohosign", "silae",
                                                          "google_search_console"}
 
 

@@ -1,5 +1,5 @@
-"""Silae — French payroll, READ-ONLY (dossiers, employees, payslips; reports and
-declarations live in `silae_documents.py`).
+"""Silae — French payroll, the READERS (dossiers, employees, payslips; reports and
+declarations live in `silae_documents.py`, the entries in `silae_act.py`).
 
 Credential = OAuth2 client-credentials (Azure AD B2C), three secrets (client_id +
 client_secret + subscription_key), resolved per call via
@@ -11,12 +11,13 @@ Surface (ADR 0047 §Amendment): one tool per business OBJECT, the verb in `op` �
 `silae_report` and `silae_declaration` in `silae_documents.py`. Routes and bodies follow
 the Silae function pages and OpenAPI file (`oto.tools.silae`).
 
-⚠️ **No write is exposed.** `SilaeClient` carries four (`ajouter_element_variable`,
-`ajouter_prime`, `ajouter_heures`, `confirmer_saisies`); no tool reaches them, and
-`tests/test_silae_op_dispatch.py` verifies it (every op played, the writes
-`assert_not_called`, plus a static check of both modules). The functions that change
-payroll state (payslip control, DSN configuration, pay cycle, show-business payslip
-computation) are not even in the client.
+⚠️ **This module and `silae_documents.py` never write.** `SilaeClient`'s four writes
+(`ajouter_element_variable`, `ajouter_prime`, `ajouter_heures`, `confirmer_saisies`) are
+served by `silae_act` ONLY (`tools/silae_act.py`, `ACTE`, the `full` access level — `read`
+is the default); `tests/test_silae_op_dispatch.py` verifies the readers never reach them
+(every op played, the writes `assert_not_called`, plus a static check of both modules).
+The functions that change payroll state beyond entries (payslip control, DSN
+configuration, pay cycle, show-business payslip computation) are not even in the client.
 
 ⚠️ **Redaction is NOT active by default**: `field_filter_defaults.SERVER_DEFAULTS` has
 nothing for `silae`, so JSON responses (NIR, names, amounts) reach the agent in clear

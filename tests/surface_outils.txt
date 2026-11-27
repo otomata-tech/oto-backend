@@ -863,6 +863,7 @@ signwell_bulk_send	create csv_template documents get list validate_csv	2d07b6263
 signwell_document	completed_pdf create delete get nom151_certificate update_authentication update_recipients	81c47ff49795271c
 signwell_template	create create_document delete get update	0905621e1541729e
 signwell_webhook	create delete list	b84e655370bb5c39
+silae_act	add_bonus add_hours add_variable_element set_entries_confirmed	aa9162088356cee1
 silae_declaration	dsn_content dsn_list states	0293a13aac4033fb
 silae_dossier	collective_agreements current_period establishments list numbers organisms	d2ac0c499750ff0b
 silae_employee	from_internal_id get jobs list	c2a7b90f913ffa3e

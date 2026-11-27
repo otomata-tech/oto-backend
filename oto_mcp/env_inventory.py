@@ -598,6 +598,15 @@ _REGLAGES: tuple[Variable, ...] = (
              "Secret envoyé en `Authorization: Bearer` au crochet de création d'org. Vide = "
              "pas de crochet (jamais d'appel de service sans secret).",
              ("oto_mcp/org_created_hook.py:44",)),
+    Variable("OTO_COMMERCE_RELAY_URL", Classe.REGLAGE, "",
+             "Base des lectures que l'outil `oto_credits` relaie au commerce de l'instance "
+             "(crédits, dépense par jour et par agent, tarifs, limites de dépense), sans `/` "
+             "final. Vide = outil non monté. Voir `capabilities/commerce_relay.py`.",
+             ("oto_mcp/capabilities/commerce_relay.py:70",)),
+    Variable("OTO_COMMERCE_RELAY_TOKEN", Classe.REGLAGE, "",
+             "Secret envoyé en `Authorization: Bearer` aux lectures relayées au commerce. "
+             "Vide = outil non monté (jamais d'appel de service sans secret).",
+             ("oto_mcp/capabilities/commerce_relay.py:71",)),
     Variable("OTO_MCP_UNIPILE_DEFAULT_LIMIT", Classe.REGLAGE, "5",
              "Plafond par défaut de comptes hébergés (clé plateforme) par org, quand "
              "l'org ne pose pas le sien (`orgs.unipile_account_limit`) : garde contre "

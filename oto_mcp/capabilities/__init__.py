@@ -167,6 +167,9 @@ from . import org_monitoring  # noqa: F401 — org.monitoring.* (oto_org_monitor
 from . import service_commerce  # noqa: F401 — service.{orgs,org.members,org.usage,org.entitlement*}
 # Le port du budget d'unités, sous la même identité de service — REST seule.
 from . import service_credits  # noqa: F401 — service.credits.* + service.org.credits.payer_mode
+# Ce que le commerce tient (crédits, tarifs, limites de dépense), relayé en lecture à
+# l'agent — MCP seule, montée seulement si l'instance déclare son commerce.
+from . import commerce_relay  # noqa: F401 — org.commerce.credits (oto_credits)
 # Gouvernance générique des ressources possédées (ADR 0030) — transfert/partage
 # d'un objet possédé (datastore pilote), owner ∪ escalade roles.py.
 from . import resources  # noqa: F401 — resources.govern (oto_resource)

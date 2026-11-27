@@ -248,6 +248,9 @@ sur un tiers (`boucles_de_fond.py`, `config.est_la_production()`) · **détails 
 - `limites-de-depense.md` — les limites de dépense du jour (org, équipe, personne) : le commerce décide, le cœur
   applique la liste poussée aux seules clés refacturées (`daily_spend_limit`), fail-open, et rend au commerce la
   personne de chaque appel
+- `relais-commerce.md` — `oto_credits` : les lectures que le commerce tient (crédits, dépense par jour et
+  par agent, tarifs, limites de dépense) relayées à l'agent en lecture seule ; config par instance, outil non
+  monté sans elle, rôle DANS l'org envoyé, tenant primaire seulement
 - `effacement-d-org.md` — EFFACER une org (RGPD art. 17) : demande, lien au titulaire, 7 j de grâce, purge
   hors processus par le classement de l'export + une décision écrite par table qu'il laisse (refus sinon),
   pierre tombale pour les pièces comptables, comptes dont c'était la seule org, archives froides réécrites

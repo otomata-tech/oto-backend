@@ -505,11 +505,13 @@ sources = [
   "oto_mcp/mollie_client.py",
   "oto_mcp/capabilities/billing*.py",
   "oto_mcp/capabilities/service_commerce.py",
+  "oto_mcp/capabilities/commerce_relay.py",
   "oto_mcp/db/billing*.py",
   "oto_mcp/db/schema/billing.py",
   "oto_mcp/api/billing.py",
 ]
-tests = ["tests/**/test_billing*.py", "tests/**/test_*factur*.py"]
+tests = ["tests/**/test_billing*.py", "tests/**/test_*factur*.py",
+         "tests/**/test_commerce_relay*.py"]
 
 [[volet]]
 nom = "runner et automatisations"

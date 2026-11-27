@@ -271,12 +271,15 @@ def _alertes_recherche(items, total, cursor, facettes, page_suivante):
     return out
 
 
-def _slim_search(res, *, facettes=(), page_suivante=False):
+def _slim_search(res, *, facettes=(), page_suivante=False, with_photo=False):
     """Slim down a search response (feedback #335, token cost ÷~2 in bulk):
     - de-duplicates `data`/`items` and `next_cursor`/`cursor` — oto-core `_norm` returns
       BOTH (same list) for downstream stability; the agent only needs `items`/`cursor`;
     - removes the image URLs from each result (`*picture_url*`: photo + large + background) =
       dead weight in search (the agent does not render images; a specific profile → linkedin_unipile_profile).
+      `with_photo=True` (opt-in, 26/11/2026) keeps ONE: `profile_picture_url`, the small
+      photo (filled from `public_picture_url` when only that one comes back) — for an
+      app or a CRM row that shows the person's face. `_large` and the banner still leave.
     Touches NOTHING else (all business fields stay).
 
     ...and SAYS what the page amputates (#536): `returned`/`truncated` as soon as
@@ -293,8 +296,12 @@ def _slim_search(res, *, facettes=(), page_suivante=False):
         items = res.get("data") or []
     for it in items:
         if isinstance(it, dict):
+            photo = (it.get("profile_picture_url") or it.get("public_picture_url")
+                     if with_photo else None)
             for k in [k for k in it if "picture_url" in k.lower()]:
                 it.pop(k, None)
+            if photo:
+                it["profile_picture_url"] = photo
     cursor = res.get("cursor") or res.get("next_cursor")
     total = res.get("total_count")
     out = {"items": items, "cursor": cursor}
@@ -1478,6 +1485,7 @@ def register(mcp: FastMCP) -> None:
         url: Optional[str] = None,
         api: str = "classic",
         cursor: Optional[str] = None,
+        with_photo: bool = False,
     ) -> dict:
         """LinkedIn search via Unipile.
 
@@ -1556,6 +1564,9 @@ def register(mcp: FastMCP) -> None:
                 the connected account's LinkedIn subscription). Recruiter/Sales Nav require
                 the premium seat activated at connect (otherwise 403 "out of scope").
             cursor: Pagination cursor returned by a previous call.
+            with_photo: True = each item keeps `profile_picture_url` (the person's
+                small photo, a temporary LinkedIn CDN URL) — to show faces in an app or
+                store them on a row. Default False: image URLs are dropped (token cost).
         """
         sub = _actor_key()
         poses = dict(company=company, location=location, industry=industry,
@@ -1567,7 +1578,7 @@ def register(mcp: FastMCP) -> None:
             industry=industry, network_distance=network_distance,
             advanced_keywords=advanced_keywords, skills=skills, url=url, api=api,
             cursor=cursor,
-        )), facettes=facettes, page_suivante=bool(cursor))
+        )), facettes=facettes, page_suivante=bool(cursor), with_photo=with_photo)
 
     @mcp.tool()
     def linkedin_unipile_facets(facet_type: str, keywords: str, limit: int = 25) -> dict:

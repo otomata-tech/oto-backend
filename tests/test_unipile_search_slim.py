@@ -140,3 +140,18 @@ def test_le_tool_transmet_le_contexte_de_la_requete_a_l_aveu(client):
     client.search.return_value = {"items": [{"id": "1"}], "cursor": "C2"}
     out = _search_tool()(company=["Acme"], cursor="C1")
     assert any("CURSOR-ONLY" in w for w in out["warnings"])
+
+
+def test_with_photo_garde_la_petite_photo_seulement():
+    """`with_photo=True` (26/11/2026) : une seule URL d'image, `profile_picture_url`."""
+    lst = [{"id": "1", "public_picture_url": "a", "public_picture_url_large": "b",
+            "background_picture_url": "c", "profile_picture_url": "d"}]
+    it = U._slim_search({"items": lst}, with_photo=True)["items"][0]
+    assert [k for k in it if "picture_url" in k] == ["profile_picture_url"]
+    assert it["profile_picture_url"] == "d"
+
+
+def test_with_photo_se_rabat_sur_public_picture_url():
+    it = U._slim_search({"items": [{"id": "9", "public_picture_url": "x"}]},
+                        with_photo=True)["items"][0]
+    assert it == {"id": "9", "profile_picture_url": "x"}

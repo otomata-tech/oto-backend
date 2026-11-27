@@ -469,7 +469,7 @@ linear_webhook	create delete list update	abe54b7271848af6
 linkedin_ads	account_roles analytics get_account get_campaign get_campaign_group get_creative list_accounts list_campaign_groups list_campaigns list_creatives	84958572ff197e4f
 linkedin_aiark_credits	-	99334726611ccf58
 linkedin_aiark_person	export mobile reverse	9adfa3fdba15ff01
-linkedin_aiark_search	companies people	c74775d2b65b1130
+linkedin_aiark_search	companies people	6c9b325b249c97cf
 linkedin_unipile	attendees contacts list read	c8bc5859a80c9c16
 linkedin_unipile_account	contracts inmail_balance limits select status	709d30bcaab7a0a1
 linkedin_unipile_act	accept_invitation cancel_invitation comment_post decline_invitation endorse invite publish_post react_message react_post send update update_member	be16f1f2a0971556
@@ -478,7 +478,7 @@ linkedin_unipile_job	applicant applicants posting postings projects	919926efcfcf
 linkedin_unipile_network	invitations relations	78a95706ef3b4b7e
 linkedin_unipile_post	engagement feed get	4a21db3253d5ee98
 linkedin_unipile_profile	comments company followers following me person posts reactions	3cc8e6c9886b0840
-linkedin_unipile_search	-	3658f6efd3bad889
+linkedin_unipile_search	-	31272662e99af095
 loi_article	get search versions	c22cc3ac38fb8bc6
 loi_codes	-	99334726611ccf58
 lucca_absence	get list	01204a69d42aff32

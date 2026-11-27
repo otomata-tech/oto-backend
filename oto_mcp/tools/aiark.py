@@ -152,11 +152,14 @@ def _slim_company(company: object) -> object:
     return out
 
 
-def _slim_person(row: object) -> object:
+def _slim_person(row: object, with_photo: bool = False) -> object:
     if not isinstance(row, dict):
         return row
     out = {k: v for k, v in row.items() if k not in _PERSON_DROP}
-    for bloc, drop in (("profile", _PROFILE_DROP), ("link", _LINK_DROP),
+    # `with_photo=True` (opt-in, 26/11/2026): `profile.picture` stays — the face an app
+    # or a CRM row shows. The `background` banner leaves either way.
+    profil_drop = tuple(k for k in _PROFILE_DROP if k != "picture") if with_photo else _PROFILE_DROP
+    for bloc, drop in (("profile", profil_drop), ("link", _LINK_DROP),
                        ("location", _LOCATION_DROP), ("department", _DEPARTMENT_DROP)):
         if isinstance(sous := out.get(bloc), dict):
             out[bloc] = {k: v for k, v in sous.items() if k not in drop}
@@ -165,7 +168,8 @@ def _slim_person(row: object) -> object:
     return out
 
 
-def _shape(payload: object, op: str, full: bool, fields: Optional[list[str]]) -> object:
+def _shape(payload: object, op: str, full: bool, fields: Optional[list[str]],
+           with_photo: bool = False) -> object:
     """Tightened AI Ark page. `full=True` = the raw page, `fields=[…]` = only those keys.
 
     The name carries the intent (ADR 0047): `full=True` says what you get, where
@@ -180,9 +184,11 @@ def _shape(payload: object, op: str, full: bool, fields: Optional[list[str]]) ->
     rows = payload.get("content")
     if not isinstance(rows, list):
         return payload
-    slim = _slim_person if op == "people" else _slim_company
     out = dict(payload)
-    out["content"] = [slim(r) for r in rows]
+    if op == "people":
+        out["content"] = [_slim_person(r, with_photo) for r in rows]
+    else:
+        out["content"] = [_slim_company(r) for r in rows]
     if fields:
         out = output_projection.project(out, items_path="content", fields=fields)
     return out
@@ -363,6 +369,7 @@ def register(mcp: FastMCP) -> None:
         size: int = 10,
         full: bool = False,
         fields: Optional[list[str]] = None,
+        with_photo: bool = False,
     ) -> dict:
         """Search LinkedIn-sourced B2B data through AI Ark (bought data, per-credit).
 
@@ -437,6 +444,9 @@ def register(mcp: FastMCP) -> None:
                 returned ~3 M characters, past any tool-result cap; measured
                 10/09/2026, 53 % of what the sourcing view still carried was read
                 by nobody.
+            with_photo: op="people" — True = `profile.picture` stays in the default
+                view (the person's photo, `{"source": url}`), to show faces in an app
+                or store them on a row. Default False: image URLs are dropped.
             fields: keep ONLY these keys on each record; the envelope (totals,
                 pagination, trackId) always stays — without it you would think you
                 saw everything. Combine with `full=True` to project the raw record.
@@ -475,7 +485,7 @@ def register(mcp: FastMCP) -> None:
         content = result.get("content") if isinstance(result, dict) else None
         if isinstance(content, list):
             session_org.note_call_trace(quantity=len(content))
-        return _shape(result, op, full, fields)
+        return _shape(result, op, full, fields, with_photo)
 
     @mcp.tool(annotations=LECTURE)
     def linkedin_aiark_person(

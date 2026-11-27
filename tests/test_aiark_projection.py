@@ -171,3 +171,10 @@ def test_la_description_de_fields_nomme_toutes_les_cles_de_la_vue():
     for cle in set(personne) | set(societe):
         assert f"`{cle}`" in d, f"clé `{cle}` rendue par la vue, absente du texte servi"
     assert "silently discarded" in d
+
+
+def test_la_photo_revient_sur_demande():
+    """`with_photo=True` (26/11/2026) : `profile.picture` reste, la bannière non."""
+    p = aiark._shape(PAGE, "people", full=False, fields=None, with_photo=True)["content"][0]
+    assert p["profile"]["picture"]["source"].startswith("https://images.ai-ark.com/")
+    assert "background" not in p["profile"] and "summary" not in p["profile"]

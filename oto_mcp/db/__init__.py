@@ -120,6 +120,9 @@ from . import (
     regles_de_comptes,
     # NON aplati : `poser`/`suivre` sont trop communs — `db.sous_instances.<fn>`.
     sous_instances,
+    # NON aplati : `creer`/`reclamer`/`avancer` sont trop communs —
+    # `db.youtube_uploads.<fn>`.
+    youtube_uploads,
 )
 
 # Ré-export plat (publics + privés à un underscore). Les noms dunder restent au

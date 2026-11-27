@@ -545,6 +545,9 @@ _SUB_COLUMNS = [
     # Hors PK (`id`), aucune FK : non repointé, un travail en cours s'arrêterait
     # (« plus membre ») pour un compte qui a seulement changé de nom.
     ("jev_jobs", "sub"),
+    # Même raison : l'identité sous laquelle `youtube_upload_worker` relaie la vidéo
+    # (lecture du projet, compte Google). Hors PK (`id`), aucune FK vers `users`.
+    ("youtube_upload_jobs", "sub"),
     # Qui a commandé un reveal de téléphone Apollo (`apollo_receiver.py`). Hors PK
     # (`token_hash`), sans FK ni unicité sur `sub` : UPDATE nu. Non repointée, une
     # commande en attente appartiendrait à un compte disparu pendant ses trente jours.

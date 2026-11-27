@@ -103,6 +103,11 @@ def _extraction() -> Fonction:
     return file_extract_worker.run_extract_loop
 
 
+def _fichiers_echus() -> Fonction:
+    from . import fichiers_echus
+    return fichiers_echus.run_fichiers_echus_loop
+
+
 def _classement() -> Fonction:
     from . import rank_backfill_worker
     return rank_backfill_worker.run_rank_backfill_loop
@@ -116,6 +121,11 @@ def _formule_backfill() -> Fonction:
 def _transcription() -> Fonction:
     from . import transcription_worker
     return transcription_worker.run_transcription_loop
+
+
+def _youtube_uploads() -> Fonction:
+    from . import youtube_upload_worker
+    return youtube_upload_worker.run_youtube_upload_loop
 
 
 def _jev_jobs() -> Fonction:
@@ -197,6 +207,11 @@ BOUCLES: tuple[Boucle, ...] = (
     # l'extraction ne dépend d'aucun service tiers : les deux pannes restent disjointes.
     Boucle(nom="file_extract_worker", tiers=False,
            armee=_interrupteur("OTO_FILE_EXTRACT_WORKER_ENABLED"), fonction=_extraction),
+    # Échéance des gros fichiers de projet (`fichiers_echus.py`) : retire l'objet et la
+    # ligne d'un fichier dont `expires_at` est passée. N'écrit qu'en base et au stockage
+    # de l'instance ; deux processus retirent au pire deux fois le même objet.
+    Boucle(nom="fichiers_echus", tiers=False,
+           armee=_interrupteur("OTO_FILES_EXPIRY_ENABLED"), fonction=_fichiers_echus),
     # Vecteurs de classement (#318) : remplit par tranches puis réconcilie. Hors du boot
     # par nécessité (la variante au boot tenait `datastore_rows` 7,55 s sous verrou).
     Boucle(nom="rank_backfill", tiers=False,
@@ -220,6 +235,12 @@ BOUCLES: tuple[Boucle, ...] = (
     # le doublon, pas la divergence : seule la prod draine.
     Boucle(nom="jev_jobs_worker", tiers=True,
            armee=_interrupteur("OTO_JEV_JOBS_WORKER_ENABLED"), fonction=_jev_jobs),
+    # Mises en ligne YouTube d'un gros fichier de projet (`youtube_upload_worker`) :
+    # publie sur la chaîne d'un client, un TIERS. Bail en base (`BAIL_S`) : un travail
+    # n'est mené que par un processus à la fois, et reprend après un redémarrage.
+    Boucle(nom="youtube_upload_worker", tiers=True,
+           armee=_interrupteur("OTO_YOUTUBE_UPLOAD_WORKER_ENABLED"),
+           fonction=_youtube_uploads),
     # Échéances du budget d'unités (`credits_echeances.py`) : règle au montant réservé
     # les réservations jamais réglées. N'écrit qu'en base ; deux processus sur la même
     # échéance, un seul la règle (état `open` dans l'écriture) : `tiers=False`.

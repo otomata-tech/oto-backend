@@ -33,7 +33,7 @@ pytestmark = pytest.mark.usefixtures("connecteurs_tous_disponibles")
 # Les six du split (2026-09-26) — ceux que le fan-out du boot a déménagés.
 SPLIT = ("gmail", "drive", "sheets", "calendar", "tasks", "chat")
 # Les services ajoutés DEPUIS : connecteurs neufs, jamais déménagés.
-POST_SPLIT = ("bigquery", "google_ads", "search_console")
+POST_SPLIT = ("bigquery", "google_ads", "search_console", "youtube")
 SERVICES = SPLIT + POST_SPLIT
 EMAIL = "https://www.googleapis.com/auth/userinfo.email"
 
@@ -193,6 +193,22 @@ def test_search_console_demande_webmasters_readonly_seul_depuis_sa_carte():
     # Le nom de SA carte, que le refus « n'a pas encore autorisé … » cite : jamais celui
     # de la carte du compte de service (« Google Search Console »).
     assert G.SERVICE_LABELS["search_console"] == "Search Console (Google sign-in)"
+
+
+def test_youtube_demande_ses_trois_scopes_seuls_depuis_sa_carte():
+    """youtube (2026-11-26) : même règle — force-ssl (commentaires, métadonnées,
+    miniatures), readonly + yt-analytics.readonly (rapports Analytics), depuis sa
+    carte seulement ; jamais `youtube.upload`, aucun outil ne met de vidéo en ligne."""
+    yt = ["https://www.googleapis.com/auth/youtube.force-ssl",
+          "https://www.googleapis.com/auth/youtube.readonly",
+          "https://www.googleapis.com/auth/yt-analytics.readonly"]
+    compte = G.scopes_for("google", _app("env"))
+    assert not set(yt) & set(compte)
+    assert G.scopes_for("youtube", _app("env")) == list(G.IDENTITY_SCOPES) + yt
+    assert set(yt) <= set(G.KNOWN_SCOPES)
+    assert G.services_granted(" ".join(yt + [EMAIL])) == ["youtube"]
+    assert "https://www.googleapis.com/auth/youtube.upload" not in G.KNOWN_SCOPES
+    assert G.SERVICE_LABELS["youtube"] == "YouTube"
 
 
 def test_un_connecteur_inconnu_nobtient_aucun_scope():

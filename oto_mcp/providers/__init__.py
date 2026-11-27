@@ -193,6 +193,8 @@ _DECLARATIONS: tuple[str, ...] = (
     # ninth service (2026-11-15) — same shape, `webmasters.readonly` consent only,
     # read-only tool. The service-account connector `google_search_console` stays.
     "search_console",
+    # tenth service (2026-11-26) — same shape, YouTube consent only (Data + Analytics).
+    "youtube",
     # --- open-data / no credential ------------------------------------------
     # Unrelated public sources → distinct connectors (formerly `fr_open`, which
     # merged them: an incoherent "open data" bag, activating one activated the other).

@@ -38,6 +38,7 @@ from . import (
     usage,
     users,
     visibility,
+    youtube,
 )
 
 __all__ = [
@@ -72,4 +73,5 @@ __all__ = [
     "usage",
     "users",
     "visibility",
+    "youtube",
 ]

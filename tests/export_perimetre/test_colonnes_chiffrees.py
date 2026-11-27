@@ -37,6 +37,7 @@ _ECRITURES: dict[str, set[str]] = {
     "oto_mcp/runner_hook.py": {"runner_triggers.hook_signing_secret_enc"},
     "oto_mcp/capabilities/transcription.py": {"transcription_jobs.api_key_enc"},
     "oto_mcp/db/jetons_de_lien.py": {"docs.public_token_enc", "process_shares.token_enc"},
+    "oto_mcp/youtube_upload_worker.py": {"youtube_upload_jobs.session_url_enc"},
 }
 
 #: module → pourquoi il chiffre HORS de la table : sous une clé donnée, pas la nôtre.

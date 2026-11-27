@@ -76,7 +76,7 @@ def test_le_perimetre_est_celui_quon_croit():
                             "outlook", "outlook_calendar", "teams", "onenote", "entra", "powerbi", "ubersuggest",
                             "jefacture", "linkedin_ads",
                             "gmail", "drive", "sheets", "calendar", "tasks", "chat",
-                            "bigquery", "google_ads", "search_console"}
+                            "bigquery", "google_ads", "search_console", "youtube"}
 
 
 # --- la forme émise, contrat lu par le dashboard -------------------------------

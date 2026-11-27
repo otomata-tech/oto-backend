@@ -257,6 +257,35 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > `media_store.upload_object`/`fetch_object` retombent sur le plafond d'une IMAGE (2 Mo) —
 > jusqu'au 21/09/2026, un fichier de plus de 2 Mo était refusé au dépôt du tableau de bord
 > et finissait `object_too_large` à l'extraction (ADR 0074, étape 0).
+>
+> **Un GROS fichier de projet (une vidéo de plusieurs Go) ne passe pas par ce plafond :
+> il ne passe pas par le backend du tout** (`large_uploads.py`). `oto_upload_url
+> target=project_file large=true` ouvre un dépôt multipart S3 et scelle la clé et
+> l'`UploadId` dans un jeton `typ=upload_large` (24 h). Le client demande l'URL présignée
+> de chaque partie (`GET /api/upload/large/<token>/part/<n>`, en texte) et y `PUT` les
+> octets bruts — `OTO_MCP_LARGE_UPLOAD_PART_BYTES` (100 Mio), 1 000 parties au plus (limite
+> Scaleway), `OTO_MCP_LARGE_UPLOAD_MAX_BYTES` (50 Gio). La clôture (`POST …/complete`)
+> liste les parties CÔTÉ SERVEUR (aucun ETag à renvoyer), refuse un trou ou une partie de
+> mauvaise taille sans consommer le jeton (le même lien reprend), consomme, clôt, relit
+> les 64 premiers Kio (#562 : le type servi se décide à l'ouverture sur le type déclaré,
+> actif ⇒ neutre et téléchargé ; un début actif sous un type passif est RETIRÉ) et range
+> la ligne `project_files`. Identité et écriture du projet rejugées à chaque partie et à
+> la clôture. La page d'upload (`GET /api/upload/large/<token>`) découpe dans le
+> navigateur et envoie au stockage : elle exige une règle **CORS** du seau (PUT depuis
+> l'origine du backend). Un dépôt jamais clos est abandonné par le cycle de vie du seau
+> (2 jours). L'extraction de texte saute un fichier au-delà de `max_bytes()`
+> (`unsupported`, sans le télécharger).
+>
+> **Un gros fichier est un TRANSIT, pas une archive : il est gardé 14 jours après son
+> dépôt, puis supprimé automatiquement** (`OTO_MCP_LARGE_UPLOAD_KEEP_DAYS`, 1 à 365).
+> La clôture pose `project_files.expires_at` (révision `20261127_1000_file_expiry`, NULL =
+> gardé sans limite, tout autre fichier) ; la boucle `fichiers_echus` (horaire,
+> `OTO_FILES_EXPIRY_ENABLED`) retire l'objet PUIS la ligne et l'écrit au journal du projet
+> (`project.file_expired`). La durée est DITE partout où le fichier se dépose : la réponse
+> d'`oto_upload_url` (`kept_days`, `notice`, et la consigne de le dire à l'utilisateur), la
+> page d'upload (avant et après le dépôt), l'accusé de clôture (`expires_at`, `notice`), et
+> `expires_at` dans les listes de fichiers (`oto_project_files`, REST). La copie d'un projet
+> garde la même échéance. Le versionnement du seau garde un objet retiré 30 jours.
 
 > **Désigner un fichier du projet au lieu de le transporter (ADR 0074, étape 1).**
 > `file_source.resolve` (le résolveur « fichier côté oto » des outils qui prennent une

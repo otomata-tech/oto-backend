@@ -235,21 +235,18 @@ def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
     return ResolvedFile(data, name, mime)
 
 
-def _from_project_file(src: dict, max_bytes: int) -> ResolvedFile:
-    """Un fichier DÉPOSÉ sur un projet (« Autre document », `oto_project_files`), lu
-    dans le stockage objet — sans URL signée ni aller-retour HTTP (ADR 0074).
-
-    La garde est celle d'une lecture par-id d'un projet : visible dans l'org ACTIVE
-    (`ownership.visible_in_org`, ADR 0023) ET lisible (`can_access(read)`). Un refus
-    répond EXACTEMENT comme un fichier inconnu : distinguer les deux dirait à qui n'a
-    pas le droit que le fichier existe."""
+def fichier_de_projet(src: dict) -> dict:
+    """La LIGNE d'un fichier de projet désigné par `{kind: "project_file", project_id,
+    file_id}`, sous la garde de `_from_project_file`, SANS en lire les octets — pour un
+    consommateur qui relaie lui-même un gros fichier, morceau par morceau. Lève
+    `FileSourceError` (un refus et un fichier inconnu répondent pareil)."""
     try:
         pid, fid = int(src.get("project_id")), int(src.get("file_id"))
     except (TypeError, ValueError):
         raise FileSourceError(
             "source project_file : `project_id` et `file_id` entiers requis "
             "(ids rendus par oto_project_files op=list).") from None
-    from . import db, media_store, ownership
+    from . import db, ownership
     introuvable = FileSourceError(
         f"source project_file : fichier #{fid} introuvable sur le projet #{pid}.")
     sub = access.current_user_sub_or_raise()
@@ -260,6 +257,20 @@ def _from_project_file(src: dict, max_bytes: int) -> ResolvedFile:
     row = db.get_project_file(fid)
     if not row or int(row["project_id"]) != pid:
         raise introuvable
+    return row
+
+
+def _from_project_file(src: dict, max_bytes: int) -> ResolvedFile:
+    """Un fichier DÉPOSÉ sur un projet (« Autre document », `oto_project_files`), lu
+    dans le stockage objet — sans URL signée ni aller-retour HTTP (ADR 0074).
+
+    La garde est celle d'une lecture par-id d'un projet : visible dans l'org ACTIVE
+    (`ownership.visible_in_org`, ADR 0023) ET lisible (`can_access(read)`). Un refus
+    répond EXACTEMENT comme un fichier inconnu : distinguer les deux dirait à qui n'a
+    pas le droit que le fichier existe."""
+    from . import media_store
+    row = fichier_de_projet(src)
+    fid = row["id"]
     try:
         data = media_store.fetch_object(row["s3_key"], max_bytes=max_bytes)
     except media_store.MediaError as e:

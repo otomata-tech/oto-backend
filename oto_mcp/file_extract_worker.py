@@ -62,6 +62,12 @@ def _extract_one(f: dict) -> str:
     from . import media_store, upload_tokens
 
     fid = int(f["id"])
+    # Un gros fichier (une vidéo déposée par parties, `large_uploads`) dépasse ce que la
+    # lecture accepte : terminal, sans le télécharger — un `failed` le retenterait.
+    if int(f.get("size_bytes") or 0) > upload_tokens.max_bytes():
+        db.save_extracted_text(fid, status=file_extract.UNSUPPORTED,
+                               detail="too large to read")
+        return file_extract.UNSUPPORTED
     try:
         # Le plafond d'un FICHIER DE PROJET (celui du dépôt) : sans lui, la lecture
         # retombe sur celui d'une image (2 Mo) et tout fichier plus gros échoue ici.

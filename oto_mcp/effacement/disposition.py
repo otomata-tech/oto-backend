@@ -99,6 +99,8 @@ NON_EXPORTEES: dict[str, Decision] = {
     "unipile_pending": effacer("connexion en cours d'un compte qui part"),
     "apify_runs": effacer("suivi des runs de l'org sur la clé plateforme"),
     "higgsfield_jobs": effacer("suivi des travaux de l'org sur la clé plateforme"),
+    "youtube_upload_jobs": effacer("mises en ligne YouTube en cours ou passées de l'org "
+                                   "(la session chiffrée part avec)"),
     "agent_episodes": effacer("pannes et relances des agents de l'org"),
     "copilot_threads": effacer(_ETAT_DE_TRAVAIL),
     "copilot_undos": effacer("annulations offertes à un compte qui part"),

@@ -667,7 +667,7 @@ oto_search	-	bc9ec7089f5b4e82
 oto_shell	-	1e4aa9b504342353
 oto_tool_schema	-	b12939b40013387f
 oto_trigger	clear_queue connect_source create default_sharing delete deliveries disconnect_source get give graph lend link links list rerun rotate_address rotate_secret run_now share shares take_over unlend unlink unshare update	319a204c648177ce
-oto_upload_url	create update	c4038cd6d5c823e4
+oto_upload_url	create update	478bd18dc006e9aa
 oto_use_group	-	e83286e86451c199
 oto_use_org	-	5c64f85f3092fc23
 oto_use_project	-	e0eac4aa79eaf494
@@ -1013,6 +1013,8 @@ yousign_creer	-	7507e672769d32f5
 yousign_document_signe	-	305c9140cf873fec
 yousign_envoyer	-	0619b74f82089b58
 yousign_statut	-	0619b74f82089b58
+youtube	accounts analytics categories channel comments job_status playlist_items playlists replies video videos	e072e5a08586513f
+youtube_act	add_to_playlist delete_comment reply set_moderation set_thumbnail update_video upload_video	5e59737350a66d6d
 zapier_execute_action	-	3f22696bc379e744
 zapier_execution_log	-	0aa98bbe32e3b8b3
 zapier_list_actions	-	99334726611ccf58

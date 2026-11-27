@@ -916,6 +916,12 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/upload/{token}", uploads.upload_receive, methods=["PUT", "POST"]),
         Route("/api/upload/{token}", uploads.upload_form, methods=["GET"]),
         Route("/api/upload/{token}", options_handler, methods=["OPTIONS"]),
+        # Gros fichier de projet (`large_uploads`) : les octets vont au stockage par
+        # parties présignées, jamais ici. `{token}` n'avale pas de `/` : aucune collision.
+        Route("/api/upload/large/{token}", uploads.large_form, methods=["GET"]),
+        Route("/api/upload/large/{token}", uploads.large_abort, methods=["DELETE"]),
+        Route("/api/upload/large/{token}/part/{n:int}", uploads.large_part, methods=["GET"]),
+        Route("/api/upload/large/{token}/complete", uploads.large_complete, methods=["POST"]),
         # Relais d'upload vers la GED Pennylane (cabinet) — route SŒUR de la précédente,
         # jeton `typ="relay"` : multipart débordé sur disque, relayé en flux, jamais
         # lu en mémoire (`api/pennylane_firm.py`). Un `curl -F`, aucun formulaire.

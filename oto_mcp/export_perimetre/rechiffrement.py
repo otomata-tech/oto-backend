@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from .. import credentials_store, runner_hook, transcription_worker
+from .. import credentials_store, runner_hook, transcription_worker, youtube_upload_worker
 from ..db import jetons_de_lien
 from .. import crypto
 from ..crypto import decrypt_with_key, empreinte_cle, encrypt_with_key  # noqa: F401 — empreinte_cle : rendue aux lecteurs du module
@@ -77,6 +77,11 @@ def _satellite(nom: str) -> Chiffree:
 #: Toutes les valeurs chiffrées sous la clé de l'instance : la source unique.
 COLONNES_CHIFFREES: tuple[Chiffree, ...] = (
     *(Chiffree(t, c, a) for t, (c, a) in AAD.items()),
+    # Hors d'`AAD` : la table ne part pas à l'export (`classement`, exclue) — la session
+    # d'un envoi en cours ne vaut que sur cette instance. Comptée et rechiffrée au
+    # changement de clé comme les autres.
+    Chiffree("youtube_upload_jobs", "session_url_enc",
+             lambda l: youtube_upload_worker._aad(l["id"])),
     *(_satellite(nom) for nom in credentials_store.SEALED_SATELLITES),
 )
 

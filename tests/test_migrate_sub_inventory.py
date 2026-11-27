@@ -500,6 +500,8 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("tenants", "brand"), ("tenants", "hosts"),
         ("tenants", "link_paths"), ("tenants", "logto_mgmt"),
         ("transcription_jobs", "result"), ("transcription_jobs", "transcript"),
+        # Les métadonnées YouTube d'une mise en ligne : titre, description, tags.
+        ("youtube_upload_jobs", "meta"),
         ("user_api_tokens", "scopes"), ("user_datastores", "schema"),
         # Le profil de la personne : il suit SA ligne (étape 2), rien à réécrire dedans.
         ("user_account_profile", "profile"),

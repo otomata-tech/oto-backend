@@ -203,6 +203,12 @@ _KNOWN: dict[str, str] = {
     # foi (sub/org/cible, TTL, usage unique). Appelée par un `curl` d'agent (PUT) ou
     # le formulaire humain (POST/GET) — un tiers, hors session dashboard.
     "/api/upload/{token}": NATURE,
+    # Le dépôt d'un GROS fichier par parties (`large_uploads`) : même nature (jeton
+    # `typ="upload_large"` dans l'URL, aucun JWT, appelé par un `curl` ou la page
+    # d'upload) ; les octets vont au stockage, ces routes n'en voient aucun.
+    "/api/upload/large/{token}": NATURE,
+    "/api/upload/large/{token}/part/{n:int}": NATURE,
+    "/api/upload/large/{token}/complete": NATURE,
     # Sa SŒUR, le relais d'upload vers la GED Pennylane (cabinet) : même nature (jeton
     # `typ="relay"` dans l'URL, aucun JWT, corps multipart d'un `curl -F`), et un
     # corps qui ne passe pas en mémoire — c'est la raison d'être d'une route à part.

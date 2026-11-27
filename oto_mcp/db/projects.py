@@ -1751,21 +1751,35 @@ def list_project_activity(project_id: int, limit: int = 50) -> list[dict]:
 
 # --- Fichiers bruts d'un projet (carte « Autre document », ADR 0032 §3) -------
 _PFILE_COLS = ("id, project_id, s3_key, filename, mime, size_bytes, title, "
-               "description, summary, public, public_url, created_by, created_at")
+               "description, summary, public, public_url, created_by, created_at, "
+               "expires_at")
+
+# L'échéance d'un fichier GARDÉ pour un temps (un gros fichier déposé par parties,
+# `large_uploads.keep_days`) : passée, la boucle `fichiers_echus` le retire, objet et
+# ligne. NULL = gardé tant qu'on ne le supprime pas — tout fichier d'avant, et tout
+# fichier déposé autrement. Posée par la révision `20261127_1000_file_expiry` ET par le
+# démarrage (`_init`, sous garde de catalogue), même DDL.
+COLONNE_EXPIRES_AT = "expires_at"
+DDL_COLONNE_EXPIRES_AT = (f"ALTER TABLE project_files ADD COLUMN IF NOT EXISTS "
+                          f"{COLONNE_EXPIRES_AT} TIMESTAMPTZ")
+DDL_INDEX_EXPIRES_AT = ("CREATE INDEX IF NOT EXISTS idx_project_files_expires "
+                        "ON project_files(expires_at) WHERE expires_at IS NOT NULL")
 
 
 def add_project_file(project_id: int, s3_key: str, filename: str, *,
                      mime: Optional[str] = None, size_bytes: Optional[int] = None,
                      title: Optional[str] = None, description: Optional[str] = None,
-                     created_by: Optional[str] = None) -> dict:
+                     created_by: Optional[str] = None, expires_at=None) -> dict:
     """Enregistre un fichier brut (déjà uploadé en S3) attaché au projet. Le blob
-    durable vit dans Object Storage (`s3_key`) ; cette ligne porte sa métadonnée."""
+    durable vit dans Object Storage (`s3_key`) ; cette ligne porte sa métadonnée.
+    `expires_at` (datetime) : la date où `fichiers_echus` le retire ; None = gardé."""
     with _connect() as conn:
         row = conn.execute(
             "INSERT INTO project_files (project_id, s3_key, filename, mime, "
-            "size_bytes, title, description, created_by) "
-            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_PFILE_COLS}",
-            (project_id, s3_key, filename, mime, size_bytes, title, description, created_by),
+            "size_bytes, title, description, created_by, expires_at) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_PFILE_COLS}",
+            (project_id, s3_key, filename, mime, size_bytes, title, description, created_by,
+             expires_at),
         ).fetchone()
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
         return dict(row)
@@ -1777,6 +1791,17 @@ def list_project_files(project_id: int) -> list[dict]:
             f"SELECT {_PFILE_COLS} FROM project_files WHERE project_id = %s "
             "ORDER BY created_at DESC",
             (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def project_files_expired(limit: int = 50) -> list[dict]:
+    """Les fichiers dont l'échéance est passée, les plus anciens d'abord."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, project_id, s3_key, filename, title FROM project_files "
+            "WHERE expires_at IS NOT NULL AND expires_at <= NOW() "
+            "ORDER BY expires_at LIMIT %s", (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -2076,7 +2101,9 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
             continue
         add_project_file(new_id, new_key, f["filename"], mime=f.get("mime"),
                          size_bytes=f.get("size_bytes"), title=f.get("title"),
-                         description=f.get("description"), created_by=copied_by)
+                         description=f.get("description"), created_by=copied_by,
+                         # La copie d'un fichier gardé pour un temps part le même jour.
+                         expires_at=f.get("expires_at"))
 
     log_project_activity(new_id, copied_by, "project.copy", f"from #{src_id}")
     return new_id, warnings

@@ -146,16 +146,25 @@ SERVICE_SCOPES: dict[str, tuple[str, ...]] = {
     # inspection, sitemaps. `webmasters` (submit a sitemap, add a property) is not
     # asked: the service-account connector `google_search_console` keeps that write.
     "search_console": ("https://www.googleapis.com/auth/webmasters.readonly",),
+    # YouTube (SENSITIVE, not restricted). `youtube.force-ssl` is the only scope that
+    # covers comments (`comments.insert`, `setModerationStatus`) as well as
+    # `videos.update`, `thumbnails.set` and video upload (`videos.insert` accepts it,
+    # so `youtube.upload` is never asked for); Analytics `reports.query` requires
+    # `youtube.readonly` plus `yt-analytics.readonly`.
+    "youtube": ("https://www.googleapis.com/auth/youtube.force-ssl",
+                "https://www.googleapis.com/auth/youtube.readonly",
+                "https://www.googleapis.com/auth/yt-analytics.readonly"),
 }
 SERVICES: tuple[str, ...] = tuple(SERVICE_SCOPES)
 SERVICE_LABELS = {"gmail": "Gmail", "drive": "Google Drive", "sheets": "Google Sheets",
                   "calendar": "Google Calendar", "tasks": "Google Tasks",
                   "chat": "Google Chat", "bigquery": "Google BigQuery",
-                  "google_ads": "Google Ads", "search_console": "Search Console (Google sign-in)"}
+                  "google_ads": "Google Ads", "search_console": "Search Console (Google sign-in)",
+                  "youtube": "YouTube"}
 
 # What the ACCOUNT (`google`) requests under our app: the six services from before the
 # split, for a dashboard with a single Google card. FROZEN at these six — a service
-# added since (bigquery 2026-10-02, google_ads 2026-10-08, search_console 2026-11-15) is authorized ONLY from its own card, it is not
+# added since (bigquery 2026-10-02, google_ads 2026-10-08, search_console 2026-11-15, youtube 2026-11-26) is authorized ONLY from its own card, it is not
 # silently added to the account's consent.
 _CARRIER_SERVICES = ("sheets", "drive", "gmail", "tasks", "calendar", "chat")
 SCOPES = [scope for svc in _CARRIER_SERVICES for scope in SERVICE_SCOPES[svc]]

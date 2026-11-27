@@ -475,6 +475,10 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "google_ads_customers": "lire",
     "google_ads_fields": "lire",
     "google_ads_search": "lire",
+    # youtube_act : publier une réponse est public (`envoyer`) ; une miniature se
+    # remplace (`ecrire`) ; un commentaire rejeté ou supprimé ne revient pas.
+    "youtube_act": {"ecrire": "update_video upload_video add_to_playlist set_thumbnail",
+                    "envoyer": "reply", "detruire": "set_moderation delete_comment"},
     "gr_lookup": "lire",
     # registers a webhook: data then leaves to its URL (decided: a send)
     "grain_hook": {"lire": "list", "envoyer": "create", "detruire": "delete"},
@@ -1505,6 +1509,7 @@ LOTS: dict[str, Lot] = {
 
 #: Tool → its list arguments that are NOT a batch of records (fields, tags, sorts…).
 PAS_UN_LOT: dict[str, str] = {
+    "youtube_act": "tags comment_ids",
     "affinity_entity": "fields",
     "affinity_list_entry": "fields",
     "affinity_note": "person_ids company_ids opportunity_ids",

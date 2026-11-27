@@ -27,6 +27,10 @@ OPTIONS /api/public/docs/{token} -> options_handler
 POST,PUT /api/upload/{token} -> upload_receive
 GET,HEAD /api/upload/{token} -> upload_form
 OPTIONS /api/upload/{token} -> options_handler
+GET,HEAD /api/upload/large/{token} -> large_form
+DELETE /api/upload/large/{token} -> large_abort
+GET,HEAD /api/upload/large/{token}/part/{n:int} -> large_part
+POST /api/upload/large/{token}/complete -> large_complete
 POST /api/relay/{token} -> relay_receive
 GET,HEAD /api/relay/batch/{token} -> relay_manifest
 GET,HEAD /api/wttj/resume/{token} -> resume_open

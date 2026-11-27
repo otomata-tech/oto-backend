@@ -306,6 +306,9 @@ CLASSEMENT: dict[str, Table] = {
     "transcription_jobs": indirecte(_PROJETS, secrets=("api_key_enc",),
                                     hors_base=("audio_key",)),
     "jev_jobs": possedee(_ORG_OU_COMPTE, comptes=("sub",)),
+    "youtube_upload_jobs": exclue(_PROJETS, "un envoi en cours vers YouTube : sa session "
+                                  "ne vaut que pour le client Google de CETTE instance, "
+                                  "et la vidéo, elle, part avec le projet"),
     # ── journal, usage, signaux ────────────────────────────────────────────────
     "tool_calls": possedee(_ORG_OU_COMPTE, "tout l'historique (décision du 28/09/2026) ; "
                            "ses mois archivés au froid ne partent pas ; au jour J, il "

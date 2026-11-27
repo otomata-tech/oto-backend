@@ -75,6 +75,13 @@ class UploadUrlInput(BaseModel):
     #: datastore — oto#141. Même raison que les deux précédents : le PUT ne porte aucun
     #: paramètre, donc la fusion sur la clé se DEMANDE ici, au mint, et se scelle.
     upsert: bool = Field(default=False, description=upi.description_parametre())
+    large: bool = Field(default=False, description=(
+        "project_file only: a BIG file (a video of several GB, up to the `max_bytes` the "
+        "answer gives). The bytes go straight to storage in parts, never through oto: "
+        "the answer gives `part_size`, `part_url` (GET `…/part/<n>` → the URL to PUT part "
+        "n on) and `complete_url` (POST once every part is sent). Valid 24 h, the file "
+        "lands in the project at completion. A large file is TEMPORARY: it is deleted "
+        "automatically after `kept_days` (14 by default; `notice` says it) — tell the user."))
 
 
 class UploadUrlOutput(BaseModel):
@@ -96,6 +103,21 @@ class UploadUrlOutput(BaseModel):
     target: dict = Field(description=(
         "la cible SCELLÉE dans le jeton (lisible, signée, non chiffrée) — le PUT ne "
         "porte aucun paramètre"))
+    part_size: Optional[int] = Field(None, description=(
+        "`large` : la taille EXACTE de chaque partie, sauf la dernière (plus courte)"))
+    max_parts: Optional[int] = Field(None, description="`large` : parties au plus")
+    part_url: Optional[str] = Field(None, description=(
+        "`large` : `GET` en remplaçant `{n}` (1, 2…) rend, en texte, l'URL où `PUT` la "
+        "partie n (présignée, une heure, sans `Content-Type`)"))
+    complete_url: Optional[str] = Field(None, description=(
+        "`large` : `POST` une fois toutes les parties envoyées → l'accusé ; une partie "
+        "manquante est nommée, et le même lien la reprend"))
+    abort_url: Optional[str] = Field(None, description="`large` : `DELETE` abandonne le dépôt")
+    kept_days: Optional[int] = Field(None, description=(
+        "`large` : jours de garde du fichier après le dépôt ; ensuite il est supprimé "
+        "automatiquement (`expires_at` de l'accusé et des listes de fichiers)"))
+    notice: Optional[str] = Field(None, description=(
+        "`large` : la durée de garde en une phrase, à dire à l'utilisateur"))
 
 
 # Les refus de la frappe. La cible est RE-jugée à la réception (`check_target_access`) :
@@ -116,6 +138,8 @@ _REFUS_DU_MINT = (
     DeclaredError(400, "bad_parent",
                   "`target=doc`, `op=create` : `parent_id` n'existe pas ou n'est pas une "
                   "page du projet visé (même garde qu'`oto_doc op=create`)"),
+    DeclaredError(400, "large_needs_project_file",
+                  "`large=true` ne vaut que pour `target=project_file`"),
     DeclaredError(400, "upsert_without_key",
                   "`upsert=true` sur un tableau sans clé métier, et sans `key` : il n'y "
                   "aurait rien sur quoi fusionner"),
@@ -203,6 +227,12 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
     except upload_tokens.UploadError as e:
         raise AuthzDenied(e.status, e.code, e.message)
 
+    if inp.large:
+        if target["kind"] != "project_file":
+            raise AuthzDenied(400, "large_needs_project_file",
+                              "`large=true` is for `target=project_file` only.")
+        return _large_upload_url(ctx, target)
+
     token, exp = upload_tokens.sign(sub, ctx.org_id, target)
     url = f"{config.public_base_url()}/api/upload/{token}"
     _CT_BY_KIND = {"doc": "text/markdown; charset=utf-8",
@@ -253,6 +283,46 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
     }
 
 
+def _large_upload_url(ctx: ResolvedCtx, target: dict) -> dict:
+    """Un gros fichier de projet : dépôt multipart direct au stockage (`large_uploads`)."""
+    from .. import large_uploads, media_store
+    try:
+        token, exp, scelle = large_uploads.ouvrir(ctx.sub, ctx.org_id, target)
+    except media_store.MediaError as e:
+        raise AuthzDenied(e.status, e.code, str(e))
+    base = f"{config.public_base_url()}/api/upload/large/{token}"
+    taille = scelle["part_size"]
+    mio = taille // (1024 * 1024)
+    return {
+        "url": base,
+        "method": "PUT",
+        "expires_at": exp,
+        "max_bytes": scelle["max_bytes"],
+        "headers": {},
+        "part_size": taille,
+        "max_parts": large_uploads.MAX_PARTS,
+        "part_url": f"{base}/part/{{n}}",
+        "complete_url": f"{base}/complete",
+        "abort_url": base,
+        "kept_days": large_uploads.keep_days(),
+        "notice": large_uploads.retention_notice(),
+        "hint": (
+            f"Split the file in parts of exactly {taille} bytes ({mio} MiB; the last one "
+            "shorter), PUT each one on its own URL, then POST complete. With a shell: "
+            f"`B='{base}'; F=FILE; P=$(( ($(wc -c < \"$F\") + {taille} - 1) / {taille} )); "
+            "for n in $(seq 1 $P); do dd if=\"$F\" bs=1M skip=$(( (n-1)*"
+            f"{mio} )) count={mio} 2>/dev/null | curl -sf -X PUT -H 'Content-Type:' "
+            "--data-binary @- "
+            "\"$(curl -sf \"$B/part/$n\")\" -o /dev/null || echo \"part $n failed\"; done; "
+            "curl -s -X POST \"$B/complete\"`. A failed part is sent again the same way; "
+            "complete names any missing part. Without a shell, hand the URL to the user: "
+            "opening it in a browser shows an upload form that does all of it. Valid 24 h, "
+            "single completion; the bytes never pass through oto. "
+            f"{large_uploads.retention_notice()} Tell the user."),
+        "target": {k: v for k, v in scelle.items() if k not in ("key", "upload_id")},
+    }
+
+
 CAPABILITIES += [
     Capability(
         key="me.upload_url", handler=_upload_url, Input=UploadUrlInput, authz=SUB_ONLY,
@@ -266,7 +336,9 @@ CAPABILITIES += [
             f"file you produced up to {_EN_LIGNE_KO} KB (`{{kind:\"content\"}}`). Targets: "
             "`datastore` (CSV or NDJSON rows; `key` designates rows by that column), `doc`, "
             "`project_file`, "
-            "`image` (public permanent URL, 2 MB). With neither a shell nor a user, send "
+            "`image` (public permanent URL, 2 MB). A big file (a video of several GB): "
+            "`target=project_file, large=true` sends it to storage in parts, and it is "
+            "deleted automatically after 14 days by default. With neither a shell nor a user, send "
             "rows inline with `data_write`. The URL is signed, not encrypted: keep "
             "confidential names out of it."
         ),

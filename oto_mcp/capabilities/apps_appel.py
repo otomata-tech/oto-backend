@@ -53,7 +53,9 @@ touche : le geste reste jugé par la règle ci-dessous, aux droits du lecteur.
 l'org de l'appel.
 
 **La règle : droits d'une app = droits de son AUTEUR ∩ droits de son LECTEUR.**
-L'auteur (`apps.updated_by`, le dernier à avoir écrit l'app) choisit ce qu'elle
+L'auteur (`apps.updated_by` : le dernier à avoir écrit l'app EN atteignant tout ce
+qu'elle déclare — un éditeur sans ses tableaux écrit sans le devenir, `apps.py::
+_auteur_garde`) choisit ce qu'elle
 touche ; le lecteur l'ouvre avec ses propres droits. Sans la règle, quelqu'un qui peut
 éditer l'app sans lire un tableau le déclarerait et le ferait lire par la session d'un
 collègue. Chaque appel juge donc, sur le tableau DÉCLARÉ au manifeste :
@@ -297,7 +299,7 @@ def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False,
     if draft:
         # L'APERÇU du brouillon (`docs/apps.md` § Brouillon et publication) : ses seuls
         # éditeurs l'ouvrent, et il se juge comme une app à part entière — SON
-        # manifeste, SON auteur (le dernier à l'avoir écrit) ∩ le lecteur. Un lecteur
+        # manifeste, SON auteur (`draft_by`, `apps.py::_auteur_garde`) ∩ le lecteur. Un lecteur
         # reçoit le même refus qu'il y ait un brouillon ou non.
         if not ownership.can_access(ctx.sub, APP_RTYPE, str(app["id"]), "write"):
             raise _refus(403, "draft_editors_only", "Only the app's editors open its draft.")

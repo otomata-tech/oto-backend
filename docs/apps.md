@@ -108,7 +108,8 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
   ambiguës aussi ; sinon `all: true`), absent ou ambigu → 400 `invalid_edits` qui
   nomme l'edit, rien d'écrit ; la longueur que le HTML AURAIT est jugée avant chaque
   remplacement (au plus 1 000 000 de caractères, `MAX_HTML`). Mêmes gardes que `update` : bêta,
-  écriture sur l'app, auteur qui lit ce que l'app déclare (→ 403 `would_break_app`),
+  écriture sur l'app, un auteur qui lit ce que l'app déclare — l'appelant, sinon celui
+  d'avant (§ Modifier une app sans ses tableaux ; personne → 403 `would_break_app`),
   révision ; `expected_rev` → 409, et sans `expected_rev`, la révision LUE (une
   écriture concurrente n'est jamais écrasée sans un mot). Il rend un **reçu** (`rev`,
   `replaced`, `warnings`), jamais le HTML : l'op existe pour qu'un agent change une
@@ -128,6 +129,40 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
 - **REST : session interactive seule** (`allow_api_token=False` sur `/api/me/apps`
   et sur l'appel) : un jeton `oto_`, délégation d'agent hébergé comprise, est refusé
   en 403 `api_token_forbidden`. Un agent écrit une app par `oto_apps`, en MCP.
+
+## Modifier une app sans ses tableaux
+
+Décidé le 25/11/2026 : **un éditeur d'une app la modifie même s'il n'a reçu aucun de ses
+tableaux** (`capabilities/apps.py::_auteur_garde`). Avant, toute écriture faisait de son
+auteur celui de l'app, et un éditeur sans les tableaux était refusé (`would_break_app`,
+`invalid_manifest`) — il aurait cassé l'app pour tous ses lecteurs.
+
+- **Qui atteint tout ce que l'app déclare en devient l'auteur**, comme avant.
+- **Qui n'atteint pas tout écrit quand même, et l'auteur RESTE celui d'avant**
+  (`updated_by`, `draft_by` pour un brouillon), dont les droits bornent toujours chaque
+  lecteur. `edited_by` (`draft_edited_by`) dit qui a écrit ; l'historique
+  (`app_revisions.edited_by`) nomme qui a écrit chaque état, pas son auteur. Servi
+  partout où l'app s'écrit : `update` (HTML, titre, vignette, manifeste), `patch`,
+  `restore`, brouillon et `publish` ; `op=validate` dit bon un tel manifeste.
+- **Une borne** : il ne change ni les tableaux (numéro, `fields`, `set`, `add`), ni les
+  agents que l'app déclare, ni ses rôles (`roles`, leur ordre, `default_role`, dès
+  qu'une app en déclare : élargir un rôle ouvre ce que l'auteur n'a pas choisi de
+  montrer) — comparés après résolution par l'auteur, le reste du
+  manifeste (titre, hauteur, `files`) est libre — **et l'auteur d'avant les atteint
+  encore**. Sinon le refus est le sien, nommé par SES problèmes (rien ne dit ce que
+  l'auteur atteint). Une restauration ou une publication se juge pareil, contre ce
+  qu'elle remplace.
+- **Il ne lit rien de plus par l'app** : à l'appel, la règle auteur ∩ lecteur le juge
+  comme tout lecteur (refusé sur un tableau qu'il n'a pas).
+- **Ce qui change** : jusqu'ici, qui écrivait le HTML lisait déjà tout ce que l'app
+  montre. Désormais le HTML d'un éditeur SANS les tableaux tourne chez des lecteurs qui
+  les ont. Le cadre isolé ne laisse rien sortir vers lui (§ Ce que le cadre isolé laisse
+  sortir : `connect-src 'none'`, requêtes vers les CDN permis seuls). Restent trois
+  chemins, chacun derrière un geste du LECTEUR : `oto.open(url)` (l'adresse entière
+  montrée, ouverte s'il la choisit), `set`/`add` vers un tableau déclaré que l'éditeur
+  lit (accord du lecteur, valeur montrée), et l'entrée d'un agent déclaré `run` (accord
+  du lecteur). L'éditeur ne peut ni ajouter un tableau, un champ ou un agent, ni élargir
+  `set`/`add` : ces chemins sont ceux que l'auteur a déclarés.
 
 ## Une app ouverte — auteur ∩ lecteur (`me.app.call`)
 
@@ -422,7 +457,8 @@ n'écrit de révision qu'en publiant, d'où le plancher des publiées. La purge 
 rétroactive : la première écriture d'une app au-delà du budget en retire l'excédent.
 La taille se lit par `octet_length`, sans décompresser le HTML stocké. `restore`
 remet une révision (en écrivant à son tour l'état courant), après avoir REJUGÉ son
-manifeste : celui qui restaure en devient l'auteur, et l'état restauré est une version
+manifeste : celui qui restaure en devient l'auteur (ou l'auteur reste, § Modifier une app
+sans ses tableaux), et l'état restauré est une version
 publiée (un retour en arrière délibéré, avec sa `note`). `restore to_draft=true` la met
 au brouillon à la place, pour l'essayer avant de la publier (app à brouillon seulement). `op=revision` rend une
 version ENTIÈRE (manifeste, HTML), aux éditeurs seuls — un HTML d'hier peut porter ce
@@ -454,9 +490,10 @@ une branche avant d'arriver sur sa branche principale (`db/app_versions.py`,
   `rev`, auteur, date) qu'à qui peut modifier l'app ; `draft=true` refuse un lecteur
   du même 403 `draft_editors_only` qu'il y ait un brouillon ou non. Aucune carte de liste
   ne le porte.
-- **L'auteur du brouillon** (`draft_by`) est le dernier à l'avoir écrit, avec la règle
-  d'une écriture de l'app : il doit atteindre ce que le manifeste du brouillon déclare
-  (403 `would_break_app`), un manifeste écrit se juge contre lui.
+- **L'auteur du brouillon** (`draft_by`) est, avec la règle d'une écriture de l'app, le
+  dernier à l'avoir écrit s'il atteint ce que le manifeste du brouillon déclare ; sinon
+  l'auteur d'avant reste (§ Modifier une app sans ses tableaux), `draft_edited_by` dit
+  qui l'a écrit ; personne → 403 `would_break_app`.
 - **L'aperçu** : `POST /api/me/apps/{id}/call` et `…/consent` avec `draft: true`, et le
   dépôt de fichier avec le champ `draft`, ouvrent le brouillon — jugé comme une app à
   part entière : SON manifeste, SON auteur ∩ le lecteur (éditeur). Un jeton émis pour
@@ -465,7 +502,8 @@ une branche avant d'arriver sur sa branche principale (`db/app_versions.py`,
   préproduction : il lit et écrit les VRAIS tableaux et lance les vrais agents.
 - **`op=publish`** (`expected_rev` = le `rev` du brouillon vu, obligatoire ; `note`
   facultative, 500 caractères) : le manifeste du brouillon est REJUGÉ contre qui publie,
-  qui devient l'auteur de l'app ; l'état remplacé part dans `app_revisions`, l'état
+  qui devient l'auteur de l'app (sinon l'auteur du brouillon le devient, s'il l'atteint
+  encore) ; l'état remplacé part dans `app_revisions`, l'état
   publié porte `published_at` et `version_note`, le brouillon est vidé — une
   transaction, sous le verrou de la ligne. Un brouillon changé depuis l'aperçu est
   refusé (409 `draft_conflict`). `op=delete_draft` le jette.

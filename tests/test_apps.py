@@ -72,7 +72,7 @@ def seams(monkeypatch):
     from oto_mcp.capabilities.orgs import partage_par_defaut
     monkeypatch.setattr(partage_par_defaut, "role_a_la_naissance", lambda org, t: rec["defaut"])
 
-    def _update(app_id, *, by, expected_rev=None, **fields):
+    def _update(app_id, *, by, edited_by=None, expected_rev=None, **fields):
         if expected_rev not in (None, "abc"):
             raise db.apps.AppConflict("abc")
         rec["update"].append((app_id, by, fields))
@@ -347,8 +347,8 @@ def test_get_inconnue_et_illisible_meme_404(seams):
 
 
 def test_changer_la_vignette_sans_lire_ce_que_l_app_declare_est_refuse(seams, monkeypatch):
-    """Écrire fait de soi l'auteur : un éditeur qui ne lit pas le tableau déclaré
-    casserait l'app pour tous ses lecteurs en changeant seulement la vignette."""
+    """Un éditeur qui ne lit pas le tableau déclaré, sur une app dont l'auteur ne le lit
+    plus non plus : personne n'en serait l'auteur, l'écriture casserait l'app."""
     monkeypatch.setattr(db.apps, "get", lambda i: dict(
         ROW, id=i, updated_by="autre", manifest={"tables": {"t": {"table": "99"}}}))
     e = _refus(lambda: A._app(CTX, A.AppInput(op="update", app_id=5, title="y")))
@@ -628,9 +628,154 @@ def test_patch_sans_expected_rev_ecrit_contre_la_revision_lue(seams, monkeypatch
 
 
 def test_patch_sans_lire_ce_que_l_app_declare_est_refuse(seams, monkeypatch):
-    """Comme update : patcher fait de soi l'auteur, dont les droits bornent chaque lecteur."""
+    """Comme update : ni l'éditeur ni l'auteur d'avant n'atteignent le tableau déclaré."""
     monkeypatch.setattr(db.apps, "get", lambda i: dict(
         ROW, id=i, updated_by="autre", manifest={"tables": {"t": {"table": "99"}}}))
     e = _refus(lambda: A._app(CTX, A.AppInput(op="patch", app_id=5,
                                               edits=[{"find": "x", "replace": "y"}])))
     assert (e.status, e.code) == (403, "would_break_app") and seams["update"] == []
+
+
+# ── Un éditeur sans les tableaux de l'app : il écrit, l'auteur reste ─────────
+
+class _StoreAuteur(_Store):
+    """L'auteur voit aussi le tableau 99 (champ `score`), que l'éditeur ne voit pas."""
+
+    def _resolve(self, ref, write=False):
+        return 99 if str(ref) == "99" else super()._resolve(ref, write)
+
+    def get_schema(self, ref):
+        if str(ref) == "99":
+            return {"fields": [{"key": "score"}]}
+        return super().get_schema(ref)
+
+
+SANS = {"tables": {"t": {"table": "99", "fields": ["score"]}}}
+
+
+@pytest.fixture
+def editeur(seams, monkeypatch):
+    """u1 édite une app dont `auteur` est l'auteur, qui déclare le tableau 99 (que u1
+    ne lit pas) ; `seams["auteur_voit"]` coupe l'accès de l'auteur."""
+    import oto_mcp.datastore.core as core
+    seams["auteur_voit"] = True
+    monkeypatch.setattr(core, "make_store", lambda sub: _StoreAuteur()
+                        if sub == "auteur" and seams["auteur_voit"] else _Store())
+    seams["orgs"]["99"] = ORG_DU_PROJET
+    row = dict(ROW, updated_by="auteur", manifest={
+        "title": None, "height": 480, "files": False, "agents": {},
+        "tables": {"t": {"table": "99", "fields": ["score"], "set": {}, "add": []}}})
+    monkeypatch.setattr(db.apps, "get", lambda i: dict(row, id=i) if i == 5 else None)
+    vus = []
+
+    def update(app_id, *, by, edited_by=None, expected_rev=None, **fields):
+        vus.append((by, edited_by, fields))
+        return dict(row, **{k: v for k, v in fields.items() if v is not None and v is not ...},
+                    updated_by=by, edited_by=edited_by)
+    monkeypatch.setattr(db.apps, "update", update)
+    seams["ecrit"] = vus
+    return seams
+
+
+@pytest.mark.parametrize("inp", [
+    dict(op="patch", edits=[{"find": "x", "replace": "y"}]),
+    dict(op="update", html="<p>neuf</p>"),
+    dict(op="update", title="Renommée"),
+    # Le même manifeste, renvoyé tel quel, avec seulement une autre hauteur.
+    dict(op="update", manifest={"height": 900, **SANS}),
+])
+def test_un_editeur_sans_les_tableaux_ecrit_et_l_auteur_reste(editeur, inp):
+    A._app(CTX, A.AppInput(app_id=5, **inp))
+    ((by, edited_by, _),) = editeur["ecrit"]
+    assert (by, edited_by) == ("auteur", "u1")
+
+
+def test_le_manifeste_resolu_par_l_auteur_est_celui_ecrit(editeur):
+    A._app(CTX, A.AppInput(op="update", app_id=5, manifest={"height": 900, **SANS}))
+    ((_, _, fields),) = editeur["ecrit"]
+    assert fields["manifest"]["tables"]["t"]["table"] == "99"
+    assert fields["manifest"]["height"] == 900
+
+
+@pytest.mark.parametrize("manifest", [
+    # Un champ de plus sur le tableau qu'il ne lit pas.
+    {"tables": {"t": {"table": "99", "fields": ["score", "autre"]}}},
+    # Le même tableau, plus de liste de champs : tout lire.
+    {"tables": {"t": {"table": "99"}}},
+    # Un geste d'écriture en plus.
+    {"tables": {"t": {"table": "99", "fields": ["score"], "set": {"score": ["1"]}}}},
+    # Un tableau en plus, qu'il ne lit pas non plus.
+    {"tables": {"t": {"table": "99", "fields": ["score"]}, "u": {"table": "99"}}},
+    # Un agent en plus.
+    {**SANS, "agents": {"a": 9}},
+])
+def test_un_editeur_sans_les_tableaux_ne_change_pas_ce_que_l_app_declare(editeur, manifest):
+    e = _refus(lambda: A._app(CTX, A.AppInput(op="update", app_id=5, manifest=manifest)))
+    assert (e.status, e.code) == (400, "invalid_manifest") and editeur["ecrit"] == []
+
+
+def test_un_auteur_qui_ne_lit_plus_ses_tableaux_ne_couvre_personne(editeur):
+    editeur["auteur_voit"] = False
+    e = _refus(lambda: A._app(CTX, A.AppInput(op="patch", app_id=5,
+                                              edits=[{"find": "x", "replace": "y"}])))
+    assert (e.status, e.code) == (403, "would_break_app") and editeur["ecrit"] == []
+
+
+def test_un_editeur_qui_atteint_tout_en_devient_l_auteur(editeur, monkeypatch):
+    import oto_mcp.datastore.core as core
+    monkeypatch.setattr(core, "make_store", lambda sub: _StoreAuteur())
+    A._app(CTX, A.AppInput(op="update", app_id=5, title="Renommée"))
+    ((by, edited_by, _),) = editeur["ecrit"]
+    assert (by, edited_by) == ("u1", "u1")
+
+
+def test_validate_dit_bon_un_manifeste_qui_garde_l_auteur(editeur):
+    ok = A._app(CTX, A.AppInput(op="validate", app_id=5, manifest={"height": 900, **SANS}))
+    assert ok["ok"] is True
+    ko = A._app(CTX, A.AppInput(op="validate", app_id=5,
+                                manifest={"tables": {"t": {"table": "99"}}}))
+    assert ko["ok"] is False and ko["problems"]
+
+
+def test_publier_un_brouillon_sans_ses_tableaux_garde_son_auteur(editeur, monkeypatch):
+    brouillon = {"manifest": dict(SANS), "html": "<p>d</p>", "by": "auteur",
+                 "edited_by": "auteur", "at": "t", "rev": "d1"}
+    monkeypatch.setattr(db.app_versions, "draft", lambda i: brouillon)
+    vus = []
+
+    def publish(app_id, *, by, expected_rev, manifest, note=None, edited_by=None):
+        vus.append((by, edited_by, manifest["tables"]["t"]["table"]))
+        return dict(ROW, updated_by=by)
+    monkeypatch.setattr(db.app_versions, "publish", publish)
+    A._app(CTX, A.AppInput(op="publish", app_id=5, expected_rev="d1"))
+    assert vus == [("auteur", "u1", "99")]
+
+
+def test_ecrire_le_brouillon_sans_ses_tableaux_garde_son_auteur(editeur, monkeypatch):
+    brouillon = {"manifest": dict(SANS), "html": "<p>x</p>", "by": "auteur",
+                 "edited_by": "auteur", "at": "t", "rev": "d1"}
+    monkeypatch.setattr(db.app_versions, "draft", lambda i: brouillon)
+    monkeypatch.setattr(db.apps, "get", lambda i: dict(
+        ROW, id=i, updated_by="auteur", drafts_enabled=True, manifest=dict(SANS)))
+    vus = []
+
+    def write_draft(app_id, *, by, edited_by=None, expected_rev=None, manifest=None, html=None):
+        vus.append((by, edited_by))
+        return {**brouillon, "by": by, "edited_by": edited_by}
+    monkeypatch.setattr(db.app_versions, "write_draft", write_draft)
+    A._app(CTX, A.AppInput(op="patch", app_id=5, edits=[{"find": "x", "replace": "y"}]))
+    A._app(CTX, A.AppInput(op="update", app_id=5, manifest={"height": 700, **SANS}))
+    assert vus == [("auteur", "u1"), ("auteur", "u1")]
+
+
+def test_restaurer_sans_les_tableaux_garde_l_auteur_si_les_declarations_restent(editeur):
+    editeur["old_manifest"] = {"height": 300, **SANS}
+    A._app(CTX, A.AppInput(op="restore", app_id=5, revision_id=3))
+    ((by, edited_by, fields),) = editeur["ecrit"]
+    assert (by, edited_by, fields["manifest"]["height"]) == ("auteur", "u1", 300)
+
+
+def test_restaurer_sans_les_tableaux_d_autres_declarations_est_refuse(editeur):
+    editeur["old_manifest"] = {"tables": {"t": {"table": "99"}}}
+    e = _refus(lambda: A._app(CTX, A.AppInput(op="restore", app_id=5, revision_id=3)))
+    assert (e.status, e.code) == (400, "invalid_manifest") and editeur["ecrit"] == []

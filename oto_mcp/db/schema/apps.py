@@ -162,3 +162,13 @@ ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS note TEXT;
 -- remplacé. NULL pour les révisions d'avant cette colonne.
 ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS saved_at TIMESTAMPTZ;
 """
+
+EDITEUR = """
+-- QUI a écrit l'état vivant et le brouillon, à côté de leur AUTEUR (`updated_by`,
+-- `draft_by`), celui dont les droits bornent l'app. Un éditeur qui n'atteint pas tous
+-- les tableaux de l'app la modifie sans en devenir l'auteur, tant qu'il ne change ni
+-- ses tableaux ni ses agents (`docs/apps.md` § Modifier une app sans ses tableaux) :
+-- les deux diffèrent alors. NULL = l'auteur (états d'avant ces colonnes).
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS edited_by TEXT;
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS draft_edited_by TEXT;
+"""

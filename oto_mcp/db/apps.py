@@ -40,7 +40,7 @@ from ._conn import _connect
 # Ce qu'une LISTE rend : de quoi dessiner une carte, jamais le HTML (une app pèse
 # des dizaines de Ko ; la liste d'une org en servait sinon des centaines).
 _CARTE = ("id, owner_type, owner_id, context_org_id, title, thumbnail, created_by, "
-          "created_at, updated_by, updated_at, archived_at")
+          "created_at, updated_by, edited_by, updated_at, archived_at")
 # L'état vivant est-il une version publiée, sa note, et l'app passe-t-elle par un
 # brouillon : de quoi dire au lecteur quelle version il ouvre. Jamais le brouillon
 # lui-même (`db/app_versions.py`), réservé à ses éditeurs.
@@ -89,10 +89,11 @@ def create(owner: tuple[str, str], context_org_id: Optional[int], *, title: str,
     with _connect() as conn:
         row = conn.execute(
             f"INSERT INTO apps (owner_type, owner_id, context_org_id, title, manifest, html, "
-            f"thumbnail, created_by, updated_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            f"thumbnail, created_by, updated_by, edited_by) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
             f"RETURNING {_TOUT}",
             (owner[0], str(owner[1]), context_org_id, title, Jsonb(manifest), html,
-             Jsonb(thumbnail) if thumbnail is not None else None, by, by),
+             Jsonb(thumbnail) if thumbnail is not None else None, by, by, by),
         ).fetchone()
         if project_id is not None:
             conn.execute("INSERT INTO app_projects (app_id, project_id, filed_by) "
@@ -273,13 +274,15 @@ def unfile(app_id: int, project_id: int) -> bool:
                             (app_id, project_id)).rowcount > 0
 
 
-def update(app_id: int, *, by: str, expected_rev: Optional[str] = None,
+def update(app_id: int, *, by: str, edited_by: Optional[str] = None,
+           expected_rev: Optional[str] = None,
            title: Optional[str] = None, manifest: Optional[dict] = None,
            html: Optional[str] = None, thumbnail: Any = ...,
            published: bool = False, note: Optional[str] = None) -> Optional[dict]:
     """Change les champs donnés (`thumbnail=None` l'efface ; omis, il reste). Écrit
     l'état précédent dans `app_revisions` d'abord. `None` = app inconnue.
-    `published` : l'état écrit est une version publiée (`op=restore`), avec `note`."""
+    `published` : l'état écrit est une version publiée (`op=restore`), avec `note`.
+    `by` devient l'auteur de l'app ; `edited_by` (défaut : `by`) dit qui a écrit."""
     with _connect() as conn:
         prior = conn.execute(
             f"SELECT {_TOUT} FROM apps WHERE id = %s FOR UPDATE", (app_id,)).fetchone()
@@ -288,13 +291,15 @@ def update(app_id: int, *, by: str, expected_rev: Optional[str] = None,
         current = app_rev(prior["title"], prior["manifest"], prior["html"], prior["thumbnail"])
         if expected_rev is not None and expected_rev != current:
             raise AppConflict(current)
-        row = ecrire_sous_verrou(conn, prior, by=by, title=title, manifest=manifest,
+        row = ecrire_sous_verrou(conn, prior, by=by, edited_by=edited_by, title=title,
+                                 manifest=manifest,
                                  html=html, thumbnail=thumbnail, published=published,
                                  note=note)
     return with_rev(row)
 
 
-def ecrire_sous_verrou(conn, prior: dict, *, by: str, title: Optional[str] = None,
+def ecrire_sous_verrou(conn, prior: dict, *, by: str, edited_by: Optional[str] = None,
+                       title: Optional[str] = None,
                        manifest: Optional[dict] = None, html: Optional[str] = None,
                        thumbnail: Any = ..., published: bool = False,
                        note: Optional[str] = None, extra_sets: Iterable[str] = ()) -> dict:
@@ -315,7 +320,8 @@ def ecrire_sous_verrou(conn, prior: dict, *, by: str, title: Optional[str] = Non
         "published_at, note, saved_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (app_id, prior["title"], Jsonb(prior["manifest"]), prior["html"],
          Jsonb(prior["thumbnail"]) if prior["thumbnail"] is not None else None,
-         prior["updated_by"], prior.get("published_at") if remplace else None,
+         prior.get("edited_by") or prior["updated_by"],
+         prior.get("published_at") if remplace else None,
          prior.get("version_note") if remplace else None, prior.get("updated_at")),
     )
     # Deux bornes : les révisions ordinaires, puis les versions publiées — jamais l'une
@@ -328,7 +334,11 @@ def ecrire_sous_verrou(conn, prior: dict, *, by: str, title: Optional[str] = Non
             (app_id, app_id, garde),
         )
     _purger_au_budget(conn, app_id)
-    sets, params = ["updated_at = NOW()", "updated_by = %s", *extra_sets], [by]
+    # `by` = l'AUTEUR, dont les droits bornent l'app ; `edited_by` = qui écrit. Un
+    # éditeur qui n'atteint pas tous les tableaux de l'app écrit sans en devenir
+    # l'auteur (`capabilities/apps.py::_auteur_garde`) : les deux diffèrent alors.
+    sets = ["updated_at = NOW()", "updated_by = %s", "edited_by = %s", *extra_sets]
+    params: list = [by, edited_by or by]
     if title is not None:
         sets.append("title = %s")
         params.append(title)

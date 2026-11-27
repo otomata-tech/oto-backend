@@ -23,7 +23,7 @@ def brouillons(seams, monkeypatch):  # noqa: F811
         "mode", True)) if i == 5 else None)
     monkeypatch.setattr(db.app_versions, "draft", lambda i: etat["draft"])
 
-    def write_draft(app_id, *, by, expected_rev=None, manifest=None, html=None):
+    def write_draft(app_id, *, by, edited_by=None, expected_rev=None, manifest=None, html=None):
         if etat.get("raise"):
             raise etat["raise"]
         base = etat["draft"] or {"manifest": ROW["manifest"], "html": ROW["html"]}
@@ -34,7 +34,7 @@ def brouillons(seams, monkeypatch):  # noqa: F811
                          "at": "t", "rev": "d-new"}
         return etat["draft"]
 
-    def publish(app_id, *, by, expected_rev, manifest, note=None):
+    def publish(app_id, *, by, expected_rev, manifest, note=None, edited_by=None):
         if expected_rev != etat["draft"]["rev"]:
             raise db.app_versions.DraftConflict(etat["draft"]["rev"])
         etat["published"].append({"by": by, "manifest": manifest, "note": note})
@@ -68,7 +68,7 @@ def _brouillon(**kw):
 def test_get_nomme_le_brouillon_a_l_editeur_seul(brouillons):
     brouillons["draft"] = _brouillon()
     out = _app(op="get")
-    assert out["draft"] == {"rev": "d1", "updated_by": "u1", "updated_at": "t"}
+    assert out["draft"] == {"rev": "d1", "updated_by": "u1", "edited_by": "u1", "updated_at": "t"}
     # L'app servie reste la version publiée.
     assert out["app"]["html"] == ROW["html"]
     brouillons["seams"]["rights"]["write"] = False
@@ -148,8 +148,9 @@ def test_restaurer_vers_le_brouillon_d_une_app_sans_brouillon(brouillons):
 
 
 def test_qui_ecrit_le_brouillon_doit_atteindre_son_manifeste(brouillons):
-    """L'auteur du brouillon borne son aperçu : écrire sans lire ce qu'il déclare est
-    refusé, comme pour l'app publiée."""
+    """L'auteur du brouillon borne son aperçu : écrire sans lire ce qu'il déclare, sur
+    un brouillon dont l'auteur ne le lit plus non plus, est refusé, comme pour l'app
+    publiée."""
     brouillons["draft"] = _brouillon(manifest={"tables": {"t": {"table": "99"}}}, by="autre")
     e = _refus(lambda: _app(op="patch", edits=[{"find": "draft", "replace": "x"}]))
     assert (e.status, e.code) == (403, "would_break_app")

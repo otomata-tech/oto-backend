@@ -22,7 +22,7 @@ from psycopg.types.json import Jsonb
 from ._conn import _connect
 from .apps import _TOUT, app_rev, ecrire_sous_verrou, with_rev
 
-_BROUILLON = "draft_manifest, draft_html, draft_by, draft_at"
+_BROUILLON = "draft_manifest, draft_html, draft_by, draft_edited_by, draft_at"
 
 
 class DraftConflict(Exception):
@@ -60,7 +60,8 @@ def _vue(row: Optional[dict]) -> Optional[dict]:
     if row is None or row.get("draft_html") is None:
         return None
     return {"manifest": row["draft_manifest"] or {}, "html": row["draft_html"],
-            "by": row["draft_by"], "at": row["draft_at"],
+            "by": row["draft_by"], "edited_by": row.get("draft_edited_by") or row["draft_by"],
+            "at": row["draft_at"],
             "rev": draft_rev(row["draft_manifest"], row["draft_html"])}
 
 
@@ -91,10 +92,12 @@ def _juger(prior: dict, expected_rev: Optional[str]) -> Optional[dict]:
     return courant
 
 
-def write_draft(app_id: int, *, by: str, expected_rev: Optional[str] = None,
+def write_draft(app_id: int, *, by: str, edited_by: Optional[str] = None,
+                expected_rev: Optional[str] = None,
                 manifest: Optional[dict] = None, html: Optional[str] = None) -> Optional[dict]:
     """Écrit le brouillon : `manifest` et/ou `html`, le reste repris du brouillon en
-    cours ou, sans lui, de l'état vivant. L'auteur du brouillon devient `by`. `None` =
+    cours ou, sans lui, de l'état vivant. L'auteur du brouillon devient `by` (ses
+    droits bornent l'aperçu) ; `edited_by` (défaut : `by`) dit qui l'a écrit. `None` =
     app inconnue ; `DraftsOff` si l'app ne passe pas par un brouillon."""
     with _connect() as conn:
         prior = _verrou(conn, app_id)
@@ -110,8 +113,8 @@ def write_draft(app_id: int, *, by: str, expected_rev: Optional[str] = None,
         h = html if html is not None else base["html"]
         row = conn.execute(
             "UPDATE apps SET draft_manifest = %s, draft_html = %s, draft_by = %s, "
-            f"draft_at = NOW() WHERE id = %s RETURNING {_BROUILLON}",
-            (Jsonb(m), h, by, app_id)).fetchone()
+            f"draft_edited_by = %s, draft_at = NOW() WHERE id = %s RETURNING {_BROUILLON}",
+            (Jsonb(m), h, by, edited_by or by, app_id)).fetchone()
     return _vue(row)
 
 
@@ -123,7 +126,8 @@ def delete_draft(app_id: int, *, expected_rev: Optional[str] = None) -> bool:
             return False
         _juger(prior, expected_rev)
         conn.execute("UPDATE apps SET draft_manifest = NULL, draft_html = NULL, "
-                     "draft_by = NULL, draft_at = NULL WHERE id = %s", (app_id,))
+                     "draft_by = NULL, draft_edited_by = NULL, draft_at = NULL "
+                     "WHERE id = %s", (app_id,))
     return True
 
 
@@ -142,7 +146,7 @@ def set_enabled(app_id: int, enabled: bool) -> Optional[dict]:
 
 
 def publish(app_id: int, *, by: str, expected_rev: Optional[str], manifest: dict,
-            note: Optional[str] = None) -> Optional[dict]:
+            note: Optional[str] = None, edited_by: Optional[str] = None) -> Optional[dict]:
     """Rend le brouillon vivant : `manifest` est celui du brouillon, déjà REJUGÉ par
     l'appelant contre `by` (qui devient l'auteur de l'app) ; le HTML est celui du
     brouillon nommé par `expected_rev` — refusé s'il a changé. L'état remplacé est
@@ -157,7 +161,8 @@ def publish(app_id: int, *, by: str, expected_rev: Optional[str], manifest: dict
         if expected_rev is not None and expected_rev != courant["rev"]:
             raise DraftConflict(courant["rev"])
         row = ecrire_sous_verrou(
-            conn, prior, by=by, manifest=manifest, html=courant["html"], published=True,
-            note=note, extra_sets=("draft_manifest = NULL", "draft_html = NULL",
-                                   "draft_by = NULL", "draft_at = NULL"))
+            conn, prior, by=by, edited_by=edited_by, manifest=manifest, html=courant["html"],
+            published=True, note=note,
+            extra_sets=("draft_manifest = NULL", "draft_html = NULL", "draft_by = NULL",
+                        "draft_edited_by = NULL", "draft_at = NULL"))
     return with_rev(row)

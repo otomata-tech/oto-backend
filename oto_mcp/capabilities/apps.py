@@ -32,12 +32,21 @@ les écritures (403 `apps_beta_only`) et `oto_apps` dans `BETA_TOOLS` sont tomb�
 borne une app n'a jamais été l'option : c'est le manifeste jugé contre la portée de
 l'AUTEUR, et à l'appel l'intersection auteur ∩ lecteur.
 
+**Un éditeur modifie l'app même sans ses tableaux** (`_auteur_garde`) : qui écrit et
+atteint tout ce que l'app déclare en devient l'auteur ; qui n'atteint pas tout écrit
+quand même — HTML, titre, vignette, hauteur, publication d'un brouillon — et l'auteur
+RESTE celui d'avant, dont les droits bornent toujours l'app (`edited_by` dit qui a
+écrit). Une seule borne : il ne change ni les tableaux (numéros, champs, `set`, `add`)
+ni les agents que l'app déclare, et l'auteur d'avant les atteint encore. Changer ces
+déclarations sans les atteindre reste refusé.
+
 **Face REST : session interactive seule** (`allow_api_token=False`) — aucun jeton
 `oto_`, délégation d'agent hébergé comprise : une app s'écrit par un humain ou par son
 agent en MCP, pas par un script porteur de clé.
 """
 from __future__ import annotations
 
+import copy
 import os
 from typing import Any, Literal, Optional
 
@@ -133,7 +142,11 @@ class AppCard(BaseModel):
     thumbnail: Optional[dict] = None
     created_by: Optional[str] = None
     created_at: Optional[Any] = None
+    # L'AUTEUR : dont les droits bornent l'app (auteur ∩ lecteur).
     updated_by: Optional[str] = None
+    # Qui a écrit l'état vivant — l'auteur, sauf un éditeur qui n'atteint pas tous ses
+    # tableaux (il écrit sans en devenir l'auteur). NULL = l'auteur.
+    edited_by: Optional[str] = None
     updated_at: Optional[Any] = None
     archived_at: Optional[Any] = None
 
@@ -152,7 +165,9 @@ class AppView(AppCard):
 class AppDraft(BaseModel):
     """Le brouillon d'une app, sans son contenu — servi à ses seuls éditeurs."""
     rev: str
+    # L'auteur du brouillon (borne son aperçu), et qui l'a écrit.
     updated_by: Optional[str] = None
+    edited_by: Optional[str] = None
     updated_at: Optional[Any] = None
 
 
@@ -256,12 +271,58 @@ def _problemes(sub: str, org_id: Optional[int], raw: Optional[dict]) -> tuple[di
     return clean, problems
 
 
-def _checked_manifest(ctx: ResolvedCtx, org_id: Optional[int], raw: Optional[dict]) -> dict:
+# Ce qui, dans un manifeste normalisé, OUVRE quelque chose à ses lecteurs : les tableaux
+# (numéro, champs, `set`, `add`), les agents — et, dès qu'une app déclare des rôles,
+# leur définition, leur ordre et le rôle par défaut (`apps_roles.py`) : élargir un rôle
+# ouvre à ceux qui le tiennent ce que l'auteur n'a pas choisi de leur montrer. Une clé
+# que le manifeste ne porte pas se compare comme absente des deux côtés.
+_CE_QUI_OUVRE = ("tables", "agents", "roles", "role_order", "default_role")
+
+
+def _ouvre(clean: dict) -> dict:
+    return {k: clean.get(k) or None for k in _CE_QUI_OUVRE}
+
+
+def _declarations(manifest: Optional[dict]) -> dict:
+    """Ce qu'un manifeste ouvre (`_CE_QUI_OUVRE`), normalisé par `forme` — le reste
+    (titre, hauteur, fichiers) n'ouvre rien."""
+    clean, _ = forme(manifest if manifest is not None else {})
+    return _ouvre(clean)
+
+
+def _auteur_garde(ctx: ResolvedCtx, org_id: Optional[int], base: dict,
+                  raw: Optional[dict]) -> Optional[dict]:
+    """Un éditeur qui n'atteint pas tout ce que l'app déclare écrit-il SANS en devenir
+    l'auteur ? Oui si l'auteur de `base` (`{"manifest", "updated_by"}` : l'état vivant
+    ou le brouillon que l'écriture remplace) existe, atteint encore tout ce que `raw`
+    déclare, et que `raw` déclare exactement les mêmes tableaux, agents et rôles que `base`.
+    Rend alors le manifeste résolu par cet auteur ; sinon `None` (le refus de l'appelant
+    reste, nommé par SES problèmes : rien ne dit ce que l'auteur atteint)."""
+    a = base.get("updated_by")
+    if not a or a == ctx.sub:
+        return None
+    essai, problems = forme(copy.deepcopy(raw) if raw is not None else {})
+    if problems or auteur(a, org_id, essai):
+        return None
+    if _ouvre(essai) != _declarations(base.get("manifest")):
+        return None
+    return essai
+
+
+def _checked_manifest(ctx: ResolvedCtx, org_id: Optional[int], raw: Optional[dict],
+                      base: Optional[dict] = None) -> tuple[dict, str]:
+    """Le manifeste jugé, et l'AUTEUR de l'écriture : l'appelant s'il atteint tout ce
+    qu'il déclare ; sinon, avec `base`, l'auteur d'avant quand l'écriture garde ses
+    déclarations (`_auteur_garde`)."""
     clean, problems = _problemes(ctx.sub, org_id, raw)
-    if problems:
-        raise AuthzDenied(400, "invalid_manifest",
-                          "The manifest isn't valid: " + " ".join(problems))
-    return clean
+    if not problems:
+        return clean, ctx.sub
+    if base is not None:
+        garde = _auteur_garde(ctx, org_id, base, raw)
+        if garde is not None:
+            return garde, base["updated_by"]
+    raise AuthzDenied(400, "invalid_manifest",
+                      "The manifest isn't valid: " + " ".join(problems))
 
 
 def _content(inp: AppInput, *, creating: bool) -> None:
@@ -328,17 +389,24 @@ def _avertir(manifest: Optional[dict], html: Optional[str]) -> dict:
     return {"warnings": w} if w else {}
 
 
-def _devenir_auteur_ou_refus(ctx: ResolvedCtx, row: dict) -> None:
-    """Toute écriture fait de son auteur celui de l'app (`updated_by`), dont les droits
-    bornent chaque lecteur. Écrire sans pouvoir lire ce que l'app déclare la casserait
-    pour tous : rejugé, refusé nommé."""
-    if row.get("updated_by") != ctx.sub:
-        _, problems = _problemes(ctx.sub, org_de_l_app(row), row["manifest"])
-        if problems:
-            raise AuthzDenied(
-                403, "would_break_app",
-                "Saving would make you this app's author, and you can't reach "
-                "everything it uses: " + " ".join(problems))
+def _devenir_auteur_ou_refus(ctx: ResolvedCtx, row: dict) -> str:
+    """L'AUTEUR d'une écriture qui garde le manifeste de `row` (HTML, titre, vignette) :
+    l'appelant s'il atteint tout ce que l'app déclare — il en devient l'auteur
+    (`updated_by`), dont les droits bornent chaque lecteur ; sinon l'auteur d'avant,
+    s'il l'atteint encore (`_auteur_garde`) : l'éditeur écrit sans en devenir
+    l'auteur. Ni l'un ni l'autre : écrire casserait l'app pour tous, refusé nommé."""
+    if row.get("updated_by") == ctx.sub:
+        return ctx.sub
+    org = org_de_l_app(row)
+    _, problems = _problemes(ctx.sub, org, row["manifest"])
+    if not problems:
+        return ctx.sub
+    if _auteur_garde(ctx, org, row, row["manifest"]) is not None:
+        return row["updated_by"]
+    raise AuthzDenied(
+        403, "would_break_app",
+        "This app's author can no longer reach everything it uses, and neither can "
+        "you: " + " ".join(problems))
 
 
 def _org_list(ctx: ResolvedCtx, archived: bool) -> tuple[list[dict], set[int]]:
@@ -399,6 +467,14 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         if app is not None:
             org_suspension.exiger(org)
         clean, problems = _problemes(sub, org, inp.manifest)
+        if problems and app is not None and _can(sub, app["id"], "write"):
+            # Un éditeur sans les tableaux de l'app : ce manifeste s'écrirait-il en
+            # gardant l'auteur (`_auteur_garde`) ? Alors il est bon, et on le dit.
+            base = _base_brouillon(app) if app.get("drafts_enabled") else app
+            garde = _auteur_garde(ctx, org, base, inp.manifest if inp.manifest is not None
+                                  else base.get("manifest"))
+            if garde is not None:
+                clean, problems = garde, []
         out: dict = {"ok": not problems, "problems": problems}
         if not problems:
             manifeste = app["manifest"] if inp.manifest is None and app is not None else clean
@@ -413,7 +489,7 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
             _require(_can_project(sub, int(inp.project_id), "write"), "forbidden",
                      "You can't file an app in this project.", 403)
         _content(inp, creating=True)
-        manifest = _checked_manifest(ctx, int(ctx.org_id), inp.manifest)
+        manifest, _ = _checked_manifest(ctx, int(ctx.org_id), inp.manifest)
         extra = _avertir(manifest, inp.html)
         # À qui la crée, dans l'org active : privée, comme un agent — l'org l'ouvre
         # seulement si un admin l'a réglé (`partage_par_defaut`, type `app`).
@@ -517,20 +593,23 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         _require(old is not None, "unknown_revision", "No such revision of this app.", 404)
         # Restaurer, c'est RÉÉCRIRE l'app sous son nom : le manifeste d'hier est rejugé
         # contre celui qui restaure (il devient l'auteur) et l'org de l'app d'aujourd'hui.
-        manifest = _checked_manifest(ctx, org_de_l_app(row), old["manifest"])
+        # Un éditeur sans les tableaux restaure une version qui déclare les mêmes
+        # tableaux et agents que ce qu'elle remplace (`_auteur_garde`).
+        manifest, a = _checked_manifest(ctx, org_de_l_app(row), old["manifest"],
+                                        base=_base_brouillon(row) if inp.to_draft else row)
         extra = _avertir(manifest, old["html"])
         if inp.to_draft:
             # Vers le brouillon : l'essayer avant de la rendre vivante. Le titre et la
             # vignette, la carte, n'en font pas partie.
             V.ecrire(ctx, row, expected_rev=inp.expected_rev, manifest=manifest,
-                     html=old["html"], auteur_ou_refus=_devenir_auteur_ou_refus)
+                     html=old["html"], auteur_ou_refus=_devenir_auteur_ou_refus, auteur=a)
             return {"app": _view(sub, row), "target": "draft",
                     "draft": V.resume(db.app_versions.draft(row["id"])), **extra}
         # Une restauration est une version PUBLIÉE : un retour en arrière délibéré, gardé
         # dans l'historique hors de la purge des révisions ordinaires.
-        changed = _update(sub, row, inp.expected_rev, title=old["title"], manifest=manifest,
-                          html=old["html"], thumbnail=old["thumbnail"], published=True,
-                          note=V._note(inp.note))
+        changed = _update(sub, row, inp.expected_rev, auteur=a, title=old["title"],
+                          manifest=manifest, html=old["html"], thumbnail=old["thumbnail"],
+                          published=True, note=V._note(inp.note))
         return {"app": _view(sub, changed), "target": "live", **extra}
 
     if inp.op == "patch" and row.get("drafts_enabled"):
@@ -556,25 +635,31 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
             html, n = appliquer(row.get("html") or "", inp.edits, max_len=MAX_HTML)
         except RemplacementRefuse as e:
             raise AuthzDenied(400, "invalid_edits", str(e)) from None
-        _devenir_auteur_ou_refus(ctx, row)
+        a = _devenir_auteur_ou_refus(ctx, row)
         # Le manifeste, un patch n'y touche pas : celui de l'app lue.
         extra = _avertir(row.get("manifest"), html)
         # Le HTML est calculé sur la révision LUE : sans `expected_rev`, on écrit contre
         # elle, sinon une écriture concurrente serait écrasée sans un mot.
-        changed = _update(sub, row, inp.expected_rev or row["rev"], html=html)
+        changed = _update(sub, row, inp.expected_rev or row["rev"], auteur=a, html=html)
         return {"rev": changed["rev"], "replaced": n, "target": "live", **extra}
 
     # update
     _content(inp, creating=False)
+    au_brouillon = bool(row.get("drafts_enabled")) and (inp.manifest is not None
+                                                         or inp.html is not None)
+    a: Optional[str] = None
     if inp.manifest is not None:
-        manifest = _checked_manifest(ctx, org_de_l_app(row), inp.manifest)
+        # Jugé contre ce que l'écriture remplace : le brouillon, ou l'état vivant.
+        manifest, a = _checked_manifest(ctx, org_de_l_app(row), inp.manifest,
+                                        base=_base_brouillon(row) if au_brouillon else row)
     else:
         manifest = None
-    if row.get("drafts_enabled") and (manifest is not None or inp.html is not None):
-        return _update_brouillon(ctx, row, inp, manifest)
+    if au_brouillon:
+        return _update_brouillon(ctx, row, inp, manifest, a)
     if manifest is None:
-        # Changer le titre ou la vignette fait aussi de moi l'auteur.
-        _devenir_auteur_ou_refus(ctx, row)
+        # Changer le titre ou la vignette fait aussi de moi l'auteur — si j'atteins
+        # tout ce que l'app déclare ; sinon l'auteur reste.
+        a = _devenir_auteur_ou_refus(ctx, row)
     thumb: Any = ...
     if inp.clear_thumbnail:
         thumb = None
@@ -582,7 +667,8 @@ def _app(ctx: ResolvedCtx, inp: AppInput) -> dict:
         thumb = _thumbnail(inp.thumbnail)
     extra = _avertir(manifest if manifest is not None else row["manifest"],
                      inp.html if inp.html is not None else row["html"])
-    changed = _update(sub, row, inp.expected_rev, title=inp.title.strip() if inp.title else None,
+    changed = _update(sub, row, inp.expected_rev, auteur=a,
+                      title=inp.title.strip() if inp.title else None,
                       manifest=manifest, html=inp.html, thumbnail=thumb)
     return {"app": _view(sub, changed), "target": "live", **extra}
 
@@ -593,8 +679,17 @@ def _thumb_of(inp: AppInput) -> Any:
     return _thumbnail(inp.thumbnail) if inp.thumbnail is not None else ...
 
 
+def _base_brouillon(row: dict) -> dict:
+    """Ce qu'une écriture au brouillon remplace : le brouillon en cours (son manifeste,
+    son auteur), sinon l'état vivant dont il naîtra."""
+    courant = db.app_versions.draft(row["id"])
+    if courant is None:
+        return row
+    return {**row, "manifest": courant["manifest"], "updated_by": courant["by"]}
+
+
 def _update_brouillon(ctx: ResolvedCtx, row: dict, inp: AppInput,
-                      manifest: Optional[dict]) -> dict:
+                      manifest: Optional[dict], auteur_du_manifeste: Optional[str]) -> dict:
     """`update` d'une app à brouillon : le manifeste et le HTML vont au brouillon ; le
     titre et la vignette — la carte, que les lecteurs voient dans la liste — en direct,
     s'ils sont donnés aussi. `expected_rev` nomme le brouillon (ou, sans lui, l'état
@@ -608,20 +703,22 @@ def _update_brouillon(ctx: ResolvedCtx, row: dict, inp: AppInput,
     # auteur qui casserait l'app publiée ne laisse pas un brouillon écrit à moitié.
     thumb = _thumb_of(inp)
     carte = inp.title is not None or thumb is not ...
-    if carte:
-        _devenir_auteur_ou_refus(ctx, row)
+    a_carte = _devenir_auteur_ou_refus(ctx, row) if carte else None
     V.ecrire(ctx, row, expected_rev=inp.expected_rev, manifest=manifest, html=inp.html,
-             auteur_ou_refus=_devenir_auteur_ou_refus)
+             auteur_ou_refus=_devenir_auteur_ou_refus, auteur=auteur_du_manifeste)
     if carte:
-        row = _update(ctx.sub, row, None, title=inp.title.strip() if inp.title else None,
-                      thumbnail=thumb)
+        row = _update(ctx.sub, row, None, auteur=a_carte,
+                      title=inp.title.strip() if inp.title else None, thumbnail=thumb)
     return {"app": _view(ctx.sub, row), "target": "draft",
             "draft": V.resume(db.app_versions.draft(row["id"])), **extra}
 
 
-def _update(sub: str, row: dict, expected_rev: Optional[str], **fields) -> dict:
+def _update(sub: str, row: dict, expected_rev: Optional[str], *,
+            auteur: Optional[str] = None, **fields) -> dict:
+    """Écrit l'état vivant : `auteur` (défaut : `sub`) en devient l'auteur, `sub` l'a écrit."""
     try:
-        out = db.apps.update(row["id"], by=sub, expected_rev=expected_rev, **fields)
+        out = db.apps.update(row["id"], by=auteur or sub, edited_by=sub,
+                             expected_rev=expected_rev, **fields)
     except db.apps.AppConflict as e:
         raise AuthzDenied(409, "conflict",
                           f"This app changed since you read it (now at rev {e.current_rev}): "
@@ -701,14 +798,19 @@ def description_app(liens: bool) -> str:
             "read the draft with op=get `draft: true` and write against ITS rev "
             "(409 draft_exists if you pass the published rev while a draft exists). "
             "op=publish (`expected_rev` = the draft's rev, optional `note`) makes the draft "
-            "live for everyone and you its author; op=delete_draft drops it. "
+            "live for everyone and you its author (unless you can't reach its tables: "
+            "then its author stays); op=delete_draft drops it. "
             "create, update, patch, restore, publish and validate also return `warnings`: "
             "oto.rows / oto.aggregate calls that sort, filter, group or measure on a "
             "field the manifest doesn't declare (`_created_at` / `_updated_at` are "
             "always sortable and filterable) — the open app would refuse them, so fix "
             "them first. Every declared "
             "table and agent must be within YOUR reach and in the app's organization: "
-            "otherwise 400 invalid_manifest, each problem listed.\n"
+            "otherwise 400 invalid_manifest, each problem listed. An editor who can't "
+            "reach an existing app's tables can still change its HTML, title, thumbnail "
+            "and layout (and publish or restore) as long as the declared tables and "
+            "agents stay exactly the same: its author, whose rights bound every viewer, "
+            "stays who it was.\n"
             "In the HTML, `window.oto`: rows(table, {filter, orderBy, limit}) / "
             "aggregate(table, {groupBy, metrics, filter}) / set(table, rowId, field, value) / "
             "add(table, values) / upload(file) → {id, name, mediaType, size} (manifest "

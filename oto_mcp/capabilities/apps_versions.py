@@ -9,7 +9,9 @@ direct). Ses éditeurs l'ouvrent en aperçu (`op=get draft=true`, et
 du brouillon) ; `op=publish` le rend vivant pour tous, avec une note.
 
 **Publier, c'est réécrire l'app sous son nom** — comme restaurer : le manifeste du
-brouillon est rejugé contre celui qui publie, qui en devient l'auteur ; il nomme le
+brouillon est rejugé contre celui qui publie, qui en devient l'auteur (s'il n'atteint
+pas tout ce que le brouillon déclare, l'auteur du brouillon le reste, à condition de
+l'atteindre encore : `apps._auteur_garde`) ; il nomme le
 brouillon qu'il a vu (`expected_rev`), sinon un brouillon changé entre l'aperçu et le
 clic deviendrait vivant sous son nom sans qu'il l'ait lu.
 
@@ -48,7 +50,8 @@ def resume(draft: Optional[dict]) -> Optional[dict]:
     """Ce qu'un éditeur voit du brouillon sans l'ouvrir : qui, quand, son `rev`."""
     if draft is None:
         return None
-    return {"rev": draft["rev"], "updated_by": draft["by"], "updated_at": draft["at"]}
+    return {"rev": draft["rev"], "updated_by": draft["by"],
+            "edited_by": draft.get("edited_by") or draft["by"], "updated_at": draft["at"]}
 
 
 def _conflit(e: db.app_versions.DraftConflict) -> AuthzDenied:
@@ -65,17 +68,19 @@ def _conflit(e: db.app_versions.DraftConflict) -> AuthzDenied:
 
 def ecrire(ctx: ResolvedCtx, row: dict, *, expected_rev: Optional[str],
            manifest: Optional[dict] = None, html: Optional[str] = None,
-           auteur_ou_refus) -> dict:
-    """Écrit le brouillon. `manifest`, s'il est donné, est déjà jugé contre l'appelant ;
-    sinon, l'appelant devient l'auteur du brouillon et doit atteindre ce que son
-    manifeste déclare (`auteur_ou_refus`, la règle d'une écriture de l'app)."""
+           auteur_ou_refus, auteur: Optional[str] = None) -> dict:
+    """Écrit le brouillon. `manifest`, s'il est donné, est déjà jugé par l'appelant, qui
+    nomme son `auteur` ; sinon l'auteur se juge sur le manifeste du brouillon
+    (`auteur_ou_refus`, la règle d'une écriture de l'app) : l'appelant s'il atteint
+    tout ce qu'il déclare, sinon l'auteur d'avant s'il l'atteint encore."""
     if manifest is None:
         courant = db.app_versions.draft(row["id"])
         base = ({"manifest": courant["manifest"], "updated_by": courant["by"]} if courant
                 else {"manifest": row["manifest"], "updated_by": row["updated_by"]})
-        auteur_ou_refus(ctx, {**row, **base})
+        auteur = auteur_ou_refus(ctx, {**row, **base})
     try:
-        out = db.app_versions.write_draft(row["id"], by=ctx.sub, expected_rev=expected_rev,
+        out = db.app_versions.write_draft(row["id"], by=auteur or ctx.sub, edited_by=ctx.sub,
+                                          expected_rev=expected_rev,
                                           manifest=manifest, html=html)
     except db.app_versions.DraftConflict as e:
         raise _conflit(e) from None
@@ -116,10 +121,15 @@ def publier(ctx: ResolvedCtx, row: dict, expected_rev: Optional[str], note: Opti
     # publier le HTML d'un autre (la base le refuserait, mais après le jugement).
     if courant["rev"] != expected_rev:
         raise _conflit(db.app_versions.DraftConflict(courant["rev"]))
-    manifest = checked_manifest(ctx, org_de_l_app(row), courant["manifest"])
+    # Qui publie sans atteindre tout ce que le brouillon déclare le publie quand même si
+    # l'auteur du brouillon l'atteint encore : celui-ci reste l'auteur de l'app.
+    manifest, auteur = checked_manifest(
+        ctx, org_de_l_app(row), courant["manifest"],
+        base={"manifest": courant["manifest"], "updated_by": courant["by"]})
     extra = avertir(manifest, courant["html"])
     try:
-        out = db.app_versions.publish(row["id"], by=ctx.sub, expected_rev=expected_rev,
+        out = db.app_versions.publish(row["id"], by=auteur, edited_by=ctx.sub,
+                                      expected_rev=expected_rev,
                                       manifest=manifest, note=_note(note))
     except db.app_versions.NoDraft:
         raise AuthzDenied(409, "no_draft", "This app has no draft to publish.") from None

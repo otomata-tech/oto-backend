@@ -1857,7 +1857,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                                  ferme=_acces_agent.forfait_ferme(ctx.sub, t, pretes))
                              for t in _acces_agent.avec_visibilites(
                                  ctx.org_id, _servis_en_liste(ctx.org_id, vus))],
-                "runner": _modele.etat_servi(db.runner_arme(ctx.org_id), ctx.org_id)}
+                "runner": _modele.etat_servi(db.runner_arme(ctx.org_id), ctx.org_id, ctx.sub)}
 
     if inp.trigger_ids is not None:
         return _ranger_en_lot(ctx, inp)
@@ -1872,7 +1872,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                     _acces_agent.avec_visibilites(
                         ctx.org_id, [_avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t))])[0], n,
                     ferme=_acces_agent.forfait_ferme(ctx.sub, t)),
-                "runner": _modele.etat_servi(db.runner_arme(ctx.org_id), ctx.org_id)}
+                "runner": _modele.etat_servi(db.runner_arme(ctx.org_id), ctx.org_id, ctx.sub)}
 
     if inp.op == "rotate_address":
         t = db.get_trigger(inp.trigger_id, ctx.org_id)
@@ -3424,7 +3424,9 @@ CAPABILITIES += [
             "agent without a model is REFUSED (`model_required`) on create and on "
             "enable, and `model=\"\"` no longer removes it. The model flagged "
             "`default` is the one to propose: the first served model in catalogue "
-            "order. A model no live worker serves is REFUSED (`model_not_served`) on "
+            "order — except in an organization that runs Claude on the accounts its "
+            "members lend it (pool) with at least one lender, where it is the Claude "
+            "account model (`sub:sonnet`), which costs the organization nothing. A model no live worker serves is REFUSED (`model_not_served`) on "
             "create, on enable, and when changed on an enabled trigger: its job "
             "would wait for a worker of that family and expire. ⚠️ An occurrence "
             "nobody claimed BEFORE the next one is due is EXPIRED, not silently "

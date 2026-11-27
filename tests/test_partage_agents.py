@@ -55,7 +55,7 @@ def org(monkeypatch):
                         lambda i, o: etat.update(supprime=True) or True)
     monkeypatch.setattr(db, "livraisons", lambda *a, **k: [])
     monkeypatch.setattr(db, "runner_arme", lambda o: None)
-    monkeypatch.setattr(RT._modele, "etat_servi", lambda etat, o: None)
+    monkeypatch.setattr(RT._modele, "etat_servi", lambda etat, o, sub=None: None)
     monkeypatch.setattr(db, "trigger_sans_org",
                         lambda i: {"id": 7, "org_id": ORG, "sub": PROPRIETAIRE}
                         if i == 7 else None)

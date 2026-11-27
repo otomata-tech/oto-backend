@@ -9,7 +9,8 @@ from __future__ import annotations
 from typing import Optional
 
 from .. import db, runner_models
-from . import _cle_exigee
+from ..db import org_subscription_pool
+from . import _abonnement, _cle_exigee
 from ._types import AuthzDenied
 
 
@@ -193,10 +194,51 @@ def exige_servi(etat: dict, famille: Optional[str]) -> None:
         "Choisis un modèle servi (`runner.models` sur `op=list`).")
 
 
-def etat_servi(etat: dict, org_id: Optional[int] = None) -> dict:
+def _defaut_du_pool(org_id: Optional[int], familles: list, modeles: list[dict],
+                    sub: Optional[str]) -> Optional[str]:
+    """Le modèle d'ABONNEMENT à proposer par défaut à `sub` dans cette org, ou None.
+
+    Une org qui a CHOISI le pool (`org_subscription_pool.POOL`) fait tourner ses agents
+    sur les abonnements que ses membres lui prêtent : ils ne lui coûtent rien. Lui
+    proposer le modèle « clé » (payé en crédits de la plateforme quand l'org n'a pas
+    déposé sa clé) faisait poser ses agents sur la mauvaise voie — un client en pool a
+    découvert des milliers de crédits dépensés par deux agents posés ainsi, alors que
+    l'équipe croyait tout faire tourner sur ses comptes Claude (25/11/2026).
+
+    La règle de `runner_models.catalogue` (« un abonnement n'est JAMAIS le défaut »)
+    tient pour toutes les AUTRES orgs : elle évite de proposer un refus
+    `subscription_not_connected` à qui n'a pas de connexion. En pool, cette garde ne
+    joue pas (`_abonnement.exiger_a_la_pose` juge le pool, pas le demandeur) ; restent
+    les deux conditions que la pose exige, lues ici avec les mêmes fonctions :
+    le chemin ouvert au demandeur (`_abonnement.ouvert`, sinon
+    `subscription_not_enabled`) et un pool non vide à la pose
+    (`taille_du_pool_a_la_pose`, sinon `subscription_pool_empty` — un prêteur au
+    plafond compte, comme à la pose). Proposé ainsi, le défaut n'est jamais un refus.
+
+    Sans `sub` (une lecture qui ne sert pas de proposition à une personne, comme la
+    garde `model_is_default` des modèles éteints), rien ne change."""
+    if org_id is None or not sub:
+        return None
+    for famille in sorted(set(familles) & runner_models.FAMILLES_PERSONNELLES):
+        if org_subscription_pool.mode_regle(int(org_id), famille) != org_subscription_pool.POOL:
+            continue
+        if org_subscription_pool.taille_du_pool_a_la_pose(int(org_id), famille) <= 0:
+            continue
+        if not _abonnement.ouvert(sub):
+            return None
+        return next((m["id"] for m in modeles
+                     if m["family"] == famille and m.get("allowed", True)), None)
+    return None
+
+
+def etat_servi(etat: dict, org_id: Optional[int] = None, sub: Optional[str] = None) -> dict:
     """L'état du runner tel que servi : présence, familles, et le catalogue marqué
     de ce qui est servi — ce dont un écran a besoin pour proposer un modèle sans
     proposer celui qui serait refusé.
+
+    ⚠️ Avec `org_id` ET `sub`, une org en POOL avec au moins un prêteur se voit
+    proposer son modèle d'abonnement (`_defaut_du_pool`) : il ne lui coûte rien, et la
+    pose ne le refuse pas.
 
     ⚠️ Avec `org_id`, le défaut proposé écarte les familles servies dont l'org n'a
     pas déposé la clé EXIGÉE : les proposer, c'est proposer un refus
@@ -239,4 +281,8 @@ def etat_servi(etat: dict, org_id: Optional[int] = None) -> dict:
                        if m["family"] in proposables and m.get("allowed", True)), None)
         for m in modeles:
             m["default"] = m["id"] == defaut
+    pool = _defaut_du_pool(org_id, familles, modeles, sub)
+    if pool:
+        for m in modeles:
+            m["default"] = m["id"] == pool
     return {**etat, "families": familles, "models": modeles}

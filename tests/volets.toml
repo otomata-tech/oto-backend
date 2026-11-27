@@ -754,6 +754,8 @@ sources = [
   "oto_mcp/media_store.py",
   "oto_mcp/transit.py",
   "oto_mcp/upload_tokens.py",
+  "oto_mcp/large_uploads.py",
+  "oto_mcp/fichiers_echus.py",
   "oto_mcp/capabilities/uploads.py",
   "oto_mcp/api/uploads.py",
   "oto_mcp/api/upload_page.py",
@@ -764,7 +766,7 @@ sources = [
   "oto_mcp/formula_backfill_worker.py",
 ]
 tests = ["tests/**/test_file*.py", "tests/**/test_upload*.py", "tests/**/test_csv*.py", "tests/**/test_media*.py",
-         "tests/test_transit.py"]
+         "tests/test_transit.py", "tests/test_large_uploads.py"]
 
 [[volet]]
 nom = "recherche"

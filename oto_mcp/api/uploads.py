@@ -39,7 +39,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from .. import db, geste, upload_tokens
 from ..capabilities._types import ContratDeRoute, DeclaredError
-from .base import _json, _json_error, _locale_from_accept_language
+from .base import _file, _json, _json_error, _locale_from_accept_language
 from .upload_page import SCRIPT_UPLOAD, upload_page_html
 
 
@@ -197,6 +197,80 @@ async def upload_form(request: Request) -> Response:
     )
 
 
+# ── Gros fichiers : dépôt multipart direct au stockage (`large_uploads`) ─────────────
+
+async def _large_payload(request: Request):
+    from .. import large_uploads
+    payload = large_uploads.verifier(request.path_params.get("token", ""))
+    if payload is None:
+        return None, _json_error(request, 401, "invalid_or_expired_token")
+    return payload, None
+
+
+async def large_part(request: Request) -> Response:
+    """`GET /api/upload/large/{token}/part/{n}` → en TEXTE, l'URL présignée où `PUT` la
+    partie n — lisible par `$(curl …)` sans parseur JSON."""
+    from .. import large_uploads
+    payload, refus = await _large_payload(request)
+    if refus:
+        return refus
+    try:
+        url = await run_in_threadpool(large_uploads.url_de_partie, payload,
+                                      int(request.path_params["n"]))
+    except upload_tokens.UploadError as e:
+        return _json_error(request, e.status, e.code, e.message or None)
+    return _file(request, url, media_type="text/plain",
+                 headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+async def large_complete(request: Request) -> JSONResponse:
+    """`POST /api/upload/large/{token}/complete` : clôt le dépôt, range le fichier."""
+    from .. import large_uploads
+    payload, refus = await _large_payload(request)
+    if refus:
+        return refus
+    try:
+        with geste.portee(geste.UPLOAD, payload["sub"], payload["jti"]):
+            result = await run_in_threadpool(large_uploads.terminer, payload)
+    except upload_tokens.UploadError as e:
+        return _json_error(request, e.status, e.code, e.message or None)
+    return _json(request, result)
+
+
+async def large_abort(request: Request) -> JSONResponse:
+    """`DELETE /api/upload/large/{token}` : abandonne le dépôt et ses parties."""
+    from .. import large_uploads
+    payload, refus = await _large_payload(request)
+    if refus:
+        return refus
+    try:
+        result = await run_in_threadpool(large_uploads.abandonner, payload)
+    except upload_tokens.UploadError as e:
+        return _json_error(request, e.status, e.code, e.message or None)
+    return _json(request, result)
+
+
+async def large_form(request: Request) -> Response:
+    """La page d'upload d'un gros fichier (GET) : le navigateur découpe le fichier et
+    envoie chaque partie au stockage lui-même. La CSP ouvre l'origine du stockage."""
+    from .. import large_uploads, media_store
+    from ..entetes_securite import csp_upload_large
+    from .upload_page import SCRIPT_UPLOAD_LARGE
+    payload = large_uploads.verifier(request.path_params.get("token", ""))
+    lang = _locale_from_accept_language(request.headers.get("accept-language")) or "en"
+    headers = {"Cache-Control": "private", "Referrer-Policy": "no-referrer",
+               "Vary": "Accept-Language",
+               "Content-Security-Policy": csp_upload_large(
+                   SCRIPT_UPLOAD_LARGE, media_store.origines_de_depot())}
+    if payload is None:
+        return HTMLResponse(upload_page_html(None, lang), status_code=401, headers=headers)
+    return HTMLResponse(
+        upload_page_html(large_uploads.libelle(payload["target"], lang), lang,
+                         part_size=int(payload["target"]["part_size"]),
+                         notice=large_uploads.retention_notice(lang)),
+        headers=headers)
+
+
 # ── Le contrat publié (oto#106) ───────────────────────────────────────────────────
 
 class AccuseDeDepot(BaseModel):
@@ -208,6 +282,13 @@ class AccuseDeDepot(BaseModel):
     op: Optional[Literal["create", "update"]] = Field(None, description="`doc`")
     chars: Optional[int] = Field(None, description="`doc` : caractères de la page")
     filename: Optional[str] = Field(None, description="`project_file`")
+    expires_at: Optional[str] = Field(None, description=(
+        "`project_file` déposé par parties (`large`) : la date (ISO 8601, UTC) où il est "
+        "supprimé automatiquement"))
+    notice: Optional[str] = Field(None, description=(
+        "`project_file` déposé par parties : la durée de garde, en une phrase à dire à "
+        "l'utilisateur"))
+    parts: Optional[int] = Field(None, description="`project_file` déposé par parties")
     url: Optional[str] = Field(None, description="`image` : l'adresse publique, permanente")
     datastore: Optional[str] = Field(None, description="`datastore` : le tableau chargé")
     inserted: Optional[int] = Field(None, description="`datastore` : lignes créées")

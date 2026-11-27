@@ -103,6 +103,11 @@ def _extraction() -> Fonction:
     return file_extract_worker.run_extract_loop
 
 
+def _fichiers_echus() -> Fonction:
+    from . import fichiers_echus
+    return fichiers_echus.run_fichiers_echus_loop
+
+
 def _classement() -> Fonction:
     from . import rank_backfill_worker
     return rank_backfill_worker.run_rank_backfill_loop
@@ -197,6 +202,11 @@ BOUCLES: tuple[Boucle, ...] = (
     # l'extraction ne dépend d'aucun service tiers : les deux pannes restent disjointes.
     Boucle(nom="file_extract_worker", tiers=False,
            armee=_interrupteur("OTO_FILE_EXTRACT_WORKER_ENABLED"), fonction=_extraction),
+    # Échéance des gros fichiers de projet (`fichiers_echus.py`) : retire l'objet et la
+    # ligne d'un fichier dont `expires_at` est passée. N'écrit qu'en base et au stockage
+    # de l'instance ; deux processus retirent au pire deux fois le même objet.
+    Boucle(nom="fichiers_echus", tiers=False,
+           armee=_interrupteur("OTO_FILES_EXPIRY_ENABLED"), fonction=_fichiers_echus),
     # Vecteurs de classement (#318) : remplit par tranches puis réconcilie. Hors du boot
     # par nécessité (la variante au boot tenait `datastore_rows` 7,55 s sous verrou).
     Boucle(nom="rank_backfill", tiers=False,

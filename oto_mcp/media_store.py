@@ -650,3 +650,144 @@ def make_private(key: str) -> None:
         _get_client().put_object_acl(Bucket=_bucket(), Key=key, ACL="private")
     except Exception as e:
         raise MediaError(500, "acl_failed", str(e))
+
+
+# --- Gros fichiers : dépôt multipart DIRECT vers le stockage -------------------------
+# Un fichier de projet de plusieurs Go (une vidéo) ne passe jamais par le backend : le
+# client envoie chaque partie au stockage sur une URL présignée (`presign_partie`), le
+# backend ne fait qu'ouvrir, lister et clore (`large_uploads.py`). Limites Scaleway :
+# 1 000 parties, 5 Mo à 5 Go chacune (la dernière exceptée), 5 To par objet.
+
+def ouvrir_multipart(key: str, content_type: str, attachment_name: str | None) -> str:
+    """Ouvre un dépôt multipart sur `key` (privé, durable) → son `UploadId`. Le type et
+    le téléchargement forcé sont posés ICI : un objet multipart les reçoit à l'ouverture."""
+    if key.split("/", 1)[0] not in PREFIXES_DURABLES:
+        raise MediaError(500, "unknown_prefix", f"Préfixe durable inconnu : {key!r}.")
+    entetes = {"ContentType": content_type}
+    if attachment_name is not None:
+        entetes["ContentDisposition"] = (
+            f"attachment; filename*=UTF-8''{quote(attachment_name, safe='')}")
+    try:
+        out = _get_client().create_multipart_upload(Bucket=_bucket(), Key=key, **entetes)
+        return out["UploadId"]
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "upload_failed", str(e))
+
+
+def presign_partie(key: str, upload_id: str, numero: int, *, expiry: int) -> str:
+    """URL PUT présignée d'UNE partie (1-based). Le corps de la partie y va brut."""
+    try:
+        return _get_client().generate_presigned_url(
+            "upload_part", Params={"Bucket": _bucket(), "Key": key, "UploadId": upload_id,
+                                   "PartNumber": int(numero)}, ExpiresIn=expiry)
+    except Exception as e:
+        raise MediaError(500, "presign_failed", str(e))
+
+
+def parties_recues(key: str, upload_id: str) -> list[dict]:
+    """Les parties que le stockage a reçues, toutes pages lues : `[{n, etag, size}]`,
+    par numéro croissant. Le client n'a donc jamais à renvoyer les ETag."""
+    client, parties, marqueur = _get_client(), [], 0
+    try:
+        while True:
+            page = client.list_parts(Bucket=_bucket(), Key=key, UploadId=upload_id,
+                                     PartNumberMarker=marqueur, MaxParts=1000)
+            parties += [{"n": int(p["PartNumber"]), "etag": p["ETag"],
+                         "size": int(p["Size"])} for p in page.get("Parts") or []]
+            if not page.get("IsTruncated"):
+                break
+            marqueur = int(page.get("NextPartNumberMarker") or 0)
+    except Exception as e:  # boto / réseau / upload inconnu
+        code = (getattr(e, "response", None) or {}).get("Error", {}).get("Code")
+        if code == "NoSuchUpload":
+            raise MediaError(404, "upload_not_found", "dépôt inconnu ou déjà clos") from None
+        raise MediaError(500, "list_failed", str(e))
+    return sorted(parties, key=lambda p: p["n"])
+
+
+def clore_multipart(key: str, upload_id: str, parties: list[dict]) -> None:
+    try:
+        _get_client().complete_multipart_upload(
+            Bucket=_bucket(), Key=key, UploadId=upload_id,
+            MultipartUpload={"Parts": [{"PartNumber": p["n"], "ETag": p["etag"]}
+                                       for p in parties]})
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "complete_failed", str(e))
+
+
+def abandonner_multipart(key: str, upload_id: str) -> None:
+    """Abandonne un dépôt multipart (best-effort : un dépôt déjà clos ou purgé n'est pas
+    un refus — la règle de cycle de vie du seau en abandonne de toute façon à 2 jours)."""
+    try:
+        _get_client().abort_multipart_upload(Bucket=_bucket(), Key=key, UploadId=upload_id)
+    # noqa: SILENT — best-effort : le cycle de vie du seau purge ce qui resterait
+    except Exception:
+        pass
+
+
+def lire_debut(key: str, n: int = 65536) -> bytes:
+    """Les `n` premiers octets d'un objet (lecture par plage) : de quoi juger le type
+    d'un fichier qu'on ne charge jamais en entier."""
+    try:
+        body = _get_client().get_object(Bucket=_bucket(), Key=key,
+                                        Range=f"bytes=0-{n - 1}")["Body"]
+        return body.read(n)
+    except Exception as e:  # boto / réseau / clé absente
+        if _absent(e):
+            raise MediaError(404, "not_found", "objet absent") from None
+        raise MediaError(500, "fetch_failed", str(e))
+
+
+def lire_plage(key: str, debut: int, fin: int) -> bytes:
+    """Les octets `[debut, fin]` (inclus) d'un objet — un morceau à la fois, pour
+    relayer un gros fichier sans jamais le tenir en mémoire."""
+    try:
+        body = _get_client().get_object(Bucket=_bucket(), Key=key,
+                                        Range=f"bytes={debut}-{fin}")["Body"]
+        return body.read()
+    except Exception as e:  # boto / réseau / clé absente
+        if _absent(e):
+            raise MediaError(404, "not_found", "objet absent") from None
+        raise MediaError(500, "fetch_failed", str(e))
+
+
+def taille_objet(key: str) -> int:
+    try:
+        return int(_get_client().head_object(Bucket=_bucket(), Key=key)
+                   .get("ContentLength") or 0)
+    except Exception as e:  # boto / réseau / clé absente
+        if _absent(e):
+            raise MediaError(404, "not_found", "objet absent") from None
+        raise MediaError(500, "fetch_failed", str(e))
+
+
+def type_servi_gros(declare: str | None) -> TypeServi:
+    """Le type SERVI d'un gros fichier, décidé à l'OUVERTURE du dépôt, avant le moindre
+    octet (#562) : un type déclaré PASSIF (vidéo, audio, image matricielle, PDF,
+    archive) est gardé ; tout le reste (HTML, SVG, XML, texte, inconnu) est neutre et
+    téléchargé. Le début du fichier est revérifié à la clôture (`_balisage_actif`)."""
+    base = (declare or "").split(";")[0].strip().lower()
+    passif = (base.startswith(("video/", "audio/"))
+              or base in {"image/png", "image/jpeg", "image/gif", "image/webp",
+                          "image/heic", "image/avif", "application/pdf",
+                          "application/gzip"}
+              or base in _FAMILLE_ZIP or base in _FAMILLE_OLE)
+    if passif and re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", base):
+        return TypeServi(base, attachment=False)
+    return TypeServi(_NEUTRE, attachment=True)
+
+
+def debut_actif(data: bytes, declare: str) -> bool:
+    """Le début d'un fichier, sans signature de format reconnue, porte-t-il du balisage
+    qu'un navigateur interprète ? Une signature fait foi d'abord (#562) : un zip, un
+    EPUB ou un MP4 peut porter du XML sans être une page."""
+    return _signature(data, declare) is None and _balisage_actif(data)
+
+
+def origines_de_depot() -> list[str]:
+    """Les origines où un navigateur PUT les parties d'un gros fichier : celle du
+    point d'accès S3 (adresse par chemin) et celle du seau (adresse par hôte virtuel)."""
+    from .config import require_env
+    point = urlsplit(require_env("OTO_MCP_S3_ENDPOINT"))
+    seau = urlsplit(public_base())
+    return sorted({f"{point.scheme}://{point.netloc}", f"{seau.scheme}://{seau.netloc}"})

@@ -58,11 +58,11 @@ def test_la_preprod_ne_compose_aucune_boucle_tierce(env):
     assert set(composees) == _toutes(tiers=False)
 
 
-def test_la_production_compose_les_quatorze(env):
+def test_la_production_compose_les_quinze(env):
     env.setenv("OTO_ENV", _PROD)
     env.setenv("OTO_SENTRY_ENV", "production")
     composees = boucles_de_fond.composer()
-    assert len(composees) == len(boucles_de_fond.BOUCLES) == 14
+    assert len(composees) == len(boucles_de_fond.BOUCLES) == 15
     assert set(composees) == _toutes()
 
 

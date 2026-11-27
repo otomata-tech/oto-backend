@@ -69,6 +69,55 @@ else{const c=j.error||r.status;err((T.msg[c]||T.fail(c))+(j.detail?" "+j.detail:
 }catch(x){err(T.net)}});
 """
 
+# Le script d'un GROS fichier (`large_uploads`) : le navigateur découpe le fichier en
+# parties de `data-ps` octets, demande l'URL présignée de chacune, l'envoie AU STOCKAGE
+# (jamais au backend), puis clôt. Trois essais par partie ; la progression s'affiche sur
+# le bouton. Mêmes règles que `SCRIPT_UPLOAD` : tout passe par `textContent`.
+SCRIPT_UPLOAD_LARGE = """
+const f=document.getElementById("f"),fi=document.getElementById("file"),
+z=document.getElementById("zone"),nm=document.getElementById("nom"),
+b=document.getElementById("go"),m=document.getElementById("msg"),
+ok=document.getElementById("ok");
+const FR=document.documentElement.lang==="fr",PS=parseInt(f.dataset.ps,10);
+const T=FR?{retry:"Réessayer",fail:c=>"L’envoi a échoué ("+c+").",
+net:"Erreur réseau : vérifie ta connexion puis réessaie.",units:[" o"," Ko"," Mo"," Go"],comma:true,
+msg:{token_already_used:"Ce lien a déjà servi. Demande à l’assistant d’en générer un nouveau.",
+invalid_or_expired_token:"Ce lien a expiré. Demande à l’assistant d’en générer un nouveau.",
+content_too_large:"Le fichier est trop volumineux pour ce lien.",
+forbidden:"Ce compte n’a plus accès à la destination.",
+unknown_project:"Le projet de destination n’existe plus."}}
+:{retry:"Try again",fail:c=>"Upload failed ("+c+").",
+net:"Network error: check your connection and try again.",units:[" B"," KB"," MB"," GB"],comma:false,
+msg:{token_already_used:"This link has already been used. Ask the assistant for a new one.",
+invalid_or_expired_token:"This link has expired. Ask the assistant for a new one.",
+content_too_large:"The file is too large for this link.",
+forbidden:"This account no longer has access to the destination.",
+unknown_project:"The destination project no longer exists."}};
+const taille=n=>{let i=0;while(n>=1024&&i<3){n/=1024;i++}
+const v=i?n.toFixed(1):String(n);return (T.comma?v.replace(".",","):v)+T.units[i]};
+const montre=()=>{const x=fi.files[0];z.classList.toggle("has",!!x);b.disabled=!x;
+if(x){nm.textContent=x.name+" · "+taille(x.size)}m.hidden=true};
+fi.addEventListener("change",montre);
+["dragenter","dragover"].forEach(t=>z.addEventListener(t,e=>{e.preventDefault();z.classList.add("drag")}));
+["dragleave","drop"].forEach(t=>z.addEventListener(t,()=>z.classList.remove("drag")));
+z.addEventListener("drop",e=>{e.preventDefault();if(e.dataTransfer.files.length){fi.files=e.dataTransfer.files;montre()}});
+const err=t=>{m.textContent=t;m.hidden=false;b.disabled=false;b.classList.remove("busy");b.textContent=T.retry};
+const base=location.href.split(/[?#]/)[0];
+const refus=async r=>{const j=await r.json().catch(()=>({}));const c=j.error||r.status;
+return (T.msg[c]||T.fail(c))+(j.detail?" "+j.detail:"")};
+const partie=async(x,i)=>{for(let k=0;k<3;k++){
+const r=await fetch(base+"/part/"+i);if(!r.ok){throw new Error(await refus(r))}
+try{const p=await fetch(await r.text(),{method:"PUT",body:x.slice((i-1)*PS,Math.min(i*PS,x.size))});
+if(p.ok){return}}catch(e){}}throw new Error(T.net)};
+f.addEventListener("submit",async e=>{e.preventDefault();const x=fi.files[0];if(!x){return}
+m.hidden=true;b.disabled=true;b.classList.add("busy");
+const n=Math.max(1,Math.ceil(x.size/PS));
+try{for(let i=1;i<=n;i++){b.textContent=Math.floor(100*(i-1)/n)+" %";await partie(x,i)}
+b.textContent="100 %";const r=await fetch(base+"/complete",{method:"POST"});
+if(r.ok){f.hidden=true;ok.hidden=false}else{err(await refus(r))}
+}catch(x){err(x.message||T.net)}});
+"""
+
 # Les jetons du design du tableau de bord (gris Radix Slate, le bleu d'Oto, rayons
 # 6/8/12 px, corps 13 px). Pas de police distante : la page est autoportée, la CSP n'ouvre
 # aucune origine — Inter s'il est installé, sinon la police du système.
@@ -77,6 +126,8 @@ _STYLE_UPLOAD = (
     '--g1:#fcfcfd;--g2:#f9f9fb;--g3:#f0f0f3;--g4:#e8e8ec;--g9:#8b8d98;--g12:#1c2024;'
     '--red:#ce2c31;--green:#218358}'
     '*{box-sizing:border-box}[hidden]{display:none!important}'
+    '.avis{margin:12px 0 0;padding:8px 10px;border-radius:6px;background:#fff7e6;'
+    'border:1px solid #f3d9a4;color:#7a4b00}'
     'body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;'
     'justify-content:center;padding:24px 16px;background:var(--g2);color:var(--g12);'
     'font:13px/18px Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;'
@@ -159,7 +210,8 @@ _TEXTES_UPLOAD = {
 }
 
 
-def upload_page_html(label: str | None, lang: str = "en") -> str:
+def upload_page_html(label: str | None, lang: str = "en", *,
+                     part_size: int | None = None, notice: str | None = None) -> str:
     """Page d'upload autoportée d'un lien signé (#105, fallback humain). `label` None
     = lien invalide/expiré (message, sans formulaire). Le POST du fichier se fait vers
     la MÊME URL (multipart `file`), en fetch, avec accusé/erreur affiché. `lang` :
@@ -175,10 +227,15 @@ def upload_page_html(label: str | None, lang: str = "en") -> str:
     else:
         titre = t["title"]
         safe = _html.escape(label)
+        # Gros fichier : la taille des parties, lue par `SCRIPT_UPLOAD_LARGE`.
+        ps = f' data-ps="{int(part_size)}"' if part_size is not None else ""
+        avis = f'<p class="avis">{_html.escape(notice)}</p>' if notice else ""
         body = (
-            f'<main class="card"><form id="f"><div class="ic">{_ICONE_DEPOT}</div>'
+            f'<main class="card"><form id="f"{ps}><div class="ic">{_ICONE_DEPOT}</div>'
             f'<h1>{t["title"]}</h1>'
             f'<p>{t["dest"]}{sep} <b>{safe}</b></p>'
+            # La durée de garde d'un gros fichier, dite AVANT le dépôt et après.
+            f'{avis}'
             '<label class="zone" id="zone">'
             f'{_ICONE_DEPOT}<span class="t">{t["drop"]}</span>'
             f'<span class="s">{t["or"]} <u>{t["browse"]}</u></span>'
@@ -188,10 +245,10 @@ def upload_page_html(label: str | None, lang: str = "en") -> str:
             '<p id="msg" class="msg" role="alert" hidden></p>'
             f'<p class="foot">{t["foot"]}</p></form>'
             f'<div id="ok" hidden><div class="ic ok">{_ICONE_OK}</div>'
-            f'<h1>{t["ok"]}</h1><p>{t["ok_sub"]}</p>'
+            f'<h1>{t["ok"]}</h1><p>{t["ok_sub"]}</p>{avis}'
             '<div class="url" id="url" hidden><code></code>'
             f'<button type="button">{t["copy"]}</button></div></div></main>'
-            f'<script>{SCRIPT_UPLOAD}</script>')
+            f'<script>{SCRIPT_UPLOAD if part_size is None else SCRIPT_UPLOAD_LARGE}</script>')
     return (
         f'<!doctype html><html lang="{lang}"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'

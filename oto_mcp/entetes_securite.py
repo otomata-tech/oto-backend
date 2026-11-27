@@ -57,6 +57,13 @@ CSP_PROJET_PUBLIE = _politique(**_POLICES, img_src=_IMAGES,
                                script_src="'unsafe-inline'", form_action="'none'")
 
 
+def csp_upload_large(script: str, origines: list[str]) -> str:
+    """Formulaire d'un GROS fichier : comme `csp_upload`, plus les origines du stockage
+    où le script envoie chaque partie (URL présignées)."""
+    return _politique(script_src=empreinte_script(script), style_src="'unsafe-inline'",
+                      connect_src=" ".join(["'self'", *origines]), form_action="'self'")
+
+
 def csp_upload(script: str) -> str:
     """Formulaire d'upload signé (`api/uploads`) : UN script en ligne, autorisé par son
     empreinte ; il poste le fichier en `fetch` vers la même URL (`connect-src 'self'`) ;

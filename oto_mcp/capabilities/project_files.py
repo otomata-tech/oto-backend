@@ -68,7 +68,9 @@ CAPABILITIES += [
         description=(
             "A project's raw documents (« Autre document » — PDF/HTML/etc. attached to "
             "the project). op=list → each file with filename + title/description/summary "
-            "+ a signed download_url to fetch it (read access). op=delete + file_id → "
+            "+ a signed download_url to fetch it (read access); `expires_at` set = a "
+            "temporary large file, deleted automatically on that date — say so to the "
+            "user. op=delete + file_id → "
             "remove an outdated document (write access; deletes the stored object too). "
             "To add one: `oto_import target=project_file` (a file the server can reach) "
             "or `oto_upload_url target=project_file` (a file you push)."

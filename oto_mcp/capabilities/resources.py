@@ -780,6 +780,12 @@ def _gouverner(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
             raise AuthzDenied(404, "not_found", "ressource introuvable.")
         out = ops["enrich"](row)
         out["grants"] = _grants_view(inp.resource_type, rid)
+        if inp.resource_type == "datastore_namespace":
+            # Qui le tient À TRAVERS une app seulement : aucun partage ici, mais un
+            # accès quand même — son gérant doit le voir, et pouvoir le retirer.
+            out["through_app"] = [
+                {**a, "label": _owner_label(a["principal_type"], a["principal_id"])}
+                for a in db.apps.through_app_of_table(int(rid))]
         return out
 
     if inp.op == "transfer":

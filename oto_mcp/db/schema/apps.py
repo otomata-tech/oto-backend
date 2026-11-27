@@ -162,3 +162,92 @@ ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS note TEXT;
 -- remplacé. NULL pour les révisions d'avant cette colonne.
 ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS saved_at TIMESTAMPTZ;
 """
+
+ROLES = """
+-- Le rôle d'APP d'un partage (`docs/apps.md` § Rôles d'une app) : la clé d'un des rôles
+-- que le manifeste déclare (`manifest.roles`), posée par qui gouverne l'app
+-- (`oto_apps op=set_role`). Il RESSERRE ce que le manifeste ouvre à ce lecteur
+-- (tableaux, champs, valeurs, ajouts, agents, fichiers) — jamais plus. NULL = le rôle
+-- par défaut du manifeste (`default_role`). Sur le partage même : il part avec lui
+-- (retrait, échéance — un partage échu puis repartagé repart du rôle par défaut, comme
+-- un partage neuf), suit la fusion de comptes et l'export comme lui. Colonne AJOUTÉE
+-- (révision `20261127_1200_app_roles`) : le fragment `grants.GRANTS` a déjà été joué.
+ALTER TABLE resource_grants ADD COLUMN IF NOT EXISTS app_role TEXT;
+-- L'IDENTITÉ d'un partage (`docs/apps.md` § Accès par l'app) : un numéro jamais repris,
+-- tiré à sa pose (`db.grant_resource`). Changer son rôle ou son échéance tant qu'il est
+-- vivant le garde ; le reposer après son échéance, ou après un retrait, en tire un
+-- neuf. Ce qui ne vaut que sous CE partage (`app_table_access.share_id`) ne revit donc
+-- jamais sous un autre. NULL = un partage d'avant la colonne, numéroté à sa prochaine
+-- pose ou au premier accès par l'app ouvert sous lui. Nullable sans défaut : catalogue
+-- seul (un `DEFAULT nextval` réécrirait la table).
+CREATE SEQUENCE IF NOT EXISTS resource_grants_share_id_seq;
+ALTER TABLE resource_grants ADD COLUMN IF NOT EXISTS share_id BIGINT;
+-- Le PÉRIMÈTRE DE LIGNES d'un partage d'app (`docs/apps.md` § Périmètre de lignes) :
+-- `{"<numéro du tableau>": {"<champ>": <valeur>}}`, posé par qui gouverne l'app ET
+-- peut partager chaque tableau nommé (`oto_apps op=set_scope`). Dans l'appel de l'app,
+-- ce lecteur ne voit, n'écrit et n'ajoute que les lignes dont chaque champ porte sa
+-- valeur ; c'est aussi la valeur que lit un rôle qui déclare `rows: {…: "$share"}`.
+-- NULL = aucun périmètre posé. Rangé par NUMÉRO de tableau, jamais par le nom que lui
+-- donne le manifeste : un renommage ne l'éteint pas. Part avec le partage, suit la
+-- fusion de comptes comme lui (UPDATE de `principal_id`).
+ALTER TABLE resource_grants ADD COLUMN IF NOT EXISTS app_scope JSONB;
+"""
+
+ACCES_PAR_L_APP = """
+-- Un tableau ouvert à quelqu'un À TRAVERS UNE APP SEULEMENT (`docs/apps.md` § Accès par
+-- l'app) : il le lit — et l'écrit, `permission = 'write'`, par les seuls gestes de
+-- l'app — dans l'appel de CETTE app, borné par son manifeste et son rôle d'app. Nulle
+-- part ailleurs : aucune lecture de `resource_grants` ne voit cette table, ni les
+-- outils `data_*`, ni la face REST des tableaux, ni l'écran Tableaux. Posé par qui
+-- gouverne l'app ET le tableau (`oto_apps op=grant_through_app`). Ne vaut que tant que
+-- le même principal tient, VIVANT, le partage de l'app sous lequel il a été ouvert
+-- (`share_id` = `resource_grants.share_id`) : il part avec lui, et ne revient pas avec
+-- un partage reposé (après retrait, échéance, transfert…) — il se rouvre.
+CREATE TABLE IF NOT EXISTS app_table_access (
+    app_id BIGINT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+    ns_id BIGINT NOT NULL REFERENCES user_datastores(id) ON DELETE CASCADE,
+    principal_type TEXT NOT NULL CHECK (principal_type IN ('user', 'group', 'org')),
+    principal_id TEXT NOT NULL,
+    permission TEXT NOT NULL CHECK (permission IN ('read', 'write')),
+    share_id BIGINT NOT NULL,
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (app_id, ns_id, principal_type, principal_id)
+);
+-- La fusion de comptes repointe `principal_id` et `granted_by` d'un bloc : indexés, sinon
+-- un balayage complet de la table (garde `tests/test_repointer_residus_alias.py`).
+CREATE INDEX IF NOT EXISTS app_table_access_principal_idx ON app_table_access (principal_id);
+CREATE INDEX IF NOT EXISTS app_table_access_granted_by_idx ON app_table_access (granted_by);
+"""
+
+LECTURES = """
+-- Le JOURNAL DES LECTURES d'app (`docs/apps.md` § Journal des lectures) : qui a lu quel
+-- tableau par quelle app, quel jour — des COMPTEURS, pas une ligne par lecture (une app
+-- ouvre son écran par huit à quinze lectures et se rafraîchit). Écrit APRÈS la lecture,
+-- hors de son emprunt au pool (`capabilities/apps_appel._call_journalise`). Lu par qui
+-- gouverne l'app ou le tableau (`oto_apps op=reads`). Purgé au-delà de 180 jours par
+-- `oto-mcp maintenance app-reads`.
+-- `access` : par où le lecteur atteignait le tableau — `own` (son propre partage),
+-- `app` (À TRAVERS l'app seulement, `app_table_access`), `run` (un agent lancé depuis
+-- l'app, par cet accès : `row_reads` y compte les ouvertures du tableau, `rows_served`
+-- reste 0, le run lisant par les outils de tableau).
+-- `day` : le jour UTC.
+CREATE TABLE IF NOT EXISTS app_reads (
+    app_id BIGINT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+    day DATE NOT NULL,
+    ns_id BIGINT NOT NULL REFERENCES user_datastores(id) ON DELETE CASCADE,
+    sub TEXT NOT NULL,
+    access TEXT NOT NULL CHECK (access IN ('own', 'app', 'run')),
+    row_reads INTEGER NOT NULL DEFAULT 0,
+    aggregate_reads INTEGER NOT NULL DEFAULT 0,
+    rows_served BIGINT NOT NULL DEFAULT 0,
+    first_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (app_id, day, ns_id, sub, access)
+);
+-- Le gérant d'un tableau lit par lui ; la purge, par le jour.
+CREATE INDEX IF NOT EXISTS app_reads_ns_idx ON app_reads (ns_id, day);
+CREATE INDEX IF NOT EXISTS app_reads_day_idx ON app_reads (day);
+-- La fusion de comptes repointe `sub` d'un bloc.
+CREATE INDEX IF NOT EXISTS app_reads_sub_idx ON app_reads (sub);
+"""

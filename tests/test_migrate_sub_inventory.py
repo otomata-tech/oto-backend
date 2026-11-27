@@ -535,7 +535,12 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("org_erasures", "snapshot"),
     }
     # L'application de Custom API : son adresse, son mode, ses actions — aucune personne.
-    applications = {("api_apps", "connection"), ("api_apps", "definition")}
+    applications = {("api_apps", "connection"), ("api_apps", "definition"),
+                    # Le périmètre de lignes d'un partage d'app : numéro de tableau →
+                    # {champ: valeur posée par son gérant} — une valeur MÉTIER (un code
+                    # partenaire, une adresse de contact), jamais un sub ; la ligne suit
+                    # déjà la fusion par `principal_id`.
+                    ("resource_grants", "app_scope")}
     allow = sans_personne | journaux | applications
 
     manquantes = jsonb - set(_JSONB_SUB_COLUMNS) - allow

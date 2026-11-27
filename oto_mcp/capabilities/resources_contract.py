@@ -168,8 +168,22 @@ class ResourceList(_Avertissement):
 # `op=get` = la fiche de la famille + ses bénéficiaires. L'héritage garde les trois
 # formes et leur discriminant : dupliquer les champs ici les ferait diverger au
 # premier ajout dans un `_enrich_*`.
+class ThroughAppAccess(BaseModel):
+    """Qui tient ce tableau À TRAVERS une app seulement (`app_table_access`) : il n'a
+    aucun partage du tableau, et ne le lit que dans cette app (`docs/apps.md` § Accès
+    par l'app). Retirable par qui gouverne le tableau (`oto_apps op=revoke_through_app`
+    avec `tables`)."""
+    app_id: int
+    app_title: Optional[str] = None
+    principal_type: str
+    principal_id: str
+    label: Optional[str] = None
+    permission: str
+
+
 class DatastoreResourceDetail(DatastoreResource, _Avertissement):
     grants: list[ResourceGrant]
+    through_app: list[ThroughAppAccess] = Field(default_factory=list)
 
 
 class ProjectResourceDetail(ProjectResource, _Avertissement):

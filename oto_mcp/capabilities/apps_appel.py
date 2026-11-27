@@ -74,13 +74,21 @@ stocké est déjà normalisé (`apps_manifeste.forme`) et ses tableaux sont des 
 
 **Session interactive seule** (`allow_api_token=False`) : aucun jeton `oto_`,
 délégation d'agent hébergé comprise — un agent n'est jamais le lecteur d'une app.
+
+**Le journal des lectures** (`app_reads`, `docs/apps.md` § Journal des lectures) : chaque
+lecture SERVIE — seule ou d'un lot — est notée pendant l'appel, en mémoire (`_LUES`), puis
+écrite APRÈS lui, hors de son emprunt au pool, en une requête (`_call_journalise`) : le
+chemin de lecture reste lecture seule et à un emprunt. Une écriture du journal qui
+échoue est journalisée (Sentry) ; la lecture est servie quand même.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+import logging
 import secrets
+from contextvars import ContextVar
 from typing import Any, Literal, Optional
 
 import psycopg
@@ -92,6 +100,8 @@ from ._authz import ORG_MEMBER
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .apps_manifeste import DATES, lisible, org_de_l_app, tableau_de_l_org
 from .registry import CAPABILITIES
+
+logger = logging.getLogger(__name__)
 
 APP_RTYPE = "app"
 MAX_ROWS = 200
@@ -184,6 +194,9 @@ class AppCallInput(BaseModel):
     draft: bool = Field(
         default=False, description="The app's DRAFT is open, not its published version "
         "(its editors only): judged against the draft's manifest and its author.")
+    as_role: Optional[str] = Field(
+        default=None, description="See the app as one of the roles its manifest declares "
+        "(its editors only, to try what that role sees and does).")
     # Libres à l'entrée : une lecture mal formée est refusée DANS sa réponse, jamais en
     # refusant tout le lot (`_lecture_du_lot`).
     reads: Optional[list[dict]] = Field(
@@ -285,7 +298,7 @@ def peut_cliquer(sub: str, app_id: int) -> bool:
 
 
 def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False,
-              geste_: bool = False) -> dict:
+              geste_: bool = False, as_role: Optional[str] = None) -> dict:
     from .. import org_suspension
 
     app = db.apps.get_for_call(int(app_id))
@@ -313,7 +326,65 @@ def _app_pour(ctx: ResolvedCtx, app_id: int, draft: bool = False,
     if not app.get("updated_by"):
         raise _refus(403, "app_author_unknown",
                      "Nobody is known to have written this app, so it can't act for anyone.")
-    return app
+    return _au_role(ctx.sub, app, as_role)
+
+
+def _au_role(sub: str, app: dict, as_role: Optional[str]) -> dict:
+    """L'app vue par son lecteur : son manifeste RESSERRÉ au rôle qu'il tient
+    (`apps_roles.py`). Toute action lit `app["manifest"]` après ce point — le rôle
+    borne donc lectures, lot, agrégats, gestes, consentement, fichiers et runs sans
+    qu'aucune n'ait à le savoir. `as_role` : un éditeur essaie un rôle."""
+    from . import apps_roles
+
+    manifest = app.get("manifest") or {}
+    if as_role is not None:
+        if not ownership.can_access(sub, APP_RTYPE, str(app["id"]), "write"):
+            raise _refus(403, "as_role_editors_only",
+                         "Only the app's editors can see it as another role.")
+        if as_role not in (manifest.get("roles") or {}):
+            raise _refus(400, "unknown_role", f"This app declares no role “{as_role}”.")
+        # L'éditeur qui ESSAIE un rôle n'a pas de partage retenu : `$email` se résout
+        # sur SA propre adresse vérifiée, `$share` ne trouve rien (aucune ligne).
+        choix = {"editeur": False, "role": as_role, "portees": []}
+    else:
+        choix = apps_roles.choix_du_lecteur(sub, app)
+    role = choix["role"]
+    # Le PÉRIMÈTRE DE LIGNES (`docs/apps.md` § Périmètre de lignes), résolu ICI une fois
+    # comme le rôle : `_lire`, `_geste` (donc le consentement) et `_droit_du_run` ne
+    # lisent que `app["row_scope"]`. Qui modifie l'app (hors `as_role`) n'en a aucun.
+    lignes = ({} if choix["editeur"] else apps_roles.lignes_du_lecteur(
+        manifest, role, choix["portees"], lambda: _email_verifie(sub)))
+    return {**app, "manifest": apps_roles.resserrer(manifest, role), "app_role": role,
+            "row_scope": lignes}
+
+
+def _email_verifie(sub: str) -> Optional[str]:
+    """L'adresse du lecteur que `$email` compare : celle de l'annuaire, et seulement
+    quand le jeton de CETTE requête la dit vérifiée (`email_verified`). Sans le claim
+    (jeton API, « voir en tant que », run d'agent) : None — aucune ligne."""
+    from ..api.base import email_verifie_de
+
+    if email_verifie_de(sub) is not True:
+        return None
+    e = (db.emails_by_subs([sub]) or {}).get(sub)
+    return e.strip() if isinstance(e, str) and "@" in e else None
+
+
+def _perimetre(app: dict, ns: str):
+    """Le périmètre de lignes du lecteur sur ce tableau : `(clauses, champs)` — None
+    s'il n'en a aucun ; `champs` = `{champ: valeur à poser}`, None quand le périmètre
+    ne se résout pas (aucune ligne, aucun geste)."""
+    from . import apps_roles
+
+    lignes = app.get("row_scope")
+    if lignes is None:
+        # Une app qui n'est pas passée par `_au_role` : aucun chemin servi n'en produit.
+        raise _refus(500, "row_scope_unresolved", "This app call wasn't judged for its viewer.")
+    if str(ns) not in lignes:
+        return None
+    p = lignes[str(ns)]
+    champs = None if p is apps_roles.RIEN else {c: spec["pose"] for c, spec in p.items()}
+    return apps_roles.clauses(p), champs
 
 
 def _table(app: dict, alias: Optional[str], want: str = "read") -> tuple[str, dict]:
@@ -397,6 +468,9 @@ def _empreinte(inp: AppCallInput) -> str:
     corps = {k: getattr(inp, k) for k in ("action", "table", "agent", "row_id", "field",
                                            "value", "expected_revision", "values", "input",
                                            "files", "file")}
+    if inp.as_role is not None:
+        # Un jeton émis sous un rôle essayé ne se brûle que sous ce rôle.
+        corps["as_role"] = inp.as_role
     if inp.draft:
         # Un jeton émis pour l'aperçu du brouillon ne se brûle pas sur l'app publiée
         # (ni l'inverse) : leurs manifestes et leurs auteurs diffèrent. Absente quand
@@ -426,6 +500,71 @@ def _resume(app: dict, action: str, target: dict, content: dict, text: str) -> d
             "target": target, "content": content, "text": text}
 
 
+def _dans_le_perimetre(ctx: ResolvedCtx, app: dict, ns: str, row_id: str,
+                       field: Optional[str]) -> None:
+    """`write_cell` sur un tableau au périmètre de lignes : la ligne visée doit en être,
+    lue au serveur par la MÊME requête qu'une lecture de l'app (clauses du périmètre +
+    `_id`), jamais comparée ici — couches et types se lisent comme à la lecture. Sinon
+    le refus d'une ligne qui n'existe pas (404 `row_not_found`) : rien ne dit qu'elle
+    existe chez un autre. Jugé AVANT l'écriture, donc avant le 409 de révision qui
+    citerait la révision du voisin. La révision attendue tient le reste : une ligne
+    sortie du périmètre entre ce contrôle et l'écriture a changé de révision."""
+    from .datastore import rows as R
+
+    p = _perimetre(app, ns)
+    if p is None:
+        return
+    clauses, champs = p
+    if champs is not None and field in champs:
+        raise _refus(403, "row_scope_field",
+                     f"“{field}” places a row in your scope: it can't be changed here.")
+    trouve = R._list_rows(ctx, R.ListRowsInput(
+        datastore=ns, limit=1, fields=["_id"],
+        filters=json.dumps(clauses + [{"field": "_id", "op": "eq", "value": str(row_id)}])))
+    if not trouve.get("rows"):
+        raise AuthzDenied(404, "row_not_found")
+
+
+def _cle_du_tableau(ns: str) -> Optional[str]:
+    """La clé métier DÉCLARÉE du tableau, lue sur son schéma VIVANT (elle peut être posée
+    ou changée après l'écriture du manifeste) — jamais par les droits du lecteur : c'est
+    le serveur qui juge."""
+    ligne = db.get_datastore_by_id(int(ns))
+    k = ((ligne or {}).get("schema") or {}).get("key")
+    return k if isinstance(k, str) and k else None
+
+
+def _cle_hors_perimetre(app: dict, ns: str, champs: set) -> None:
+    """Un lecteur au PÉRIMÈTRE DE LIGNES ne choisit pas la clé métier du tableau : elle est
+    unique sur TOUT le tableau, et le refus d'une clé déjà portée (« existe déjà ») lui
+    dirait qu'une ligne hors de son périmètre la porte. Refusé sans regarder les données
+    — le refus est le même que la clé soit libre ou non. Sauf si son périmètre IMPOSE
+    cette colonne (sa valeur, pas son choix). Ajouter sans la clé reste permis : la
+    ligne naît sans clé, non rapprochable."""
+    p = _perimetre(app, ns)
+    if p is None:
+        return
+    cle = _cle_du_tableau(ns)
+    if cle is None or cle not in champs:
+        return
+    if p[1] is not None and cle in p[1]:
+        return
+    raise _refus(403, "row_scope_key",
+                 f"“{cle}” is this table's unique key: it can't be chosen from your "
+                 "scope. Leave it out.")
+
+
+def _ajout_neutre(e: AuthzDenied) -> AuthzDenied:
+    """Le 409 `business_key_exists` d'un ajout NOMME la ligne en place (`id`, `details`) :
+    servi tel quel à un lecteur d'app, il livrerait l'identifiant d'une ligne que son
+    rôle, son périmètre ou ses champs ne lui montrent pas. Ramené à un refus sans rien
+    de la ligne."""
+    if e.code != "business_key_exists":
+        return e
+    return AuthzDenied(409, "row_conflict",
+                       "This row can't be added: it collides with an existing row.")
+
+
 def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
     """Juge un geste qui écrit ou lance — TOUT ce que l'appel jugera, sans rien
     faire — et rend `(faire, résumé)` : de quoi le faire, et ce que l'écran hôte
@@ -446,6 +585,8 @@ def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
             # ce qu'un autre a changé depuis.
             raise _refus(400, "revision_required",
                          "An app's write names the row's `_revision` as it was shown.")
+        _cle_hors_perimetre(app, ns, {inp.field} if inp.field else set())
+        _dans_le_perimetre(ctx, app, ns, inp.row_id, inp.field)
 
         def faire(_consent_id: int) -> dict:
             row = R._update_row(ctx, R.UpdateRowInput(
@@ -465,14 +606,27 @@ def _geste(ctx: ResolvedCtx, app: dict, inp: AppCallInput):
         cols = t.get("add") or []
         if not cols:
             raise _refus(403, "undeclared_write", "This app may not add rows to this table.")
-        extra = sorted(k for k in values if k not in cols)
+        p = _perimetre(app, ns)
+        imposes = {} if p is None else p[1]
+        if imposes is None:
+            raise _refus(403, "row_scope_unresolved",
+                         "Your rows in this table can't be told apart (no value set on "
+                         "your share, or no verified email): you can't add one.")
+        # Les champs du périmètre ne se choisissent pas : la valeur du lecteur les
+        # REMPLACE, déclarés ou non dans `add` — sa ligne naît dans son périmètre.
+        extra = sorted(k for k in values if k not in cols and k not in imposes)
         if extra:
             raise _refus(403, "undeclared_write", f"This app may not fill: {', '.join(extra)}.")
         if not values:
             raise _refus(400, "empty_row", "The new row is empty.")
+        _cle_hors_perimetre(app, ns, set(values))
+        values = {**values, **imposes}
 
         def faire(_consent_id: int) -> dict:
-            row = R._append_row(ctx, R.AppendRowInput(datastore=ns, row=values))
+            try:
+                row = R._append_row(ctx, R.AppendRowInput(datastore=ns, row=values))
+            except AuthzDenied as e:
+                raise _ajout_neutre(e) from None
             return {"row": _projeter(t, row)}
         return faire, _resume(
             app, inp.action, {"table": inp.table, "table_id": ns}, {"row": values},
@@ -781,8 +935,9 @@ def _consent(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         raise AuthzDenied(400, "consent_not_needed", f"`{inp.action}` doesn't take a consent.")
     if inp.reads is not None:
         raise AuthzDenied(400, "invalid_batch", "A consent is for one gesture: no `reads`.")
-    app = _app_pour(ctx, inp.app_id, inp.draft, geste_=True)
-    _, resume = _geste(ctx, app, inp)
+    app = _app_pour(ctx, inp.app_id, inp.draft, geste_=True, as_role=inp.as_role)
+    with _par_l_app(ctx.sub, app):
+        _, resume = _geste(ctx, app, inp)
     jeton = secrets.token_urlsafe(32)
     ttl = CONSENT_TTL_UPLOAD if inp.action == "upload_file" else CONSENT_TTL
     db.apps.consent_issue(int(app["id"]), ctx.sub, inp.action, _empreinte(inp),
@@ -801,6 +956,78 @@ def _consent(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
 # restent hors de la portée : ils écrivent. Un lot (`batch`) tient TOUTES ses lectures
 # dans un seul emprunt, et n'admet qu'elles.
 _LECTURES_D_UN_EMPRUNT = frozenset({"read_rows", "read_aggregate"})
+
+
+# Les lectures SERVIES de l'appel en cours, notées par `_noter_lu` et écrites au journal
+# par `_call_journalise` une fois l'appel rendu. None hors de lui : rien n'est noté.
+_LUES: ContextVar[Optional[list]] = ContextVar("lectures_d_app", default=None)
+
+
+def _noter_lu(app: dict, alias: Optional[str], action: str, out: dict, portee) -> None:
+    lues = _LUES.get()
+    if lues is None:
+        return
+    t = (app["manifest"].get("tables") or {}).get(alias) or {}
+    ns = str(t.get("table") or "")
+    if not ns.isdigit():
+        return
+    lues.append((int(ns), "app" if ns in portee.servis else "own",
+                 action == "read_rows", len(out.get("rows") or ())))
+
+
+def _call_journalise(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
+    """Le handler de la route : l'appel (`_call`), PUIS le journal de ce qu'il a servi —
+    hors de son emprunt au pool, qui reste en lecture seule. Un appel refusé n'a rien
+    servi (une lecture seule refusée lève ; les refus d'un lot ne sont pas notés)."""
+    lues: list = []
+    jeton = _LUES.set(lues)
+    try:
+        out = _call(ctx, inp)
+    finally:
+        _LUES.reset(jeton)
+    if lues:
+        _journaliser(int(inp.app_id), ctx.sub, lues)
+    return out
+
+
+def _journaliser(app_id: int, sub: str, lues: list) -> None:
+    """Somme par `(tableau, accès)` — deux lectures d'un même tableau dans un lot font
+    UNE ligne de la requête — et l'écrit. Jamais un refus de la lecture déjà servie."""
+    sommes: dict[tuple, list] = {}
+    for ns, acces, lignes_lues, n in lues:
+        c = sommes.setdefault((ns, acces), [0, 0, 0])
+        c[0 if lignes_lues else 1] += 1
+        c[2] += n
+    try:
+        db.apps.note_reads(app_id, sub, [(ns, acc, *c) for (ns, acc), c in sommes.items()])
+    except Exception:
+        logger.error("journal des lectures d'app : écriture en échec (app %s), la lecture "
+                     "est servie sans être notée", app_id, exc_info=True)
+
+
+def _noter_run(sub: str, ns: str) -> None:
+    """Un RUN lancé depuis une app vient d'ouvrir ce tableau par l'accès de l'app
+    (`par_l_app.servi`, hors portée d'appel) : une ouverture de plus au journal, sous
+    l'app et le lanceur (`access = 'run'`, sans compte de lignes — le run lit par les
+    outils de tableau). Jamais dans une portée de connexion partagée : une lecture
+    groupée (`reuse_connection`) reste lecture seule, une transaction d'écriture ne
+    s'alourdit pas du journal — l'ouverture n'est alors pas notée, et le dit."""
+    from .. import verrou_org
+
+    v = verrou_org.travail_de_la_requete()
+    if v is None or v.job_id is None or v.sub != sub:
+        return
+    if db.connexion_partagee():
+        logger.warning("journal des lectures d'app : ouverture du tableau %s par un run "
+                       "non notée (connexion partagée)", ns)
+        return
+    try:
+        app_id = db.apps.app_of_run(int(v.job_id), sub)
+        if app_id is not None:
+            db.apps.note_reads(int(app_id), sub, [(int(ns), "run", 1, 0, 0)])
+    except Exception:
+        logger.error("journal des lectures d'app : ouverture par un run non notée "
+                     "(tableau %s)", ns, exc_info=True)
 
 
 def _call(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
@@ -825,7 +1052,7 @@ def _lot(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
               if getattr(inp, k) is not None]
     if inp.options or autres:
         raise AuthzDenied(400, "invalid_batch",
-                     "A batch carries only `reads` (and `draft`): each read names its own "
+                     "A batch carries only `reads` (and `draft`, `as_role`): each read names its own "
                      f"table and options (not {', '.join(autres or ['options'])}).")
     if not reads:
         raise AuthzDenied(400, "invalid_batch", "A batch needs `reads`, a non-empty list.")
@@ -841,25 +1068,27 @@ def _lot(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
         raise AuthzDenied(400, "invalid_batch", "Two reads of a batch share an `id`.")
     _debiter(len(reads) - 1)
     with db.reuse_connection():
-        app = _app_pour(ctx, inp.app_id, inp.draft)
+        app = _app_pour(ctx, inp.app_id, inp.draft, as_role=inp.as_role)
         results = []
-        for r in reads:
-            try:
-                lu = _lecture_du_lot(inp, r)
-                out = _lire(ctx, app, lu.action, lu.table, lu.options or {})
-                results.append({"id": r["id"], "ok": True, **out})
-            except AuthzDenied as d:
-                results.append({"id": r["id"], "ok": False, "status": d.status,
-                                "code": d.code, "detail": d.message or None,
-                                **({"details": d.details} if d.details else {})})
-            except psycopg.errors.QueryCanceled:
-                # La borne `statement_timeout` du pool a coupé CETTE lecture : l'emprunt
-                # est en autocommit (`reuse_connection`), donc seule elle échoue, et
-                # les suivantes restent servies sur la même connexion.
-                results.append({"id": r["id"], "ok": False, "status": 503,
-                                "code": READ_TIMEOUT,
-                                "detail": "This read took too long and was stopped: "
-                                          "narrow it (filter, limit) or retry it alone."})
+        with _par_l_app(ctx.sub, app) as portee:
+            for r in reads:
+                try:
+                    lu = _lecture_du_lot(inp, r)
+                    out = _lire(ctx, app, lu.action, lu.table, lu.options or {})
+                    _noter_lu(app, lu.table, lu.action, out, portee)
+                    results.append({"id": r["id"], "ok": True, **out})
+                except AuthzDenied as d:
+                    results.append({"id": r["id"], "ok": False, "status": d.status,
+                                    "code": d.code, "detail": d.message or None,
+                                    **({"details": d.details} if d.details else {})})
+                except psycopg.errors.QueryCanceled:
+                    # La borne `statement_timeout` du pool a coupé CETTE lecture : l'emprunt
+                    # est en autocommit (`reuse_connection`), donc seule elle échoue, et
+                    # les suivantes restent servies sur la même connexion.
+                    results.append({"id": r["id"], "ok": False, "status": 503,
+                                    "code": READ_TIMEOUT,
+                                    "detail": "This read took too long and was stopped: "
+                                              "narrow it (filter, limit) or retry it alone."})
     return {"results": results}
 
 
@@ -906,7 +1135,97 @@ def _debiter(n: int) -> None:
 
 
 def _appel(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
-    app = _app_pour(ctx, inp.app_id, inp.draft, geste_=inp.action in GESTES)
+    app = _app_pour(ctx, inp.app_id, inp.draft, geste_=inp.action in GESTES,
+                    as_role=inp.as_role)
+    with _par_l_app(ctx.sub, app) as portee:
+        out = _appel_de(ctx, inp, app)
+        if inp.action in _LECTURES_D_UN_EMPRUNT:
+            _noter_lu(app, inp.table, inp.action, out, portee)
+        if (inp.action in GESTES and isinstance(out, dict) and inp.table
+                and str(((app["manifest"].get("tables") or {}).get(inp.table) or {})
+                        .get("table")) in portee.servis):
+            # Écrit par l'accès de l'app : le lecteur n'atteint pas ce tableau par ses
+            # routes — l'hôte ne propose pas de défaire par elles.
+            out = {**out, "through_app": True}
+        return out
+
+
+def _par_l_app(sub: str, app: dict):
+    """La portée de l'accès PAR L'APP (`datastore/par_l_app.py`) pour cet appel : les
+    seuls tableaux du manifeste resserré au rôle du lecteur, au droit que l'un de ses
+    principals y tient par CETTE app (`app_table_access`, tant qu'il tient un partage
+    vivant de l'app) — en écriture seulement si l'app y écrit (`set` ou `add`). Lu une
+    fois par tableau et par appel."""
+    from ..datastore import par_l_app
+
+    tables = {str(t.get("table")): t for t in (app["manifest"].get("tables") or {}).values()
+              if isinstance(t, dict)}
+    vus: dict[str, Optional[str]] = {}
+
+    def droit(ns: str) -> Optional[str]:
+        # Paresseux : un appel que le lecteur sert seul ne lit rien de plus.
+        if ns not in tables:
+            return None
+        if ns not in vus:
+            principaux = list(ownership.accessor_scope(sub).principal_pairs())
+            d = db.apps.through_app_access(int(app["id"]), int(ns), principaux)
+            # Le manifeste et ses rôles sont la SEULE frontière d'un lecteur par l'app :
+            # elle ne vaut que tant que leur auteur (le dernier à les avoir écrits,
+            # `updated_by`, ou `draft_by` pour l'aperçu) peut PARTAGER ce tableau. Un
+            # éditeur qui ne le peut pas et réécrit l'app (un champ de plus, un rôle
+            # élargi) en devient l'auteur : l'accès par l'app s'éteint, il ne s'élargit pas.
+            if d is not None and not ownership.can_govern(
+                    app["updated_by"], ownership.TYPE_RESSOURCE_DATASTORE, ns):
+                d = None
+            t = tables[ns]
+            if d == "write" and not (t.get("set") or t.get("add")):
+                d = "read"
+            vus[ns] = d
+        return vus[ns]
+
+    return par_l_app.portee(par_l_app.Portee(sub, droit))
+
+
+def _droit_du_run(sub: str, ns: str) -> Optional[str]:
+    """L'accès par l'app d'un RUN : l'agent qu'un lecteur a lancé DEPUIS une app
+    (consentement `start_agent` brûlé sur ce travail, `app_consents.job_id`) lit, le
+    temps de son run, ce que ce lecteur lit par CETTE app — jugé à chaque fois comme
+    l'appel le jugerait (partage vivant de l'app, rôle, auteur qui peut partager le
+    tableau). Trois bornes de plus, parce que l'agent lit par les outils de tableau,
+    qui ne projettent ni ne filtrent : LECTURE seule (une écriture d'agent ne passerait
+    pas par `set` / `add`), seulement d'un tableau que le rôle ouvre ENTIER (sans liste
+    de champs) — sinon l'agent verrait des champs que son lanceur ne voit pas —, et
+    JAMAIS d'un tableau où le lanceur a un périmètre de lignes (il verrait les lignes
+    des autres)."""
+    from .. import verrou_org
+
+    v = verrou_org.travail_de_la_requete()
+    if v is None or v.job_id is None or v.sub != sub:
+        return None
+    app_id = db.apps.app_of_run(int(v.job_id), sub)
+    if app_id is None:
+        return None
+    app = db.apps.get_for_call(int(app_id))
+    if (app is None or app.get("archived_at") is not None or not app.get("updated_by")
+            or not ownership.can_access(sub, APP_RTYPE, str(app_id), "read")):
+        return None
+    app = _au_role(sub, app, None)
+    t = next((t for t in (app["manifest"].get("tables") or {}).values()
+              if isinstance(t, dict) and str(t.get("table")) == str(ns)), None)
+    if t is None or t.get("fields") is not None:
+        return None
+    if str(ns) in app["row_scope"]:
+        # Un tableau au périmètre de lignes ne s'hérite PAS : l'agent lit par les outils
+        # de tableau, qui ne posent pas ce filtre — il verrait les lignes du voisin.
+        return None
+    if not ownership.can_govern(app["updated_by"], ownership.TYPE_RESSOURCE_DATASTORE, str(ns)):
+        return None
+    d = db.apps.through_app_access(int(app_id), int(ns),
+                                   list(ownership.accessor_scope(sub).principal_pairs()))
+    return "read" if d else None
+
+
+def _appel_de(ctx: ResolvedCtx, inp: AppCallInput, app: dict) -> dict:
     o = inp.options or {}
 
     if inp.action == "upload_file":
@@ -987,6 +1306,11 @@ def _lire(ctx: ResolvedCtx, app: dict, action: str, alias: Optional[str], o: dic
     from .datastore import rows as R
 
     ns, t = _table(app, alias)
+    # Le périmètre de lignes du lecteur part dans `filters` — la forme riche, en ET avec
+    # le `filter` de l'app (`_filter_clauses`) et avec la recherche `q` (`_ds_where`) :
+    # aucun argument de l'app ne le remplace, ni ne l'élargit.
+    p = _perimetre(app, ns)
+    portee = json.dumps(p[0]) if p is not None else None
 
     if action == "read_rows":
         order_by = o.get("order_by")
@@ -1008,7 +1332,8 @@ def _lire(ctx: ResolvedCtx, app: dict, action: str, alias: Optional[str], o: dic
                     else [f for f in champs if isinstance(f, str)] + sorted(_META - {"_id"})),
             offset=max(_entier(o, "offset", 0), 0), order_by=order_by,
             order_dir="asc" if o.get("order_dir") == "asc" else "desc",
-            q=q if isinstance(q, str) and q else None, filter=_filtre(t, o.get("filter"))))
+            q=q if isinstance(q, str) and q else None, filter=_filtre(t, o.get("filter")),
+            filters=portee))
         return {"rows": [_projeter(t, r) for r in page.get("rows") or []],
                 "total": page.get("total")}
 
@@ -1031,13 +1356,13 @@ def _lire(ctx: ResolvedCtx, app: dict, action: str, alias: Optional[str], o: dic
                         "label": m.get("label") if isinstance(m.get("label"), str) else f"m{i}"})
     out = R._aggregate(ctx, R.AggregateInput(
         datastore=ns, group_by=group_by, metrics=json.dumps(propres),
-        filter=_filtre(t, o.get("filter"))))
+        filter=_filtre(t, o.get("filter")), filters=portee))
     return {"groups": out.get("groups") or []}
 
 
 CAPABILITIES += [
     Capability(
-        key="me.app.call", handler=_call, Input=AppCallInput, Output=AppCallOut,
+        key="me.app.call", handler=_call_journalise, Input=AppCallInput, Output=AppCallOut,
         authz=ORG_MEMBER,
         description=(
             "What an open app asks, relayed by the front on behalf of its viewer: read "
@@ -1103,3 +1428,11 @@ CAPABILITIES += [
         ),
     ),
 ]
+
+
+def _enregistrer() -> None:
+    from ..datastore import par_l_app
+    par_l_app.enregistrer_run(_droit_du_run, _noter_run)
+
+
+_enregistrer()

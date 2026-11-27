@@ -314,6 +314,9 @@ sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
 #                                               OTO_JOURNAL_REVISIONS_RETENTION_DAYS
 #                                               (90 j), sauf l'import d'une ligne
 #                                               vivante — docs/datastore.md
+#   app-reads                                   (timer) purge du journal des lectures
+#                                               d'app au-delà de 180 jours (jours UTC)
+#                                               — docs/apps.md § Journal des lectures
 #   alertes-credential | all                    (idem : `all` joue le timer)
 #   instagram-tokens                            renouvelle les autorisations
 #                                               Instagram avant leur terme. ⚠️ Ce

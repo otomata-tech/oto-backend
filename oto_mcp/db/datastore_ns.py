@@ -531,25 +531,42 @@ def grant_resource(
     jours`. Omis, un partage VIVANT garde la sienne — un re-partage qui ne change qu'un
     rôle ne retire pas une échéance en silence — et un partage neuf ou ÉCHU n'en a pas :
     re-partager ce qui a expiré le rouvre, sans le laisser mort-né. Rend l'échéance
-    ÉCRITE (None = sans échéance), pour que la réponse décrive la base."""
+    ÉCRITE (None = sans échéance), pour que la réponse décrive la base.
+
+    L'IDENTITÉ du partage (`share_id`, `docs/apps.md` § Accès par l'app) : un partage
+    VIVANT la garde (changer son rôle, Voir → Utiliser, ou son échéance ne le remplace
+    pas) ; un partage neuf ou repris ÉCHU en tire une neuve, et repart du rôle d'app par
+    défaut (`app_role` NULL), comme un partage neuf. Ce qui avait été ouvert sous
+    l'ancien (`app_table_access`) ne revit pas sous lui."""
     if ttl_days is not None and (isinstance(ttl_days, bool) or int(ttl_days) < 1):
         raise ValueError(f"ttl_days doit être un entier ≥ 1 (reçu {ttl_days!r})")
     eff_role = _normalize_role(role, permission)
     eff_perm = _ROLE_TO_PERMISSION[eff_role]
     ttl = int(ttl_days) if ttl_days is not None else None
+    vivant = partage_vivant('resource_grants')
     with _connect() as conn:
         row = conn.execute(
             "INSERT INTO resource_grants "
             "(resource_type, resource_id, principal_type, principal_id, permission, role, "
-            " granted_by, expires_at) "
+            " granted_by, expires_at, share_id) "
             "VALUES (%(rt)s, %(rid)s, %(pt)s, %(pid)s, %(perm)s, %(role)s, %(by)s, "
-            "        NOW() + make_interval(days => %(ttl)s::int)) "
+            "        NOW() + make_interval(days => %(ttl)s::int), "
+            "        nextval('resource_grants_share_id_seq')) "
             "ON CONFLICT (resource_type, resource_id, principal_type, principal_id) "
             "DO UPDATE SET permission = EXCLUDED.permission, role = EXCLUDED.role, "
             "granted_by = EXCLUDED.granted_by, "
             "expires_at = CASE WHEN %(ttl)s::int IS NOT NULL THEN EXCLUDED.expires_at "
-            f"                 WHEN {partage_vivant('resource_grants')} "
-            "                 THEN resource_grants.expires_at END "
+            f"                 WHEN {vivant} "
+            "                 THEN resource_grants.expires_at END, "
+            # À droite, `resource_grants` est la ligne d'AVANT : vivante, elle garde son
+            # identité (numérotée si elle n'en avait pas) et son rôle d'app ; échue, la
+            # pose est un partage neuf. Le PÉRIMÈTRE DE LIGNES (`app_scope`) reste, lui,
+            # dans les deux cas : il ne fait que restreindre, et le perdre élargirait ce
+            # que ce lecteur voit (`docs/apps.md` § Périmètre de lignes).
+            f"share_id = CASE WHEN {vivant} "
+            "                THEN COALESCE(resource_grants.share_id, EXCLUDED.share_id) "
+            "                ELSE EXCLUDED.share_id END, "
+            f"app_role = CASE WHEN {vivant} THEN resource_grants.app_role END "
             "RETURNING expires_at",
             {"rt": resource_type, "rid": resource_id, "pt": principal_type,
              "pid": principal_id, "perm": eff_perm, "role": eff_role, "by": granted_by,
@@ -561,13 +578,22 @@ def grant_resource(
 def revoke_resource_grant(
     resource_type: str, resource_id: str, principal_type: str, principal_id: str,
 ) -> bool:
+    """Retire le partage. Celui d'une APP emporte, dans la même transaction, ce qui avait
+    été ouvert à ce principal à travers elle (`app_table_access`, `docs/apps.md` § Accès
+    par l'app) : lié à l'identité du partage, cela ne revivrait de toute façon pas sous
+    un partage reposé — le retirer ici, c'est que personne ne le voie encore listé."""
     with _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM resource_grants WHERE resource_type = %s AND resource_id = %s "
-            "AND principal_type = %s AND principal_id = %s",
-            (resource_type, resource_id, principal_type, principal_id),
-        )
-        return cur.rowcount > 0
+        with conn.transaction():
+            cur = conn.execute(
+                "DELETE FROM resource_grants WHERE resource_type = %s AND resource_id = %s "
+                "AND principal_type = %s AND principal_id = %s",
+                (resource_type, resource_id, principal_type, principal_id),
+            )
+            if resource_type == "app" and str(resource_id).isdigit():
+                conn.execute(
+                    "DELETE FROM app_table_access WHERE app_id = %s AND principal_type = %s "
+                    "AND principal_id = %s", (int(resource_id), principal_type, str(principal_id)))
+            return cur.rowcount > 0
 
 
 def get_resource_grant(

@@ -331,6 +331,16 @@ _PK_SUB_TABLES = (
     # lève et fait échouer TOUT le merge. Le compte Unipile de la ligne retirée n'est
     # pas supprimé chez le fournisseur : le relevé des sièges le montre orphelin.
     ("unipile_accounts", "sub", ("org_id", "provider", "slot")),
+    # Un tableau ouvert à une personne À TRAVERS une app (`app_table_access`, PK
+    # `(app_id, ns_id, principal_type, principal_id)`) : il suit la personne. Les deux
+    # comptes tenant la même ligne ⟹ celle du survivant reste. `principal_id` mêle sub et
+    # ids d'org/équipe, mais un sub n'est jamais un entier : seules les lignes user bougent.
+    ("app_table_access", "principal_id", ("app_id", "ns_id", "principal_type")),
+    # Le journal des lectures d'app (`app_reads`, PK `(app_id, day, ns_id, sub, access)`) :
+    # les compteurs suivent le lecteur. Les deux comptes ayant lu le même tableau par la
+    # même app le même jour ⟹ la ligne du survivant reste, ses compteurs seuls (ceux de
+    # l'absorbé pour ce jour-là se perdent : un journal, pas une facture).
+    ("app_reads", "sub", ("app_id", "day", "ns_id", "access")),
     # L'abonnement d'une personne (OTO-130) suit le compte fusionné : sa ligne porte
     # le `sandbox_id`, que le worker relit — le sandbox reste celui où elle s'est connectée.
     ("user_model_subscriptions", "sub", ("famille",)),
@@ -688,6 +698,8 @@ _SUB_COLUMNS = [
     # qui a déposé un fichier dans une app : c'est aussi qui le LIT (lui seul, et ses
     # runs) — il suit la personne, sinon ses fichiers lui deviendraient illisibles.
     ("app_files", "sub"),
+    # qui a ouvert un tableau à travers une app : attribution, hors PK, UPDATE nu.
+    ("app_table_access", "granted_by"),
     # - qui a écrit un commentaire de ligne : une signature d'auteur (`mine`, le droit
     #   de retirer le sien se lisent par elle), hors PK, indexée, UPDATE nu.
     ("datastore_row_comments", "auteur_sub"),

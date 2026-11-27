@@ -78,6 +78,226 @@ d'`ownership` (`apps.owner_type/owner_id`, partages dans `resource_grants`,
   après le tag. Index `apps (owner_id)` et `app_projects (filed_by)` : la fusion de
   comptes repointe ces colonnes d'un bloc.
 
+## Rôles d'une app (`manifest.roles`, `capabilities/apps_roles.py`)
+
+Une app peut dire **qui, parmi ses lecteurs, voit et fait quoi** : le manifeste déclare
+des rôles (`roles: {admin: {…}, user: {…}}`) et un `default_role`, OBLIGATOIRE dès
+qu'un rôle existe. Chaque rôle **resserre** le manifeste, jamais plus :
+
+- `tables` absent = tous les tableaux déclarés ; présent = ceux-là seuls, chacun `true`
+  ou `{fields?, set?, add?}` — une clé absente hérite du manifeste, une clé présente
+  en est un sous-ensemble (`set: {}`, `add: []` : aucune écriture). Jugé à l'écriture
+  (`apps_manifeste.forme`) : un rôle qui nomme ce que le manifeste n'ouvre pas est
+  refusé, 400 `invalid_manifest` ; ses champs sont jugés contre le schéma comme ceux
+  du manifeste.
+- `agents` (liste de noms, ou `{nom: true | {run?, input?}}`), `files` (`false` = ni
+  dépôt ni liste), `sections` (noms libres, retirés du HTML marqué — ci-dessous), `label`,
+  `rows` (périmètre de lignes, plus bas).
+
+**Qui tient quel rôle.** Le rôle d'app d'un PARTAGE de l'app
+(`resource_grants.app_role`, révision `20261127_1200_app_roles`) : posé par qui
+GOUVERNE l'app (`oto_apps op=set_role`, `principal_type`, `principal_id`, `role` ;
+sans `role` = retour au défaut ; 404 `not_shared` sans partage, 400 `unknown_role` pour
+un rôle que ni l'app publiée ni son brouillon ne déclare), lu par `op=roles`. Il part
+avec le partage (retrait, échéance) et suit la fusion de comptes comme lui ; un partage
+échu puis repris est un partage NEUF et repart du `default_role` (`db.grant_resource`),
+comme après un retrait — ni plus étroit ni plus large par principe : ce que choisit qui
+repartage, pas un reste. Changer le rôle de PARTAGE (Voir → Utiliser) ou l'échéance
+d'un partage vivant le garde. Un rôle ne se pose que sur un partage vivant. Nominatif
+d'abord, puis équipe, puis org ; à type égal, le premier dans l'ordre du manifeste.
+Sans rôle posé, ou un rôle que le manifeste ne déclare plus : `default_role` — jamais
+le manifeste entier. **Qui peut modifier l'app n'est borné par aucun rôle** (il
+réécrirait le manifeste) ; il l'essaie sous un rôle par `as_role` sur l'appel
+(403 `as_role_editors_only` sinon). Une app possédée par une org est modifiable par
+tous ses membres : pour des rôles entre collègues, la garder possédée par une personne
+ou une équipe et la PARTAGER à l'org (Use).
+
+**Où il s'applique : une fois, à l'entrée de l'appel** (`apps_appel._app_pour` →
+`_au_role`). Toute action lit le manifeste après ce point — lectures, lot, agrégats,
+gestes et leur consentement, dépôt et liste de fichiers, runs — donc toutes sont
+bornées sans le savoir. `op=get` sert au lecteur le manifeste de SON rôle, sans la
+définition des rôles, et `access` `{role, role_label, sections}` (ce que l'app lit par
+`oto.access()`) ; à qui peut la modifier, le manifeste entier et `role: null`.
+
+**Sections : le balisage marqué est retiré au serveur** (`capabilities/apps_sections.py`).
+L'auteur marque une partie du HTML par `data-oto-section="nom"` (plusieurs noms séparés
+par des blancs : visible si le rôle en ouvre UN). Servi à un lecteur borné par un rôle
+(`op=get` — le seul chemin qui rend du HTML à qui ne peut pas modifier l'app : le
+brouillon, `revision` et `restore` sont réservés aux éditeurs, `revisions` ne porte
+pas de HTML), le HTML perd **l'élément entier** — balise, contenu, `<script>` et
+`<style>` intérieurs — de chaque section que son rôle n'ouvre pas : il n'atteint pas le
+navigateur, « afficher la source » comprise. Un `<script data-oto-section="admin">` part
+aussi. Rôle sans `sections` : rien n'est retiré ; `sections: []` : tout élément marqué
+part ; qui peut modifier l'app, ou une app sans rôle : le HTML entier. `oto.access()`
+dit toujours à la page ses sections. Le reste du HTML est recopié à l'octet, et `rev`
+reste celui de l'app.
+
+- **Fermé du côté sûr.** Un lecteur linéaire suit le découpage du tokenizer HTML
+  (commentaires, valeurs entre guillemets contenant `>`, texte brut de `script` et de
+  ses états échappés, `style`, `textarea`, `title`, CDATA et `/>` en SVG/MathML) ; un
+  élément marqué ne finit qu'à SA balise fermante, et seulement si le navigateur la
+  suivrait (une fermeture ignorée à travers un tableau, une liste, un `select`, un
+  `template`… est ignorée ici aussi), jamais par la fermeture d'un ancêtre. **Jamais
+  fermé — ou un élément marqué intérieur fermé par celle d'un autre — : tout jusqu'à la
+  fin du document part** (un avertissement le dit à l'écriture). Retirer trop casse l'affichage d'un
+  rôle ; retirer trop peu fuirait. Fermer explicitement chaque élément marqué (`</li>`,
+  `</p>`, `</td>` compris).
+- **Ce qui n'est PAS protégé** : tout ce qui vit hors d'un élément marqué — une
+  constante ou un appel dans un `<script>` non marqué, un gabarit HTML construit en JS
+  (`'<div data-oto-section="admin">'` dans une chaîne n'est PAS lu), le CSS, les
+  attributs d'éléments non marqués. Mettre ce qui n'appartient qu'à une section DANS un
+  élément marqué (un `<script data-oto-section="admin">` pour son code, un
+  `<template data-oto-section="admin">` pour son gabarit). Les données des tableaux sont
+  protégées par le rôle de toute façon : ce qu'il ne lit pas n'est jamais servi.
+- **Le mode STRICT** (`apps_sections.strict`, `non_classes`) — dès qu'un rôle déclare
+  `sections`, sauf `strict_sections: false` au manifeste : **chaque `<script>`, chaque
+  `<style>` et chaque balise à gestionnaire `on…=` doit être classé** — marqué d'une
+  section, ou déclaré COMMUN par `data-oto-section="*"` (servi à tous les rôles, même à
+  `sections: []` ; `*` est réservé, aucun rôle ne le déclare). Jugé sur ce qui reste une
+  fois retirés les éléments marqués d'une section (le texte d'un script n'est pas lu
+  comme du balisage). ⚠️ **C'est la seule exception à « le HTML avertit, ne refuse
+  jamais »** : à CHAQUE écriture (`create`, `update` — y compris un manifeste seul sur le
+  HTML gardé —, `patch`, `restore`, `publish`), 400 `sections_not_classified` qui nomme
+  chaque ligne, rien d'écrit ; `op=validate` le rend dans `problems`. Au service, en
+  dernier recours (une app écrite avant la règle, ou base modifiée à la main), un
+  lecteur borné reçoit 403 `app_unavailable`, sans nom de rôle ni de section ; qui
+  modifie l'app l'ouvre et voit le problème en écrivant. Ce que le mode strict ne
+  couvre PAS : le balisage et le texte non marqués (communs par définition), les
+  attributs `style=`, les URLs — et ce qu'un script COMMUN fait : un avertissement
+  signale une section nommée en clair dans le commun (`noms_dans_le_commun`).
+- **À l'écriture**, en `warnings` (jamais un refus) : une section qu'un rôle ouvre sans
+  qu'aucun élément ne la porte (ce que la page cache pour elle par script part chez
+  tous), une marque qu'aucun rôle ne déclare (retirée pour tout rôle à `sections`), un
+  élément marqué jamais fermé. `op=validate` ne les rend qu'à qui peut modifier l'app.
+
+⚠️ Le rôle ne fait que retirer : Use reste nécessaire pour cliquer, et
+chaque geste reste jugé auteur ∩ lecteur. Un lecteur qui tient le tableau par un
+partage ORDINAIRE le lit en entier hors de l'app : pour que le rôle soit la seule
+porte, ouvrir le tableau **par l'app seulement** (ci-dessous) au lieu de le partager.
+
+### Accès par l'app (`app_table_access`, `datastore/par_l_app.py`)
+
+Un tableau peut être ouvert à quelqu'un **à travers une app seulement** : `oto_apps
+op=grant_through_app` (`app_id`, `principal_type`, `principal_id`, `tables` optionnel —
+par défaut tous ceux que l'app déclare), `op=revoke_through_app` pour le retirer,
+`op=roles` le liste par partage (`through_app`). Règles :
+
+- **Poser = partager le tableau** : qui gouverne l'app ET peut partager chaque tableau
+  (`can_govern`) ; un tableau qu'il ne peut partager est sauté et nommé (`skipped`).
+  Seulement à un principal qui tient un partage VIVANT de l'app (404 `not_shared`).
+- **Droit** : `write` si l'app écrit dans ce tableau (`set` ou `add`), sinon `read` ; à
+  l'appel, `write` retombe à `read` si le manifeste resserré au rôle n'y écrit plus.
+- **Ne vaut que dans l'appel de CETTE app** : `apps_appel._par_l_app` ouvre une portée
+  (`ContextVar`) le temps de l'appel, pour les seuls tableaux du manifeste resserré ;
+  `DatastorePg._trouver` la consulte quand le lecteur ne tient pas le tableau lui-même
+  assez. **Aucune autre lecture ne voit `app_table_access`** : outils `data_*`, face
+  REST des tableaux, écran Tableaux, recherche, une autre app — rien. Le reste de
+  l'appel est jugé comme avant (manifeste, rôle, auteur ∩ lecteur, consentement) ;
+  l'historique des lignes garde le lecteur.
+- **Part avec le partage de l'app, et ne revient pas avec un autre.** L'accès est lié
+  à l'IDENTITÉ du partage sous lequel il a été ouvert (`share_id` : un numéro jamais
+  repris, tiré par `db.grant_resource`, posé aussi sur `app_table_access`) et ne compte
+  que tant que le MÊME principal tient CE partage, vivant (`db.apps._sous_son_partage`).
+  Un partage vivant garde son identité quand on change son rôle (Voir → Utiliser,
+  Manage) ou son échéance : l'accès reste. Un partage reposé en a une neuve — après un
+  retrait, une échéance passée (il n'y a pas d'événement : la ligne échue reste, et la
+  reprise par `ON CONFLICT` change l'identité), un transfert qui fait du principal le
+  propriétaire puis l'en retire, un lien d'invitation, un partage d'org par défaut
+  (`partage_par_defaut` : changer le réglage ne retire aucun partage ; retirer celui
+  d'une org est un retrait ordinaire) — : **rien de ce qui avait été ouvert ne revit,
+  il se rouvre** (`grant_through_app`). Deux gardes, la seconde de propreté : la
+  liaison (aucun chemin qui termine un partage ne peut l'oublier, puisqu'elle ne
+  dépend d'aucun) et le retrait des lignes avec le partage au point unique
+  `db.revoke_resource_grant` (`oto_resource op=unshare` et sa cascade, `ownership.revoke`,
+  le nouveau propriétaire d'un `transfer`) et avec une équipe supprimée
+  (`group_store.delete_group`). Les listes (`op=roles`, `through_app` du tableau) ne
+  montrent que les accès qui valent. Une app supprimée emporte les siens (FK) ; une
+  équipe ou une org n'a jamais son numéro repris. La fusion de comptes déplace partage
+  et accès ensemble (même identité) ; si les deux comptes tenaient la même ligne, celle
+  du survivant reste, et ne vaut que sous SON partage. Un transfert de l'app laisse
+  aux AUTRES principaux leur partage, donc leur accès — toujours borné par l'auteur
+  du manifeste, qui doit pouvoir partager le tableau. Un partage d'avant `share_id`
+  (NULL) est numéroté au premier accès ouvert sous lui ; une ligne sans partage
+  numéroté ne vaut rien.
+- **Un agent lancé depuis l'app en hérite, en LECTURE** (`apps_appel._droit_du_run`) :
+  le run d'un travail sur lequel le lecteur a brûlé un consentement `start_agent` de
+  cette app (`app_consents.job_id`, travail de la requête `verrou_org`) lit ce que ce
+  lecteur lit par l'app, rejugé à chaque résolution (partage vivant, rôle, auteur qui
+  peut partager le tableau). Deux bornes de plus, parce que l'agent lit par les outils
+  de tableau, qui ne projettent pas : **lecture seule**, et seulement d'un tableau que
+  le rôle ouvre **entier** (sans liste de champs). Un tableau aux champs bornés ne lui
+  est pas ouvert.
+- **Le gérant du tableau le voit et le retire** : `oto_resource op=get` d'un tableau
+  rend `through_app` (app, principal, droit) ; `oto_apps op=revoke_through_app` avec
+  `tables` (numéros) lui suffit, sans aucun droit sur l'app.
+
+### Périmètre de lignes (`roles.<r>.rows`, `resource_grants.app_scope`)
+
+Un lecteur peut ne voir d'un tableau que **SES lignes** — un partenaire sa fiche, jamais
+celle du voisin. Deux façons de le dire, cumulables :
+
+- **Une valeur posée sur le partage** : `oto_apps op=set_scope` (`app_id`,
+  `principal_type`, `principal_id`, `scope` `{tableau: {champ: valeur}}` ; sans `scope`
+  = retiré). Rangé par NUMÉRO de tableau (`resource_grants.app_scope`, même révision
+  `20261127_1200_app_roles`) : renommer le tableau dans le manifeste ne l'éteint pas ;
+  `op=roles` le rend par nom (`grants[].scope`). Gardes : gouverner l'app ET pouvoir
+  partager chaque tableau du périmètre posé et de celui qu'il remplace (403
+  `forbidden`) ; un partage existant (404 `not_shared`) ; chaque champ une colonne
+  déclarée d'un type qu'une égalité compare (texte, nombre, email, url, téléphone, enum,
+  lien, booléen — ni date, ni JSON, ni formule, ni composite) et chaque valeur un
+  scalaire non vide (400 `invalid_scope`, rien d'écrit). Il part avec le partage et suit
+  la fusion de comptes comme lui.
+- **Une colonne déclarée par le rôle** : `roles.partner.rows = {fiches: {contact_email:
+  "$email"}}` — l'adresse VÉRIFIÉE du lecteur (celle de l'annuaire, seulement quand le
+  jeton de la requête porte `email_verified: true`) — ou `"$share"` — la valeur posée
+  sur son partage pour ce champ. Jugé à l'écriture : tableau déclaré ET ouvert par le
+  rôle, nom de colonne nu, valeur `$email` ou `$share`, champ que le rôle ne peut PAS
+  poser (`set` : sinon il déplacerait une ligne vers le voisin), puis contre le schéma
+  (`apps_manifeste.auteur`, même sur un tableau sans liste de champs) : déclaré, d'un
+  type comparable.
+
+**Ce qui s'applique, une fois, à l'entrée de l'appel** (`apps_appel._au_role` →
+`apps_roles.lignes_du_lecteur`, rangé dans `app["row_scope"]`) : par tableau du manifeste
+resserré, chaque contrainte RESTREINT (ET) — la valeur du rôle et chaque valeur posée
+sur un partage retenu ; deux valeurs différentes pour un champ = aucune ligne.
+**Fail-closed** : `$share` sans valeur posée, `$email` sans adresse vérifiée (jeton API,
+« voir en tant que », claim absent) = le tableau ne sert AUCUNE ligne et refuse tout
+geste. L'égalité est exacte ; pour `$email`, l'adresse telle que l'annuaire la tient
+ou en minuscules.
+
+**Quel partage** : celui dont le rôle a été retenu (nominatif > équipe > org, puis ordre
+du manifeste) ; au rôle par défaut, ou sans rôles, les partages du type le plus précis
+qu'il tient. Plusieurs partages retenus (deux équipes, même rôle) : tous leurs
+périmètres s'appliquent (ET). Un partage nominatif sans périmètre l'emporte donc sur un
+partage d'org qui en porte un : c'est le partage le plus précis qui dit ce qu'il voit.
+
+**Toutes les portes** :
+- `read_rows`, `read_aggregate`, chaque lecture d'un `batch` : le périmètre part au
+  store en `filters` (la forme riche), en ET avec le `filter` de l'app et la recherche
+  `q` — l'app ne peut ni le remplacer (nommer le même champ ne fait que restreindre) ni
+  en sortir par la recherche.
+- `write_cell` : la ligne visée est relue au serveur par la même requête (périmètre +
+  `_id`) avant tout — hors du périmètre, 404 `row_not_found`, le refus d'une ligne qui
+  n'existe pas (jamais le 409 de révision qui citerait celle du voisin) ; un champ du
+  périmètre ne se change pas (403 `row_scope_field`). La révision attendue couvre la
+  course : une ligne sortie du périmètre entre le contrôle et l'écriture a changé de
+  révision.
+- `add_row` : les champs du périmètre sont IMPOSÉS — la valeur du lecteur remplace la
+  sienne, qu'ils soient dans `add` ou non ; le résumé du consentement montre la valeur
+  imposée ; périmètre non résolu → 403 `row_scope_unresolved`.
+- le consentement juge exactement comme l'appel (`_geste`), et l'appel rejuge.
+- **un run d'agent n'hérite JAMAIS d'un tableau à périmètre** (`_droit_du_run`) : l'agent
+  lit par les outils de tableau, qui ne posent pas ce filtre.
+
+**Qui n'est pas borné** : qui peut modifier l'app (il réécrirait le manifeste). Par
+`as_role`, il essaie un rôle sans partage retenu : `$email` se résout sur SA propre
+adresse vérifiée, `$share` ne trouve rien (aucune ligne). ⚠️ Comme le rôle, le
+périmètre ne borne que l'appel de l'app : un lecteur qui tient le tableau par un partage
+ordinaire le lit entier ailleurs — ouvrir le tableau **par l'app seulement**.
+⚠️ Résidu connu : `add_row` sur un tableau à clé métier rend 409 `business_key_exists`
+si la clé est déjà portée, y compris par une ligne hors du périmètre — choisir une clé
+qui contient le champ du périmètre, ou aucune.
+
 ## Ce que le serveur juge
 
 - **À l'écriture** (`capabilities/apps_manifeste.py`) — `create`, `update` ET
@@ -193,7 +413,69 @@ et `batch`, un lot de lectures (plus bas).
   `tests/test_apps_appel_lot.py`.
 - **Journal** : l'appel est tracé comme toute requête REST (`tool_calls`, `kind=rest`),
   mais la route y est réduite (`/api/me/apps/:id/call`) : le numéro de l'app et le
-  tableau lu n'y sont pas. Aucun journal d'audit des lectures n'existe à ce jour.
+  tableau lu n'y sont pas. Qui a lu quel tableau par quelle app se lit dans le **journal
+  des lectures** (§ suivant).
+
+
+**La clé métier ne se choisit pas d'un périmètre** (`apps_appel._cle_hors_perimetre`) :
+unique sur TOUT le tableau, le refus d'une clé déjà portée (« existe déjà ») dirait à un
+partenaire qu'une ligne hors de son périmètre la porte. Un lecteur au périmètre de lignes
+ne peut donc ni ajouter une ligne qui porte la colonne clé, ni la réécrire (403
+`row_scope_key`) — sauf si son périmètre IMPOSE cette colonne. Jugé à chaque geste sur le
+schéma VIVANT (une clé déclarée après le manifeste compte), sans regarder les données :
+clé libre ou prise, le même refus. Ajouter SANS la clé reste permis (la ligne naît sans
+clé, non rapprochable) ; un partenaire ne peut plus enregistrer une ligne par une clé
+qu'il tape. À l'écriture du manifeste, un rôle à `rows` qui ajoute ou pose la clé est
+refusé. Et pour tout lecteur d'app, le 409 `business_key_exists` d'un ajout — qui nomme
+la ligne en place (`id`, `details`) — devient 409 `row_conflict`, sans rien d'elle.
+
+### Journal des lectures (`app_reads`)
+
+Le gérant d'un tableau ouvert à un partenaire — par un partage ou À TRAVERS l'app
+seulement (§ Accès par l'app) — doit pouvoir répondre à « qui a lu quoi ». Les gestes ont
+leur journal (`app_consents`) ; les lectures ont celui-ci.
+
+- **Des compteurs, pas une ligne par lecture.** Une app ouvre son écran par huit à quinze
+  lectures et se rafraîchit ; la route en admet 240 par minute et par jeton. Une ligne
+  par **(app, jour UTC, tableau, lecteur, accès)** : `row_reads` (lectures de lignes),
+  `aggregate_reads` (agrégats), `rows_served` (lignes rendues), `first_at` / `last_at`.
+  `access` dit par où le lecteur atteignait le tableau : `own` (son propre partage),
+  `app` (l'accès par l'app seul, `Portee.servis`), `run` (un agent lancé depuis l'app,
+  par cet accès).
+- **Écrit APRÈS l'appel, hors de son emprunt.** Le chemin de lecture reste lecture seule
+  et à UN emprunt au pool (`tests/test_apps_appel_une_connexion.py`) : chaque lecture
+  SERVIE — seule, ou chacune d'un lot — est notée en mémoire pendant l'appel, puis le
+  handler de la route (`apps_appel._call_journalise`) écrit le tout en UNE requête
+  (`db.apps.note_reads`, `INSERT … ON CONFLICT DO UPDATE`, sommée par tableau et accès),
+  sur un second emprunt. Rien n'est tamponné entre deux appels : un processus qui
+  tombe ne perd que l'appel en cours. Une écriture du journal qui échoue est
+  journalisée (Sentry) et la lecture est servie quand même. Une lecture refusée, ou
+  coupée par la borne de durée, n'a rien servi : elle n'est pas notée.
+- **Les runs** : un agent lancé depuis l'app qui lit un tableau par l'accès de l'app
+  (`_droit_du_run`) est noté au point où le store SERT le tableau (`par_l_app.servi`),
+  sous l'app et le lanceur, `access = 'run'` : `row_reads` y compte les **ouvertures**
+  du tableau (une résolution par le store, pas une page), `rows_served` reste 0 — le run
+  lit par les outils de tableau, qui ne remontent pas leur compte. Une ouverture faite
+  dans une portée de connexion partagée (lecture groupée, transaction d'écriture) n'est
+  pas notée, et le dit (journal du processus).
+- **Ce qui n'est PAS noté** : les lectures d'un run par son propre partage du tableau
+  (c'est le journal d'appels, `tool_calls`, qui les porte), les fichiers (`list_files`,
+  `file_url`) et les runs (`agent_runs`, `run_result`) lus par l'app, la lecture que fait
+  le jugement d'un geste, et QUELLES lignes ont été servies : un ensemble d'identifiants
+  borné serait faux dès qu'il déborde, et réécrirait la ligne chaude à chaque lecture.
+  La fusion de deux comptes qui ont lu le même tableau le même jour par la même app
+  garde les compteurs du survivant pour ce jour-là.
+- **Qui le lit** (`oto_apps op=reads`, `days` ≤ 180, 30 par défaut ; session
+  interactive, comme tout `oto_apps`) : qui **gouverne l'app** (propriétaire, admin,
+  Manage) lit toutes ses lignes (`tables` : celles-là) ; qui gouverne un **tableau**
+  seulement lit les lignes de ce tableau — par `app_id`, sans même pouvoir lire l'app,
+  ou sans `app_id`, `tables` = des numéros de tableaux qu'il gouverne, toutes apps
+  confondues. Ne gouverner ni l'app ni aucun de ses tableaux : 404 `unknown_app` (403 à
+  qui lit l'app sans la gérer). Au plus 2 000 lignes, les plus récentes d'abord.
+- **Rétention : 180 jours**, purgés par `oto-mcp maintenance app-reads` (timer
+  quotidien, `all`), jamais au démarrage. L'effacement d'une app ou d'un tableau emporte
+  ses lignes (`ON DELETE CASCADE`) ; une app ne se supprime pas hors l'effacement de son
+  org (on l'archive).
 
 ### Écrire, ajouter, lancer, déposer — l'accord du lecteur, donné hors de l'app (`me.app.consent`, #1386)
 

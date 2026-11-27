@@ -649,6 +649,8 @@ sources = [
   "oto_mcp/capabilities/apps.py",
   "oto_mcp/capabilities/apps_manifeste.py",
   "oto_mcp/capabilities/apps_appel.py",
+  "oto_mcp/capabilities/apps_roles.py",
+  "oto_mcp/capabilities/apps_sections.py",
   "oto_mcp/capabilities/apps_html.py",
   "oto_mcp/capabilities/apps_versions.py",
   "oto_mcp/capabilities/remplacements.py",

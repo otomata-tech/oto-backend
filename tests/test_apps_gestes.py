@@ -8,6 +8,8 @@ erreur et ce qu'ils ont conclu, seulement pour les runs du lecteur. On remplace 
 même contrat que le SQL (brûlé une fois, mêmes clés) : ce qu'on vérifie, c'est le
 jugement.
 """
+from types import SimpleNamespace
+
 import pytest
 
 from oto_mcp import client_trace, db, geste, ownership
@@ -62,6 +64,10 @@ def s(monkeypatch):
     monkeypatch.setattr(ownership, "has_role_grant",
                         lambda sub, rtype, rid, roles: droits.get((sub, "app_role")) in roles)
     monkeypatch.setattr(db.apps, "get_for_call", lambda i: dict(APP) if i == 5 else None)
+    # Les partages de l'app (rôle, périmètre de lignes) : aucun ici.
+    monkeypatch.setattr(db.apps, "app_shares_of", lambda rid, principaux: [])
+    monkeypatch.setattr(ownership, "accessor_scope", lambda sub: SimpleNamespace(
+        principal_pairs=lambda: [("user", sub)]))
     monkeypatch.setattr(C, "org_de_l_app", lambda app: ORG)
     monkeypatch.setattr(C, "tableau_de_l_org", lambda ns, org: org == ORG)
     monkeypatch.setattr(R, "_update_row", lambda ctx, inp: rec["update"].append((ctx.sub, inp)) or {

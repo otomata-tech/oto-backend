@@ -95,6 +95,9 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.apps.FICHIERS,            # fichiers déposés dans une app par un lecteur, pour ses agents
     schema.apps.FICHIERS_ORIGINE,    # d'où vient un fichier d'app : déposé, ou rendu par un agent
     schema.apps.VERSIONS,            # brouillon d'une app et versions publiées, gardées à part
+    schema.apps.ROLES,               # le rôle d'app d'un partage (resserre le manifeste)
+    schema.apps.ACCES_PAR_L_APP,     # un tableau ouvert à travers une app seulement
+    schema.apps.LECTURES,            # le journal des lectures d'app, en compteurs par jour
     schema.runs.SLACK_AGENT_POSTS,   # messages postés dans Slack par un agent : à qui va une réponse
     schema.usage.APIFY_RUNS,         # runs Apify de la clé plateforme, notés au lancement
     schema.usage.HIGGSFIELD_JOBS,    # travaux Higgsfield de la clé plateforme, notés à la soumission

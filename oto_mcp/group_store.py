@@ -113,6 +113,12 @@ def delete_group(group_id: int) -> bool:
         with conn.transaction():
             credentials_store.clear_entity_credentials("group", str(group_id),
                                                        conn=conn)
+            # Ce qui était ouvert à l'équipe à travers une app (`app_table_access`, sans
+            # FK : `principal_id` est générique). Inerte sans elle — un numéro d'équipe
+            # n'est jamais repris —, retiré pour que le gérant d'un tableau ne le voie
+            # plus listé (`docs/apps.md` § Accès par l'app).
+            conn.execute("DELETE FROM app_table_access WHERE principal_type = 'group' "
+                         "AND principal_id = %s", (str(group_id),))
             cur = conn.execute("DELETE FROM org_groups WHERE id = %s", (group_id,))
             return (cur.rowcount or 0) > 0
 

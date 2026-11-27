@@ -88,7 +88,9 @@ ECRITURES = {
     # `publish` rend un brouillon vivant, `delete_draft` le jette, `set_drafts` règle le
     # passage par un brouillon.
     "me.app": {"create", "update", "patch", "archive", "unarchive", "restore", "file",
-               "unfile", "put_file", "publish", "delete_draft", "set_drafts"},
+               "unfile", "put_file", "publish", "delete_draft", "set_drafts",
+               # les rôles, le périmètre et l'accès par l'app de ses partages
+               "set_role", "set_scope", "grant_through_app", "revoke_through_app"},
     "me.doc": {"create", "bulk_create", "update", "patch", "delete", "move", "revert",
                "set_public", "archive", "unarchive", "verify", "set_owner"},
     "me.function": {"create", "propose", "run", "test", "publish", "refuse"},

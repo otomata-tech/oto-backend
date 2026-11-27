@@ -1223,7 +1223,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "oto_admin_user": {"lire": "list get", "detruire": "set_role"},
     "oto_admin_vault_health": "lire",
     # publish rend un brouillon vivant pour tous les lecteurs ; delete_draft le jette.
-    "oto_apps": {"lire": "list get revisions revision validate read_file", "ecrire": "create update patch unarchive file set_drafts", "detruire": "archive restore unfile put_file publish delete_draft"},
+    "oto_apps": {"lire": "list get revisions revision validate read_file roles reads", "ecrire": "create update patch unarchive file set_drafts set_role set_scope grant_through_app", "detruire": "archive restore unfile put_file publish delete_draft revoke_through_app"},
     "oto_clear_group": "ecrire",
     "oto_clear_org": "ecrire",
     "oto_clear_project": "ecrire",
@@ -1686,7 +1686,7 @@ PAS_UN_LOT: dict[str, str] = {
     "data_review_app": "fields",
     "data_write": "force versions",
     "oto_admin_guide": "slots",
-    "oto_apps": "project_ids edits",
+    "oto_apps": "project_ids edits tables",
     "oto_connector": "connectors",
     "oto_doc": "pages fields",
     "oto_fleet": "tools",

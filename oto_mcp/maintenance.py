@@ -40,6 +40,8 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                           ses jours de dépense de plus de 30 jours
     oto-mcp maintenance app-files     purge des fichiers déposés dans une app depuis
                                           30 jours (l'objet d'abord, puis la ligne)
+    oto-mcp maintenance app-reads     purge du journal des lectures d'app au-delà de
+                                          180 jours (jours UTC)
     oto-mcp maintenance apify-runs    relève le coût des runs Apify de la clé plateforme
                                           que personne n'a relus, sous l'org qui les a
                                           lancés, et compare le mois à ce qu'Apify compte
@@ -792,6 +794,19 @@ def app_files(*, dry_run: bool = False) -> dict:
             "purged": store.delete_files(r["id"] for r in rows)}
 
 
+def app_reads(*, dry_run: bool = False) -> dict:
+    """Purge le journal des lectures d'app (`app_reads`, `docs/apps.md` § Journal des
+    lectures) au-delà de `db.apps.READS_RETENTION_DAYS` jours. La lecture du journal
+    est déjà bornée à cette fenêtre (`oto_apps op=reads`, `days` ≤ 180) : ce travail
+    retire ce qu'on ne sert plus. Une ligne par app, tableau, lecteur, accès et jour :
+    une passe quotidienne retire un jour."""
+    from .db import apps as store
+    jours = store.READS_RETENTION_DAYS
+    if dry_run:
+        return {"retention_days": jours, "purgeables": store.count_purgeable_reads(jours)}
+    return {"retention_days": jours, "purged": store.purge_reads(jours)}
+
+
 def digest_lecteurs(*, dry_run: bool = False) -> dict:
     """Résumé quotidien des lecteurs d'une procédure partagée, un mail par propriétaire.
 
@@ -855,6 +870,7 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "digest-lecteurs": digest_lecteurs,
     "copilot": copilot,
     "app-files": app_files,
+    "app-reads": app_reads,
     "slack-agent-posts": slack_agent_posts,
     "apify-runs": apify_runs,
     "higgsfield-jobs": higgsfield_jobs,
@@ -884,7 +900,7 @@ _ACTES = ("journal-tokens", "residu-projete", "cles-plateforme-au-format")
 # qu'un travail plus long (re-projection, index) ne consomme la fenêtre du timer.
 _ALL = ("journal-jour", "retention", "revisions", "blocks", "key-indexes", "alertes-credential",
         "instagram-tokens", "unipile-fin-de-droit", "apollo-phones", "activation", "digest-lecteurs", "copilot",
-        "app-files", "slack-agent-posts", "apify-runs", "higgsfield-jobs", "effacements")
+        "app-files", "app-reads", "slack-agent-posts", "apify-runs", "higgsfield-jobs", "effacements")
 
 
 def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:

@@ -5,6 +5,8 @@ qui a déposé lit (lui, et les runs qu'il lance), et un run reçoit le texte de
 fichiers qu'on lui remet, borné pour tenir dans son `handoff`. Stockage et base
 remplacés par des dictionnaires : on vérifie le jugement.
 """
+from types import SimpleNamespace
+
 import pytest
 
 from oto_mcp import client_trace, db, file_extract, geste, media_store, ownership
@@ -42,6 +44,10 @@ def s(monkeypatch):
     rec = {"consents": {}, "files": {}, "objects": {}, "run_now": [], "manifest": MANIFEST}
     monkeypatch.setattr(ownership, "can_access", lambda sub, t, rid, want="read": sub in (LECTEUR, AUTRE))
     monkeypatch.setattr(db.apps, "get_for_call", lambda i: dict(APP, manifest=rec["manifest"]) if i == 5 else None)
+    # Les partages de l'app (rôle, périmètre de lignes) : aucun ici.
+    monkeypatch.setattr(db.apps, "app_shares_of", lambda rid, principaux: [])
+    monkeypatch.setattr(ownership, "accessor_scope", lambda sub: SimpleNamespace(
+        principal_pairs=lambda: [("user", sub)]))
     monkeypatch.setattr(db.apps, "get", lambda i: dict(APP, manifest=rec["manifest"]) if i == 5 else None)
     monkeypatch.setattr(C, "org_de_l_app", lambda app: ORG)
     monkeypatch.setattr(db, "get_trigger", lambda tid, org: {"id": tid})

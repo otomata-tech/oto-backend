@@ -1,5 +1,6 @@
 """Apps : lecture et écriture des tables `apps`, `app_revisions`, `app_projects`,
-`app_consents` et `app_files`.
+`app_consents`, `app_files`, `app_table_access` et `app_reads` (le journal des
+lectures, en compteurs par jour).
 
 NON aplati dans `db.*` : `create`/`get`/`update` sont trop communs pour la surface
 plate. Les appelants écrivent `db.apps.<fn>`.
@@ -608,3 +609,270 @@ def file_of(app_id: int, sub: str, file_id: int) -> Optional[dict]:
             f"SELECT {_FICHIER} FROM app_files WHERE id = %s AND app_id = %s AND sub = %s",
             (file_id, app_id, sub),
         ).fetchone()
+
+
+def app_shares_of(app_id: str, principals: list[tuple[str, str]]) -> list[dict]:
+    """Chaque partage VIVANT de l'app que tiennent ces principals, rôle posé ou non :
+    `[{principal_type, principal_id, app_role, app_scope}]`
+    (`capabilities/apps_roles.choix_du_lecteur` : le rôle ET le périmètre de lignes du
+    partage retenu). UNE requête pour tous les principals."""
+    from ._partage_vivant import PARTAGE_VIVANT_G
+
+    if not principals:
+        return []
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT g.principal_type, g.principal_id, g.app_role, g.app_scope "
+            "FROM resource_grants g "
+            "JOIN unnest(%s::text[], %s::text[]) AS pr(t, i) "
+            "  ON g.principal_type = pr.t AND g.principal_id = pr.i "
+            "WHERE g.resource_type = 'app' AND g.resource_id = %s "
+            f"AND {PARTAGE_VIVANT_G} ORDER BY g.principal_type, g.principal_id",
+            ([p[0] for p in principals], [str(p[1]) for p in principals], str(app_id)),
+        ).fetchall()
+
+
+def set_app_scope(app_id: str, principal_type: str, principal_id: str,
+                  scope: Optional[dict]) -> bool:
+    """Pose (ou retire, `scope` None) le périmètre de lignes du partage de ce principal
+    (`{numéro de tableau: {champ: valeur}}`). Faux = aucun partage de l'app."""
+    with _connect() as conn:
+        row = conn.execute(
+            "UPDATE resource_grants SET app_scope = %s WHERE resource_type = 'app' "
+            "AND resource_id = %s AND principal_type = %s AND principal_id = %s RETURNING 1",
+            (Jsonb(scope) if scope else None, str(app_id), principal_type, str(principal_id)),
+        ).fetchone()
+    return row is not None
+
+
+def set_app_role(app_id: str, principal_type: str, principal_id: str,
+                 role: Optional[str]) -> bool:
+    """Pose (ou retire, `role` None) le rôle d'app du partage VIVANT de ce principal.
+    Faux = ce principal n'en a aucun : un rôle ne se pose que sur un partage vivant (un
+    partage échu repris repart du rôle par défaut, `db.grant_resource`)."""
+    from ._partage_vivant import PARTAGE_VIVANT
+
+    with _connect() as conn:
+        row = conn.execute(
+            "UPDATE resource_grants SET app_role = %s WHERE resource_type = 'app' "
+            "AND resource_id = %s AND principal_type = %s AND principal_id = %s "
+            f"AND {PARTAGE_VIVANT} RETURNING 1",
+            (role, str(app_id), principal_type, str(principal_id)),
+        ).fetchone()
+    return row is not None
+
+
+def app_role_grants(app_id: str) -> list[dict]:
+    """Les partages VIVANTS de l'app avec leur rôle d'app (NULL = le rôle par défaut)."""
+    from ._partage_vivant import PARTAGE_VIVANT
+
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT principal_type, principal_id, role, app_role, app_scope, expires_at "
+            "FROM resource_grants WHERE resource_type = 'app' AND resource_id = %s "
+            f"AND {PARTAGE_VIVANT} ORDER BY principal_type, principal_id", (str(app_id),),
+        ).fetchall()
+
+
+def _sous_son_partage() -> str:
+    """La jointure qui fait VALOIR une ligne `app_table_access a` : le même principal
+    tient, vivant, le partage de l'app sous lequel elle a été ouverte (`share_id`). Un
+    partage reposé — après retrait, échéance, transfert — porte une autre identité :
+    ce qui avait été ouvert sous l'ancien ne revit pas (`docs/apps.md` § Accès par l'app)."""
+    from ._partage_vivant import PARTAGE_VIVANT_G
+
+    return ("JOIN resource_grants g ON g.resource_type = 'app' "
+            "  AND g.resource_id = a.app_id::text AND g.principal_type = a.principal_type "
+            "  AND g.principal_id = a.principal_id AND g.share_id = a.share_id "
+            f"  AND {PARTAGE_VIVANT_G} ")
+
+
+def through_app_access(app_id: int, ns_id: int,
+                       principals: list[tuple[str, str]]) -> Optional[str]:
+    """Le droit que l'un de ces principals tient sur le tableau À TRAVERS cette app
+    (`app_table_access`) : `write` > `read`, None = aucun. Ne compte que sous le partage
+    VIVANT de l'app qui l'a vu ouvrir (`_sous_son_partage`)."""
+    if not principals:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT max(a.permission) AS p FROM app_table_access a "
+            "JOIN unnest(%s::text[], %s::text[]) AS pr(t, i) "
+            "  ON a.principal_type = pr.t AND a.principal_id = pr.i "
+            + _sous_son_partage() +
+            "WHERE a.app_id = %s AND a.ns_id = %s",
+            ([p[0] for p in principals], [str(p[1]) for p in principals], int(app_id),
+             int(ns_id)),
+        ).fetchone()
+    return row["p"] if row else None
+
+
+def grant_through_app(app_id: int, ns_id: int, principal_type: str, principal_id: str,
+                      permission: str, by: str) -> bool:
+    """Ouvre le tableau à ce principal à travers l'app, SOUS son partage vivant de l'app
+    (son `share_id`, numéroté ici s'il date d'avant la colonne). Faux = aucun partage
+    vivant : rien n'est écrit. Rouvrir sous un partage reposé lie la ligne au neuf."""
+    from ._partage_vivant import PARTAGE_VIVANT
+
+    cle = (str(app_id), principal_type, str(principal_id))
+    with _connect() as conn:
+        with conn.transaction():
+            conn.execute(
+                "UPDATE resource_grants SET share_id = nextval('resource_grants_share_id_seq') "
+                "WHERE resource_type = 'app' AND resource_id = %s AND principal_type = %s "
+                f"AND principal_id = %s AND share_id IS NULL AND {PARTAGE_VIVANT}", cle)
+            cur = conn.execute(
+                "INSERT INTO app_table_access (app_id, ns_id, principal_type, principal_id, "
+                "permission, share_id, granted_by) "
+                "SELECT %s, %s, principal_type, principal_id, %s, share_id, %s "
+                "FROM resource_grants WHERE resource_type = 'app' AND resource_id = %s "
+                f"AND principal_type = %s AND principal_id = %s AND {PARTAGE_VIVANT} "
+                "ON CONFLICT (app_id, ns_id, principal_type, principal_id) DO UPDATE SET "
+                "permission = EXCLUDED.permission, share_id = EXCLUDED.share_id, "
+                "granted_by = EXCLUDED.granted_by, granted_at = NOW()",
+                (int(app_id), int(ns_id), permission, by, *cle))
+            return cur.rowcount > 0
+
+
+def revoke_through_app(app_id: int, principal_type: str, principal_id: str) -> int:
+    with _connect() as conn:
+        return conn.execute(
+            "DELETE FROM app_table_access WHERE app_id = %s AND principal_type = %s "
+            "AND principal_id = %s", (int(app_id), principal_type, str(principal_id)),
+        ).rowcount
+
+
+def through_app_of_table(ns_id: int) -> list[dict]:
+    """Chaque accès par une app qui VAUT sur ce tableau, avec l'app (pour son gérant)."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT a.app_id, ap.title AS app_title, a.principal_type, a.principal_id, "
+            "a.permission FROM app_table_access a JOIN apps ap ON ap.id = a.app_id "
+            + _sous_son_partage() +
+            "WHERE a.ns_id = %s ORDER BY a.app_id, a.principal_type, a.principal_id",
+            (int(ns_id),),
+        ).fetchall()
+
+
+def revoke_through_app_tables(app_id: int, principal_type: str, principal_id: str,
+                              ns_ids: list[int]) -> int:
+    with _connect() as conn:
+        return conn.execute(
+            "DELETE FROM app_table_access WHERE app_id = %s AND principal_type = %s "
+            "AND principal_id = %s AND ns_id = ANY(%s)",
+            (int(app_id), principal_type, str(principal_id), [int(n) for n in ns_ids]),
+        ).rowcount
+
+
+def through_app_of(app_id: int) -> list[dict]:
+    """Chaque accès par l'app qui VAUT sur cette app (pour `op=roles`) : une ligne restée
+    d'un partage disparu ne s'y montre pas — elle ne rend rien."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT a.ns_id, a.principal_type, a.principal_id, a.permission "
+            "FROM app_table_access a " + _sous_son_partage() +
+            "WHERE a.app_id = %s ORDER BY a.principal_type, a.principal_id, a.ns_id",
+            (int(app_id),),
+        ).fetchall()
+
+
+def app_of_run(job_id: int, sub: str) -> Optional[int]:
+    """L'app depuis laquelle `sub` a lancé ce travail (consentement `start_agent` brûlé
+    sur lui), None sinon."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT app_id FROM app_consents WHERE job_id = %s AND sub = %s "
+            "AND action = 'start_agent' AND used_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+            (int(job_id), sub),
+        ).fetchone()
+    return int(row["app_id"]) if row else None
+
+
+# --- Le journal des lectures d'app (`app_reads`, `docs/apps.md` § Journal des lectures).
+
+#: Ce que le journal garde : la purge (`maintenance app-reads`) et la borne de lecture.
+READS_RETENTION_DAYS = 180
+#: Au plus, les lignes d'une lecture du journal (une par lecteur, tableau, accès, jour).
+READS_MAX = 2000
+
+_JOUR_UTC = "(NOW() AT TIME ZONE 'UTC')::date"
+
+
+def note_reads(app_id: int, sub: str, lues: Iterable[tuple]) -> int:
+    """Ajoute aux compteurs du jour (UTC) ce qu'un appel a servi : `lues` = des
+    `(ns_id, access, row_reads, aggregate_reads, rows_served)`, déjà sommés par
+    `(ns_id, access)` par l'appelant — un `ON CONFLICT DO UPDATE` refuse de toucher deux
+    fois la même ligne dans une requête. UNE requête, en autocommit de son emprunt ;
+    les clés triées : deux appels concurrents verrouillent dans le même ordre. Un
+    tableau supprimé entre la lecture et l'écriture est sauté (jointure)."""
+    lignes = sorted((int(ns), str(acc), int(r), int(a), int(n)) for ns, acc, r, a, n in lues)
+    if not lignes:
+        return 0
+    cols = list(zip(*lignes))
+    with _connect() as conn:
+        return conn.execute(
+            "INSERT INTO app_reads (app_id, day, ns_id, sub, access, row_reads, "
+            "aggregate_reads, rows_served) "
+            f"SELECT %s, {_JOUR_UTC}, x.ns, %s, x.acc, x.r, x.a, x.n "
+            "FROM unnest(%s::bigint[], %s::text[], %s::int[], %s::int[], %s::bigint[]) "
+            "AS x(ns, acc, r, a, n) JOIN user_datastores d ON d.id = x.ns "
+            "ORDER BY x.ns, x.acc "
+            "ON CONFLICT (app_id, day, ns_id, sub, access) DO UPDATE SET "
+            "row_reads = app_reads.row_reads + EXCLUDED.row_reads, "
+            "aggregate_reads = app_reads.aggregate_reads + EXCLUDED.aggregate_reads, "
+            "rows_served = app_reads.rows_served + EXCLUDED.rows_served, "
+            "last_at = NOW()",
+            (int(app_id), sub, list(cols[0]), list(cols[1]), list(cols[2]), list(cols[3]),
+             list(cols[4])),
+        ).rowcount
+
+
+_COLONNES_LUES = ("r.app_id, ap.title AS app_title, r.ns_id, d.namespace AS table_name, r.sub, "
+                  "u.email, r.access, r.day, r.row_reads, r.aggregate_reads, r.rows_served, "
+                  "r.first_at, r.last_at")
+_JOINTURES_LUES = ("FROM app_reads r JOIN apps ap ON ap.id = r.app_id "
+                   "JOIN user_datastores d ON d.id = r.ns_id "
+                   "LEFT JOIN users u ON u.sub = r.sub")
+
+
+def reads_of_app(app_id: int, days: int, ns_ids: Optional[list[int]] = None) -> list[dict]:
+    """Le journal d'UNE app sur les `days` derniers jours (UTC, aujourd'hui compris),
+    les plus récents d'abord, `READS_MAX` lignes au plus ; `ns_ids` : ces tableaux
+    seulement (None = tous)."""
+    with _connect() as conn:
+        return conn.execute(
+            f"SELECT {_COLONNES_LUES} {_JOINTURES_LUES} WHERE r.app_id = %s "
+            f"AND r.day > {_JOUR_UTC} - %s "
+            "AND (%s::bigint[] IS NULL OR r.ns_id = ANY(%s::bigint[])) "
+            "ORDER BY r.day DESC, r.last_at DESC LIMIT %s",
+            (int(app_id), int(days), ns_ids, ns_ids, READS_MAX),
+        ).fetchall()
+
+
+def reads_of_tables(ns_ids: list[int], days: int) -> list[dict]:
+    """Le journal de ces tableaux, par toutes les apps, sur les `days` derniers jours."""
+    with _connect() as conn:
+        return conn.execute(
+            f"SELECT {_COLONNES_LUES} {_JOINTURES_LUES} WHERE r.ns_id = ANY(%s::bigint[]) "
+            f"AND r.day > {_JOUR_UTC} - %s "
+            "ORDER BY r.day DESC, r.last_at DESC LIMIT %s",
+            ([int(n) for n in ns_ids], int(days), READS_MAX),
+        ).fetchall()
+
+
+_READS_PURGEABLES = f"day <= {_JOUR_UTC} - %s"
+
+
+def count_purgeable_reads(days: int = READS_RETENTION_DAYS) -> int:
+    with _connect() as conn:
+        return int(conn.execute(
+            f"SELECT count(*) AS n FROM app_reads WHERE {_READS_PURGEABLES}", (int(days),),
+        ).fetchone()["n"])
+
+
+def purge_reads(days: int = READS_RETENTION_DAYS) -> int:
+    """Retire les jours du journal des lectures au-delà de `days`. Rend combien."""
+    with _connect() as conn:
+        return conn.execute(
+            f"DELETE FROM app_reads WHERE {_READS_PURGEABLES}", (int(days),),
+        ).rowcount or 0

@@ -123,6 +123,16 @@ def forme(raw: Any) -> tuple[dict, list[str]]:
         "agents": agents,
         "files": raw.get("files") is True,
     }
+    # Le mode strict des sections (`apps_sections.strict`) : seul un `false` explicite
+    # l'éteint ; absent, il suit les rôles.
+    if raw.get("strict_sections") is not None:
+        if not isinstance(raw["strict_sections"], bool):
+            problems.append("`strict_sections` must be true or false.")
+        else:
+            clean["strict_sections"] = raw["strict_sections"]
+    # Les rôles (`apps_roles.py`) : jugés contre ce que le manifeste vient d'ouvrir.
+    from . import apps_roles
+    problems += apps_roles.forme(raw, clean, ALIAS.match)
     return clean, problems
 
 
@@ -187,7 +197,11 @@ def auteur(sub: str, project_org: Optional[int], clean: dict) -> list[str]:
     from ..datastore.core import DatastoreAmbigu, DatastoreNotFound, make_store
     from ..datastore.errors import TableauParNom
 
+    from .apps_roles import TYPES_DE_PERIMETRE, champs_de_perimetre, champs_nommes
+
     problems: list[str] = []
+    roles_nomment = champs_nommes(clean)
+    perimetres = champs_de_perimetre(clean)
     store = make_store(sub)
     for alias, t in clean["tables"].items():
         try:
@@ -205,10 +219,39 @@ def auteur(sub: str, project_org: Optional[int], clean: dict) -> list[str]:
                             "organization.")
             continue
         t["table"] = str(ns_id)
-        declared = {f.get("key") for f in (schema or {}).get("fields") or [] if isinstance(f, dict)}
+        types = {f.get("key"): f.get("type") for f in (schema or {}).get("fields") or []
+                 if isinstance(f, dict)}
+        declared = set(types)
+        # Un périmètre de lignes (`roles.<r>.rows`) vise une colonne DÉCLARÉE, d'un type
+        # qu'une égalité compare — jugé même sur un tableau sans schéma : un champ
+        # inconnu n'y matcherait aucune ligne, sans rien dire.
+        for champ in sorted(perimetres.get(alias, set())):
+            if champ not in declared:
+                problems.append(f"tables.{alias}: a role's rows scope names `{champ}`, "
+                                "which the table doesn't declare.")
+            elif types[champ] not in TYPES_DE_PERIMETRE:
+                problems.append(f"tables.{alias}: a role's rows scope can't use `{champ}` "
+                                f"(type {types[champ]}): a text, number, email, enum or "
+                                "link column only.")
+        # Un rôle à périmètre de lignes ne CHOISIT pas la clé métier (unique sur tout le
+        # tableau : « existe déjà » trahirait la ligne d'un autre). Dit ici pour l'auteur ;
+        # jugé à chaque geste sur le schéma vivant (`apps_appel._cle_hors_perimetre`).
+        cle = (schema or {}).get("key")
+        if isinstance(cle, str) and cle:
+            from .apps_roles import resserrer
+            for nom, r in (clean.get("roles") or {}).items():
+                lignes = (r.get("rows") or {}).get(alias)
+                if not lignes or cle in lignes:
+                    continue
+                vu = (resserrer(clean, nom).get("tables") or {}).get(alias) or {}
+                if cle in (vu.get("add") or []) or cle in (vu.get("set") or {}):
+                    problems.append(f"roles.{nom}: `{cle}` is the unique key of table "
+                                    f"`{alias}`, which this role scopes to its rows — it "
+                                    "can't add or set it (remove it from `add` / `set`).")
         if not declared:
             continue
-        named = set(t["fields"] or []) | set(t["set"]) | set(t["add"])
+        named = (set(t["fields"] or []) | set(t["set"]) | set(t["add"])
+                 | roles_nomment.get(alias, set()))
         unknown = sorted(n for n in named if n not in declared)
         if unknown:
             problems.append(f"tables.{alias}: no such field: {', '.join(unknown)}.")

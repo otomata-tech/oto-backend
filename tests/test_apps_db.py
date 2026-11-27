@@ -104,6 +104,12 @@ def test_migration_aller_retour(live, pg_module_dsn):
     # table) est irréversible et le dit (`RetourImpossible`) ; on part juste sous elle,
     # au-dessus de toutes les tables qui pointent `apps`.
     command.stamp(_alembic(), _SOUS_LA_DERNIERE_IRREVERSIBLE)
+    # Les tables nées AU-DESSUS de ce point qui pointent `apps` (`app_table_access`,
+    # `app_reads`, `20261127_1200_app_roles`) ne descendent pas avec lui : on les retire à la main,
+    # comme leur propre révision le ferait.
+    with psycopg.connect(pg_module_dsn, autocommit=True) as c:
+        c.execute("DROP TABLE IF EXISTS app_reads")
+        c.execute("DROP TABLE IF EXISTS app_table_access")
     command.downgrade(_alembic(), _PRECEDENTE)
     assert tables() == set()
     command.upgrade(_alembic(), "head")

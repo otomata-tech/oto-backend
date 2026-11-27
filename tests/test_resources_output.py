@@ -90,7 +90,10 @@ def test_la_fiche_est_la_liste_plus_les_beneficiaires(detail, base):
     # `deprecation_warning` (l'avis d'un alias daté, oto#65) est commun à TOUTES les
     # réponses de la surface, pas propre à la fiche : il est mis de côté ici.
     ajouts = set(detail.model_fields) - set(base.model_fields)
-    assert ajouts - set(C._Avertissement.model_fields) == {"grants"}
+    # Un TABLEAU dit aussi qui le tient à travers une app seulement (`through_app`,
+    # `docs/apps.md` § Accès par l'app) : des bénéficiaires, que `grants` ne voit pas.
+    attendus = {"grants", "through_app"} if detail is C.DatastoreResourceDetail else {"grants"}
+    assert ajouts - set(C._Avertissement.model_fields) == attendus
 
 
 def test_publication_declare_la_vue_projet_sans_deriver(monkeypatch):

@@ -8,6 +8,8 @@ stockage. Assertions sur le CODE des refus.
 import asyncio
 import types
 
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 from starlette.requests import Request
@@ -51,6 +53,10 @@ def seams(monkeypatch):
     monkeypatch.setattr(ownership, "has_role_grant",
                         lambda sub, rtype, rid, roles: droits.get((sub, "app_role")) in roles)
     monkeypatch.setattr(db.apps, "get_for_call", lambda i: dict(APP) if i == 5 else None)
+    # Les partages de l'app (rôle, périmètre de lignes) : aucun ici.
+    monkeypatch.setattr(db.apps, "app_shares_of", lambda rid, principaux: [])
+    monkeypatch.setattr(ownership, "accessor_scope", lambda sub: SimpleNamespace(
+        principal_pairs=lambda: [("user", sub)]))
     monkeypatch.setattr(C, "org_de_l_app", lambda app: ORG_DU_PROJET if app.get("id") == 5 else None)
     monkeypatch.setattr(C, "tableau_de_l_org",
                         lambda ns, org: org is not None and org_des_tableaux.get(ns) == org)

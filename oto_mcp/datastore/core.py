@@ -282,6 +282,9 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         08/11/2026) : seuls le numéro et `slot:<nom>`, déjà résolu en numéro, désignent."""
         if est_un_nom_de_tableau(datastore):
             raise TableauParNom(str(datastore))
+        par_app = self._par_l_app(datastore, write)
+        if par_app is not None:
+            return par_app
         org_ids, group_ids = self._active_scope()
         try:
             ns = db.resolve_datastore_ns(
@@ -317,6 +320,33 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
                                             str(ns_id), "write"))
             if not ok:
                 raise DatastoreReadOnly(datastore)
+        return ns
+
+    def _par_l_app(self, datastore: str, write: bool) -> Optional[dict]:
+        """Le tableau tenu À TRAVERS l'app ouverte (`datastore/par_l_app.py`), quand le
+        lecteur ne le tient pas lui-même assez : dans la portée d'un appel d'app
+        seulement, pour une personne (jamais un store d'org ni un périmètre
+        d'endpoint), pour un numéro. None = la résolution ordinaire décide."""
+        from . import par_l_app
+
+        if (self.sub is None or self.acting_org is not None or self.allowed_ns_ids is not None
+                or not str(datastore).isdigit()):
+            return None
+        # Hors d'un appel d'app ou d'un run : rien à servir, rien de lu (le cas courant).
+        if not par_l_app.peut_servir(self.sub):
+            return None
+        # Le lecteur tient-il déjà ce qu'il faut ? La résolution ordinaire le sert.
+        if ownership.can_access(self.sub, ownership.TYPE_RESSOURCE_DATASTORE,
+                                str(datastore), "write" if write else "read"):
+            return None
+        d = par_l_app.droit(self.sub, str(datastore))
+        if d is None or (write and d != "write"):
+            return None
+        if write and self.read_only:
+            raise DatastoreReadOnly(datastore)
+        ns = db.get_datastore_by_id(int(datastore))
+        if ns is not None:
+            par_l_app.servi(self.sub, str(datastore))
         return ns
 
     @staticmethod

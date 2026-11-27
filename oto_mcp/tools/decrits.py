@@ -14,6 +14,11 @@ connector. What the description derives (pair, effects, batches, personal argume
 - The credential is the caller's, resolved at each call: a key by `access.resolve_api_key`, a service account's JSON
   key file by `access.resolve_credential_fields`, a login and a password (`basic`) by `access.resolve_credential`.
   It is given to the engine under the description's field names; the engine reads no secret anywhere else.
+- The account's settings (`connector.settings`, 23/11/2026: an address, a tenant name, a closed choice) are not secret
+  fields of the same record, resolved with the secret by `access.resolve_credential_fields` and given to the engine
+  as `settings=`: it validates each value and guards an address built from one (https only, never a private host, no
+  redirect). A missing setting, a value that no longer fits, or an address refused stops the call before anything is
+  sent, saying what to fix on the connector, never the value.
 - A connector with mode `platform` resolves the shared key as any shared key resolves (closed or open, grants, quota:
   the registry entry and the cascade decide, never this module). The probe function reads the account itself: on the
   shared key it is the platform's account, refused.
@@ -140,17 +145,29 @@ class Servi:
         self.basique = descriptions.identifiant_et_mot_de_passe(description)
         self.champ = self.champs[0]
         self.coffre = None if self.basique else descriptions.champ_du_coffre(description)
+        self.reglages = tuple(r["name"] for r in descriptions.reglages(description))
+        self.reglages_requis = tuple(r["name"] for r in descriptions.reglages(description) if "default" not in r)
         self.plateforme = "platform" in description["connector"]["modes"]
         self.sonde = (description["connector"].get("probe") or {}).get("function")
         self.fonctions = {f["name"]: f for f in description["functions"]}
         self.a_niveaux = "access_levels" in description["connector"]["auth"]
         self.validateurs = {n: Draft202012Validator(f["input"]) for n, f in self.fonctions.items()}
 
-    def _credential_de_l_appelant(self) -> tuple[dict, bool]:
-        """`(credential for the engine, on the platform key)`, resolved as the vault keeps it: a key, a service
-        account's JSON key file, or a login and a password (both fields, under the description's names)."""
+    def _credential_de_l_appelant(self) -> tuple[dict, bool, Optional[dict]]:
+        """`(credential for the engine, on the platform key, settings of the account)`, resolved as the vault keeps
+        it: a key, a service account's JSON key file, or a login and a password (both fields, under the description's
+        names); with settings, every field of the one record, never on the platform key."""
+        if self.reglages:
+            champs = access.resolve_credential_fields(self.nom)
+            manquent = [c for c in (*self.champs, *self.reglages_requis) if not champs.get(c)]
+            if manquent:
+                raise _invalide(f"The {self.description['connector']['label']} account lacks "
+                                f"{', '.join(manquent)}: set it again on the connector. Nothing was done.")
+            # a setting left empty takes its declared default in the engine (a `choice`)
+            return ({c: champs[c] for c in self.champs}, False,
+                    {r: champs[r] for r in self.reglages if champs.get(r)})
         if descriptions.compte_de_service(self.description):
-            return {self.champ: access.resolve_credential_fields(self.nom)[self.coffre]}, False
+            return {self.champ: access.resolve_credential_fields(self.nom)[self.coffre]}, False, None
         if self.basique:
             rc = access.resolve_credential(self.nom, want="auto" if self.plateforme else "byo")
             champs = rc.fields
@@ -158,9 +175,15 @@ class Servi:
             if manquent:
                 raise _invalide(f"The {self.description['connector']['label']} credential lacks "
                                 f"{', '.join(manquent)}: set it again on the connector. Nothing was done.")
-            return {c: champs[c] for c in self.champs}, rc.is_platform
+            return {c: champs[c] for c in self.champs}, rc.is_platform, None
         cle, sur_plateforme = access.resolve_api_key(self.nom)
-        return {self.champ: cle}, sur_plateforme
+        return {self.champ: cle}, sur_plateforme, None
+
+    def _reglage_refuse(self, e: Exception) -> McpError:
+        """A setting of the account missing, invalid, or an address refused (the engine's words, never the value):
+        nothing was sent, whoever manages the connector fixes it."""
+        return _invalide(f"The {self.description['connector']['label']} account's settings stop this call: {e}. "
+                         "Whoever manages the connector sets them again. Nothing was sent.")
 
     def _noter_la_quantite(self, f: dict, args: dict, answers: list) -> None:
         """The call's settled quantity on its trace (`cost.settled_quantity`), 0 without a declared cost; a quantity
@@ -186,14 +209,17 @@ class Servi:
     def appeler(self, f: dict, args: dict) -> dict:
         """Call the function by the engine with the caller's credential: every page read, the refusal named, the
         quantity noted, the answer shaped (`serve.result`)."""
-        credential, sur_plateforme = self._credential_de_l_appelant()
+        credential, sur_plateforme, reglages = self._credential_de_l_appelant()
         if sur_plateforme and f["name"] == self.sonde:
             raise _invalide(f"op `{f['name']}` reads the {self.description['connector']['label']} account itself; "
                             "this call runs on the shared platform key, whose account is the platform's. "
                             "Nothing was done.")
         niveau = access_level_gate.level_of_the_call(self.nom) if self.a_niveaux else None
         try:
-            pages = engine.execute(self.description, f["name"], args, credential=credential, access_level=niveau)
+            pages = engine.execute(self.description, f["name"], args, credential=credential, settings=reglages,
+                                   access_level=niveau)
+        except (engine.AccountSettingError, engine.AddressRefused) as e:
+            raise self._reglage_refuse(e) from None
         except engine.UnknownAccessLevel as e:
             raise RefusNomme(engine.Refused("unknown_access_level", f"{e} {self._geste_du_niveau()}")) from e
         except engine.Refused as refus:
@@ -217,14 +243,18 @@ class Servi:
                 f"scope='org', org_id=<the organization's id, from oto_context>, name='{self.nom}', "
                 f"level='{niveau or '<one of ' + niveaux + '>'}').")
 
-    def sonder(self, fields: dict, config: Optional[dict] = None) -> Optional[dict]:  # noqa: ARG002
+    def sonder(self, fields: dict, config: Optional[dict] = None) -> Optional[dict]:
         """"Test connection": the description's probe function, no argument, by the engine; a refusal that marks the
         key is `NonAutorise`, one that marks the credits `QuotaEpuise`; an unhealthy answer raises with its reason."""
         sonde = self.description["connector"]["probe"]
         credential = ({c: fields.get(c) for c in self.champs} if self.basique
                       else {self.champ: fields.get(self.coffre)})
+        champs = {**(config or {}), **fields}   # a setting is a field of the record; `config` only as a fallback
+        reglages = {r: champs[r] for r in self.reglages if champs.get(r)} if self.reglages else None
         try:
-            pages = engine.execute(self.description, sonde["function"], {}, credential=credential)
+            pages = engine.execute(self.description, sonde["function"], {}, credential=credential, settings=reglages)
+        except (engine.AccountSettingError, engine.AddressRefused) as e:
+            raise RuntimeError(f"The account's settings are refused: {e}.") from None
         except (engine.Refused, engine.TokenRefused) as refus:
             if refus.marks_account == "credential_rejected":
                 raise connector_verify.NonAutorise(str(refus)) from None

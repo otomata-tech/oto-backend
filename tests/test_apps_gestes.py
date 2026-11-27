@@ -407,3 +407,24 @@ def test_run_result_seulement_pour_un_run_du_lecteur(s):
 def test_les_runs_d_un_agent_que_l_auteur_ne_voit_plus(s):
     s["niveaux"][(AUTEUR, 10)] = None
     assert refus(call, action="agent_runs", agent="watch").code == "app_author_lost_access"
+
+
+# ── Images connues : ce que la page écrit n'apprend aucune adresse (#images) ──
+
+@pytest.mark.parametrize("geste_", [
+    ECRIRE, dict(action="add_row", table="leads", values={"name": "https://evil.example/?d=x.png"})])
+def test_un_geste_d_app_n_apprend_aucune_image(s, monkeypatch, geste_):
+    """`me.app.call` écrit sous `images_connues.geste_d_app` : la ligne que la page
+    ajoute ou change n'apprend aucune adresse d'image, même si la source de la session
+    apprenait (`oto_mcp/images_connues.py`) — une ceinture de plus que l'exclusion de
+    `console`. Hors de l'appel, rien n'est posé."""
+    from oto_mcp import images_connues as ic
+    vu = []
+    monkeypatch.setattr(R, "_update_row", lambda ctx, inp: vu.append(ic._GESTE_D_APP.get()) or {
+        "_id": inp.row_id, "_revision": "2", "name": "A", "status": inp.patch["status"]})
+    monkeypatch.setattr(R, "_append_row", lambda ctx, inp: vu.append(ic._GESTE_D_APP.get()) or {
+        "_id": "r9", "_revision": "1", **inp.row})
+    assert ic._GESTE_D_APP.get() is False
+    call(**geste_, consent=consent(**geste_))
+    assert vu == [True]
+    assert ic._GESTE_D_APP.get() is False

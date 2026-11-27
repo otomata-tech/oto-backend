@@ -162,3 +162,30 @@ ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS note TEXT;
 -- remplacé. NULL pour les révisions d'avant cette colonne.
 ALTER TABLE app_revisions ADD COLUMN IF NOT EXISTS saved_at TIMESTAMPTZ;
 """
+
+IMAGES_CONNUES = """
+-- Les images CONNUES (`oto_mcp/images_connues.py`) : chaque adresse d'image apprise
+-- AVANT qu'une app ne soit ouverte (HTML enregistré d'une app, ligne écrite côté
+-- serveur), et sa copie dans le stockage média, sous `app-images/<empreinte>`. Le
+-- cadre d'une app ne charge que ces copies : une adresse composée à la lecture n'a pas
+-- de ligne ici, donc pas de copie, et ne quitte jamais la plateforme.
+CREATE TABLE IF NOT EXISTS images_connues (
+    -- SHA-256 hexadécimal de l'adresse EXACTE : la clé que le front calcule aussi.
+    empreinte TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    -- Ce qui l'a apprise : `app` (HTML ou manifeste enregistré) ou `ligne`.
+    origine TEXT NOT NULL,
+    -- `a_copier` → `copiee` | `refusee` (terminal).
+    etat TEXT NOT NULL DEFAULT 'a_copier',
+    essais INT NOT NULL DEFAULT 0,
+    detail TEXT,
+    octets INT,
+    type_image TEXT,
+    appris_le TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    prochain_essai TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reservee_jusqu_a TIMESTAMPTZ,
+    copiee_le TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS images_connues_a_copier_idx
+    ON images_connues (prochain_essai) WHERE etat = 'a_copier';
+"""

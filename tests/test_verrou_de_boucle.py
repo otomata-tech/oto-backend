@@ -28,6 +28,8 @@ _RESERVEES = {
     "transcription_worker",
     # `claim_next_jev_job` : bail en base (`BAIL_S`), FOR UPDATE SKIP LOCKED.
     "jev_jobs_worker",
+    # `db/images_connues.reserver` : bail en base (`BAIL_S`), FOR UPDATE SKIP LOCKED.
+    "images_connues",
 }
 
 

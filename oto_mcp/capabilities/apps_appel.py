@@ -86,7 +86,7 @@ from typing import Any, Literal, Optional
 import psycopg
 from pydantic import BaseModel, Field
 
-from .. import client_trace, config, db, geste, ownership
+from .. import client_trace, config, db, geste, images_connues, ownership
 from . import _acces_agent
 from ._authz import ORG_MEMBER
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
@@ -804,6 +804,15 @@ _LECTURES_D_UN_EMPRUNT = frozenset({"read_rows", "read_aggregate"})
 
 
 def _call(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
+    """L'appel d'une app ouverte, tout entier sous `images_connues.geste_d_app` : ce que
+    la page écrit (`add_row`, `write_cell`) n'apprend aucune adresse d'image — sinon elle
+    écrirait une ligne puis afficherait l'image qu'elle y a composée
+    (`oto_mcp/images_connues.py`)."""
+    with images_connues.geste_d_app():
+        return _call_de_l_app(ctx, inp)
+
+
+def _call_de_l_app(ctx: ResolvedCtx, inp: AppCallInput) -> dict:
     if inp.action == "batch":
         return _lot(ctx, inp)
     if inp.reads is not None:

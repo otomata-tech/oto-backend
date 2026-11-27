@@ -20,7 +20,7 @@ from typing import Any, Optional
 from psycopg.types.json import Jsonb
 
 from ._conn import _connect
-from .apps import _TOUT, app_rev, ecrire_sous_verrou, with_rev
+from .apps import _TOUT, app_rev, apprendre_les_images, ecrire_sous_verrou, with_rev
 
 _BROUILLON = "draft_manifest, draft_html, draft_by, draft_at"
 
@@ -112,6 +112,7 @@ def write_draft(app_id: int, *, by: str, expected_rev: Optional[str] = None,
             "UPDATE apps SET draft_manifest = %s, draft_html = %s, draft_by = %s, "
             f"draft_at = NOW() WHERE id = %s RETURNING {_BROUILLON}",
             (Jsonb(m), h, by, app_id)).fetchone()
+        apprendre_les_images(conn, h, m)
     return _vue(row)
 
 

@@ -97,7 +97,19 @@ def create(owner: tuple[str, str], context_org_id: Optional[int], *, title: str,
         if project_id is not None:
             conn.execute("INSERT INTO app_projects (app_id, project_id, filed_by) "
                          "VALUES (%s, %s, %s)", (row["id"], project_id, by))
+        apprendre_les_images(conn, html, manifest)
     return with_rev(row)
+
+
+def apprendre_les_images(conn, html: Optional[str], manifest: Optional[dict]) -> None:
+    """Les adresses que le HTML et le manifeste ENREGISTRÉS d'une app font connaître
+    (`oto_mcp/images_connues.py`), posées au registre dans la transaction de
+    l'écriture. Toute écriture d'app passe ici : création, `ecrire_sous_verrou`
+    (mise à jour, patch, restauration, publication) et le brouillon
+    (`app_versions.write_draft`) — un brouillon s'ouvre aussi."""
+    from .. import images_connues as ic
+    texte_du_manifeste = json.dumps(manifest, ensure_ascii=False) if manifest else None
+    ic.retenir_avec(conn, ic.urls_du_texte(html, texte_du_manifeste), "app")
 
 
 def get(app_id: int) -> Optional[dict]:
@@ -346,6 +358,8 @@ def ecrire_sous_verrou(conn, prior: dict, *, by: str, title: Optional[str] = Non
         params.append(note)
     elif manifest is not None or html is not None:
         sets += ["published_at = NULL", "version_note = NULL"]
+    if manifest is not None or html is not None:
+        apprendre_les_images(conn, html, manifest)
     return conn.execute(
         f"UPDATE apps SET {', '.join(sets)} WHERE id = %s RETURNING {_TOUT}",
         (*params, app_id),

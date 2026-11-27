@@ -152,6 +152,10 @@ NON_EXPORTEES: dict[str, Decision] = {
     "embed_consommation": sans_objet("tokens d'embedding facturés à l'instance, par jour"),
     "agent_causes": sans_objet("catalogue de la plateforme des causes de panne d'agent, "
                                "une par empreinte de motif, sans org ni propriétaire"),
+    # ⚠️ sans org ni compte, mais une adresse (une photo de profil) peut y désigner une
+    # personne : son effacement suit celui de la copie, question ouverte (docs/apps.md).
+    "images_connues": sans_objet("registre d'instance des images connues des apps, "
+                                 "sans org ni compte"),
     "connector_schemas": sans_objet("cache des schémas d'outils"),
     "copilot_slack_events": expire("déduplication des messages Slack, quelques jours, "
                                    "sans propriétaire"),

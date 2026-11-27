@@ -36,7 +36,9 @@ _DEFAULT_MAX_BYTES = 2 * 1024 * 1024  # 2 Mo
 # La règle d'écriture de chaque préfixe, source UNIQUE : l'écriture native la pose
 # (`upload_image`, `upload_object`), l'import d'un périmètre la repose sur chaque objet
 # versé (`entetes_d_objet`). Un préfixe absent de ces deux ensembles n'a pas de règle.
-PREFIXES_PUBLICS = frozenset({"avatars", "org-logos", "images"})
+# `app-images` : la copie d'une image CONNUE d'une app (`images_connues.py`), sous
+# l'empreinte de son adresse (`upload_image_connue`).
+PREFIXES_PUBLICS = frozenset({"avatars", "org-logos", "images", "app-images"})
 # `copilot-attachments` : les fichiers joints aux messages de l'agent intégré
 # (`capabilities/copilot/pieces.py`), purgés avec ses conversations ; `app-files` : les
 # fichiers déposés dans une app ou rendus par ses agents.
@@ -306,6 +308,34 @@ def upload_image(prefix: str, owner_id: str, data: bytes, content_type: str) -> 
     except Exception as e:  # boto / réseau
         raise MediaError(500, "upload_failed", str(e))
     return public_url(key)
+
+
+_EMPREINTE = re.compile(r"[0-9a-f]{64}")
+
+
+def upload_image_connue(empreinte: str, data: bytes, *, max_bytes: int) -> tuple[str, str]:
+    """Dépose la copie d'une image CONNUE d'une app (`images_connues.py`) sous
+    `app-images/<empreinte>`, publique, et rend `(url, type)`.
+
+    La clé est l'empreinte de l'ADRESSE d'origine, pas du contenu : c'est ce que le
+    front calcule sans rien demander (`app-images/<sha256(url)>`). Pas d'extension : le
+    type est porté par l'objet, lu sur ses octets (png, jpeg, gif, webp — jamais SVG).
+    Cache immuable : une adresse copiée ne se recopie jamais."""
+    if not _EMPREINTE.fullmatch(empreinte or ""):
+        raise MediaError(500, "bad_key", f"Empreinte invalide : {empreinte!r}.")
+    if not data:
+        raise MediaError(400, "missing_file", "Image vide.")
+    if len(data) > max_bytes:
+        raise MediaError(413, "image_too_large", f"Image > {max_bytes} octets.")
+    entetes = _entetes_publics(data)
+    key = f"app-images/{empreinte}"
+    try:
+        _get_client().put_object(Bucket=_bucket(), Key=key, Body=data, **entetes)
+    except MediaError:
+        raise
+    except Exception as e:  # boto / réseau
+        raise MediaError(500, "upload_failed", str(e))
+    return public_url(key), entetes["ContentType"]
 
 
 _DEFAULT_PRESIGN_EXPIRY = 3600  # 1 h

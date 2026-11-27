@@ -106,6 +106,19 @@ from .query import (  # noqa: F401
 from .users import upsert_user
 
 
+def _apprendre_les_images(conn, avant: Optional[dict], apres: dict) -> None:
+    """Les adresses d'image que cette écriture de ligne APPREND, posées au registre
+    dans sa transaction (`oto_mcp/images_connues.py`) : rien pendant un geste d'app ni
+    pour une source qui n'apprend pas, rien de ce que la ligne portait déjà. Les deux
+    écritures de `data` d'une ligne (insertion, fusion sous verrou) passent ici ; la
+    purge d'une colonne, la fusion des doublons et l'avance de la file n'écrivent rien
+    de neuf."""
+    from .. import images_connues as ic
+    if not ic.ecriture_apprend():
+        return
+    ic.retenir_avec(conn, ic.urls_des_lignes(avant, apres), "ligne")
+
+
 def datastore_insert_row(ns_id: int, row_id: str, data: dict,
                          created_at: Optional[str] = None,
                          updated_at: Optional[str] = None) -> dict:
@@ -122,6 +135,7 @@ def datastore_insert_row(ns_id: int, row_id: str, data: dict,
         ).fetchone()
         from .search import stamp_rank_vector
         stamp_rank_vector(conn, "datastore_rows", "ns_id = %s AND row_id = %s", (ns_id, row_id))
+        _apprendre_les_images(conn, None, data)
         return dict(row)
 
 
@@ -1355,6 +1369,7 @@ def datastore_merge_row_locked(ns_id: int, row_id: str, apply_fn, updated_at: st
             from .search import stamp_rank_vector
             stamp_rank_vector(conn, "datastore_rows", "ns_id = %s AND row_id = %s",
                               (ns_id, row_id))
+        _apprendre_les_images(conn, current, merged)
         return dict(row), merged
 
 

@@ -113,6 +113,11 @@ def _formule_backfill() -> Fonction:
     return formula_backfill_worker.run_formula_backfill_loop
 
 
+def _images_connues() -> Fonction:
+    from . import images_connues_worker
+    return images_connues_worker.run_images_connues_loop
+
+
 def _transcription() -> Fonction:
     from . import transcription_worker
     return transcription_worker.run_transcription_loop
@@ -207,6 +212,14 @@ BOUCLES: tuple[Boucle, ...] = (
     Boucle(nom="formula_backfill", tiers=False,
            armee=_interrupteur("OTO_FORMULA_BACKFILL_ENABLED"),
            fonction=_formule_backfill),
+    # Images connues d'une app (`images_connues_worker.py`) : TÉLÉCHARGE chez des hôtes
+    # extérieurs les images apprises avant lecture, et les dépose dans le stockage média.
+    # Un appel sortant vers un tiers, à partir de travail en base : seule la prod.
+    # Éteinte tant qu'elle n'est pas déclarée : allumée par défaut, elle ferait refuser
+    # le démarrage d'une instance sans `OTO_ENV` qui éteignait les autres boucles tierces.
+    Boucle(nom="images_connues", tiers=True,
+           armee=_allumee_si_declaree("OTO_IMAGES_CONNUES_ENABLED"),
+           fonction=_images_connues),
     # Transcription (ADR 0074, #674) : appelle Mistral, un FOURNISSEUR. `tiers=True`
     # (oto#1363) : la page de résultat fige l'URL de SON environnement
     # (`config.dashboard_url()`) — en double prod/préprod, le gagnant de la course

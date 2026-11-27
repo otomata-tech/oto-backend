@@ -657,9 +657,12 @@ sources = [
   "oto_mcp/db/app_versions.py",
   "oto_mcp/db/schema/apps.py",
   "oto_mcp/apps_lecteurs_actifs.py",
+  "oto_mcp/images_connues.py",
+  "oto_mcp/images_connues_worker.py",
+  "oto_mcp/db/images_connues.py",
 ]
 tests = ["tests/test_apps*.py", "tests/test_app_versions_db.py", "tests/test_remplacements.py",
-         "tests/test_migrate_sub_inventory.py"]
+         "tests/test_migrate_sub_inventory.py", "tests/test_images_connues*.py"]
 
 [[volet]]
 nom = "docs et partage"

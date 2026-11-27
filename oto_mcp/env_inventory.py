@@ -835,6 +835,10 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_FILE_EXTRACT_WORKER_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : worker d'extraction de fichiers.",
              ("oto_mcp/boucles_de_fond.py:157",)),
+    Variable("OTO_IMAGES_CONNUES_ENABLED", Classe.REGLAGE, "0",
+             "Boucle de fond : copie des images connues des apps dans le stockage média "
+             "(éteinte tant que l'instance ne pose pas `1`).",
+             ("oto_mcp/boucles_de_fond.py:221",)),
     Variable("OTO_RANK_BACKFILL_ENABLED", Classe.REGLAGE, "1",
              "Boucle de fond : backfill de classement.",
              ("oto_mcp/boucles_de_fond.py:161",)),

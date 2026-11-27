@@ -1061,6 +1061,10 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "teamtailor_job_applications": "lire",
     "teamtailor_jobs": "lire",
     "telegram_act": {"envoyer": "send"},
+    # add_number BUYS a number (Twilio bills the month at once); remove_number releases it
+    # for good; cancel_call cuts a live call; call and send_sms reach a third party
+    "twilio_act": {"ecrire": "add_number update_number", "envoyer": "call send_sms",
+                   "detruire": "remove_number cancel_call"},
     "threecx_call": {"lire": "list export"},
     # Live on the PBX: an update REPLACES the routing a public number or queue had (the
     # preview shows it, nothing keeps it), a navigation list is replaced whole, and an
@@ -1293,6 +1297,11 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
 #: that list as not a batch (`PAS_UN_LOT`).
 LOTS: dict[str, Lot] = {
     "mailpool_mailboxes:create": Lot("mailboxes"),
+    "twilio_act:send_sms": Lot("to", 50),
+    "twilio_act:call": Lot("to", 1),
+    # these ops refuse `to`: the tool's only list belongs to call / send_sms
+    "twilio_act:add_number": Lot("to", 1),
+    "twilio_act:update_number": Lot("to", 1),
     "mailpool_mailboxes:export": Lot("mailbox_ids"),
     # `update` edits ONE mailbox (`mailbox_id`) and refuses `mailboxes`: this lot never
     # counts anything. It stays because the guard (`test_effets_declares`) wants a lot on
@@ -1506,6 +1515,7 @@ LOTS: dict[str, Lot] = {
 #: Tool → its list arguments that are NOT a batch of records (fields, tags, sorts…).
 PAS_UN_LOT: dict[str, str] = {
     "affinity_entity": "fields",
+    "twilio_act": "media_urls",
     "affinity_list_entry": "fields",
     "affinity_note": "person_ids company_ids opportunity_ids",
     "ahrefs_batch_analysis": "targets select order_by",

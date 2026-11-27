@@ -176,15 +176,17 @@ def test_group_scope_is_the_ACTIVE_team_and_only_one_of_his(monkeypatch):
 # se prend connecteur par connecteur, mesure de rayon en main — fullenrich seul l'a eue).
 FREE_TIER_OTHERS = ("serper", "hunter", "reddit", "sirene", "kaspr",
                     "unipile", "apollo", "serpapi", "searchapi",
-                    "tavily")  # 26/08 : socle recherche web, ouvert sans quota (GO du partenaire)
+                    "tavily",  # 26/08 : socle recherche web, ouvert sans quota (GO du partenaire)
+                    "twilio")  # 27/11 : numéros de la plateforme, ouverts à toute org créditée (Julien)
 
 # Vague 2 (23/08) : chaînés SANS toucher leur flag — arêtes semées au boot, révocation
 # vraie, metering d'arête ; un appelant sans arête retombe sur le chemin ouvert.
 WAVE2 = ("serper", "hunter", "apollo", "serpapi", "kaspr", "reddit")
 
 # Jamais chaînés, et pourquoi : unipile (mode plateforme gouverné par option comp +
-# comptes opérés, pas par share_down), searchapi/sirene (pas de clé plateforme posée).
-NEVER_CHAINED = ("unipile", "searchapi", "sirene", "tavily")
+# comptes opérés, pas par share_down), searchapi/sirene (pas de clé plateforme posée),
+# twilio (clé = jeton du relais du commerce, coupé par org via share_denied comme unipile).
+NEVER_CHAINED = ("unipile", "searchapi", "sirene", "tavily", "twilio")
 
 
 def test_unchained_connectors_never_touch_the_chain(monkeypatch):

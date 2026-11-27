@@ -80,6 +80,7 @@ A **single trunk**, `main`, and no long-lived release branches.
 | `tavily` | 100 |
 | `sirene` | no cap |
 | `unipile` (hosted messaging, and the channels that borrow its key) | no cap, but every use of the platform key requires the organization's paid option `unipile` |
+| `twilio` (the numbers an organization bought from the platform) | no cap, the key is the commerce's phone relay credential, which only reaches the organization's own numbers, refuses an organization out of credits and bills every call and message in credits |
 
 The cap counts per user and per key (`usage_today`). It is the key's own `rate_limit` when one is stored, otherwise `OTO_MCP_QUOTA_<PROVIDER>_DAILY`, otherwise the registry default above; an organization holding the declared right `platform_unmetered` has no cap (`oto_mcp/access/resolve.py`, `_win_quota`). A paid option (`unipile`) is a live declared right of the organization (`org_entitlements`, ADR 0070 §7), re-read on **every** use of the platform key (`quotas.exiger_option_payante`), not only when an account is connected; a right granted to a single person no longer opens it. **Installing a connector is not a gate**: it is a display filter, and `oto_call` reaches a connector that is exposed but not installed. For connectors moved to the grant chain (`grants_chain.CHAIN_CONNECTORS`), an account whose grant was revoked is refused, with no fall-back to the free tier. The table is held to the registry by `tests/test_securite_palier_gratuit.py`.
 

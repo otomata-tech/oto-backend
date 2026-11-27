@@ -46,6 +46,9 @@ CLES_REGLEMENT = ("units", "platform_carrier", "tenant_grant_ids", credits.CLE)
 # the platform quota (a balance read, an account listing, a search the quota does not
 # count…). Moving one of them to a debit is a decision, with its `units`.
 SANS_DEBIT = frozenset({
+    # twilio — the platform key is the commerce's phone relay, which bills the org in
+    # credits itself (rent, minutes, segments): nothing to debit here.
+    "twilio", "twilio_act",
     # apollo — only the person match and the bulk match debit the common key's quota.
     "apollo_search_organizations", "apollo_enrich_organization",
     "apollo_bulk_enrich_organizations", "apollo_search_people", "apollo_reveal_phone",

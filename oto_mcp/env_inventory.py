@@ -598,6 +598,15 @@ _REGLAGES: tuple[Variable, ...] = (
              "Secret envoyé en `Authorization: Bearer` au crochet de création d'org. Vide = "
              "pas de crochet (jamais d'appel de service sans secret).",
              ("oto_mcp/org_created_hook.py:44",)),
+    Variable("OTO_COMMERCE_RELAY_URL", Classe.REGLAGE, "",
+             "Base du relais du commerce de l'instance, sans `/` final : les numéros achetés "
+             "à la plateforme qu'un agent utilise via `twilio` / `twilio_act` quand l'org n'a pas branché sa "
+             "propre clé Twilio. Vide = pas de numéros de la plateforme. Voir `tools/twilio_courtier.py`.",
+             ("oto_mcp/tools/twilio_courtier.py:89",)),
+    Variable("OTO_COMMERCE_RELAY_TOKEN", Classe.REGLAGE, "",
+             "Secret envoyé en `Authorization: Bearer` au relais du commerce. Vide = pas de "
+             "numéros de la plateforme (jamais d'appel de service sans secret).",
+             ("oto_mcp/tools/twilio_courtier.py:90",)),
     Variable("OTO_MCP_UNIPILE_DEFAULT_LIMIT", Classe.REGLAGE, "5",
              "Plafond par défaut de comptes hébergés (clé plateforme) par org, quand "
              "l'org ne pose pas le sien (`orgs.unipile_account_limit`) : garde contre "

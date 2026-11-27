@@ -315,6 +315,9 @@ _DECLARATIONS: tuple[str, ...] = (
     # Neighbour of `leexi` by trade: a company's calls, their
     # recordings and what the vendor's AI drew from them.
     "aircall",
+    # Same trade, but it PLACES calls and sends SMS on the org's own Twilio
+    # account (numbers bought there) — wired 2026-11-26.
+    "twilio",
     # Same family (meeting recordings, transcripts) — wired 2026-09-29.
     "claap",
     # Same family (sales calls, transcripts, AI summaries) — wired 2026-10-12.

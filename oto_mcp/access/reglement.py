@@ -46,9 +46,10 @@ CLES_REGLEMENT = ("units", "platform_carrier", "tenant_grant_ids", credits.CLE)
 # the platform quota (a balance read, an account listing, a search the quota does not
 # count…). Moving one of them to a debit is a decision, with its `units`.
 SANS_DEBIT = frozenset({
-    # apollo — only the person match and the bulk match debit the common key's quota.
+    # apollo — only the person match, the bulk match and the phone reveal (its worst
+    # case, 2026-11-22) debit the common key's quota; collecting a reveal is free.
     "apollo_search_organizations", "apollo_enrich_organization",
-    "apollo_bulk_enrich_organizations", "apollo_search_people", "apollo_reveal_phone",
+    "apollo_bulk_enrich_organizations", "apollo_search_people",
     "apollo_reveal_phone_result", "apollo_job_postings", "apollo_contact",
     "apollo_email_accounts", "apollo_email_schedules", "apollo_sequence",
     "apollo_sequence_contacts", "apollo_email", "apollo_act", "apollo_conversation",

@@ -502,6 +502,12 @@ _REGLAGES: tuple[Variable, ...] = (
              "journalise. Absente ou 0 : aucun plancher. Illisible ou négative : LÈVE "
              "au boot.",
              ("oto_mcp/access/credits_modes.py:137",)),
+    Variable("OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY", Classe.REGLAGE, None,
+             "Plafond quotidien (UTC) des révélations de téléphone Apollo qu'une org "
+             "commande sur la clé PLATEFORME (défaut 100 dans le code, 0 = aucune). "
+             "Compté sur les commandes elles-mêmes : le droit `platform_unmetered` ne le "
+             "lève pas. Illisible ou négative : LÈVE au boot.",
+             ("oto_mcp/tools/apollo.py:107",)),
     Variable("OTO_CREDITS_HOLD_MAX_S", Classe.REGLAGE, None,
              "Durée maximale d'une réservation sans échéance connue (travail "
              "asynchrone sans `within_s`, tranche de fond `jev_rows`, appel synchrone "

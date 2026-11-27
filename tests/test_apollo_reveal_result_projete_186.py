@@ -48,13 +48,13 @@ def _sonder(monkeypatch, **kw):
                    "failure_reason": None,
                    "webhook_result": {"people": [_personne("p1"), _personne("p2")]}},
     }
-    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: MagicMock(key="k"))
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: MagicMock(key="k", is_platform=False))
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **k: client)
     # Le receveur d'oto (éprouvé dans `test_apollo_receveur.py`) : rien de livré,
     # donc le sondage d'Apollo répond — le chemin que ce banc décrit.
     from oto_mcp import apollo_receiver
     monkeypatch.setattr(apollo_receiver, "commander",
-                        lambda cle: ("jeton", "https://mcp.acme.test/api/receivers/apollo/phones/jeton"))
+                        lambda cle, plafond=None: ("jeton", "https://mcp.acme.test/api/receivers/apollo/phones/jeton"))
     monkeypatch.setattr(apollo_receiver, "lier", lambda j, rid: None)
     monkeypatch.setattr(apollo_receiver, "abandonner", lambda j: None)
     monkeypatch.setattr(apollo_receiver, "resultat_recu", lambda rid, cle: None)

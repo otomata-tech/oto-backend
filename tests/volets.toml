@@ -836,7 +836,7 @@ tests = ["tests/**/test_browser*.py", "tests/**/test_substrat_navigateur*.py"]
 
 [[volet]]
 nom = "apollo (révélations)"
-sources = ["oto_mcp/apollo_receiver.py", "oto_mcp/db/apollo_reveals.py"]
+sources = ["oto_mcp/apollo_receiver.py", "oto_mcp/apollo_releve.py", "oto_mcp/db/apollo_reveals.py"]
 tests = ["tests/**/test_apollo*.py"]
 
 [[volet]]

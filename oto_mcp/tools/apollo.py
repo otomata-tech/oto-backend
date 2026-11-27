@@ -41,14 +41,29 @@ endpoint queries, NOT on read/write:
   even though none costs a credit. Do not confuse them with `people/*`,
   which query the shared database: a person found there is a contact here
   only if the team has saved them.
-- **The REVEALS** (`apollo_reveal_phone`, and `apollo_match_person(reveal_personal_emails=True)`):
-  byo-only too, but for a THIRD reason — COST, not the data
-  boundary. They do query the shared database, so nothing would prevent the
-  common key; what prevents it is that the counter (`units`, settled per call) debits
-  1 unit per call, the price of a bare match, whereas Apollo bills a surcharge
-  on top (~9 credits for a phone; plan-dependent scale, not measured, for
-  personal emails). `platform_quota` would lie by a factor we cannot
-  name, and it is the only figure a batch worker stops on.
+- **The REVEALS** query the shared database too, so nothing in the DATA prevents
+  the common key; what decides is COST — Apollo bills a surcharge on top of the
+  match. Two different answers:
+  - `apollo_reveal_phone` runs on the caller's own key when it has one, ELSE on the
+    platform key. Its cost is MEASURED: 8 Apollo credits for a person whose number is
+    found, 0 when none is, plus 1 for the match — 9 at worst — and Apollo DECLARES the
+    8 in the `credits_consumed` of the delivered envelope. On the platform key:
+    - the order checks and debits the common key's quota at that worst case (9 units),
+      and is refused past a per-ORG daily cap (`OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY`)
+      that unlimited orgs do not escape;
+    - the read that collects it traces the declared figure as `quantity`, under the
+      order's id (`apollo_reveal_request_id`) so a biller counts it once; a cost
+      Apollo did not declare is a NAMED refusal (`apollo_cost_undeclared`), never a
+      silent zero;
+    - an order nobody collects is billed all the same, by the daily settlement
+      (`apollo_releve.py`), at the declared figure or the worst case;
+    - a delivered reveal is filed under the ORG that ordered it
+      (`apollo_receiver.portee`): the key is shared, its reveals are not.
+  - `apollo_match_person(reveal_personal_emails=True)` and a batch reveal
+    (`apollo_bulk_match`) stay byo-only: Apollo bills personal emails on a pot whose
+    scale depends on the plan, not measured, and a batch's phones per PERSON —
+    `platform_quota` would lie by a factor we cannot name, and it is the only
+    figure a batch worker stops on.
 
 ⚠️ Apollo doc (not verified from this environment, no key available here):
 `add_contact_ids` and `/emailer_messages/{id}/activities` (email stats) require
@@ -61,6 +76,7 @@ its write remains possible without the catalog (degraded validation, announced).
 from __future__ import annotations
 
 import logging
+import os
 import warnings
 from typing import Any, Literal, Optional
 
@@ -68,11 +84,42 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, apollo_receiver, output_projection, session_org
+from .. import access, apollo_receiver, apollo_releve, output_projection, session_org
 from .lecture import ACTE, LECTURE
 from ..datastore.identite import AdresseJson as Adresse
 
 logger = logging.getLogger(__name__)
+
+
+# --- the per-org daily cap on the platform key's phone reveals ---------------
+# A per-ORG ceiling on the platform key's phone reveals a day — counted on the
+# orders themselves (`apollo_phone_reveals`), so the `platform_unmetered` right that
+# lifts the per-person quota does not lift it: an unlimited org's runaway batch
+# stops here, not on the Apollo account's yearly credits.
+_ENV_PLAFOND_ORG = "OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY"
+_PLAFOND_ORG_DEFAUT = 100
+
+
+def plafond_reveals_org() -> int:
+    """`OTO_MCP_APOLLO_PHONE_REVEALS_PER_ORG_DAILY`: phone reveals one org orders a UTC
+    day on the platform key; absent = 100, `0` = none. Anything but a whole number
+    ≥ 0 raises — at startup (`verifier_reglages`), never read as the default."""
+    lu = os.environ.get(_ENV_PLAFOND_ORG)
+    if lu is None or not lu.strip():
+        return _PLAFOND_ORG_DEFAUT
+    try:
+        n = int(lu.strip())
+    except ValueError:
+        n = -1
+    if n < 0:
+        raise ValueError(f"{_ENV_PLAFOND_ORG}={lu!r}: unreadable value, expected a "
+                         "whole number (0 or more)")
+    return n
+
+
+def verifier_reglages() -> None:
+    """Startup guard: an unreadable cap refuses to start, never read as the default."""
+    plafond_reveals_org()
 
 
 def _bad(msg: str) -> McpError:
@@ -120,28 +167,24 @@ def register(mcp: FastMCP) -> None:
         "data): Apollo search and enrichment remain usable "
         "without your own key.")
 
-    # Apollo's REVEALS — phone AND personal emails — are byo-only for
-    # a DIFFERENT reason than everything else in this module: it is not a data
-    # boundary, it is COST. A reveal makes Apollo bill a
-    # SURCHARGE on top of the match, while the platform counter
-    # (`units`, settled per call) debits 1 unit per call — the price of a bare match,
-    # whatever happens. Yet `platform_quota` exists precisely so that a batch worker
-    # stops BEFORE the wall (oto-backend#710): letting it lie would break
-    # the only measure it relies on.
+    # Apollo's REVEALS bill a SURCHARGE on top of the match, while the platform
+    # counter (`units`) is what a batch worker stops on BEFORE the wall
+    # (oto-backend#710): a reveal on the common key must debit what it really costs.
     #
-    # ⚠️ The SAME rule for both, deliberately. What separates them is
-    # the size of the gap, not its nature: for the phone it is measured (~9
-    # credits where a bare match costs 1); for personal emails it is not
-    # — Apollo bills them on a separate pot whose scale depends on the
-    # plan, and none of our measurements quantifies it. An unknown factor is not
-    # a zero factor: opening the common key to the only reveal whose
-    # multiplier we do not know would amount to saying the counter lies less when we do not
-    # know by how much. The day the gap is measured AND the counter knows how to debit
-    # it, that is when the rule can change — not before.
-    _BYO_REVEAL_TELEPHONE = (
-        "the phone reveal NEVER goes through the platform key (Apollo bills it "
-        "~9 credits when a bare match costs 1): set your own Apollo key. "
-        "Search and `apollo_match_person` keep working without it.")
+    # The PHONE reveal now does. Its gap was the condition written here ("the day the
+    # gap is measured AND the counter knows how to debit it"), and both are met:
+    # measured on a real account on 2026-11-22 — 8 Apollo credits for a person whose
+    # number is found, 0 when none is, plus 1 for the match, as Apollo's usage log
+    # shows — and Apollo DECLARES the 8 in the delivered envelope (`credits_consumed`).
+    # So on the platform key the order checks and debits the worst case
+    # (`_UNITES_REVEAL_TELEPHONE` = 8 + the match), and the read that collects it — or
+    # the daily settlement, for an order nobody collects — traces the declared figure
+    # for the biller.
+    #
+    # Personal emails stay byo-only: Apollo bills them on a separate pot whose scale
+    # depends on the plan, and none of our measurements quantifies it. An unknown
+    # factor is not a zero factor.
+    _UNITES_REVEAL_TELEPHONE = 9
     _BYO_REVEAL_EMAILS_PERSO = (
         "`reveal_personal_emails=True` NEVER goes through the platform key: "
         "Apollo bills this reveal ON TOP of the match, on a pot whose scale "
@@ -181,6 +224,17 @@ def register(mcp: FastMCP) -> None:
                 raise McpError(ErrorData(
                     code=INVALID_PARAMS, message=f"{msg} — {precision}"))
             raise
+
+    def _cle_telephone(*, lecture: bool = False):
+        """The Apollo key a PHONE reveal runs on: the caller's own key when it has one,
+        else the platform key — the usual cascade, platform tier included (see the
+        comment above `_UNITES_REVEAL_TELEPHONE`). An order checks the common key's
+        quota for the reveal's worst case; a READ consumes nothing at Apollo and checks
+        no quota (like `fullenrich_result`, #943): an order already paid must stay
+        readable the day the quota runs out."""
+        if lecture:
+            return access.resolve_credential("apollo", check_usage=False)
+        return access.resolve_credential("apollo", units=_UNITES_REVEAL_TELEPHONE)
 
     @mcp.tool(annotations=LECTURE)
     def apollo_search_organizations(
@@ -551,9 +605,9 @@ def register(mcp: FastMCP) -> None:
         different source, no credit burned on a call that would just fail.
 
         ⚠️ NO MOBILE OR DIRECT DIAL HERE: Apollo never returns those synchronously.
-        apollo_reveal_phone orders them, on your own Apollo key.
+        apollo_reveal_phone orders them.
 
-        ⚠️ `reveal_personal_emails=True` needs YOUR OWN Apollo key too: Apollo bills
+        ⚠️ `reveal_personal_emails=True` needs YOUR OWN Apollo key: Apollo bills
         that reveal ON TOP of the match, and the shared key's meter can only charge a
         plain match. Same rule as apollo_reveal_phone.
 
@@ -657,19 +711,33 @@ def register(mcp: FastMCP) -> None:
         agent will look (a datastore row, the run journal). Lose it and the credits
         are spent with nothing to collect.
 
-        ⚠️ Your own Apollo key only: a reveal costs ~9 Apollo credits where a plain
-        match costs 1, so it never runs on the shared platform key.
+        Cost: 8 Apollo credits for a person whose number is found, none when it is
+        not, plus 1 for the match. Runs on your own Apollo key when you have one, else
+        on the shared platform key — where an organization orders at most a daily
+        number of reveals, and each is billed whether or not you collect it.
 
         Args:
             full: keep the employer's tech stack, the employment history and the
                 Apollo CRM account record. Off by default: a real reveal came back
                 at 65 374 characters and the client refused it outright. Same price.
         """
-        cle = _cle_byo(_BYO_REVEAL_TELEPHONE)
+        cle = _cle_telephone()
         client = ApolloClient(api_key=cle.key)
         # The order is born BEFORE the call: Apollo may POST before handing control
-        # back to us. If it cannot be born, nothing is paid yet — we raise.
-        jeton, destination = apollo_receiver.commander(cle)
+        # back to us. If it cannot be born, nothing is paid yet — we raise. On the
+        # platform key it is born only under the org's daily cap, counted and written
+        # in one locked transaction (parallel orders cannot overshoot it).
+        try:
+            jeton, destination = apollo_receiver.commander(
+                cle, plafond=plafond_reveals_org() if cle.is_platform else None)
+        except apollo_receiver.PlafondDuJour as p:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"Refusal `apollo_phone_daily_cap`: your organization has ordered "
+                f"{p.used} phone reveals today on the shared Apollo key, its daily "
+                f"cap is {p.limit}. It resets at midnight UTC — or set your own "
+                "Apollo key, which has no such cap."),
+                data={"code": "apollo_phone_daily_cap", "used": p.used,
+                      "limit": p.limit, "retryable": False}))
         try:
             out = client.match_person(
                 person_id=person_id, linkedin_url=linkedin_url, email=email,
@@ -682,6 +750,19 @@ def register(mcp: FastMCP) -> None:
         except BaseException:
             apollo_receiver.abandonner(jeton)
             raise
+
+        # What the ORDER costs, on the two counters. The common key's quota debits the
+        # worst case of a matched reveal (the match, plus a number found) — the real
+        # figure only exists when the numbers arrive, and a quota is a wall to stop
+        # BEFORE, not an invoice; a reveal that matched nobody debits the match alone,
+        # like `apollo_match_person`. The BILLED line (`quantity`) is the match, same
+        # rule as `apollo_match_person` (unconditional, common key OR own); the phone
+        # itself is billed on the read that collects it, at the figure Apollo declares.
+        trouve = bool(out.get("person"))
+        if cle.is_platform:
+            session_org.note_call_trace(units=_UNITES_REVEAL_TELEPHONE if trouve else 1)
+        session_org.note_call_trace(quantity=_credits_billed(
+            out, "apollo_reveal_phone", 1 if trouve else 0))
 
         # ⚠️ APOLLO FOUND NOBODY ≠ APOLLO ACCEPTED THE REVEAL. The oto-core client
         # translates the 404 into `None` (and a body can come back without
@@ -746,8 +827,11 @@ def register(mcp: FastMCP) -> None:
         phone_column: str = "phone",
     ) -> dict:
         """Collect the numbers ordered with apollo_reveal_phone or apollo_bulk_match.
-        0 Apollo credits. Readable through the Apollo key that paid for the reveal:
-        whoever reaches the connector with that same key, nobody else.
+        Checking costs nothing. Readable through the Apollo key that paid for the
+        reveal — on the shared platform key, by the organization that ordered it —
+        nobody else. Once done, the response's `result.credits_consumed` is what
+        Apollo charged for the reveal (8 for a person whose number is found, 0 when
+        none was).
 
         `done: false` carries `retry_after_seconds` — wait that long, call again.
         When done, the numbers are at `result.webhook_result.people[].phone_numbers[]`
@@ -779,15 +863,29 @@ def register(mcp: FastMCP) -> None:
         # that paid for it, and nobody else (`apollo_receiver.portee`). Then what
         # Apollo delivered TO US, with no call; Apollo polling is only the fallback
         # — POST not yet arrived, refused, or order placed before this batch.
-        cle = _cle_byo(_BYO_REVEAL_TELEPHONE)
+        cle = _cle_telephone(lecture=True)
         result = apollo_receiver.resultat_recu(request_id, cle)
         if result is None:
+            # ⚠️ On the SHARED key, polling Apollo is only for an order THIS org
+            # placed: `webhook_result/{id}` answers whoever holds the key, and every
+            # org holds the platform one — a guessed or leaked id would hand over
+            # another org's numbers. Own keys keep the fallback for orders placed
+            # before the receiver existed.
+            if cle.is_platform and not apollo_receiver.commande_connue(request_id, cle):
+                session_org.note_call_trace(quantity=0)
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    f"No phone reveal `{request_id}` ordered by your organization on "
+                    "the shared Apollo key (or it expired after 30 days): order it "
+                    "with apollo_reveal_phone, then collect the id it returns.")))
             client = ApolloClient(api_key=cle.key)
             try:
                 out = client.poll_webhook_result(request_id)
             except ValueError as e:
                 raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
             if not out.get("done"):
+                # A check consumed nothing at Apollo: a TRACED zero, not an absence
+                # (a metering consumer reads absence as 1) — as `fullenrich_result`.
+                session_org.note_call_trace(quantity=0)
                 wait = out.get("retry_after_seconds")
                 return {
                     "done": False,
@@ -796,6 +894,36 @@ def register(mcp: FastMCP) -> None:
                                   f"again in ~{wait or 10}s."),
                 }
             result = out.get("result") or {}
+        # The BILLED line of the PHONE: what Apollo charged for this order, as it
+        # DECLARES it in the delivered envelope (`credits_consumed`: 8 for a person
+        # whose number is found, 0 when none was, measured on a real account on
+        # 2026-11-22). Traced under the order's id (`apollo_reveal_request_id`, the
+        # billing lens's `job_id`): every read of a done order traces the same figure,
+        # and the consumer counts it ONCE per id.
+        cout = apollo_releve.cout_declare(result)
+        if cout is None:
+            if cle.is_platform:
+                # An unreadable cost never becomes zero: the read is REFUSED, by name,
+                # and the order stays unsettled — the daily settlement bills it at the
+                # worst case (`apollo_releve.py`).
+                session_org.note_call_trace(quantity=0)
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    f"Refusal `apollo_cost_undeclared`: Apollo delivered reveal "
+                    f"`{request_id}` without saying what it charged "
+                    f"(credits_consumed={result.get('credits_consumed')!r}). On the "
+                    "shared Apollo key a reveal is only served with its cost: it is "
+                    "billed at its worst case. Do not order it again."),
+                    data={"code": "apollo_cost_undeclared", "retryable": False}))
+            # Your own key: Apollo bills you, nothing is billed here.
+            logger.warning("apollo_reveal_phone_result: `credits_consumed` missing or "
+                           "unreadable (%r) on an own key — nothing to bill",
+                           result.get("credits_consumed"))
+            session_org.note_call_trace(apollo_reveal_request_id=str(request_id))
+        else:
+            session_org.note_call_trace(apollo_reveal_request_id=str(request_id),
+                                        quantity=cout)
+            if cle.is_platform:
+                apollo_receiver.marquer_releve(request_id, cle)
         # ⚠️ DONE IS NOT DELIVERED. Apollo closes an order it could not honour with a
         # `failure_reason` — "you ran out of mobile number credits" on an empty
         # account (signal #1283) — and an envelope with no number. Served as is, the

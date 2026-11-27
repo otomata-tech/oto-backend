@@ -595,7 +595,8 @@ def test_trace_only_yields_a_closed_set_of_keys():
     `org.usage.calls`) ; et le run Apify dont un appel relève le coût final
     (`apify_run_id`, 11/10/2026 — le job que la même lentille sert comme `job_id`), et le
     travail Higgsfield dont la lecture aboutie trace le prix (`higgsfield_request_id`,
-    02/11/2026, même rôle).
+    02/11/2026, même rôle), et la commande de téléphone Apollo dont la relève trace
+    ce qu'Apollo a facturé (`apollo_reveal_request_id`, 22/11/2026, même rôle).
     Et le SLUG de la procédure qu'un run déroule (#1340), sous la clé que lisent la
     reconstruction des runs et l'audit de projet (`usage._ARG_PROCEDURE`).
     Et la FORME sous laquelle l'appel a désigné un tableau (`ref_kind`, 17/11/2026 :
@@ -607,7 +608,8 @@ def test_trace_only_yields_a_closed_set_of_keys():
                                    "readonly_forced", "readonly_forced_bilan",
                                    "found_work_emails", "found_personal_emails",
                                    "found_phones", "apify_run_id",
-                                   "higgsfield_request_id", "guide_scope",
+                                   "higgsfield_request_id",
+                                   "apollo_reveal_request_id", "guide_scope",
                                    usage._ARG_PROCEDURE, "recipe_bridge_refusals",
                                    "ref_kind")
 

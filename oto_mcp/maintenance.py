@@ -23,8 +23,9 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                           À BLANC tant que OTO_UNIPILE_FIN_DE_DROIT
                                           n'est pas posé
     oto-mcp maintenance check-boot    rejoue l'ordre du boot en transaction ANNULÉE
-    oto-mcp maintenance apollo-phones retire les reveals de téléphone Apollo reçus
-                                          au-delà de trente jours
+    oto-mcp maintenance apollo-phones facture les reveals de téléphone de la clé
+                                          plateforme que personne n'a relus, puis
+                                          retire ceux reçus au-delà de trente jours
     oto-mcp maintenance digest-lecteurs  résumé quotidien des lecteurs d'une procédure
                                           partagée par lien, à son propriétaire —
                                           À BLANC tant que OTO_DIGEST_LECTEURS
@@ -717,16 +718,21 @@ def cles_plateforme_au_format(*, dry_run: bool = True) -> dict:
 
 
 def apollo_phones(*, dry_run: bool = False) -> dict:
-    """Retire les reveals de téléphone Apollo reçus au-delà de trente jours.
+    """Facture les reveals de téléphone commandés sur la clé plateforme que personne n'a
+    relus (`apollo_releve.py`), puis retire ceux reçus au-delà de trente jours.
 
     La rétention d'Apollo lui-même : passé ce délai, son sondage ne rend plus rien, et
     une commande gardée ici ne servirait qu'à garder des numéros. La lecture filtre
     déjà l'échéance (`db/apollo_reveals.lire`) : ce travail retire ce qu'on ne sert
     plus, il ne décide pas de ce qu'on sert."""
+    from . import apollo_releve
     from .db import apollo_reveals
+    # Le relevé AVANT la purge : une commande de la clé plateforme que personne n'a
+    # relue est facturée (`apollo_releve.py`) bien avant ses trente jours.
+    releve = apollo_releve.maintenance(dry_run=dry_run)
     if dry_run:
-        return {"purgeables": apollo_reveals.compter_purgeables()}
-    return {"purged": apollo_reveals.purger()}
+        return {**releve, "purgeables": apollo_reveals.compter_purgeables()}
+    return {**releve, "purged": apollo_reveals.purger()}
 
 
 def slack_agent_posts(*, dry_run: bool = False) -> dict:

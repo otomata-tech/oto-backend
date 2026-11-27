@@ -1702,10 +1702,13 @@ def export_tool_calls_for_org(
 # `note_call_trace` et `server._TRACED_ARGS` le verse dans `args` — l'argument qui
 # porte le run (`run_id`) a un nom que d'autres outils emploient pour autre chose.
 # `higgsfield_request_id` de même (`request_id` est trop commun).
+# `apollo_reveal_request_id` de même : posé par `apollo_reveal_phone_result` sur la
+# relève d'un reveal de téléphone, avec ce qu'Apollo en a facturé.
 # ⚠️ N'ajouter ici qu'un nom qu'AUCUNE ligne déjà écrite ne porte : la même expression
 # sert les totaux par jour (`journal_jour`), et un nom déjà présent dans le journal
 # ferait apparaître des jobs dans le direct que les jours consolidés n'ont pas.
-BILLABLE_JOB_ARGS: tuple[str, ...] = ("enrichment_id", "apify_run_id", "higgsfield_request_id")
+BILLABLE_JOB_ARGS: tuple[str, ...] = ("enrichment_id", "apify_run_id", "higgsfield_request_id",
+                                      "apollo_reveal_request_id")
 _BILLABLE_JOB_ID_SQL = "COALESCE(" + ", ".join(
     f"l.args->>'{nom}'" for nom in BILLABLE_JOB_ARGS) + ")"
 

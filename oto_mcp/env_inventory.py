@@ -312,12 +312,25 @@ _REGLAGES: tuple[Variable, ...] = (
              ("oto_mcp/functions/isolement.py:135",)),
     Variable("OTO_FUNCTIONS_MAX_SIMULTANEES", Classe.REGLAGE, "4",
              "Exécutions SIMULTANÉES du bac à sable (fonctions et recettes-code) dans le "
-             "processus (`functions/places.py`), en plus d'une seule par compte. Au-delà : "
-             "429 `sandbox_busy` avec `Retry-After`, rien n'est lancé. Défaut 4 : 4 × 1 Go "
-             "(`isolement.MEMOIRE_MO`) sous la mémoire libre de la box. PAR PROCESSUS : "
-             "pendant une bascule bleu/vert, les deux couleurs tournent et le plafond "
-             "effectif double. Pas un entier ≥ 1 : refus de démarrer.",
-             ("oto_mcp/functions/places.py:81",)),
+             "processus (`functions/places.py`). Un compte en tient au plus ce plafond moins "
+             "`OTO_FUNCTIONS_RESERVE` ; au-delà, la demande attend son tour "
+             "(`OTO_FUNCTIONS_ATTENTE_MAX_S`), puis 429 `sandbox_busy` avec `Retry-After`. "
+             "Défaut 4 : 4 × 1 Go (`isolement.MEMOIRE_MO`) sous la mémoire libre de la box. "
+             "PAR PROCESSUS : pendant une bascule bleu/vert, les deux couleurs tournent et le "
+             "plafond effectif double. Pas un entier ≥ 1 : refus de démarrer.",
+             ("oto_mcp/functions/places.py:127",)),
+    Variable("OTO_FUNCTIONS_RESERVE", Classe.REGLAGE, "1",
+             "Places du bac à sable qu'un compte laisse toujours aux autres "
+             "(`functions/places.py`) : il en tient au plus `OTO_FUNCTIONS_MAX_SIMULTANEES` "
+             "moins cette réserve, et au moins une. 0 = un compte peut prendre tout le "
+             "processus. Pas un entier ≥ 0 : refus de démarrer.",
+             ("oto_mcp/functions/places.py:134",)),
+    Variable("OTO_FUNCTIONS_ATTENTE_MAX_S", Classe.REGLAGE, "25",
+             "Secondes qu'une demande d'exécution du bac à sable attend une place avant le "
+             "refus 429 `sandbox_busy` (`functions/places.py`) ; la place libérée va au compte "
+             "qui en tient le moins, puis au plus ancien. 0 = refus immédiat (le comportement "
+             "d'avant). Pas un nombre ≥ 0 : refus de démarrer.",
+             ("oto_mcp/functions/places.py:147",)),
     Variable("OTO_ABONNEMENT_OUVERT_A_TOUS", Classe.REGLAGE, "",
              "Agents sur l'abonnement Claude de la personne : ouverts à TOUT compte "
              "de l'instance (`1`, `true`, `yes`, `on`). Absente, vide ou un non = "

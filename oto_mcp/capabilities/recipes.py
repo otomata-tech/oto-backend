@@ -60,6 +60,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import session_org, tool_alias, tool_registry
 from ..db import recipes as db_recipes
 from ..functions import executor as bac
+from ..functions import places as places_bac
 from ..functions import pont as pont_bac
 from ..recipes import affichage, code, contrat, moteur
 from . import _bac_occupe, _code_humain
@@ -409,7 +410,7 @@ async def _executer(ctx: ResolvedCtx, inp: RecipeInput, corps: dict, *, ecrire: 
             # Copiée à sa création, elle garde l'org épinglée ci-dessus.
             tache = asyncio.ensure_future(code.executer(
                 corps, _params(corps, inp.params), fastmcp=fastmcp, sub=ctx.sub,
-                datastore=inp.datastore, ecrire=ecrire))
+                datastore=inp.datastore, ecrire=ecrire, org_id=ctx.org_id))
             borne = _borne_s(corps)
             try:
                 fait, _ = await asyncio.wait({tache}, timeout=borne)
@@ -447,8 +448,12 @@ async def _executer(ctx: ResolvedCtx, inp: RecipeInput, corps: dict, *, ecrire: 
 
 
 def _borne_s(corps: dict) -> float:
-    """La borne de dernier recours d'une recette-code VALIDÉE (`max_seconds` posé)."""
-    return float(corps["limits"]["max_seconds"]) + pont_bac.GRACE_S + _MARGE_S
+    """La borne de dernier recours d'une recette-code VALIDÉE (`max_seconds` posé). Elle
+    couvre aussi l'ATTENTE d'une place du bac à sable (`places.attente_max_s`, 28/11/2026) :
+    la file passe avant le lancement, et sans elle une recette courte qui attendait son
+    tour finissait en `recipe_timeout` au lieu de tourner (ou de recevoir `sandbox_busy`)."""
+    return (float(corps["limits"]["max_seconds"]) + pont_bac.GRACE_S + _MARGE_S
+            + places_bac.attente_max_s())
 
 
 async def _recipe(ctx: ResolvedCtx, inp: RecipeInput) -> dict:

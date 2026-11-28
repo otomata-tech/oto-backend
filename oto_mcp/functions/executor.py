@@ -155,13 +155,15 @@ def roues(racine: Path, requirements: list[str]) -> list[str]:
 
 
 def executer(*, sources: dict, entrypoint: str, requirements: list[str], mode: str,
-             sub: Optional[str], entree: Optional[dict] = None) -> dict:
+             sub: Optional[str], entree: Optional[dict] = None,
+             org_id: Optional[int] = None) -> dict:
     """Joue la fonction (`mode='run'`) ou ses tests (`mode='test'`) dans le bac à sable.
 
     Rend la sortie du harnais — `{ok, result, warnings, files}` ou `{ok, error}` en
     `run`, `{ok, tests}` en `test` — plus `journal` (ce que le code a imprimé) et
     `duree_ms`. Lève `ExecutionEchouee` si le bac à sable n'a rien rendu d'exploitable,
-    `BacASableOccupe` si `sub` ou le processus n'a plus de place (`places.py`).
+    `BacASableOccupe` si `sub` dans l'org `org_id` (la part par compte est par personne
+    ET par org) ou le processus n'a plus de place (`places.py`).
     """
     if mode not in ("run", "test"):
         raise ValueError(f"mode inconnu : {mode}")
@@ -176,7 +178,7 @@ def executer(*, sources: dict, entrypoint: str, requirements: list[str], mode: s
                 "input": entree if entree is not None else {}},
     }
     # Au plus `DELAI_S` puis l'arrêt du processus (`_jouer`) : ce qu'un refus annonce.
-    with places.place(sub, DELAI_S + places.MARGE_ARRET_S):
+    with places.place(sub, DELAI_S + places.MARGE_ARRET_S, org_id=org_id):
         debut = time.monotonic()
         code, sortie, erreurs = _jouer(lancement(racine, _SCRIPT, DELAI_S),
                                        json.dumps(tache).encode())

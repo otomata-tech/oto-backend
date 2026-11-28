@@ -3,8 +3,10 @@ tournent en même temps.
 
 Chaque exécution était bornée (mémoire, durée) mais pas leur NOMBRE : tout compte pouvait
 en lancer N à la fois. Ces bancs tiennent les trois règles — un plafond par processus,
-une exécution par compte, un refus IMMÉDIAT (429 `sandbox_busy` + `Retry-After`) sans
-rien lancer — et la libération de la place quoi qu'il arrive à l'exécution. Ils tournent
+une limite par compte (le plafond moins une réserve), un refus (429 `sandbox_busy` +
+`Retry-After`) sans rien lancer — et la libération de la place quoi qu'il arrive à
+l'exécution. L'attente d'une place (28/11/2026) a ses bancs à part
+(`test_functions_places_file.py`) : ici elle est mise à 0, le refus d'avant. Ils tournent
 sans Deno : ce qu'on éprouve est le compte des places, pas le bac à sable.
 """
 from __future__ import annotations
@@ -28,11 +30,26 @@ _VERSION = {"sources": {"f.py": "def executer(e):\n    return {}\n"},
 def places_neuves(monkeypatch):
     """Chaque banc part d'un processus sans exécution en cours, plafond relu."""
     monkeypatch.delenv(places.ENV_MAX, raising=False)
-    places.plafond.cache_clear()
+    monkeypatch.delenv(places.ENV_RESERVE, raising=False)
+    monkeypatch.setenv(places.ENV_ATTENTE, "0")
+    _vider_caches()
     assert places.en_cours() == 0, "un banc précédent a gardé une place"
     yield
-    places.plafond.cache_clear()
+    _vider_caches()
     assert places.en_cours() == 0, "une place n'a pas été rendue"
+    assert places.en_attente() == 0, "une demande est restée dans la file"
+
+
+def _vider_caches() -> None:
+    places.plafond.cache_clear()
+    places.reserve.cache_clear()
+    places.attente_max_s.cache_clear()
+
+
+def _un_par_compte(monkeypatch) -> None:
+    """L'ancienne règle — une exécution par compte — sous le plafond par défaut."""
+    monkeypatch.setenv(places.ENV_RESERVE, str(places.MAX_DEFAUT - 1))
+    places.reserve.cache_clear()
 
 
 def _plafond(monkeypatch, n: int) -> None:
@@ -58,9 +75,37 @@ def test_le_plafond_global_atteint_refuse_un_autre_compte(monkeypatch):
         pass
 
 
-def test_le_meme_compte_deux_fois_la_seconde_est_refusee():
+def test_un_compte_prend_les_places_libres_jusqu_a_la_reserve():
+    """Plafond 4, réserve 1 : un compte en tient trois ; la quatrième lui est refusée,
+    elle reste à un autre compte."""
+    assert places.par_compte() == 3
+    with places.place("a"), places.place("a"), places.place("a"):
+        with pytest.raises(places.BacASableOccupe, match="this person"):
+            with places.place("a"):
+                pytest.fail("un compte a pris la place réservée aux autres")
+        with places.place("b"):
+            assert places.en_cours() == 4
+
+
+def test_une_reserve_illisible_leve(monkeypatch):
+    monkeypatch.setenv(places.ENV_RESERVE, "-1")
+    places.reserve.cache_clear()
+    with pytest.raises(places.ReglageInvalide, match=places.ENV_RESERVE):
+        places.verifier_configuration()
+
+
+@pytest.mark.parametrize("brut", ["abc", "-1", "inf"])
+def test_une_attente_illisible_leve(monkeypatch, brut):
+    monkeypatch.setenv(places.ENV_ATTENTE, brut)
+    places.attente_max_s.cache_clear()
+    with pytest.raises(places.ReglageInvalide, match=places.ENV_ATTENTE):
+        places.verifier_configuration()
+
+
+def test_le_meme_compte_deux_fois_sous_l_ancienne_regle(monkeypatch):
+    _un_par_compte(monkeypatch)
     with places.place("a"):
-        with pytest.raises(places.BacASableOccupe, match="this account"):
+        with pytest.raises(places.BacASableOccupe, match="this person"):
             with places.place("a"):
                 pytest.fail("un compte a tenu deux exécutions à la fois")
         assert places.en_cours() == 1
@@ -180,6 +225,7 @@ def test_oto_function_refuse_en_429_sans_rien_lancer(monkeypatch, tmp_path):
 
 def test_une_recette_code_refuse_en_429_sans_rien_lancer(monkeypatch, tmp_path):
     from oto_mcp import outils_du_travail
+    _un_par_compte(monkeypatch)
     monkeypatch.setattr(outils_du_travail, "manquants", lambda cites: None)
     monkeypatch.setattr(cap_recettes, "_instance", lambda: object())
     monkeypatch.setattr(executor, "repertoire", lambda: tmp_path)

@@ -68,7 +68,7 @@ fichiers EN MÉMOIRE de Pyodide.
 | boucle sans fin | délai (`DELAI_S`), processus tué | `test_une_boucle_sans_fin…` |
 | sortie sans fin | lue EN FLUX, plafond `MAX_REPONSE` : au-delà, processus tué, `ReponseTropLongue` | `test_une_sortie_au_dela_du_plafond…` |
 | identité, réseau, mémoire du serveur | l'isolement système déclaré (`functions/isolement.py`, ci-dessous) | lu sur la commande lancée |
-| trop d'exécutions à la fois | des places comptées par processus et par compte (`functions/places.py`, ci-dessous) : refus immédiat, 429 `sandbox_busy` | `tests/test_functions_places.py` |
+| trop d'exécutions à la fois | des places comptées par processus et par compte (`functions/places.py`, ci-dessous) : attente bornée en file équitable, puis 429 `sandbox_busy` | `tests/test_functions_places.py`, `tests/test_functions_places_file.py` |
 
 ### L'isolement du processus
 
@@ -108,15 +108,32 @@ Chaque exécution est bornée (1 Go, un cœur, 64 tâches, sa durée) ; leur NOM
 
 - au plus `OTO_FUNCTIONS_MAX_SIMULTANEES` exécutions simultanées dans le processus
   (défaut **4** : 4 × 1 Go au pire, sous les ~6 Go que la box laisse libres) ;
-- au plus **une** par compte (`sub`) : un compte ne prend pas toutes les places.
+- au plus le plafond **moins une réserve** par compte — un compte = une personne DANS une
+  org, la clé `(sub, org_id)` (28/11/2026 : une personne membre de plusieurs orgs n'est pas
+  bornée d'une org à l'autre ; sans org, `(sub, None)`) — `OTO_FUNCTIONS_RESERVE`,
+  défaut 1, au moins une place par compte : un compte prend les places libres, mais en
+  laisse toujours une à un autre (28/11/2026 ; c'était **une** par compte).
 
-Au-delà, le refus est **immédiat** — jamais une file d'attente — et rien n'est lancé :
-429 `sandbox_busy`, avec l'en-tête `Retry-After` (secondes) et `details.retry_after_seconds`
-en REST, `{code, retry_after_seconds}` dans les données de l'erreur MCP. Déclaré par
+**Une demande attend son tour** (28/11/2026), au plus `OTO_FUNCTIONS_ATTENTE_MAX_S`
+(défaut **25 s**, l'attente de la file des places de la ferme) ; la place libérée va au
+compte qui en tient le **moins**, puis au plus ancien arrivé, et un nouvel arrivant ne
+passe jamais devant qui attend. Pourquoi : mesuré en prod sur 17 h, 187 refus sur 200
+venaient de la limite d'UNE par compte et 12 seulement du plafond du serveur — un agent
+hébergé tourne sous l'identité de son propriétaire, et une org dont une personne possède
+les agents n'avait qu'une place, même box vide. L'ancienne règle refusait toute attente
+(une requête qui attend tient sa connexion) : l'attente est donc bornée, et `0` rend le
+refus immédiat d'avant. Au-delà de l'attente, rien n'est lancé : 429 `sandbox_busy`, avec
+l'en-tête `Retry-After` (secondes) et `details.retry_after_seconds` en REST,
+`{code, retry_after_seconds}` dans les données de l'erreur MCP. Déclaré par
 `oto_function` et `oto_recipe`. La place est prise avant le lancement et rendue après la
-mort du processus, quoi qu'il arrive (exception, délai, annulation). Un `threading.Lock`
-et non un sémaphore asyncio : l'aller simple prend sa place dans un fil, le pont dans la
-boucle ; le verrou ne couvre qu'un compte, jamais une attente.
+mort du processus, quoi qu'il arrive (exception, délai, annulation) ; un demandeur qui
+renonce (délai, client parti, tâche annulée) sort de la file et rend la place qui lui
+aurait été attribuée entre-temps. Une seule file pour deux sortes d'appelants :
+l'aller simple attend dans un fil (`places.place`, un `threading.Event`), le pont dans la
+boucle (`places.place_async`, un futur asyncio — la boucle n'est jamais bloquée). Un
+`threading.Lock` et non un sémaphore asyncio : le verrou ne couvre qu'un compte ou une
+attribution, jamais une attente. La borne de dernier recours d'une recette-code
+(`recipe_timeout`) ajoute l'attente maximale à `max_seconds`.
 
 Le `Retry-After` dit quand une place se libère **au plus tard** (25/11/2026) : chaque place
 connaît sa borne (le délai de l'exécution, ses grâces, l'arrêt du processus —
@@ -127,8 +144,9 @@ dépassé la sienne (journalisée, sans le compte), retombe sur `places.ATTENTE_
 Un appel d'outil abandonné à l'échéance (son fil continue) ne tient PAS de place : il
 vole hors place jusqu'à la fin de son fil (`tests/test_functions_places_liberation.py`).
 
-Le réglage se lit au démarrage (`server.main`) : pas un entier ≥ 1, l'instance refuse de
-démarrer.
+Les réglages se lisent au démarrage (`server.main`) : un plafond qui n'est pas un entier
+≥ 1, une réserve qui n'est pas un entier ≥ 0 ou une attente qui n'est pas un nombre ≥ 0,
+et l'instance refuse de démarrer.
 
 ⚠️ **Le plafond est PAR PROCESSUS.** Pendant une bascule bleu/vert, deux couleurs tournent :
 le plafond effectif de la box double le temps de la bascule (8 × 1 Go au défaut).

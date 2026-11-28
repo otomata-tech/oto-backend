@@ -14,7 +14,7 @@ CODE = "sandbox_busy"
 REFUS = DeclaredError(
     429, CODE,
     "the sandbox already runs its maximum of simultaneous executions on this server, or "
-    "this account already has one running: nothing was started; retry after the "
+    "this person already holds their share in this org: nothing was started; retry after the "
     "`Retry-After` delay (seconds)")
 
 

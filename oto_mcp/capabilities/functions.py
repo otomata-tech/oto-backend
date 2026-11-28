@@ -174,7 +174,7 @@ def _executer(ctx: ResolvedCtx, version: dict, mode: str,
     try:
         return executor.executer(sources=version["sources"], entrypoint=version["entrypoint"],
                                  requirements=version["requirements"] or [], mode=mode,
-                                 sub=ctx.sub, entree=entree)
+                                 sub=ctx.sub, entree=entree, org_id=ctx.org_id)
     except executor.BacASableOccupe as e:
         raise _bac_occupe.refus(e) from None
     except executor.BacASableAbsent as e:

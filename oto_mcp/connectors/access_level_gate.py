@@ -129,6 +129,12 @@ def refusal(decl: access_levels.AccessLevels, level: str, source: str, tool: str
                  f"scope='org', org_id={org}, name='{decl.connector}', level='full'))")
     if source == "default":
         par = f"default for `{decl.connector}` (organization #{org} sets none)"
+    if source == access_levels.INSTANCE:
+        fermes = ", ".join(sorted(set(decl.instance_gates.values())))
+        par = (f"this instance for `{decl.connector}` (the wider levels "
+               f"{', '.join(sorted(decl.instance_gates))} are off: instance setting "
+               f"{fermes} is not on)")
+        geste = "a platform operator turns that instance setting on"
     suite = ("a wider level then needs a new consent (a token obtained for a narrower "
              "level lacks its scopes)" if decl.widening_needs_consent else
              "the next call then claims the wider scopes, no new consent")

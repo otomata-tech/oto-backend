@@ -190,8 +190,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "bigquery",
     # eighth service (2026-10-08) — same shape, `adwords` consent only, read-only tools.
     "google_ads",
-    # ninth service (2026-11-15) — same shape, `webmasters.readonly` consent only,
-    # read-only tool. The service-account connector `google_search_console` stays.
+    # ninth service (2026-11-15) — same shape, `webmasters.readonly` consent, or
+    # `webmasters` at its `full` access level (instance-gated) for `search_console_act`.
+    # The service-account connector `google_search_console` stays.
     "search_console",
     # --- open-data / no credential ------------------------------------------
     # Unrelated public sources → distinct connectors (formerly `fr_open`, which

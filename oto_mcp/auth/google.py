@@ -88,6 +88,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .. import credentials_store, db
+from ..providers.search_console import WEBMASTERS, WEBMASTERS_READONLY
 from . import flow as oauth_flow
 from ..connectors import flow as connector_flow
 from ..connectors import health as connector_health
@@ -141,11 +142,22 @@ SERVICE_SCOPES: dict[str, tuple[str, ...]] = {
     # calls only `listAccessibleCustomers`, `googleAds:search` and `googleAdsFields:search`
     # (`oto.tools.google.ads`) — no mutate endpoint is ever built.
     "google_ads": ("https://www.googleapis.com/auth/adwords",),
-    # Google Search Console (SENSITIVE), read-only: `webmasters.readonly` lets the
-    # person's Google user read the properties THEY can open — performance, URL
-    # inspection, sitemaps. `webmasters` (submit a sitemap, add a property) is not
-    # asked: the service-account connector `google_search_console` keeps that write.
-    "search_console": ("https://www.googleapis.com/auth/webmasters.readonly",),
+    # Google Search Console (SENSITIVE): `webmasters.readonly` lets the person's Google
+    # user read the properties THEY can open — performance, URL inspection, sitemaps.
+    # This tuple is what COVERS the service and it stays the read-only scope: changing
+    # it would stop every existing grant from covering Search Console (the Chat lesson
+    # above). The write (`search_console_act` op `add_sitemap`) needs `webmasters`, asked
+    # only at the `full` access level (`providers/search_console.ACCESS_LEVELS`, off
+    # unless the instance sets GOOGLE_SEARCH_CONSOLE_WRITE): `webmasters` implies the
+    # read-only scope (`SCOPE_IMPLIES`), so a grant holding EITHER covers the reads, and
+    # it is a known scope, kept in the vault and in the refresh bound once granted.
+    "search_console": (WEBMASTERS_READONLY,),
+}
+# A wider scope Google documents as including a narrower one: a grant holding the key
+# covers every service that asks for the values (`services_granted`). Never guessed
+# from the names — each line is the provider's documentation.
+SCOPE_IMPLIES: dict[str, tuple[str, ...]] = {
+    WEBMASTERS: (WEBMASTERS_READONLY,),
 }
 SERVICES: tuple[str, ...] = tuple(SERVICE_SCOPES)
 SERVICE_LABELS = {"gmail": "Gmail", "drive": "Google Drive", "sheets": "Google Sheets",
@@ -195,14 +207,30 @@ def account_services() -> tuple[str, ...]:
 # What a vault row can carry: nothing else gets in (`persist_token`),
 # even if a partner's client has other scopes granted elsewhere.
 KNOWN_SCOPES = (frozenset(IDENTITY_SCOPES)
-                | frozenset(sc for svc in SERVICES for sc in SERVICE_SCOPES[svc]))
+                | frozenset(sc for svc in SERVICES for sc in SERVICE_SCOPES[svc])
+                | frozenset(SCOPE_IMPLIES))
+
+
+def _closure(scopes) -> set[str]:
+    """`scopes` (string or list) and every scope they imply (`SCOPE_IMPLIES`)."""
+    have = set(scopes.split() if isinstance(scopes, str) else (scopes or ()))
+    for sc in list(have):
+        have.update(SCOPE_IMPLIES.get(sc, ()))
+    return have
 
 
 def services_granted(scopes) -> list[str]:
-    """The services whose scopes ALL appear in `scopes` (string or list) —
-    what an account has actually authorized, in service order."""
-    have = set(scopes.split() if isinstance(scopes, str) else (scopes or ()))
+    """The services whose scopes ALL appear in `scopes` (string or list), or are
+    implied by one that does (`SCOPE_IMPLIES`) — what an account has actually
+    authorized, in service order."""
+    have = _closure(scopes)
     return [svc for svc in SERVICES if set(SERVICE_SCOPES[svc]) <= have]
+
+
+def _service_scopes_any(service: str) -> set[str]:
+    """The scopes that serve `service`: its own, and the wider ones implying them."""
+    own = set(SERVICE_SCOPES[service])
+    return own | {w for w, narrower in SCOPE_IMPLIES.items() if own & set(narrower)}
 
 
 def _declared_scopes(recorded: Optional[str]) -> Optional[str]:
@@ -233,15 +261,36 @@ def _service_bound(declared: Optional[str], service: Optional[str]) -> Optional[
     `None` when there is no service, or nothing narrower to try."""
     if not declared or service not in SERVICE_SCOPES:
         return None
-    keep = set(IDENTITY_SCOPES) | set(SERVICE_SCOPES[service])
+    # The wider scopes too (`webmasters` for Search Console): bounded to the read-only
+    # scope alone, a granted write would be lost at refresh.
+    keep = set(IDENTITY_SCOPES) | _service_scopes_any(service)
     narrowed = " ".join(sc for sc in declared.split() if sc in keep)
     return narrowed if narrowed and narrowed != declared else None
 
 
-def scopes_for(connector: str, app: "OAuthApp") -> list[str]:
+def _leveled(connector: str):
+    """The access-level declaration of a Google service, or None (most declare none)."""
+    from ..connectors import access_levels
+    return access_levels.declared(connector)
+
+
+def consent_level(connector: str, org_id: Optional[int],
+                  group_id: Optional[int]) -> Optional[str]:
+    """The access level a consent of `connector` asks for under (org, team) — already
+    clamped by the instance (`access_levels.resolve`); None for a service without levels."""
+    if _leveled(connector) is None:
+        return None
+    from ..connectors import access_levels
+    return access_levels.effective_level(connector, org_id, group_id)
+
+
+def scopes_for(connector: str, app: "OAuthApp", level: Optional[str] = None) -> list[str]:
     """The scopes THIS consent requests — the identity, then:
 
-    - a service: its own, and nothing else;
+    - a service: its own, and nothing else — for a service with access levels
+      (`search_console`), the scopes of `level` (`providers/<name>.ACCESS_LEVELS`); no
+      level, or a level the instance keeps closed, asks for its default level's, which
+      are `SERVICE_SCOPES`;
     - the account (`google`): under OUR app, the six services from before the split
       (`_CARRIER_SERVICES`, for a single-card dashboard), narrowed by the instance's
       `GOOGLE_ACCOUNT_SERVICES` (`account_services`); under a TENANT's app,
@@ -253,7 +302,15 @@ def scopes_for(connector: str, app: "OAuthApp") -> list[str]:
         base = ([sc for svc in account_services() for sc in SERVICE_SCOPES[svc]]
                 if app.origin == "env" else [])
     elif connector in SERVICE_SCOPES:
-        base = list(SERVICE_SCOPES[connector])
+        decl = _leveled(connector)
+        if decl is not None and level is not None:
+            if level not in decl.levels:
+                raise RuntimeError(f"\"{level}\" is not an access level of {connector}.")
+            if decl.gate_of(level) is not None:
+                level = decl.default
+            base = list(decl.levels[level])
+        else:
+            base = list(SERVICE_SCOPES[connector])
     else:
         raise RuntimeError(f"\"{connector}\" is not a known Google service.")
     return list(IDENTITY_SCOPES) + base
@@ -366,7 +423,7 @@ _AUD = "google"
 
 def make_state(sub: str, org_id: int, return_app: str = "",
                connector: str = "google", scope: str = "member",
-               group_id: Optional[int] = None) -> str:
+               group_id: Optional[int] = None, level: Optional[str] = None) -> str:
     """Signed state (`oauth_flow.sign_state`, audience `google`) — payload
     {sub, org, app, c, s, g, jti} plus the `aud` and `ts` the helper adds.
 
@@ -389,14 +446,20 @@ def make_state(sub: str, org_id: int, return_app: str = "",
 
     ⚠️ The value is validated by the CALLER (`resolve_return_app`) before arriving
     here: the state must never carry an unverified front key, otherwise it
-    signs an open redirect."""
+    signs an open redirect.
+
+    `level` (`l`, a service with access levels only): the level whose scopes the consent
+    asked for — the callback bounds a SHARED row to them with no call context."""
+    payload = {
+        "sub": sub, "org": org_id, "app": return_app, "c": connector,
+        # WHO the account is entrusted to (2026-09-27): the member, or their
+        # org / their team (SHARED account, set by an admin).
+        "s": scope, "g": group_id,
+        "jti": oauth_flow.new_jti()}
+    if level is not None:
+        payload["l"] = level
     try:
-        return oauth_flow.sign_state(_AUD, {
-            "sub": sub, "org": org_id, "app": return_app, "c": connector,
-            # WHO the account is entrusted to (2026-09-27): the member, or their
-            # org / their team (SHARED account, set by an admin).
-            "s": scope, "g": group_id,
-            "jti": oauth_flow.new_jti()})
+        return oauth_flow.sign_state(_AUD, payload)
     except oauth_flow.OAuthFlowError as e:
         # A missing state secret is a PLATFORM misconfiguration: the start paths
         # translate `RuntimeError` into `oauth_misconfigured`, never into a refusal
@@ -433,10 +496,16 @@ def read_state(state: Optional[str]) -> Optional[dict]:
     if scope not in ("member", "org", "group") or (
             scope == "group" and not isinstance(group, int)):
         return None
+    level = data.get("l")
+    if level is not None:
+        decl = _leveled(connector)
+        if decl is None or not isinstance(level, str) or level not in decl.levels:
+            return None
     return {"sub": sub, "org": org,
             "app": oauth_flow.resolve_return_app(data.get("app") or ""),
             "connector": connector, "scope": scope,
-            "group": group if scope == "group" else None, "jti": jti}
+            "group": group if scope == "group" else None, "jti": jti,
+            "level": level}
 
 
 def build_auth_url(sub: str, return_app: str = "", connector: str = "google",
@@ -468,16 +537,24 @@ def build_auth_url(sub: str, return_app: str = "", connector: str = "google",
         group_id = target if scope == "group" else None
     resolved_app = oauth_flow.resolve_return_app(return_app)
     app = app_for(sub)
+    # A service with access levels asks for the scopes of the level in force where the
+    # account is filed: the member's org and active team, or the shared row's org / team.
+    # Moving `read` → `full` is this same call again, from the card: a new consent.
+    if scope == "member":
+        from .. import access  # lazy: avoids any import cycle at boot
+        level = consent_level(connector, org_id, access.current_group(sub))
+    else:
+        level = consent_level(connector, org_id, group_id)
     params = {
         "client_id": app.client_id,
         "redirect_uri": app.redirect_uri,
         "response_type": "code",
-        "scope": " ".join(scopes_for(connector, app)),
+        "scope": " ".join(scopes_for(connector, app, level)),
         "access_type": "offline",
         # consent → forces refresh_token; select_account → lets the user choose
         # which Google account to connect (key to multi-account).
         "prompt": "consent select_account",
-        "state": make_state(sub, org_id, resolved_app, connector, scope, group_id),
+        "state": make_state(sub, org_id, resolved_app, connector, scope, group_id, level),
         # INCREMENTAL consent: the token also carries the scopes already granted to this
         # client. That is what makes the split hold — authorizing Drive after Gmail yields ONE
         # token that knows both, on the same vault row. Under a partner's client too:
@@ -556,7 +633,7 @@ class GoogleScopeRejected(RuntimeError):
 def persist_token(sub: str, org_id: int, token_response: dict,
                   client_id: Optional[str] = None, scope: str = "member",
                   group_id: Optional[int] = None,
-                  connector: Optional[str] = None) -> str:
+                  connector: Optional[str] = None, level: Optional[str] = None) -> str:
     """Persist the tokens (member scope: the org comes from the state, captured at
     flow start) and return the email of the connected Google account.
 
@@ -606,7 +683,7 @@ def persist_token(sub: str, org_id: int, token_response: dict,
         deja = next((a.get("scopes") or "" for a in db.list_shared_google_accounts(scope, target)
                      if a.get("google_email") == email), "")
         app = app_for(sub)
-        permis = set(scopes_for(connector, app)) | set(deja.split())
+        permis = set(scopes_for(connector, app, level)) | set(deja.split())
         scopes = " ".join(sc for sc in granted if sc in permis)
         db.set_shared_google_oauth(
             scope, target, set_by=sub,
@@ -920,8 +997,14 @@ def _resolved_row(rc) -> Optional[dict]:
             "scopes": meta.get("scopes"), "client_id": meta.get("client_id")}
 
 
+class GoogleScopeInsufficient(RuntimeError):
+    """The account covers the service but lacks a scope THIS call needs (a write granted
+    only at a wider access level): the person re-authorizes from the service's card."""
+
+
 def credentials_for(sub: str, account: Optional[str] = None,
-                    service: Optional[str] = None, *, source_account: bool = False):
+                    service: Optional[str] = None, *, source_account: bool = False,
+                    require_scopes: tuple[str, ...] = ()):
     """Return a valid `google.oauth2.credentials.Credentials` for this sub.
 
     The account is chosen by the COMMON resolution of multi-account connectors
@@ -935,6 +1018,10 @@ def credentials_for(sub: str, account: Optional[str] = None,
     team, org) — the key cascade. An unknown account is refused, never replaced by
     another. The account that served is noted on the call: the `_account` echo of
     the response names it.
+
+    `require_scopes`: scopes the call needs beyond the service's (a write): an account
+    whose recorded scopes do not hold them raises `GoogleScopeInsufficient`, before
+    any refresh or call.
 
     `source_account=True`: `account` names the account of a FILE SOURCE inside the
     call (an attachment, `file_source`) — it may differ from the call's `_account=`
@@ -969,6 +1056,13 @@ def credentials_for(sub: str, account: Optional[str] = None,
             f"The Google account {row.get('google_email') or ''} has not "
             f"yet authorized {label}: connect {label} from its card at "
             f"{config_dashboard(sub)}. Nothing was done.")
+    if require_scopes and not set(require_scopes) <= _closure(row.get("scopes")):
+        label = SERVICE_LABELS.get(service, service)
+        raise GoogleScopeInsufficient(
+            f"The Google account {row.get('google_email') or ''} authorized {label} "
+            f"without the right this call needs ({', '.join(require_scopes)}): "
+            f"re-authorize it from the « {label} » card at {config_dashboard(sub)} "
+            "(connect again: the consent now asks for it). Nothing was done.")
 
     from google.oauth2.credentials import Credentials
 
@@ -1187,7 +1281,8 @@ def _finish_return(d: dict, code: str) -> dict:
         email = persist_token(d["sub"], d["org"], tokens)
     else:
         email = persist_token(d["sub"], d["org"], tokens, scope=d["scope"],
-                              group_id=d["group"], connector=d["connector"])
+                              group_id=d["group"], connector=d["connector"],
+                              level=d.get("level"))
     return {"account": email, "scope": d["scope"]}
 
 

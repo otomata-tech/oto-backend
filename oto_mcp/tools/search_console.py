@@ -4,15 +4,20 @@ Ninth service of the Google account (2026-11-15): scope `webmasters.readonly`, g
 from its card in one click. Reads see the Search Console properties THEIR Google user
 can open, nothing more — no key to paste, no service account to add to a property.
 
-**One tool, `search_console`, read-only** (`<ns>` of the `<ns>`/`<ns>_act` pair; no
-`_act`: the scope asked cannot write). Its ops and arguments are those of the
-service-account connector `google_search_console` (described in oto-core), and so are
-the answers (Google's JSON; `list_sitemaps` under `items`), so a recipe written for one
-runs on the other by changing the tool name:
+**Two tools, the `<ns>`/`<ns>_act` pair.** `search_console` reads; its ops and arguments
+are those of the service-account connector `google_search_console` (described in
+oto-core), and so are the answers (Google's JSON; `list_sitemaps` under `items`), so a
+recipe written for one runs on the other by changing the tool name:
 - `list_sites` — the properties, with the permission level of the user on each;
 - `query_search_analytics` — clicks, impressions, CTR, position, grouped and filtered;
 - `inspect_url` — the index status of one URL (2,000 a day per property);
 - `list_sitemaps` / `get_sitemap` — the submitted sitemaps.
+
+`search_console_act(op="add_sitemap")` submits a sitemap, as `google_search_console_act`
+does: only at the `full` access level (`providers/search_console.ACCESS_LEVELS`, the
+default is `read`), only where the instance opens it (`GOOGLE_SEARCH_CONSOLE_WRITE`), and
+only with an account that granted `webmasters` (a consent made at `full`). Each missing
+piece is its own named refusal. Nothing removes a sitemap.
 
 The call goes straight to `searchconsole.googleapis.com` with the account's OAuth token
 (`requests`, like `google_ads`): no oto-core client, the API is five plain routes.
@@ -30,8 +35,10 @@ from mcp.types import INVALID_PARAMS, ErrorData
 
 from .. import access
 from ..auth import google as google_oauth
+from ..connectors import access_level_gate, access_levels
 from ..mcp_errors import McpError
-from .lecture import LECTURE
+from ..providers.search_console import WEBMASTERS
+from .lecture import ACTE, LECTURE
 
 _SERVICE = "search_console"
 _BASE = "https://searchconsole.googleapis.com"
@@ -82,19 +89,36 @@ def _path_site(site_url: str) -> str:
 
 # --- the token, per call -------------------------------------------------------
 
-def _token_for_user(account: Optional[str] = None) -> str:
+def _refused(code: str, msg: str, **data) -> McpError:
+    """A NAMED refusal: `data.code` says which gesture is missing."""
+    return McpError(ErrorData(code=INVALID_PARAMS, message=f"Refusal `{code}`: {msg}",
+                              data={"code": code, "retryable": False, **data}))
+
+
+#: The re-consent a write needs when the account was authorized at `read`.
+REAUTHORIZE = "search_console_reauthorize_required"
+
+
+def _token_for_user(account: Optional[str] = None,
+                    require_scopes: tuple[str, ...] = ()) -> str:
     sub = access.current_user_sub_or_raise()
     try:
-        creds = google_oauth.credentials_for(sub, account=account, service=_SERVICE)
+        extra = {"require_scopes": require_scopes} if require_scopes else {}
+        creds = google_oauth.credentials_for(sub, account=account, service=_SERVICE,
+                                             **extra)
+    except google_oauth.GoogleScopeInsufficient as e:
+        raise _refused(REAUTHORIZE, str(e), required_scopes=list(require_scopes))
     except RuntimeError as e:
         raise _bad(str(e))
     return creds.token
 
 
-async def _token(account: Optional[str] = None) -> str:
+async def _token(account: Optional[str] = None,
+                 require_scopes: tuple[str, ...] = ()) -> str:
     """Off the event loop (vault read + possible refresh), with its own deadline."""
     try:
-        return await asyncio.wait_for(asyncio.to_thread(_token_for_user, account),
+        args = (account, require_scopes) if require_scopes else (account,)
+        return await asyncio.wait_for(asyncio.to_thread(_token_for_user, *args),
                                       timeout=_TOKEN_TIMEOUT_S)
     except asyncio.TimeoutError:
         raise _bad(f"Google did not respond within {_TOKEN_TIMEOUT_S}s "
@@ -153,8 +177,30 @@ def _api_error(status: int, body: Any) -> McpError:
     return _bad(f"Search Console answered HTTP {status}: retry later." + said)
 
 
+def _write_error(status: int, body: Any) -> McpError:
+    """A Google refusal of the WRITE: a token without the write scope (re-authorize the
+    card), then a user that may not submit (`owner_or_full_required`, the service-account
+    connector's code), then the readers' answers."""
+    reason, message = _reason(body)
+    if status == 403 and (reason == "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
+                          or "insufficient authentication scopes" in message.lower()):
+        return _refused(REAUTHORIZE,
+                        "Google says this account's token cannot submit sitemaps: "
+                        "re-authorize it from the « Search Console (Google sign-in) » "
+                        "card (connect again: the consent asks for `webmasters`). "
+                        "Nothing was submitted.", required_scopes=[WEBMASTERS])
+    if status == 403 and reason not in ("accessNotConfigured", "SERVICE_DISABLED",
+                                        "quotaExceeded", "dailyLimitExceeded"):
+        return _refused("owner_or_full_required",
+                        "Your Google user may not submit sitemaps for this property: in "
+                        "Search Console, Settings > Users and permissions, it needs the "
+                        "Owner or Full permission (Restricted only reads), or check the "
+                        "property name. Nothing was submitted.")
+    return _api_error(status, body)
+
+
 def _call(token: str, method: str, path: str, *, params: Optional[dict] = None,
-          body: Optional[dict] = None) -> Any:
+          body: Optional[dict] = None, on_error=None) -> Any:
     try:
         resp = requests.request(method, _BASE + path, params=params, json=body,
                                 headers={"Authorization": f"Bearer {token}"},
@@ -169,7 +215,7 @@ def _call(token: str, method: str, path: str, *, params: Optional[dict] = None,
     except ValueError:
         data = {}
     if resp.status_code >= 300:
-        raise _api_error(resp.status_code, data)
+        raise (on_error or _api_error)(resp.status_code, data)
     return data
 
 
@@ -295,3 +341,70 @@ def register(mcp: FastMCP) -> None:
         return await asyncio.to_thread(
             _call, token, "GET",
             f"/webmasters/v3/sites/{_path_site(site)}/sitemaps/{quote(path, safe='')}")
+
+    @mcp.tool(name="search_console_act", annotations=ACTE)
+    async def search_console_act(
+        site_url: str,
+        feedpath: str,
+        op: Literal["add_sitemap"] = "add_sitemap",
+        account: Optional[str] = None,
+    ) -> dict:
+        """⚠️ SUBMITS a sitemap to Google Search Console for a property YOUR Google user owns or fully manages, so Google crawls the addresses it lists. Reading is `search_console`.
+
+        With the org's service account, take `google_search_console_act`.
+
+        `op`:
+        - **"add_sitemap"** (default): submits `feedpath` for `site_url` → {} on
+          success. Submitting an address already submitted submits it again. The
+          sitemap must be reachable by Google and under the property; its processing
+          (isPending, errors, warnings) is read afterwards with
+          `search_console(op="get_sitemap")`. Free. Nothing removes a sitemap.
+
+        Needs the org's `full` access level for `search_console` (an org admin sets it:
+        `oto_connector_access_level`), and the account re-authorized from the card at
+        that level (the consent then asks for `webmasters`). Refusals:
+        `access_level_denied` (level `read`, or `full` off on this instance),
+        `search_console_reauthorize_required` (the account was authorized read-only:
+        connect the card again), `owner_or_full_required` (your Google user is
+        Restricted on the property).
+
+        Args:
+            site_url: the property as `search_console(op="list_sites")` names it —
+                sc-domain:example.com, or https://www.example.com/ with its trailing slash.
+            feedpath: the sitemap's full address, e.g. https://www.example.com/sitemap.xml.
+            op: add_sitemap (default).
+            account: email of the Google account to use — same choice as `_account`.
+        """
+        if op != "add_sitemap":
+            raise _bad("op must be 'add_sitemap'")
+        site = _site(site_url, op)
+        path = _need(feedpath, "feedpath", op)
+        if not _URL.match(path) or not path.startswith("https://"):
+            raise _bad("feedpath must be the sitemap's full https URL "
+                       "(e.g. https://www.example.com/sitemap.xml).")
+        decl = access_levels.declared(_SERVICE)
+        gate = decl.gate_of(access_levels.FULL) if decl is not None else None
+        if gate is not None:
+            # Also closed by the call guard (the level then resolves to `read`); said here
+            # with its cause, for a call that reaches the tool without the guard (stdio).
+            raise _refused(access_level_gate.CODE,
+                           f"submitting a sitemap with Google sign-in is off on this "
+                           f"instance (instance setting {gate} is not on): a platform "
+                           f"operator turns it on. Nothing was submitted.",
+                           connector=_SERVICE, level=decl.default, tool="search_console_act",
+                           op=op, required_scopes=[WEBMASTERS], scope=access_levels.INSTANCE)
+        level = await asyncio.to_thread(access_level_gate.level_of_the_call, _SERVICE)
+        if not decl.covers(level, "search_console_act", op):
+            raise _refused(access_level_gate.CODE,
+                           f"the access level `{level}` for `{_SERVICE}` does not cover "
+                           f"submitting a sitemap: an org admin sets `full` "
+                           f"(oto_connector_access_level(op='set', scope='org', "
+                           f"name='{_SERVICE}', level='full')), then the account is "
+                           f"re-authorized from the card. Nothing was submitted.",
+                           connector=_SERVICE, level=level, tool="search_console_act",
+                           op=op, required_scopes=[WEBMASTERS])
+        token = await _token(account, require_scopes=(WEBMASTERS,))
+        return await asyncio.to_thread(
+            _call, token, "PUT",
+            f"/webmasters/v3/sites/{_path_site(site)}/sitemaps/{quote(path, safe='')}",
+            on_error=_write_error)

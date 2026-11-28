@@ -260,7 +260,20 @@ si chacun de ses scopes est dans la fermeture des scopes du niveau par `scope_im
   porteur du credential en `connector`), lu **à l'appel** — pas l'instantané de cardinalité.
   Résolution : l'équipe active si elle a une valeur, sinon l'org, sinon `full`. Monotone
   (ADR 0012) : une équipe restreint, n'élargit jamais (`docs/groups-and-roles.md`). Une valeur
-  en base qui n'est pas un niveau déclaré **lève**.
+  en base qui n'est pas un niveau déclaré **lève**. ⚠️ Un **service** qui emprunte un compte
+  (`credential_of`, les services Google) range son niveau sous **son propre nom**, pas sous
+  le porteur : le niveau gouverne CE service (`access_levels.setting_connector`).
+- **Interrupteur d'instance** (`instance_gates`, niveau → nom d'un interrupteur de
+  `access_levels.INSTANCE_GATES`) : un niveau qui change le produit pour toutes les orgs
+  (un scope d'écriture à déclarer au fournisseur) est **fermé** tant que l'instance ne
+  l'allume pas. Fermé, le poser est refusé (409 `access_level_off_on_instance`) et une
+  valeur posée s'applique comme le niveau par défaut (source `instance`) — visibilité,
+  garde et consentement lisent le niveau rabattu. Premier déclarant : `search_console`
+  (connexion Google), `read` par défaut (`webmasters.readonly`, le consentement d'avant),
+  `full` = `webmasters` (implique la lecture), derrière `GOOGLE_SEARCH_CONSOLE_WRITE` ; un
+  compte qui détient l'un ou l'autre scope couvre les lectures (`auth/google.SCOPE_IMPLIES`),
+  seul `webmasters` couvre `search_console_act`, et le niveau voyage signé dans le state
+  Google (`l`) pour borner un compte partagé au retour.
 - **Application** (seulement sous un niveau ≠ `full`) : couche `access_level` de la visibilité
   (`docs/tool-visibility.md`), ops non couvertes retirées de l'enum `op` servi, garde d'appel
   fail-closed `access_level_denied` aux deux sites (middleware de contexte, `oto_call`) —

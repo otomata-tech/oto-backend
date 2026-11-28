@@ -26,13 +26,23 @@ Three things this module holds:
   gained a write level keep reading only, without anyone's gesture). Monotone like activation (ADR 0012): a team can narrow its org's level, never
   widen it — refused when set, and if the org narrows later, the org's level is the
   ceiling (a team value wider than it never applies).
+- **An instance gate** (`instance_gates`, a level → the name of an instance switch in
+  `INSTANCE_GATES`): a level that changes the product for every org (a write scope to
+  declare to the provider) is OFF unless the instance turns it on. Off, setting it is
+  refused (`access_level_off_on_instance`) and a stored value of it applies as the
+  connector's default level (source `instance`): visibility, guard and consent all
+  read the clamped level.
+- **The setting's key** is the credential carrier, except for a SERVICE that borrows an
+  account (`credential_of`, the Google services): the level is the service's, not the
+  account's — two services of one Google account have two levels (`setting_connector`).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Mapping, Optional
+import os
+from dataclasses import dataclass, field
+from typing import Callable, Mapping, Optional
 
-from .. import providers
+from .. import interrupteurs, providers
 
 #: The key of the setting in `connector_settings`.
 KEY = "access_level"
@@ -40,6 +50,20 @@ KEY = "access_level"
 FULL = "full"
 #: The parameter that carries the verb of a multiplexed tool.
 OP_PARAM = "op"
+#: The source of a level the instance clamped (`resolve`).
+INSTANCE = "instance"
+
+
+def _google_search_console_write() -> bool:
+    return interrupteurs.oui_non("GOOGLE_SEARCH_CONSOLE_WRITE",
+                                 os.environ.get("GOOGLE_SEARCH_CONSOLE_WRITE"))
+
+
+#: The instance switches a declaration may gate a level behind (`instance_gates`), each
+#: read by its literal name (`env_inventory`), OFF when unset. Read at every resolution.
+INSTANCE_GATES: dict[str, Callable[[], bool]] = {
+    "GOOGLE_SEARCH_CONSOLE_WRITE": _google_search_console_write,
+}
 
 
 class AccessLevelError(ValueError):
@@ -63,6 +87,13 @@ class AccessLevels:
     #: Widening the level needs a new consent (OAuth: a token obtained for a narrower
     #: level lacks its scopes). False for a service account: its next assertion claims them.
     widening_needs_consent: bool = True
+    #: level → the `INSTANCE_GATES` switch that must be on for it to apply.
+    instance_gates: Mapping[str, str] = field(default_factory=dict)
+
+    def gate_of(self, level: str) -> Optional[str]:
+        """The instance switch `level` needs, if it is CLOSED on this instance."""
+        gate = self.instance_gates.get(level)
+        return gate if gate is not None and not INSTANCE_GATES[gate]() else None
 
     def closure(self, level: str) -> frozenset[str]:
         """The level's scopes and everything they imply, transitively."""
@@ -109,7 +140,8 @@ def _scopes(valeur, ou: str) -> tuple[str, ...]:
 
 def _valider(connector: str, data: Mapping) -> AccessLevels:
     """Builds the declaration of `connector`, or RAISES at import (never half-read)."""
-    connues = {"levels", "scope_implies", "tools", "default", "widening_needs_consent"}
+    connues = {"levels", "scope_implies", "tools", "default", "widening_needs_consent",
+               "instance_gates"}
     if set(data) - connues:
         raise ValueError(f"{connector}: unknown keys {sorted(set(data) - connues)}")
     levels = {nom: _scopes(s, f"{connector}.levels.{nom}")
@@ -135,7 +167,15 @@ def _valider(connector: str, data: Mapping) -> AccessLevels:
     consentement = data.get("widening_needs_consent", True)
     if not isinstance(consentement, bool):
         raise ValueError(f"{connector}: widening_needs_consent is a bool, got {consentement!r}")
-    return AccessLevels(connector, levels, implies, tools, defaut, consentement)
+    gates = dict(data.get("instance_gates") or {})
+    for nom, gate in gates.items():
+        if nom not in levels:
+            raise ValueError(f"{connector}: instance gate on an undeclared level `{nom}`")
+        if nom == defaut:
+            raise ValueError(f"{connector}: the default level `{nom}` cannot be gated")
+        if gate not in INSTANCE_GATES:
+            raise ValueError(f"{connector}: unknown instance gate {gate!r}")
+    return AccessLevels(connector, levels, implies, tools, defaut, consentement, gates)
 
 
 def _declarations() -> dict:
@@ -201,8 +241,16 @@ def restricts(level: str) -> bool:
 
 # --- the setting ---------------------------------------------------------------
 
-def _carrier(connector: str) -> str:
+def setting_connector(connector: str) -> str:
+    """The connector name the setting is stored under: the credential carrier, or the
+    connector itself when it is a service borrowing an account (`credential_of`) — the
+    level governs THAT service, the account's other services keep theirs."""
+    if providers.delegates_credential(connector):
+        return connector
     return providers.credential_provider(connector)
+
+
+_carrier = setting_connector
 
 
 def _stored(connector: str, scope: str, valeur: Optional[str]) -> Optional[str]:
@@ -233,7 +281,8 @@ def settings(org_id: Optional[int], group_id: Optional[int]) -> dict[str, dict]:
 def resolve(connector: str, org_id: Optional[int], group_id: Optional[int],
             valeurs: Optional[dict] = None) -> tuple[str, str]:
     """`(level, source)` in force for `connector` under (org, active team). `source` ∈
-    `group` | `org` | `default` (the connector's default level, `AccessLevels.default`). A
+    `group` | `org` | `default` (the connector's default level, `AccessLevels.default`) |
+    `instance` (the level set is closed on this instance: the default applies). A
     connector without levels is `(full, default)`.
     `valeurs` = an already read `settings(org, group)` (the visibility reads it once for
     every connector)."""
@@ -245,8 +294,12 @@ def resolve(connector: str, org_id: Optional[int], group_id: Optional[int],
     org_level = lu.get("org") or decl.default
     group_level = lu.get("group")
     if group_level is not None and decl.narrower_or_equal(group_level, org_level):
-        return group_level, "group"
-    return org_level, ("org" if lu.get("org") else "default")
+        level, source = group_level, "group"
+    else:
+        level, source = org_level, ("org" if lu.get("org") else "default")
+    if decl.gate_of(level) is not None:
+        return decl.default, INSTANCE
+    return level, source
 
 
 def effective_level(connector: str, org_id: Optional[int],
@@ -260,6 +313,13 @@ def set_level(scope_type: str, scope_id: int, connector: str, level: str,
     its org). A team level wider than its org's is REFUSED — never stored to be ignored."""
     from ..db import connector_settings
     decl = require_level(connector, level)
+    gate = decl.gate_of(level)
+    if gate is not None:
+        raise AccessLevelError(
+            "access_level_off_on_instance",
+            f"the `{level}` level of `{connector}` is off on this instance (instance "
+            f"setting {gate} is not on): a platform operator turns it on; until then "
+            f"`{decl.default}` applies.")
     if scope_type == "group":
         org_level = resolve(connector, org_id, None)[0]
         if not decl.narrower_or_equal(level, org_level):

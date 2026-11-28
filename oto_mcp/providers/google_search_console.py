@@ -25,8 +25,8 @@ CONNECTOR = _decrit(
     href="https://search.google.com/search-console",
     key_help="JSON key of the service account; add its email as a user of the "
              "Search Console property",
-    tool_note="Take it with the org's service account, also the only one that submits a "
-              "sitemap; with the person's own Google connection, take `search_console`.",
+    tool_note="Take it with the org's service account (it submits a sitemap at its `full` "
+              "level); with the person's own Google connection, take `search_console`.",
 )
 
 CATEGORY = "Marketing & SEO"

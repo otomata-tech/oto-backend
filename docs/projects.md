@@ -10,7 +10,7 @@ type: reference
 
 Conteneur de travail **possédé** (owned resource ADR 0030) : un but + ses entités. Tables
 `projects` (owner_type/owner_id, `brief_md` = doc d'entrée, soft-delete `archived_at`),
-`project_links` (pointeur typé `target_type∈{tableau,procedure,connecteur,base}` + `target_ref`
+`project_links` (pointeur typé `target_type∈{tableau,procedure,connecteur,recette,base}` + `target_ref`
 + label, pas de FK cross-store), `docs` (pages markdown **en arbre** `parent_id`, héritent de
 l'accès du projet — pas d'ownership propre), `project_activity` (journal best-effort).
 Capacités co-déclarées : **`oto_project`** (`capabilities/projects.py`, op create/list/get/
@@ -888,3 +888,19 @@ tableau riche (recherche/tri/filtres). Son CTA « Ajouter à mon Oto » a été 
 13/09/2026 (oto#192), et avec lui la capacité `me.import_project`
 (`POST /api/me/projects/import`) qu'il servait.
 **Détail : `docs/projects.md`**.
+
+
+## Lien `recette` (27/11/2026)
+
+Une recette (`docs/recettes.md`) se lie à un projet par son **slug** : `op=link
+target_type="recette" target_ref="<slug>"`. Elle doit appartenir à une ORG de la portée du
+projet (`db.recettes_dans_la_portee` : l'org d'un projet d'org, l'org parente d'une équipe,
+l'org de contexte d'un projet perso) et le lieur doit être membre de cette org ; sinon 404
+`unknown_recipe`, même message pour « absente » et « ailleurs ». Une recette de la
+plateforme ou d'un membre ne se lie pas. La lecture pose `title` (le titre de la recette)
+sur un lien qui résout ; sans `title`, l'audit le rend dans `dead_links` (« la recette
+pointée n'existe plus dans l'org du projet »), audit léger compris. `make_private` ne s'y
+applique pas ; le partage d'un projet saute ses recettes (`external_or_unresolved`) : elles
+sont lues par les membres de l'org. La copie d'un projet garde le lien seulement si la
+recette résout dans la portée de la copie — une recette ne se recopie pas (c'est du code,
+publié par une personne).

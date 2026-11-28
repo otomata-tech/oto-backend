@@ -186,6 +186,13 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
                     unbound.append({"procedure": instr["slug"],
                                     "ref": str(l.get("target_ref")),
                                     "slots": missing})
+            elif t == "recette":
+                # `title` n'est posé (`list_project_links`) que sur une recette d'une org
+                # de la portée du projet : sans lui, la recette a disparu (ou n'est plus là
+                # où le projet la cherche). Aucune requête : vaut aussi en audit léger.
+                if not l.get("title"):
+                    dead.append({"target_type": t, "target_ref": l.get("target_ref"),
+                                 "why": "la recette pointée n'existe plus dans l'org du projet"})
             elif t == "connecteur":
                 ref = l.get("target_ref")
                 if ref not in providers.REGISTRY:

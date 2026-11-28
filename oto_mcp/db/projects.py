@@ -736,6 +736,52 @@ def refs_dans_la_portee(project_id: int, target_type: str, refs: list) -> set[in
         return _ids_dans_la_portee(conn, proprio, target_type, ids)
 
 
+def _recettes_de_la_portee(conn, proprio: Optional[dict], slugs: list) -> dict[str, dict]:
+    """`{slug: {title, org_id}}` des recettes que les liens `recette` du projet peuvent désigner :
+    celles possédées par une ORG de la portée du propriétaire (`_portee_du_projet` — l'org
+    d'un projet d'org, l'org parente d'une équipe, l'org de contexte d'un projet perso).
+    Une recette se désigne par son SLUG, unique chez son propriétaire ; à slug égal entre
+    deux orgs de la portée (n'arrive qu'avec plusieurs orgs), la première de la portée
+    gagne. Jamais une recette de la plateforme ni d'un membre : le lien appartient au
+    projet, pas à qui l'ouvre."""
+    voulus = sorted({str(x).strip() for x in slugs if str(x or "").strip()})
+    if proprio is None or not voulus:
+        return {}
+    orgs = [str(o) for o in _portee_du_projet(proprio)["org_ids"]]
+    if not orgs:
+        return {}
+    rows = conn.execute(
+        "SELECT owner_id, slug, title FROM recipes "
+        "WHERE owner_type = 'org' AND owner_id = ANY(%s) AND slug = ANY(%s)",
+        (orgs, voulus)).fetchall()
+    rang = {o: i for i, o in enumerate(orgs)}
+    out: dict[str, tuple[int, dict]] = {}
+    for r in rows:
+        i = rang.get(str(r["owner_id"]), len(orgs))
+        if r["slug"] not in out or i < out[r["slug"]][0]:
+            out[r["slug"]] = (i, {"title": r["title"], "org_id": int(r["owner_id"])})
+    return {k: v[1] for k, v in out.items()}
+
+
+def recettes_dans_la_portee(project_id: int, slugs: list) -> dict[str, dict]:
+    """`{slug: {title, org_id}}` des recettes de `slugs` qu'un lien `recette` du projet peut
+    désigner — la règle de `list_project_links`, pour trancher AVANT de poser le lien."""
+    with _connect() as conn:
+        proprio = conn.execute(_PROPRIOS_SQL, ([int(project_id)],)).fetchone()
+        return _recettes_de_la_portee(conn, proprio, slugs)
+
+
+def _apply_recette_titles(links: list[dict], par_slug: dict[str, dict]) -> None:
+    """Attache le TITRE de la recette à chaque lien `recette` qui résout dans la portée
+    du projet (`title`, comme une procédure). Pur. Recette disparue ou hors portée →
+    pas de `title` : l'audit la rend dans `dead_links`."""
+    for l in links:
+        if l.get("target_type") == "recette":
+            trouvee = par_slug.get(str(l.get("target_ref") or "").strip())
+            if trouvee is not None:
+                l["title"] = trouvee["title"]
+
+
 def _apply_tableau_name_ids(links: list[dict], id_by_name: dict[str, int],
                             ambigus: set = frozenset()) -> None:
     """Résout un lien `tableau` dont le `target_ref` est un NOM, dans la portée du
@@ -852,7 +898,8 @@ def list_project_links_many(project_ids: list[int]) -> dict[int, list[dict]]:
         # Le propriétaire de chaque projet : la portée où se résout CHAQUE lien, par nom
         # comme par identifiant — une requête, et seulement s'il y a un lien à résoudre.
         a_resoudre = [pid for pid, links in out.items()
-                      if any(l.get("target_type") in ("tableau", "procedure") for l in links)]
+                      if any(l.get("target_type") in ("tableau", "procedure", "recette")
+                             for l in links)]
         par_id = ({int(r["id"]): r for r in conn.execute(_PROPRIOS_SQL, (a_resoudre,)).fetchall()}
                   if a_resoudre else {})
         for pid in a_resoudre:
@@ -889,6 +936,11 @@ def list_project_links_many(project_ids: list[int]) -> dict[int, list[dict]]:
             _apply_tableau_names(links, {i: noms[i] for i in dans[(cle, "tableau")] if i in noms})
             _apply_procedure_titles(links, {i: titres[i] for i in dans[(cle, "procedure")]
                                             if i in titres})
+            # Les recettes : par SLUG, dans la portée du propriétaire — une requête par
+            # portée distincte, et seulement s'il y a un lien `recette`.
+            slugs = [l["target_ref"] for l in links if l.get("target_type") == "recette"]
+            if slugs:
+                _apply_recette_titles(links, _recettes_de_la_portee(conn, proprios[cle], slugs))
         # (Le type de lien `doc` — pointeur manuel vers une page — a été RETIRÉ, lot 3
         # chantier 0.4 : relier des pages = les backlinks `[[…]]` de Ship 4, pas un
         # pointeur de rail. Les liens existants ont été purgés en migration.)
@@ -2064,6 +2116,17 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
                     logger.warning("duplicate_project: copie procédure #%s échouée", target_ref)
                     warnings.append(f"procédure « {label} » : copie impossible, lien ignoré.")
                     continue
+        elif link["target_type"] == "recette":
+            # Une recette appartient à une ORG et se désigne par son slug dans la portée du
+            # projet. La copie garde le pointeur seulement si elle peut encore le résoudre
+            # (même org, ou une org qui a sa propre recette de ce slug) ; sinon le lien
+            # naîtrait mort — et la recette ne se recopie pas : c'est du code, à publier
+            # par une personne dans l'org cible (`_code_humain`).
+            label = link.get("label") or link.get("title") or str(target_ref)
+            if not recettes_dans_la_portee(new_id, [target_ref]):
+                warnings.append(f"recette « {label} » : lien ignoré (absente de la portée "
+                                "de la copie).")
+                continue
         add_project_link(new_id, link["target_type"], target_ref,
                          label=link.get("label"), role=link.get("role"),
                          config=link.get("config") or None,

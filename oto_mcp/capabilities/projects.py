@@ -37,7 +37,8 @@ RTYPE = "project"
 
 # « doc » RETIRÉ (lot 3 chantier 0.4) : relier des pages = les
 # backlinks `[[…]]` (Ship 4), pas un pointeur manuel affiché en groupe de rail.
-_LINK_TYPES = ("tableau", "procedure", "connecteur")
+# « recette » (27/11/2026) : une recette de l'org, désignée par son SLUG.
+_LINK_TYPES = ("tableau", "procedure", "connecteur", "recette")
 
 
 
@@ -105,7 +106,7 @@ class ProjectInput(BaseModel):
             "with oto_resource op=transfer resource_type=project."))
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; group.id si 'group' ; ignoré sinon
     # link / unlink : un pointeur typé vers une entité regroupée par le projet.
-    target_type: Optional[Literal["tableau", "procedure", "connecteur"]] = None
+    target_type: Optional[Literal["tableau", "procedure", "connecteur", "recette"]] = None
     # Opt-ins d'op=get, cumulables : 'spine' (l'arbre des pages, Ship 2 lot 3, +
     # drill/bornage ci-dessous) · 'procedures' (le CORPS des procédures liées, #313).
     # Opt-ins d'op=list, cumulables : 'links' (les liens de chaque projet, ceux d'op=get
@@ -1320,6 +1321,20 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             if est_un_nom_de_tableau(target_ref):
                 raise refus_nom_de_tableau(target_ref)
             session_org.noter_forme_tableau(session_org.REF_NUMBER)
+        elif inp.target_type == "recette":
+            # Une recette se désigne par son SLUG (unique chez son propriétaire) : celle
+            # d'une ORG de la portée du projet (`db.recettes_dans_la_portee`, la règle de
+            # la lecture), et le lieur doit être membre de cette org — on ne range pas dans
+            # un projet le code d'une org dont on n'est pas. Même refus 404 pour « n'existe
+            # pas » et « existe ailleurs ». L'unlink garde la réf brute (lien d'avant).
+            target_ref = str(target_ref).strip()
+            if inp.op == "link":
+                trouvee = db.recettes_dans_la_portee(int(inp.project_id), [target_ref]).get(target_ref)
+                _require(trouvee is not None and roles.is_org_member(sub, trouvee["org_id"]),
+                         "unknown_recipe",
+                         f"Aucune recette « {target_ref} » dans l'org du projet. Passe son "
+                         "`slug` tel que `oto_recipe op=list` le rend (les recettes de la "
+                         "plateforme ne se lient pas).", 404)
         elif inp.target_type == "connecteur":
             # L'identité est la clé du BINDING (#57). Fin du doublon : on la sort de
             # config.identity_id vers `identity_ref`. `identity_ref` explicite (front B4 /
@@ -1787,8 +1802,8 @@ class ProjectRead(BaseModel):
     archived_at: Optional[str] = None            # non-null ⟹ projet archivé
     # Droit d'écriture de l'APPELANT sur ce projet (cf. docstring).
     can_write: bool
-    # Liens typés (tableau | procedure | connecteur) enrichis à la lecture :
-    # `datastore` + `datastore_id` (tableau) / `title` (procédure) résolus, et
+    # Liens typés (tableau | procedure | connecteur | recette) enrichis à la lecture :
+    # `datastore` + `datastore_id` (tableau) / `title` (procédure, recette) résolus, et
     # `cross_project: true` quand la même cible est liée par un AUTRE projet — la
     # toucher retombe ailleurs. ⚠️ `datastore` est un LIBELLÉ, `datastore_id` l'ADRESSE :
     # `target_ref` est tantôt l'un tantôt l'autre (#117), `datastore_id` porte toujours
@@ -1909,9 +1924,10 @@ CAPABILITIES += [
             "unarchive (puts an archived project back; `was_archived_at` echoes what it "
             "undid; find archived ones with op=list `archived=true`) / link & unlink "
             "(attach an entity: "
-            "target_type tableau|procedure|connecteur + target_ref = its id (a tableau by its "
+            "target_type tableau|procedure|connecteur|recette + target_ref = its id (a tableau by its "
             "NUMBER only — a table name is refused, `datastore_by_name`) or a procedure's "
-            "slug, "
+            "slug, a recette by its SLUG (a recipe of the project's org, `oto_recipe "
+            "op=list`; `unknown_recipe` otherwise), "
             "optional label + optional "
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "
@@ -2014,7 +2030,11 @@ CAPABILITIES += [
                 DeclaredError(400, "datastore_by_name",
                               "op=link ou op=unlink d'un tableau désigné par son NOM "
                               "(refusé depuis le 08/11/2026) : `target_ref` est son "
-                              "numéro — rien n'a été modifié")),
+                              "numéro — rien n'a été modifié"),
+                DeclaredError(404, "unknown_recipe",
+                              "op=link d'une recette absente de l'org du projet (ou d'une "
+                              "org dont l'appelant n'est pas membre) : `target_ref` est le "
+                              "slug d'une recette de cette org — rien n'a été lié")),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),
     ),

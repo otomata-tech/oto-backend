@@ -243,6 +243,12 @@ ROUTES_DE_LA_DELEGATION: dict[tuple[str, str], str] = {
         "le fil du run : le worker le relit à la reprise et y appose chaque tour "
         "(`Backend.thread_read` / `thread_append`, `worker.py`) avec le jeton délégué — "
         "le fil vit dans l'org du déclarant, que le secret du worker n'atteint pas."),
+    ("POST", "/api/me/recipes"): (
+        "un AGENT-RECETTE (`capabilities/_declencheur_recette`) : le worker `recette` "
+        "joue `op=run` de la recette épinglée du travail, au nom de son demandeur. La "
+        "capacité n'y sert QUE ce run-là — la recette, la version, les params et le "
+        "tableau de la charge du travail (`recipes._exiger_la_recette_du_travail`), "
+        "tout autre corps est refusé."),
 }
 
 

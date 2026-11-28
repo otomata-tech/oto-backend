@@ -57,7 +57,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from .. import session_org, tool_alias, tool_registry
+from .. import session_org, tool_alias, tool_registry, verrou_org
 from ..db import recipes as db_recipes
 from ..functions import executor as bac
 from ..functions import pont as pont_bac
@@ -451,7 +451,35 @@ def _borne_s(corps: dict) -> float:
     return float(corps["limits"]["max_seconds"]) + pont_bac.GRACE_S + _MARGE_S
 
 
+def _exiger_la_recette_du_travail(inp: RecipeInput, job_id: int) -> None:
+    """Sync (base) : sous un jeton de DÉLÉGATION sur la face REST, le seul corps servi est
+    le run de la recette épinglée du travail (`payload.recipe`, posée par le serveur à
+    l'enfilage d'un agent-recette). Ailleurs, ce jeton n'a pas de face REST
+    (`api.base.ROUTES_DE_LA_DELEGATION`) ; ici non plus, hors de ce run-là."""
+    from .. import db
+    charge = db.charge_du_travail(int(job_id)) or {}
+    r = charge.get("recipe") if isinstance(charge, dict) else None
+    attendu = r if isinstance(r, dict) else {}
+    meme = (inp.op == "run" and attendu
+            and inp.slug == attendu.get("slug")
+            and (inp.scope or "org") == "org"
+            and inp.version == attendu.get("version")
+            and (inp.params or {}) == (attendu.get("params") or {})
+            and str(inp.datastore or "") == str(attendu.get("datastore") or ""))
+    if not meme:
+        raise AuthzDenied(
+            403, "delegation_recipe_mismatch",
+            f"A hosted job's token runs only its own pinned recipe over REST (job "
+            f"{job_id}): `op=run` with the job's slug, version, params and table. "
+            "Anything else goes through the MCP tool `oto_recipe`, under the job's "
+            "tool list.")
+
+
 async def _recipe(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
+    if ctx.channel == "rest":
+        travail = verrou_org.travail_de_la_requete()
+        if travail is not None and travail.job_id is not None:
+            await run_in_threadpool(_exiger_la_recette_du_travail, inp, travail.job_id)
     if ctx.channel == "rest" and inp.op not in OPS_REST:
         raise AuthzDenied(
             400, "op_not_served_over_rest",

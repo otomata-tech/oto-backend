@@ -364,6 +364,11 @@ et **tient la requête HTTP jusqu'à son reçu**, plusieurs secondes à plusieur
 quatre en cours à la fois par processus laissent le pool aux autres routes. Provisoire
 comme la capacité (`x-oto-provisoire`).
 
+**Sous un jeton de délégation** (un agent-recette joué par le worker `recette`), la
+route sert UNIQUEMENT `op=run` de la recette épinglée du travail — slug, version, params
+et tableau de sa charge ; tout autre corps est refusé (`delegation_recipe_mismatch`). Le
+run se lie par l'en-tête `X-Oto-Run` (`docs/runner-et-automatisations.md` §Agent-recette).
+
 ## Les recettes de la plateforme — `scope="platform"`
 
 Une procédure de la bibliothèque publique nomme sa recette dans son schéma

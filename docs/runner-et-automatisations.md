@@ -3856,3 +3856,52 @@ la liste que le travail a reçue plus les manquants : le geste entier, que l'éc
 une personne), et un `error` qui dit à l'agent quoi faire, et seulement cela :
 `run_finish(outcome="blocked")` en les nommant.
 Un nom d'outil construit à l'exécution n'est pas lu : il reste jugé à l'appel.
+
+## Agent-recette — une recette publiée, sans modèle (2026-11-27)
+
+Un déclencheur peut jouer une **recette publiée de son org** au lieu d'une procédure avec
+un modèle : `oto_trigger op=create recipe={slug, version?, params?, datastore?}` (même
+capacité en REST). Tout le reste est celui d'un agent — horaire (`kind=schedule`, `cron`),
+porte (`kind=webhook`), `run_now`, file, livraisons, partage, pause — et rien de ce qui
+suppose un modèle : ni modèle, ni clé, ni abonnement, ni instruction, ni liste d'outils.
+Module : `capabilities/_declencheur_recette.py`.
+
+- **Version épinglée.** La pose épingle la version en service ; une version publiée
+  ensuite ne tourne pas tant qu'on ne ré-épingle pas (`op=update recipe={slug, version}`).
+  Le run tourne sous l'identité du propriétaire (ou de l'appelant de `run_now`), et tout
+  membre peut publier une recette-code : suivre « la dernière » exécuterait le code d'un
+  autre avec ses droits. La lecture sert `recipe_title` et `recipe_latest_version`.
+- **Refus nommés.** `recipe_trigger_field` (un champ d'agent passé : `procedure`, `model`,
+  `input`, `tools`, `max_*`, `payload_mode`/`payload_fields`), `recipe_immutable` (un agent
+  ne devient pas, ni ne cesse d'être, un agent-recette), `unknown_recipe`,
+  `recipe_not_published`, `recipe_version_unknown`, `recipe_missing_params`, refus du
+  tableau (`datastore_*`), `recipe_worker_unavailable` (aucun worker `recette` vivant).
+- **À l'enfilage** (tick, webhook, `run_now`), la recette épinglée est revérifiée ;
+  indisponible, l'occurrence est consommée et tracée `refused_recipe_unavailable`. Le
+  tableau se juge à l'exécution. Le corps d'un webhook n'entre pas dans les params (v1).
+- **Charge** (une définition, `_declencheur_recette.charge`) :
+  `{recipe: {slug, version, scope: "org", params, datastore?}, model_family: "recette",
+  tools: ["oto_recipe", …outils cités par la version], label, trigger_id, project_id}`.
+  La famille `recette` (`runner_models.FAMILLE_RECETTE`) route le travail : seul un worker
+  de PLATEFORME qui réserve avec `provider="recette"` le voit (`famille_seule`, refusé à
+  un membre : `recipe_worker_platform_only`) ; aucune clé de modèle n'est remise
+  (`runner_jobs._avec_cle`), le jeton délégué l'est. Un worker d'un autre dépôt ne le
+  voit jamais (clause de famille de `claim_next_job`).
+- **Exécution.** Le worker (`oto-runner`, mode `recette`) appelle `POST /api/me/recipes`
+  `{op: "run", slug, scope: "org", version, params, datastore}` avec le jeton délégué et
+  l'en-tête `X-Oto-Run` du run qu'il a ouvert. Cette route est la seule face REST du jeton
+  délégué en plus du fil (`api.base.ROUTES_DE_LA_DELEGATION`), et elle n'y sert QUE ce
+  corps-là, égal à la charge du travail (`recipes._exiger_la_recette_du_travail`,
+  `delegation_recipe_mismatch` sinon). Un travail recette n'est jamais rejoué.
+- **Report au lieu d'échec (28/11/2026).** Un travail recette n'a qu'une tentative ; un
+  refus AVANT démarrage (429 `sandbox_busy` du bac à sable, plafond de la route lourde) le
+  tuait alors que rien n'avait tourné. Le worker appelle `runner.jobs op=defer`
+  `{job_id, retry_after_seconds, reason}` (worker qui tient le travail, famille `recette`
+  seulement : `defer_recipe_only`) : `pending`, tentative rendue, run détaché (la reprise
+  ouvre un run neuf), échéance reculée de `Retry-After` borné 5–600 s, compte `_reports`
+  dans la charge. Au-delà de `REPORTS_RECETTE_MAX` (30) : `failed`,
+  `recipe_never_started: <raison>`.
+- **Base partagée avec l'ancien code.** La ligne garde `procedure = ''`, `tools = []`,
+  `model = NULL` (servie `procedure: null`) : l'ancien tick et l'ancien webhook la lisent
+  sans modèle et sautent l'occurrence (`refused_no_model`) — jamais un run de modèle.
+  Colonne `runner_triggers.recipe` (révision `20261127_1800_triggers_recette` + démarrage).

@@ -53,7 +53,11 @@ class JobsInput(BaseModel):
                 "reserve", "meter",
                 # Ce que la SONDE du worker a vu du forfait, AVANT le run (21/10/2026) :
                 # le backend le porte et tranche — voir `_trancher_le_forfait`.
-                "forfait"]
+                "forfait",
+                # Un travail de RECETTE refusé AVANT d'avoir démarré (bac à sable plein,
+                # route lourde au plafond) retourne à la file sans tentative comptée —
+                # voir `_reporter_la_recette` (28/11/2026).
+                "defer"]
     # enqueue —
     kind: Optional[Literal["start", "continue"]] = None
     payload: Optional[dict[str, Any]] = None
@@ -120,6 +124,10 @@ class JobsInput(BaseModel):
     # complete — résultat déclaré par le worker (usage_tokens, stopped, steps…),
     # lu par un ordonnanceur de flotte (garde budget, R5). Jamais du contenu de fil.
     result: Optional[dict[str, Any]] = None
+    # defer — dans combien de secondes le refus dit de réessayer (`Retry-After`), et
+    # pourquoi : borné 5–600 s côté serveur.
+    retry_after_seconds: Optional[int] = None
+    reason: Optional[str] = None
     # list — surveillance dashboard : la file de l'org, du plus récent au plus ancien.
     status: Optional[Literal["pending", "claimed", "done", "failed"]] = None
     source: Optional[Literal["batch", "scheduled", "manual"]] = Field(
@@ -678,6 +686,12 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
                            depot, appelant, job["org_id"], job.get("id"))
         return job
     famille = _abonnement.famille_du_travail(job)
+    if famille == runner_models.FAMILLE_RECETTE:
+        # Un travail d'AGENT-RECETTE (`_declencheur_recette`) : aucun modèle n'est
+        # appelé, donc aucune clé n'est remise ni exigée, aucun abonnement jugé. Il
+        # n'atteint qu'un worker qui réserve avec `provider="recette"` (clause de
+        # famille de `claim_next_job`) ; le jeton délégué est déjà posé (`_delegue`).
+        return job
     if not famille:
         # ⚠️ UN TRAVAIL SANS MODÈLE NE PART PLUS (24/09/2026). Servi à un worker de
         # plateforme, il tournait sur le modèle de SON environnement — notre clé —
@@ -1078,6 +1092,33 @@ def _reprise_future(ligne: dict) -> Optional[datetime]:
         return None
     reprise = _abonnement.echeance_utc(ligne.get("limit_reset_at"))
     return reprise if reprise is not None and reprise > datetime.now(timezone.utc) else None
+
+
+def _reporter_la_recette(ctx, inp: JobsInput) -> dict:
+    """`op=defer` : un travail de RECETTE que le serveur a refusé AVANT de le démarrer
+    (429 `sandbox_busy`, la route lourde au plafond) retourne à la file, tentative non
+    comptée, au lieu de mourir sur son unique tentative (`db.reporter_recette`).
+
+    ⚠️ Réservé au worker qui TIENT le travail (comme `complete`/`extend` : un autre
+    obtient le même 404 qu'un travail inconnu), et à la famille `recette` : un agent à
+    modèle a ses propres tentatives et ses propres reculs (`complete_job`)."""
+    if inp.retry_after_seconds is None or not (inp.reason or "").strip():
+        raise AuthzDenied(400, "missing_fields",
+                          "defer exige `retry_after_seconds` et `reason`")
+    conclu = db.porteur_et_famille(inp.job_id) or {}
+    if not conclu or not db.tenu_par(inp.job_id, ctx.sub):
+        raise AuthzDenied(404, "job_not_found", "job inconnu")
+    if conclu.get("model_family") != runner_models.FAMILLE_RECETTE:
+        raise AuthzDenied(400, "defer_recipe_only",
+                          "`op=defer` ne vaut que pour un travail de recette (famille "
+                          "`recette`) : un agent à modèle conclut par `complete`, qui "
+                          "porte ses tentatives et ses reculs.")
+    res = db.reporter_recette(inp.job_id, ctx.sub, inp.reason.strip()[:300],
+                              inp.retry_after_seconds)
+    if res is None:
+        raise AuthzDenied(404, "job_not_found", "job inconnu")
+    return {"ok": True, "status": res["status"], "reports": res["reports"],
+            "reports_max": db.REPORTS_RECETTE_MAX}
 
 
 def _trancher_le_forfait(ctx, inp: JobsInput) -> dict:
@@ -1563,7 +1604,7 @@ def charge_et_modele(ctx: ResolvedCtx, inp: JobsInput) -> Optional[dict]:
 #: Ce qu'un worker sait faire — et rien d'autre. Enfiler, lister, lire un
 #: travail sont des gestes d'organisation : ils exigent une org, et un worker
 #: n'en a pas.
-_VERBES_DU_WORKER = frozenset({"claim", "bind_run", "extend", "complete", "reserve",
+_VERBES_DU_WORKER = frozenset({"claim", "bind_run", "extend", "complete", "reserve", "defer",
                                "meter"})
 
 
@@ -1796,6 +1837,13 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
                 "la clé de l'organisation doit nommer QUEL dépôt il consomme — "
                 "sans lui, il n'y a aucune clé à attendre et rien à servir.")
         ferme = _engine_ferme(ctx, inp)
+        recettes = inp.provider == runner_models.FAMILLE_RECETTE
+        if recettes and not ctx.platform_worker:
+            # Le worker des agents-recettes est un service de PLATEFORME (secret de
+            # machine) : il appelle `op=run` au nom de chaque demandeur.
+            raise AuthzDenied(403, "recipe_worker_platform_only",
+                              "`provider=recette` est réservé aux workers de plateforme : "
+                              "il sert les agents-recettes de toutes les orgs.")
         bail = max(30, min(inp.lease_seconds, 3600))
         # ⚠️ Un worker d'ABONNEMENT ne prend QUE sa famille, qu'il l'ait demandé ou
         # non (revue du 21/09/2026). Il n'exécute rien lui-même : tout part dans le
@@ -1804,7 +1852,10 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         # coup sûr, tentative après tentative. Le drapeau `org_key_only` le
         # garantissait déjà… à condition que l'unité systemd le pose. Une garde qui
         # dépend d'une variable d'environnement bien écrite n'en est pas une.
-        famille_seule = inp.org_key_only or _abonnement.est_abonnement(inp.provider)
+        # Le worker `recette` ne prend QUE les travaux d'agents-recettes : un travail
+        # sans famille (agent historique) lui partirait sans modèle à appeler.
+        famille_seule = (inp.org_key_only or _abonnement.est_abonnement(inp.provider)
+                         or recettes)
         # ⚠️ Un MEMBRE ne réserve que SES travaux (10/10/2026). Le travail réservé
         # revient avec un jeton de délégation au nom de SON porteur (`_delegue`) :
         # un membre qui réservait le travail d'un collègue en recevait un qui agit au
@@ -1839,7 +1890,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
                 # pas de la même façon. Les confondre a coûté des jours de
                 # sondage à vide sans que personne ne le voie (07/09/2026).
                 return {"job": None, "campaign_error": panne}
-        if job is None and ctx.platform_worker and inp.provider:
+        if job is None and ctx.platform_worker and inp.provider and not recettes:
             # ⚠️ REPLI ABONNEMENT ÉPUISÉ → clé API (OTO-130, 27/09/2026) : un
             # travail d'abonnement en pause (jamais needs_login/disconnected,
             # jamais un pool vide) rejoue sur la clé API de son org plutôt que
@@ -1925,6 +1976,9 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
 
     if inp.op == "forfait":
         return _trancher_le_forfait(ctx, inp)
+
+    if inp.op == "defer":
+        return _reporter_la_recette(ctx, inp)
 
     if inp.op == "complete":
         if inp.ok is None:

@@ -23,7 +23,8 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import db, org_suspension, procedure_retiree, runner_models
-from .capabilities import _abonnement, _instruction, _limites_du_run, _modele, _projet_de_l_agent
+from .capabilities import (_abonnement, _declencheur_recette, _instruction, _limites_du_run,
+                           _modele, _projet_de_l_agent)
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ def next_due(expr: str, tz: str,
 
 
 def _occurrence_sautee(t: dict, issue: str = db.REFUSE_SUSPENDED,
-                       exige: Optional[int] = None) -> None:
+                       exige: Optional[int] = None, motif: Optional[str] = None) -> None:
     """Trace d'une échéance consommée sans rien enfiler — org suspendue, procédure
     archivée, agent sans modèle ou sur un modèle éteint, ou agent exigé sans succès du
     jour : un journal, et une livraison `refused_*` (sans créneau) visible sur la page de
@@ -75,6 +76,8 @@ def _occurrence_sautee(t: dict, issue: str = db.REFUSE_SUSPENDED,
         cause = f"l'agent {exige} qu'il exige n'a pas réussi aujourd'hui"
     elif issue == db.REFUSE_NO_MODEL:
         cause = runner_models.motif_sans_famille(t.get("model"))
+    elif issue == db.REFUSE_RECIPE_UNAVAILABLE:
+        cause = f"recette indisponible ({motif})"
     elif issue == db.REFUSE_MODEL_DISABLED:
         cause = f"modèle `{t.get('model')}` éteint par l'org {t['org_id']}"
     else:
@@ -219,6 +222,12 @@ def _tick() -> int:
                 continue
         except Exception as e:  # noqa: BLE001 — la réservation garde de toute façon
             log.warning("déclencheur %s : état de suspension illisible (%s)", t["id"], e)
+        # Un AGENT-RECETTE (sans modèle ni procédure) : sa propre branche, qui revérifie
+        # la recette épinglée avant d'enfiler (`_declencheur_recette`).
+        if _declencheur_recette.est_recette(t):
+            if _enfiler_une_recette(t):
+                enfiles += 1
+            continue
         # Procédure ARCHIVÉE : retirer une procédure arrête ce qui la déroule. Même
         # trace qu'une org suspendue, avec son motif. Une lecture qui échoue laisse
         # partir le travail (l'agent lit alors la procédure avec son `archived_at`).
@@ -320,6 +329,38 @@ def _tick() -> int:
                        payload={k: v for k, v in payload.items() if v is not None})
         enfiles += 1
     return enfiles
+
+
+def _enfiler_une_recette(t: dict) -> bool:
+    """L'occurrence d'un agent-recette : la recette épinglée revérifiée (refus nommé
+    `refused_recipe_unavailable` sinon), l'exigence d'un autre agent tenue, puis la
+    MÊME péremption que pour un agent et l'enfilage d'une charge sans modèle
+    (`_declencheur_recette.charge`, famille `recette`). True = un travail enfilé."""
+    refus = _declencheur_recette.motif_de_refus(t)
+    if refus is not None:
+        _occurrence_sautee(t, db.REFUSE_RECIPE_UNAVAILABLE, motif=f"{refus[0]}: {refus[1]}")
+        return False
+    try:
+        exige = exigence_manquee(t)
+    except Exception as e:  # noqa: BLE001 — même règle que pour un agent : l'occurrence part
+        log.warning("déclencheur %s : exigences illisibles (%s)", t["id"], e)
+        exige = None
+    if exige is not None:
+        _occurrence_sautee(t, db.REFUSE_REQUIRES, exige=exige)
+        return False
+    try:
+        perimes = db.perimer_travaux_du_declencheur(t["id"], t["org_id"])
+    except Exception as e:  # noqa: BLE001 — l'hygiène ne bloque jamais le service
+        log.warning("déclencheur %s : péremption impossible (%s) — l'enfilage "
+                    "continue", t["id"], e)
+        perimes = 0
+    if perimes:
+        log.warning("déclencheur %s (org %s) : %d occurrence(s) de recette périmée(s) — "
+                    "aucun worker `recette` ne les a prises", t["id"], t["org_id"], perimes)
+    payload = _declencheur_recette.charge(t, "planifié")
+    db.enqueue_job(t["org_id"], "start", sub=t.get("sub"),
+                   payload={k: v for k, v in payload.items() if v is not None})
+    return True
 
 
 async def run_runner_tick_loop(interval: int = _POLL_INTERVAL_S) -> None:

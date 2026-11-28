@@ -45,7 +45,8 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 from . import db, org_suspension, procedure_retiree, runner_models
-from .capabilities import _instruction, _limites_du_run, _modele, _projet_de_l_agent
+from .capabilities import (_declencheur_recette, _instruction, _limites_du_run, _modele,
+                           _projet_de_l_agent)
 
 logger = logging.getLogger(__name__)
 
@@ -933,19 +934,24 @@ def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
     # Lue AVANT d'ouvrir la transaction : une seconde connexion du pool tenue pendant
     # que celle-ci verrouille le déclencheur ne sert à rien.
     suspendue = bool(org_suspension.etat(t["org_id"]))
+    # Un AGENT-RECETTE n'a ni procédure ni modèle : ses gardes sont la recette épinglée,
+    # revérifiée ici (`_declencheur_recette.motif_de_refus`), et rien d'autre.
+    recette = _declencheur_recette.est_recette(t)
+    refus_recette = _declencheur_recette.motif_de_refus(t) if recette else None
     # Procédure ARCHIVÉE : refus nommé. Une lecture qui échoue laisse partir la
     # livraison — l'agent lit alors la procédure avec son `archived_at`, comme au tick.
     try:
-        retiree = procedure_retiree.archivee(t["org_id"], t.get("sub"), t.get("procedure"))
+        retiree = (None if recette else
+                   procedure_retiree.archivee(t["org_id"], t.get("sub"), t.get("procedure")))
     except Exception as e:  # noqa: BLE001 — voir ci-dessus
         logger.warning("déclencheur %s : état de la procédure illisible (%s)", trigger_id, e)
         retiree = None
-    sans_modele = runner_models.motif_sans_famille(t.get("model"))
+    sans_modele = None if recette else runner_models.motif_sans_famille(t.get("model"))
     # Modèle ÉTEINT par un admin de l'org : refus nommé, aucun repli sur un autre
     # modèle. Une lecture qui échoue laisse partir la livraison : la réservation refuse
     # alors le travail, raison écrite (`runner_jobs._avec_cle`).
     try:
-        eteint = _modele.modele_eteint(t["org_id"], t.get("model"))
+        eteint = False if recette else _modele.modele_eteint(t["org_id"], t.get("model"))
     except Exception as e:  # noqa: BLE001 — voir ci-dessus
         logger.warning("déclencheur %s : modèles éteints illisibles (%s)", trigger_id, e)
         eteint = False
@@ -969,6 +975,13 @@ def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
                 409, org_suspension.CODE,
                 "This agent's workspace is suspended: it will not run until the "
                 "workspace has a plan. The delivery is recorded and visible on its page.")
+        elif refus_recette is not None:
+            db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_RECIPE_UNAVAILABLE,
+                           source=source, **marque)
+            refus = HookRefus(
+                409, "trigger_recipe_unavailable",
+                f"This agent's recipe cannot run as pinned ({refus_recette[0]}): "
+                f"{refus_recette[1]} The delivery is recorded and visible on its page.")
         elif retiree:
             db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_PROCEDURE_ARCHIVED,
                            source=source, **marque)
@@ -1060,7 +1073,12 @@ def enfiler(t: dict, externe: Optional[str], source: Optional[str], *,
                 else:
                     outils = list(t.get("tools") or ())
                     outils += [o for o in outils_en_plus if o not in outils]
-                    charge = {
+                    # Un AGENT-RECETTE : la MÊME charge que l'horloge et `run_now`,
+                    # marquée `hook`. Le corps reçu n'entre pas dans les params (v1) :
+                    # la recette tourne avec ceux qui sont épinglés.
+                    charge = {**_declencheur_recette.charge(
+                        t, "webhook", project_id=projet.project_id),
+                        "hook": True} if recette else {
                         "procedure": t["procedure"],
                         "project_id": projet.project_id,
                         "tools": outils,

@@ -27,6 +27,14 @@ COLONNE_OUTILS_PLATEFORME = "outils_plateforme"
 DDL_COLONNE_OUTILS_PLATEFORME = (
     f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS {COLONNE_OUTILS_PLATEFORME} "
     "JSONB NOT NULL DEFAULT '[]'::jsonb")
+# La RECETTE que joue un agent sans modèle (`capabilities/_declencheur_recette`) :
+# `{slug, version, params, datastore}`, la version épinglée. NULL = un agent à modèle.
+# Posée par la révision `20261127_1800_triggers_recette` ET par le démarrage, sous garde
+# de catalogue — même DDL. L'ancien code l'ignore : il lit la ligne sans modèle et saute
+# l'occurrence (`refused_no_model`).
+COLONNE_RECETTE = "recipe"
+DDL_COLONNE_RECETTE = (f"ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS "
+                       f"{COLONNE_RECETTE} JSONB")
 # Les webhooks qu'oto a INSCRITS chez la source pour cet agent (`connect_source`,
 # docs/runner-et-automatisations.md §Brancher une source) : posée par la révision
 # `0072_triggers_hook_sources` ET par le démarrage, sous garde de catalogue — même DDL.
@@ -178,7 +186,9 @@ def membres_en_preset_partage(org_id: int) -> list[dict]:
         ).fetchall()]
 
 
-_COLS = ("id, org_id, sub, label, folder, procedure, project_id, tools, "
+_COLS = ("id, org_id, sub, label, folder, "
+         # `''` = un agent-recette (la colonne est NOT NULL) : servi `null`.
+         "NULLIF(procedure, '') AS procedure, project_id, tools, recipe, "
          "outils_plateforme AS platform_tools, "
          "input, max_steps, "
          "max_tokens, max_run_seconds, model, kind, payload_mode, payload_fields, max_per_hour, fraicheur_s, "
@@ -217,7 +227,8 @@ def create_trigger(org_id: int, sub: str, *, procedure: str, tz: str,
                    max_per_hour: Optional[int] = None,
                    fraicheur_s: Optional[int] = None,
                    max_per_day: Optional[int] = None,
-                   enabled: bool = True) -> dict:
+                   enabled: bool = True,
+                   recipe: Optional[dict] = None) -> dict:
     """Pose un déclencheur — programmé (`cron` + `next_due`) ou par webhook.
 
     ⚠️ `cron` et `next_due` sont devenus FACULTATIFS en signature, et c'est la
@@ -231,16 +242,17 @@ def create_trigger(org_id: int, sub: str, *, procedure: str, tz: str,
                    (org_id, sub, label, procedure, project_id, tools, input,
                     max_steps, max_tokens, max_run_seconds, model, kind, payload_mode,
                     payload_fields, max_per_hour, fraicheur_s, cron, tz, next_due,
-                    max_per_day, enabled)
+                    max_per_day, enabled, recipe)
             VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s,
-                    %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
+                    %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             RETURNING {_COLS}
             """,
             (org_id, sub, label, procedure, project_id,
              json.dumps(list(tools), ensure_ascii=False), input, max_steps,
              max_tokens, max_run_seconds, model, kind, payload_mode,
              json.dumps(payload_fields, ensure_ascii=False) if payload_fields else None,
-             max_per_hour, fraicheur_s, cron, tz, next_due, max_per_day, enabled),
+             max_per_hour, fraicheur_s, cron, tz, next_due, max_per_day, enabled,
+             json.dumps(recipe, ensure_ascii=False) if recipe else None),
         ).fetchone()
     return dict(row)
 
@@ -692,7 +704,10 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any], *,
                  # Le PLAFOND journalier (NULL = aucun). L'adresse privée
                  # (`hook_slug`) n'y est PAS : elle se pose par son verbe,
                  # `poser_adresse_de_hook`, jamais par une retouche générique.
-                 "max_per_day"}
+                 "max_per_day",
+                 # La recette d'un agent-recette (slug, version épinglée, params,
+                 # tableau), jugée par la capacité (`_declencheur_recette.valider`).
+                 "recipe"}
     inconnu = set(champs) - autorises
     if inconnu:
         raise ValueError(f"colonnes hors contrat : {sorted(inconnu)}")
@@ -703,6 +718,9 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any], *,
         if k in ("tools", "outils_plateforme"):
             sets.append(f"{k} = %s::jsonb")
             vals.append(json.dumps(list(v), ensure_ascii=False))
+        elif k == "recipe":
+            sets.append("recipe = %s::jsonb")
+            vals.append(json.dumps(v, ensure_ascii=False) if v else None)
         elif k == "payload_fields":
             # Un dict nu ne s'adapte pas en jsonb (psycopg refuse `dict`) : le
             # passer tel quel faisait échouer TOUTE mise à jour qui le portait.

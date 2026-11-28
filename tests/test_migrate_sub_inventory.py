@@ -497,6 +497,9 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         # Les webhooks inscrits chez la SOURCE d'un agent (`connect_source`) :
         # identifiants chez le tiers, événement, campagne — personne d'oto.
         ("runner_triggers", "hook_sources"),
+        # La recette d'un agent-recette : slug, version épinglée, params, numéro de
+        # tableau — aucun principal (le propriétaire est la colonne `sub`).
+        ("runner_triggers", "recipe"),
         ("tenants", "brand"), ("tenants", "hosts"),
         ("tenants", "link_paths"), ("tenants", "logto_mgmt"),
         ("transcription_jobs", "result"), ("transcription_jobs", "transcript"),

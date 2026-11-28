@@ -214,6 +214,13 @@ def hebergement(model: Optional[str]) -> Optional[dict]:
             "router": ({"name": routeur[0], "region": routeur[1]} if routeur else None)}
 
 
+#: La famille d'un travail SANS modèle qui joue une recette publiée (agent-recette,
+#: `capabilities/_declencheur_recette`). Aucun modèle du catalogue ne la porte : seul un
+#: worker qui réserve avec `provider="recette"` la sert (`db.claim_next_job`, clause de
+#: famille), et aucune clé de modèle ne lui est remise (`runner_jobs._avec_cle`).
+FAMILLE_RECETTE = "recette"
+
+
 def famille(model: Optional[str]) -> Optional[str]:
     """La famille d'un modèle du catalogue, ou None (absent, ou inconnu)."""
     m = _PAR_ID.get(model or "")

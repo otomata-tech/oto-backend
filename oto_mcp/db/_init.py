@@ -677,6 +677,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_OUTILS_PLATEFORME):
         conn.execute(runner_triggers.DDL_COLONNE_OUTILS_PLATEFORME)
+    # La recette d'un agent sans modèle — la même que pose la révision
+    # `20261127_1800_triggers_recette` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_RECETTE):
+        conn.execute(runner_triggers.DDL_COLONNE_RECETTE)
     # Les webhooks qu'oto a inscrits chez la source d'un agent — la même que pose la
     # révision `0072` : ordre indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_HOOK_SOURCES):

@@ -34,7 +34,8 @@ from starlette.concurrency import run_in_threadpool
 
 from . import preset_agents
 from .orgs import partage_par_defaut
-from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
+from . import (_abonnement, _acces_agent, _cle_exigee, _declencheur_recette, _instruction,
+               _limites_du_run,
                _modele, _portee, _procedure_du_travail, _projet_de_l_agent,
                _secret_par_lien, _source_du_hook, runner_jobs)
 from .. import (db, deprecations, org_store, outils_du_travail, ownership,
@@ -381,6 +382,19 @@ class TriggerInput(BaseModel):
             "still waiting): read `job_status` for what the job became."
         ))
 
+    # Un AGENT-RECETTE (sans modèle) : la recette publiée qu'il joue.
+    recipe: Optional[dict[str, Any]] = Field(default=None, description=(
+        "create/update: makes this a RECIPE agent — it runs a published recipe of the "
+        "org, with NO model, on its schedule (`cron`) or its webhook, or with "
+        "`run_now`: {slug, version?, params?, datastore?}. The version is PINNED (the "
+        "one in service at create; a number re-pins on update): a newer published "
+        "version never runs until re-pinned. With `recipe`, `procedure`, `model`, "
+        "`input`, `tools`, `max_steps`, `max_tokens`, `max_run_seconds`, "
+        "`payload_mode`/`payload_fields` are refused (`recipe_trigger_field`). Set at "
+        "create only: an agent never becomes, or stops being, a recipe agent "
+        "(`recipe_immutable`). The run is the owner's (or, with run_now, the "
+        "caller's): their rights on the table, their connectors."))
+
 
 class ToolWarning(BaseModel):
     """Un outil déclaré dans `tools` qui pourrait ne pas être joignable au run.
@@ -429,6 +443,14 @@ class Trigger(BaseModel):
     # listes. `null` = hors dossier. Aucune hiérarchie ni règle d'accès.
     folder: Optional[str] = None
     procedure: Optional[str] = None
+    #: Un AGENT-RECETTE : `{slug, version, params, datastore}` (version épinglée).
+    #: `null` = un agent à modèle. `procedure` et `model` sont alors `null`.
+    recipe: Optional[dict] = None
+    #: Agent-recette seulement : le titre de la recette, et la version PUBLIÉE
+    #: aujourd'hui — « v3 épinglée, v4 disponible » quand elle diffère de
+    #: `recipe.version`. `null` si la recette a disparu.
+    recipe_title: Optional[str] = None
+    recipe_latest_version: Optional[int] = None
     project_id: Optional[int] = None
     tools: Optional[list[str]] = None
     #: Les `oto_admin_*` que l'agent exerce avec le rôle plateforme de son porteur
@@ -989,6 +1011,8 @@ def _avec_hook(org_id: int, t: dict, compte: Optional[dict] = None,
     `compte`/`file` : déjà lus pour toute une liste (`_servis_en_liste`) ; absents, ils
     se lisent pour ce seul déclencheur.
     """
+    if t.get("recipe") and "recipe_title" not in t:
+        t = _declencheur_recette.lecture(org_id, [t])[0]
     if (t.get("kind") or "schedule") != "webhook":
         return t
     if compte is None:
@@ -1031,6 +1055,8 @@ def _servis_en_liste(org_id: int, ts: list[dict]) -> list[dict]:
     derniers = db.derniers_travaux(org_id, ids)
     comptes = db.comptages_livraisons(org_id, hooks)
     files = db.files_des_declencheurs(org_id, hooks)
+    # Les agents-recettes : titre et version publiée, une lecture par recette distincte.
+    ts = _declencheur_recette.lecture(org_id, ts)
     return [_avec_hook(org_id, {**t, **pertes[int(t["id"])], **derniers[int(t["id"])]},
                        comptes.get(int(t["id"])), files.get(int(t["id"])))
             for t in ts]
@@ -1549,6 +1575,121 @@ def _exiger_lancable(ctx: ResolvedCtx, t: dict, procedure: Optional[str],
     _cle_exigee.exiger_a_la_pose(ctx.org_id, famille)
 
 
+def _refuser_les_champs_d_agent(inp: TriggerInput) -> None:
+    """Un agent-recette n'a ni procédure, ni modèle, ni instruction, ni outils, ni corps
+    de webhook transmis : chacun de ces champs passé est REFUSÉ en le nommant, jamais
+    ignoré."""
+    refuses = _declencheur_recette.champs_refuses(inp)
+    if refuses:
+        raise AuthzDenied(
+            400, "recipe_trigger_field",
+            f"{', '.join('`' + c + '`' for c in refuses)} ne s'applique pas à un "
+            "agent-recette : il joue une recette publiée, sans modèle ni procédure. "
+            "Ses réglages sont `recipe` (slug, version, params, datastore), l'horaire "
+            "ou la porte, et l'état de marche.")
+
+
+def _creer_un_agent_recette(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
+    """`op=create` avec `recipe` : un agent SANS modèle qui joue une recette publiée de
+    l'org (`_declencheur_recette`). Mêmes horaire, porte, partage à la naissance et
+    adresse privée qu'un agent ; ni modèle, ni clé, ni abonnement — un worker
+    `recette` vivant suffit (`exige_servi`)."""
+    _refuser_les_champs_d_agent(inp)
+    webhook = (inp.kind or "schedule") == "webhook"
+    if webhook:
+        _exiger_une_personne_a_la_porte()
+    if not webhook and not inp.cron:
+        raise AuthzDenied(400, "missing_fields",
+                          "create exige : cron — quand jouer la recette (ou "
+                          "`kind=webhook`).")
+    if webhook and inp.cron:
+        raise AuthzDenied(
+            400, "invalid_schedule",
+            "une automatisation `webhook` n'a pas de cadencement : c'est la source "
+            "qui décide quand. Retire `cron`, ou déclare une automatisation horaire.")
+    _valide_le_webhook(inp)
+    tz = inp.tz or _TZ_DEFAUT
+    if not webhook:
+        try:
+            runner_tick.validate_cron(inp.cron, tz)
+        except ValueError as e:
+            raise AuthzDenied(400, "invalid_schedule", str(e))
+    recette = _declencheur_recette.valider(ctx.org_id, _declencheur_recette.spec(inp.recipe))
+    _exiger_projet_de_l_org(ctx, inp.project_id)
+    # Sous un jeton de délégation, l'agent créé n'appelle pas plus que le travail qui
+    # le crée (`tools_human_only`) : la liste de son travail, c'est ce que cite la
+    # recette.
+    exiger_aucun_outil_hors_du_travail(_declencheur_recette.outils(ctx.org_id, recette))
+    _declencheur_recette.exiger_un_worker(ctx.org_id)
+    genre = "webhook" if webhook else "schedule"
+    secret = hache = None
+    if webhook:
+        secret, hache = runner_hook.nouveau_secret()
+    role = partage_par_defaut.role_a_la_naissance(ctx.org_id, "agent")
+    ouvert = not inp.private and preset_agents.ouvre_a_la_naissance(ctx.sub, ctx.org_id)
+    t = db.create_trigger(
+        ctx.org_id, ctx.sub, procedure="", tools=[], tz=tz,
+        cron=inp.cron or None,
+        next_due=runner_tick.next_due(inp.cron, tz) if not webhook else None,
+        project_id=inp.project_id, label=inp.label, model=None, kind=genre,
+        payload_mode=runner_hook.IGNORE, max_per_hour=inp.max_per_hour,
+        fraicheur_s=inp.freshness_seconds, max_per_day=inp.max_per_day or None,
+        enabled=inp.enabled is not False, recipe=recette)
+    nom = inp.label or recette["slug"]
+    if ouvert:
+        ownership.grant(_acces_agent.KIND, str(t["id"]), "org", str(ctx.org_id),
+                        role="editor", granted_by=ctx.sub)
+        _portee.observer(ctx, ressource_type="runner_trigger", ressource_id=t["id"],
+                         ressource_nom=nom, vers="org", geste="oto_trigger op=create")
+    elif role and not inp.private:
+        _acces_agent.ouvrir_a_l_org(ctx, t, role)
+        _portee.observer(ctx, ressource_type="runner_trigger", ressource_id=t["id"],
+                         ressource_nom=nom, vers="org", geste="oto_trigger op=create")
+    t = _acces_agent.avec_visibilites(ctx.org_id, [t])[0]
+    if webhook:
+        adresse = runner_hook.nouvelle_adresse()
+        db.poser_adresse_de_hook(t["id"], ctx.org_id, adresse)
+        db.poser_secret_de_hook(t["id"], ctx.org_id, hache)
+        t = {**t, "hook_slug": adresse}
+        return {"trigger": _avec_hook(ctx.org_id, t),
+                **_secret_par_lien.remettre(ctx, t, secret)}
+    return {"trigger": _avec_hook(ctx.org_id, t)}
+
+
+def _lancer_un_agent_recette(ctx: ResolvedCtx, inp: TriggerInput, t: dict) -> dict:
+    """`op=run_now` d'un agent-recette : la recette épinglée revérifiée, un worker
+    `recette` vivant, la même borne de file qu'un agent, puis la charge de
+    l'horloge (`_declencheur_recette.charge`) sous l'identité de l'APPELANT. Un
+    `handoff` n'a nulle part où aller (aucune instruction) : il est écarté, et la
+    réponse le dit (`handoff_ignored`)."""
+    refus = _declencheur_recette.motif_de_refus(t)
+    if refus is not None:
+        raise AuthzDenied(409, refus[0], refus[1])
+    _declencheur_recette.exiger_un_worker(ctx.org_id)
+    en_attente = db.file_du_declencheur(t["id"], ctx.org_id)["pending"]
+    if en_attente:
+        raise AuthzDenied(409, "run_already_queued",
+                          f"une exécution de cet agent est déjà en file ({en_attente} "
+                          "en attente) : elle partira dès qu'une place se libère. "
+                          "Suis-la dans l'historique de l'agent, ou vide la file "
+                          "(`op=clear_queue`) avant d'en relancer une.")
+    chaine = _maillon_suivant(ctx.org_id, inp.trigger_id)
+    charge = _declencheur_recette.charge(
+        t, "enchaîné" if chaine else "à la demande",
+        project_id=_projet_de_l_agent.de_l_agent(t, ctx.sub).project_id)
+    exiger_un_lancement_sans_role_plateforme(ctx.org_id, t["id"], ctx.sub)
+    res = db.enqueue_job(ctx.org_id, "start",
+                         payload={k: v for k, v in charge.items() if v is not None},
+                         sub=ctx.sub, chaine=chaine)
+    logger.info("agent-recette %s (org %s) : run lancé à la demande de %s — job %s",
+                t["id"], ctx.org_id, ctx.sub, res["id"])
+    return {"ok": True,
+            "job": {"id": res["id"], "status": res["status"],
+                    "due_at": str(res["due_at"]), **({"chain": chaine} if chaine else {})},
+            **({"handoff_ignored": True} if inp.handoff else {}),
+            "trigger": _avec_hook(ctx.org_id, t)}
+
+
 #: Les statuts d'un travail qui n'est PAS fini : il attend (`pending`, `held` pour un
 #: agent en pause) ou il tourne (`claimed`). Les autres (`done`, `failed`, `expired`)
 #: se relancent.
@@ -1668,6 +1809,11 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         raise AuthzDenied(400, "platform_tools_update_only",
                           "`platform_tools` ne se pose que par `op=update`, sur un agent "
                           "existant.")
+    if inp.op == "create" and inp.recipe is not None:
+        return _creer_un_agent_recette(ctx, inp)
+    if inp.recipe is not None and inp.op != "update":
+        raise AuthzDenied(400, "recipe_create_update_only",
+                          "`recipe` ne se passe qu'à `op=create` ou `op=update`.")
     if inp.op == "create":
         webhook = (inp.kind or "schedule") == "webhook"
         if webhook:
@@ -1985,6 +2131,8 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Gardé sur le RUNNER, pas sur `enabled` (`_exiger_lancable`).
         t = db.get_trigger(inp.trigger_id, ctx.org_id)
         _acces_agent.exiger(ctx, t, _acces_agent.ECRIRE)
+        if _declencheur_recette.est_recette(t):
+            return _lancer_un_agent_recette(ctx, inp, t)
         _exiger_lancable(ctx, t, t.get("procedure"), t.get("model"))
         # Un travail de cet agent attend déjà un worker : un second ne partirait pas
         # plus tôt, il doublerait le run. Le prédicat est celui de `clear_queue`.
@@ -2264,22 +2412,28 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # opposés pour la même org, et celui qu'on retirerait est le seul qui dit
         # quoi faire.
         actuel = _actuel()
+        recette_rallumee = _declencheur_recette.est_recette(actuel)
         # La famille EFFECTIVE de ce rallumage : celle posée DANS cet appel s'il
         # y en a une, sinon celle déjà en base — c'est elle, et seulement elle,
         # que la clé exigée (14/09/2026) et `exige_servi` doivent juger, jamais
         # toutes les familles exigées à la fois.
-        famille_pose = (famille if inp.model is not None
+        famille_pose = (_declencheur_recette.FAMILLE if recette_rallumee
+                        else famille if inp.model is not None
                         else runner_models.famille((actuel or {}).get("model")))
-        # Un agent posé sans modèle avant le 24/09/2026 ne se rallume pas sans en
-        # déclarer un : il tournerait sur le modèle du worker, donc sur notre clé.
-        _modele.exige_un_modele(famille_pose)
-        _cle_exigee.exiger_a_la_pose(ctx.org_id, famille_pose, etat)
+        if not recette_rallumee:
+            # Un agent posé sans modèle avant le 24/09/2026 ne se rallume pas sans en
+            # déclarer un : il tournerait sur le modèle du worker, donc sur notre clé.
+            # Un AGENT-RECETTE n'a pas de modèle par nature : ni modèle, ni clé, ni
+            # abonnement à juger — un worker `recette` vivant (`exige_servi` plus bas).
+            _modele.exige_un_modele(famille_pose)
+            _cle_exigee.exiger_a_la_pose(ctx.org_id, famille_pose, etat)
         # Même garde qu'à la création, sur le propriétaire STOCKÉ : rallumer
         # l'agent d'un collègue posé sur un abonnement ferait payer son forfait
         # pour le travail d'un autre — sauf s'il l'a prêté (`_pose_pour`).
-        _abonnement.exiger_a_la_pose(_pose_pour(famille_pose),
-                                     (actuel or {}).get("sub"), famille_pose,
-                                     org_id=ctx.org_id)
+        if not recette_rallumee:
+            _abonnement.exiger_a_la_pose(_pose_pour(famille_pose),
+                                         (actuel or {}).get("sub"), famille_pose,
+                                         org_id=ctx.org_id)
         # ⚠️ **RALLUMER REPREND LE RYTHME, ça ne rembobine pas** (arbitré le
         # 02/09, #826). Une échéance figée pendant l'extinction est restée dans
         # le PASSÉ : sans ce recalcul, le tick voyait le déclencheur dû à la
@@ -2305,7 +2459,10 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         # Rallumer promet aussi un MODÈLE : celui qu'on pose dans cet appel, sinon
         # celui qui est stocké. Un déclencheur éteint pendant qu'une famille
         # disparaissait ne doit pas se rallumer sur une promesse morte.
-        _modele.exige_servi(etat, famille_pose)
+        if recette_rallumee:
+            _declencheur_recette.exiger_un_worker(ctx.org_id)
+        else:
+            _modele.exige_servi(etat, famille_pose)
     elif famille and inp.enabled is None:
         # Changer le modèle d'un déclencheur ALLUMÉ, c'est promettre ce modèle dès
         # l'occurrence suivante. Éteint, rien n'est promis : la retouche passe.
@@ -2352,6 +2509,20 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     # lit donc ici, juste avant d'écrire.
     if not _actuel():
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+    # Un AGENT-RECETTE se retouche par `recipe` (re-épingler, params, tableau), son
+    # horaire ou sa porte, et son état de marche ; jamais en agent à modèle — et un
+    # agent à modèle ne devient pas un agent-recette (`recipe_immutable`).
+    if inp.recipe is not None and not _declencheur_recette.est_recette(_actuel()):
+        raise AuthzDenied(
+            400, "recipe_immutable",
+            "cet agent joue une procédure avec un modèle : `recipe` se pose à la "
+            "création d'un agent-recette et ne se change pas en cours de route. Crée un "
+            "agent-recette (`op=create recipe=…`), puis supprime celui-ci.")
+    if _declencheur_recette.est_recette(_actuel()):
+        _refuser_les_champs_d_agent(inp)
+        if inp.recipe is not None:
+            champs["recipe"] = _declencheur_recette.valider(
+                ctx.org_id, _declencheur_recette.spec(inp.recipe), _actuel().get("recipe"))
     if "procedure" in champs:
         # Repointer l'agent : la même règle qu'à sa pose, pour son PROPRIÉTAIRE — c'est
         # sous lui qu'il tourne et lit, quel que soit l'éditeur (#1499).

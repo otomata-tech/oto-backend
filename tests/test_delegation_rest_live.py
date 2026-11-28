@@ -72,7 +72,7 @@ def _auth(methode: str, chemin: str, jeton: str):
     ("GET", "/api/me"),
     ("POST", "/api/me/runner/jobs"),
     ("POST", "/api/me/runner/triggers"),
-    ("POST", "/api/me/recipes"),
+    ("GET", "/api/me/recipes"),       # la route exceptée (agent-recette), autre verbe
     ("GET", "/api/datastores"),
     ("GET", "/api/me/runs/thread"),   # la route exceptée, sous un autre verbe
 ])
@@ -85,9 +85,12 @@ def test_toute_route_hors_exception_est_refusee(jeton, methode, chemin):
 
 def test_les_exceptions_sont_celles_du_worker_et_nommees():
     """Le worker (oto-runner) n'envoie son jeton délégué qu'au fil du run
-    (`Backend.thread_read` / `thread_append`). Une exception de plus se justifie ici."""
+    (`Backend.thread_read` / `thread_append`) et, en mode `recette`, au run de la recette
+    épinglée du travail (`POST /api/me/recipes`, borné par la capacité à la charge du
+    travail). Une exception de plus se justifie ici."""
     from oto_mcp.api import base
-    assert set(base.ROUTES_DE_LA_DELEGATION) == {("POST", "/api/me/runs/thread")}
+    assert set(base.ROUTES_DE_LA_DELEGATION) == {("POST", "/api/me/runs/thread"),
+                                                ("POST", "/api/me/recipes")}
     assert all(raison.strip() for raison in base.ROUTES_DE_LA_DELEGATION.values())
 
 

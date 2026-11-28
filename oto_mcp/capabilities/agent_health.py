@@ -143,7 +143,8 @@ def _visibles(ctx: ResolvedCtx, org_id: int) -> tuple[dict[int, dict], set[int]]
 
 
 def _nom(t: dict) -> str:
-    return (t.get("label") or "").strip() or t.get("procedure") or f"#{t['id']}"
+    return ((t.get("label") or "").strip() or t.get("procedure")
+            or (t.get("recipe") or {}).get("slug") or f"#{t['id']}")
 
 
 def _quand(v: Any) -> Optional[str]:

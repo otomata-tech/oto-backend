@@ -63,7 +63,8 @@ def lire(ctx: ResolvedCtx, trigger_id: int) -> dict:
     acceptees = [d for d in livraisons if d.get("outcome") in _ACCEPTEES]
     return {
         "id": int(trigger_id),
-        "label": t.get("label") or t.get("procedure") or f"Agent {trigger_id}",
+        "label": (t.get("label") or t.get("procedure")
+                  or (t.get("recipe") or {}).get("slug") or f"Agent {trigger_id}"),
         "mode": mode,
         "token": mode in _GENRE,
         "receiving": bool(acceptees),

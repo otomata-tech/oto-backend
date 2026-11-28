@@ -68,6 +68,11 @@ REFUSE_REQUIRES = "refused_requires"
 #: est consommée, rien n'est enfilé, aucun repli sur un autre modèle. L'agent repart
 #: quand le modèle est rallumé, ou quand il en déclare un autre (16/11/2026).
 REFUSE_MODEL_DISABLED = "refused_model_disabled"
+#: La recette d'un agent-recette ne peut plus partir telle qu'épinglée : supprimée,
+#: dépubliée, version épinglée introuvable, ou params qui ne tiennent plus
+#: (`capabilities/_declencheur_recette.motif_de_refus`). L'occurrence est consommée, rien
+#: n'est enfilé ; re-épingler (`oto_trigger op=update recipe=…`) la fait repartir.
+REFUSE_RECIPE_UNAVAILABLE = "refused_recipe_unavailable"
 
 #: Ce qu'on rend du corps reçu quand on RELIT une livraison — borné parce qu'une
 #: page de livraisons en sert jusqu'à 200, et qu'un corps entier × 200 n'est plus

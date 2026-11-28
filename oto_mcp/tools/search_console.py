@@ -379,8 +379,8 @@ def register(mcp: FastMCP) -> None:
             raise _bad("op must be 'add_sitemap'")
         site = _site(site_url, op)
         path = _need(feedpath, "feedpath", op)
-        if not _URL.match(path) or not path.startswith("https://"):
-            raise _bad("feedpath must be the sitemap's full https URL "
+        if not _URL.match(path):
+            raise _bad("feedpath must be the sitemap's full http(s) URL "
                        "(e.g. https://www.example.com/sitemap.xml).")
         decl = access_levels.declared(_SERVICE)
         gate = decl.gate_of(access_levels.FULL) if decl is not None else None

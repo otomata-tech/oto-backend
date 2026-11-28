@@ -229,6 +229,22 @@ def test_le_refus_de_la_garde_nomme_l_interrupteur():
     assert gate._verdict(decl, SC, "list_sites", [(1, None, "read", "default")]) is None
 
 
+def test_sans_reglage_interrupteur_eteint_le_geste_est_celui_de_l_operateur():
+    """Le défaut déployé : aucune org ne pose rien, l'interrupteur est éteint. Dire
+    « posez `full` » enverrait l'admin vers un refus : le geste nommé est l'opérateur."""
+    decl = al.DECLARED[SC]
+    refus = gate._verdict(decl, "search_console_act", "add_sitemap",
+                          [(1, None, "read", "default")])
+    assert ENV in refus.message and "platform operator" in refus.message
+
+
+def test_interrupteur_allume_le_geste_est_l_admin(ecriture_ouverte):
+    decl = al.DECLARED[SC]
+    refus = gate._verdict(decl, "search_console_act", "add_sitemap",
+                          [(1, None, "read", "default")])
+    assert "level='full'" in refus.message and ENV not in refus.message
+
+
 # --- 6. l'outil -------------------------------------------------------------------------
 
 class _Resp:
@@ -336,7 +352,7 @@ def test_compte_en_lecture_seule_reautoriser(monkeypatch):
 @pytest.mark.parametrize("kw", [
     {"site_url": "exemple.test", "feedpath": FEED},
     {"site_url": SITE, "feedpath": "sitemap.xml"},
-    {"site_url": SITE, "feedpath": "http://www.exemple.test/sitemap.xml"},
+    {"site_url": SITE, "feedpath": "ftp://www.exemple.test/sitemap.xml"},
     {"site_url": SITE, "feedpath": ""},
 ])
 def test_arguments_refuses_avant_tout_appel(outil, ecriture_ouverte, kw):

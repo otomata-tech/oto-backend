@@ -113,7 +113,7 @@ def test_webmasters_reste_dans_la_borne():
 def test_scopes_du_consentement_par_niveau(ecriture_ouverte):
     assert G.scopes_for(SC, _app()) == [*G.IDENTITY_SCOPES, RO]
     assert G.scopes_for(SC, _app(), "read") == [*G.IDENTITY_SCOPES, RO]
-    assert G.scopes_for(SC, _app(), "full") == [*G.IDENTITY_SCOPES, RW]
+    assert G.scopes_for(SC, _app(), "full") == [*G.IDENTITY_SCOPES, RW, RO]
 
 
 def test_interrupteur_eteint_jamais_webmasters():
@@ -143,7 +143,7 @@ def test_build_auth_url_demande_webmasters_en_full(monkeypatch, ecriture_ouverte
     monkeypatch.setattr(G.oauth_flow, "sign_state", lambda aud, p: signes.append(p) or "st")
     _reglages(monkeypatch, search_console={"org": "full"})
     url = G.build_auth_url("u1", connector=SC)
-    assert parse_qs(urlparse(url).query)["scope"] == [" ".join([*G.IDENTITY_SCOPES, RW])]
+    assert parse_qs(urlparse(url).query)["scope"] == [" ".join([*G.IDENTITY_SCOPES, RW, RO])]
     assert signes[-1]["l"] == "full" and signes[-1]["c"] == SC
     _reglages(monkeypatch)
     url = G.build_auth_url("u1", connector=SC)
@@ -168,6 +168,21 @@ def test_le_state_rejette_un_niveau_inconnu(monkeypatch):
 def test_le_reglage_est_range_sous_le_service():
     assert al.setting_connector(SC) == SC
     assert al.setting_connector("zoho") == "zoho"
+
+
+def test_un_service_d_un_porteur_partage_le_niveau_du_porteur():
+    """Only a declaration with `own_setting` keeps its own level: Outlook (a service of
+    the Microsoft account, no such flag) still reads the carrier's."""
+    assert al.DECLARED[SC].own_setting is True
+    decl = al._valider("outlook", {"levels": {"full": ("Mail.ReadWrite",)}, "tools": {}})
+    assert decl.own_setting is False
+
+
+def test_un_consentement_full_couvre_la_lecture_sans_l_implication():
+    """A grant made at `full` holds the read-only scope literally: the service stays
+    covered even by code that does not know `webmasters` implies it (a rollback, the front)."""
+    accorde = set(al.DECLARED[SC].levels["full"])
+    assert set(G.SERVICE_SCOPES[SC]) <= accorde
 
 
 def test_declaration():

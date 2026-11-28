@@ -32,9 +32,10 @@ Three things this module holds:
   refused (`access_level_off_on_instance`) and a stored value of it applies as the
   connector's default level (source `instance`): visibility, guard and consent all
   read the clamped level.
-- **The setting's key** is the credential carrier, except for a SERVICE that borrows an
-  account (`credential_of`, the Google services): the level is the service's, not the
-  account's — two services of one Google account have two levels (`setting_connector`).
+- **The setting's key** is the credential carrier (a service borrowing an account shares
+  its level), except for a declaration that asks for its own (`own_setting`, Search
+  Console on the Google account): two services of one Google account keep two levels
+  (`setting_connector`).
 """
 from __future__ import annotations
 
@@ -89,6 +90,11 @@ class AccessLevels:
     widening_needs_consent: bool = True
     #: level → the `INSTANCE_GATES` switch that must be on for it to apply.
     instance_gates: Mapping[str, str] = field(default_factory=dict)
+    #: The level is stored under THIS connector, not under the account it borrows
+    #: (`credential_of`): for a service whose account carries other services that must
+    #: keep their own level (Search Console on the Google account). Off by default: a
+    #: service of a carrier (Outlook on the Microsoft account) shares the carrier's level.
+    own_setting: bool = False
 
     def gate_of(self, level: str) -> Optional[str]:
         """The instance switch `level` needs, if it is CLOSED on this instance."""
@@ -141,7 +147,7 @@ def _scopes(valeur, ou: str) -> tuple[str, ...]:
 def _valider(connector: str, data: Mapping) -> AccessLevels:
     """Builds the declaration of `connector`, or RAISES at import (never half-read)."""
     connues = {"levels", "scope_implies", "tools", "default", "widening_needs_consent",
-               "instance_gates"}
+               "instance_gates", "own_setting"}
     if set(data) - connues:
         raise ValueError(f"{connector}: unknown keys {sorted(set(data) - connues)}")
     levels = {nom: _scopes(s, f"{connector}.levels.{nom}")
@@ -175,7 +181,11 @@ def _valider(connector: str, data: Mapping) -> AccessLevels:
             raise ValueError(f"{connector}: the default level `{nom}` cannot be gated")
         if gate not in INSTANCE_GATES:
             raise ValueError(f"{connector}: unknown instance gate {gate!r}")
-    return AccessLevels(connector, levels, implies, tools, defaut, consentement, gates)
+    propre = data.get("own_setting", False)
+    if not isinstance(propre, bool):
+        raise ValueError(f"{connector}: own_setting is a bool, got {propre!r}")
+    return AccessLevels(connector, levels, implies, tools, defaut, consentement, gates,
+                        propre)
 
 
 def _declarations() -> dict:
@@ -242,10 +252,13 @@ def restricts(level: str) -> bool:
 # --- the setting ---------------------------------------------------------------
 
 def setting_connector(connector: str) -> str:
-    """The connector name the setting is stored under: the credential carrier, or the
-    connector itself when it is a service borrowing an account (`credential_of`) — the
-    level governs THAT service, the account's other services keep theirs."""
-    if providers.delegates_credential(connector):
+    """The connector name the setting is stored under: the credential carrier (a service
+    borrowing an account shares the account's level, Outlook on Microsoft), unless the
+    declaration asks for its OWN setting (`own_setting`, Search Console on the Google
+    account: the account's other services keep theirs, and a level stored under `google`
+    would be read as Google's own)."""
+    decl = DECLARED.get(connector)
+    if decl is not None and decl.own_setting:
         return connector
     return providers.credential_provider(connector)
 

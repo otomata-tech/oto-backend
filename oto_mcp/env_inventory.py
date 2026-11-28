@@ -147,7 +147,8 @@ _REQUISES: tuple[Variable, ...] = (
              "et sert `search_console_act` (envoi d'un sitemap). Éteint (défaut) : poser "
              "`full` est refusé, un `full` posé s'applique en `read`, aucun consentement "
              "ne demande `webmasters`. À n'allumer qu'une fois `webmasters` déclaré au "
-             "projet Google de l'instance. Valeur illisible = refus.",
+             "projet Google de l'instance (Data Access ; chaque instance déclare "
+             "sur SON projet). Valeur illisible = refus.",
              ("oto_mcp/connectors/access_levels.py:59",)),
     Variable("GOOGLE_WORKSPACE_CLIENT_ID", Classe.REQUISE, None,
              "Client OAuth Google Workspace — NOTRE app, servie à tout compte dont le "

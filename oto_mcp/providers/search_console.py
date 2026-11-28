@@ -46,10 +46,16 @@ DESCRIPTION = (
 WEBMASTERS_READONLY = "https://www.googleapis.com/auth/webmasters.readonly"
 WEBMASTERS = "https://www.googleapis.com/auth/webmasters"
 ACCESS_LEVELS = {
-    "levels": {"read": (WEBMASTERS_READONLY,), "full": (WEBMASTERS,)},
+    # `full` asks BOTH scopes: the grant then holds the read-only one literally, so
+    # it covers the reads without `scope_implies` (a rollback to a version that does not
+    # know `webmasters`, or a front matching the read-only scope, still sees it covered).
+    "levels": {"read": (WEBMASTERS_READONLY,), "full": (WEBMASTERS, WEBMASTERS_READONLY)},
     "scope_implies": {WEBMASTERS: (WEBMASTERS_READONLY,)},
     "default": "read",
     "instance_gates": {"full": "GOOGLE_SEARCH_CONSOLE_WRITE"},
+    # Stored as `search_console`, not under the Google account it borrows: the account's
+    # other services (Gmail, Drive…) declare no levels and must not read this one.
+    "own_setting": True,
     "tools": {
         "search_console": {op: (WEBMASTERS_READONLY,) for op in (
             "list_sites", "query_search_analytics", "inspect_url", "list_sitemaps",

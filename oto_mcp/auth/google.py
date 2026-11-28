@@ -142,7 +142,8 @@ SERVICE_SCOPES: dict[str, tuple[str, ...]] = {
     # calls only `listAccessibleCustomers`, `googleAds:search` and `googleAdsFields:search`
     # (`oto.tools.google.ads`) — no mutate endpoint is ever built.
     "google_ads": ("https://www.googleapis.com/auth/adwords",),
-    # Google Search Console (SENSITIVE): `webmasters.readonly` lets the person's Google
+    # Google Search Console (NON-sensitive for Google: both scopes, checked in the
+    # project's Data Access on 2026-11-28): `webmasters.readonly` lets the person's Google
     # user read the properties THEY can open — performance, URL inspection, sitemaps.
     # This tuple is what COVERS the service and it stays the read-only scope: changing
     # it would stop every existing grant from covering Search Console (the Chat lesson

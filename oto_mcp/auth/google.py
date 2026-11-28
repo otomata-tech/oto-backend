@@ -540,7 +540,9 @@ def build_auth_url(sub: str, return_app: str = "", connector: str = "google",
     # A service with access levels asks for the scopes of the level in force where the
     # account is filed: the member's org and active team, or the shared row's org / team.
     # Moving `read` → `full` is this same call again, from the card: a new consent.
-    if scope == "member":
+    if _leveled(connector) is None:
+        level = None
+    elif scope == "member":
         from .. import access  # lazy: avoids any import cycle at boot
         level = consent_level(connector, org_id, access.current_group(sub))
     else:
@@ -1280,9 +1282,10 @@ def _finish_return(d: dict, code: str) -> dict:
     if d["scope"] == "member":
         email = persist_token(d["sub"], d["org"], tokens)
     else:
+        # The level only for a service that declares levels (its state signs one).
+        extra = {"level": d["level"]} if d.get("level") is not None else {}
         email = persist_token(d["sub"], d["org"], tokens, scope=d["scope"],
-                              group_id=d["group"], connector=d["connector"],
-                              level=d.get("level"))
+                              group_id=d["group"], connector=d["connector"], **extra)
     return {"account": email, "scope": d["scope"]}
 
 

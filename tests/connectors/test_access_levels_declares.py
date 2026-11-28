@@ -40,7 +40,7 @@ def _population(montes: dict) -> dict[str, list[str]]:
 
 def test_il_y_a_des_connecteurs_a_niveaux(montes):
     assert set(_population(montes)) == set(al.DECLARED) == {"zoho", "zohodesk", "payfit", "zohosign",
-                                                         "google_search_console"}
+                                                         "google_search_console", "search_console"}
 
 
 def test_tout_outil_servi_a_sa_declaration(montes):
@@ -65,7 +65,9 @@ def test_les_ops_declarees_sont_celles_du_schema_servi(montes):
             prop = (montes[tool].parameters.get("properties") or {}).get(al.OP_PARAM)
             if isinstance(ops, dict):
                 assert prop is not None, f"{tool} déclaré op par op sans paramètre `op`"
-                assert set(ops) == set(prop["enum"]), tool
+                # Un `Literal` à une seule valeur se sert en `const` (`search_console_act`).
+                servies = prop["enum"] if "enum" in prop else [prop["const"]]
+                assert set(ops) == set(servies), tool
 
 
 def test_la_garde_mord_sur_un_outil_non_declare():

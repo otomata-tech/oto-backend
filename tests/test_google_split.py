@@ -182,12 +182,15 @@ def test_google_ads_demande_adwords_seul_depuis_sa_carte():
 
 def test_search_console_demande_webmasters_readonly_seul_depuis_sa_carte():
     """search_console (2026-11-15) : même règle — `webmasters.readonly` seul, depuis sa
-    carte, jamais ajouté au consentement du compte ; jamais `webmasters` (écriture) ; le
-    coffre le connaît."""
+    carte, jamais ajouté au consentement du compte ; le coffre le connaît. `webmasters`
+    (écriture) n'est demandé qu'au niveau `full`, derrière un interrupteur d'instance
+    (`tests/test_search_console_write.py`) : il est connu du coffre, jamais demandé par
+    défaut ni par la carte du compte."""
     gsc = "https://www.googleapis.com/auth/webmasters.readonly"
     assert gsc not in G.scopes_for("google", _app("env"))
     assert G.scopes_for("search_console", _app("env")) == list(G.IDENTITY_SCOPES) + [gsc]
-    assert "https://www.googleapis.com/auth/webmasters" not in G.KNOWN_SCOPES
+    assert "https://www.googleapis.com/auth/webmasters" not in G.scopes_for("google", _app("env"))
+    assert "https://www.googleapis.com/auth/webmasters" in G.KNOWN_SCOPES
     assert gsc in G.KNOWN_SCOPES
     assert G.services_granted(f"{gsc} {EMAIL}") == ["search_console"]
     # Le nom de SA carte, que le refus « n'a pas encore autorisé … » cite : jamais celui

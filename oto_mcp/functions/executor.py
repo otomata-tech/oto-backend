@@ -28,6 +28,7 @@ place, `BacASableOccupe` (429 `sandbox_busy`), rien n'est lancé.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -37,7 +38,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from . import contract, isolement, places
+from . import contract, distant, isolement, places
 
 ENV_DIR = "OTO_FUNCTIONS_SANDBOX_DIR"
 _ICI = Path(__file__).resolve().parent
@@ -61,6 +62,18 @@ _BLOC = 64 * 1024
 # La roue qui accompagne chaque dépendance de la liste blanche. `et_xmlfile` suit
 # `openpyxl` : c'est sa dépendance, jamais une demande d'auteur.
 _ROUES = {"openpyxl": ("openpyxl", "et_xmlfile")}
+
+
+def empreinte() -> str:
+    """L'empreinte du bac à sable que CE code sait lancer : la version de Pyodide, le
+    verrou Deno, les scripts et les harnais. La ferme de recettes (`distant.py`) refuse
+    une empreinte différente de la sienne — un serveur et une box qui ne lanceraient pas
+    le même bac à sable ne s'entendent pas sur le protocole."""
+    h = hashlib.sha256(PYODIDE.encode())
+    for nom in ("deno.lock", "sandbox.ts", "sandbox_pont.ts", "harness.pyodide",
+                "harness_pont.pyodide"):
+        h.update(b"\0" + nom.encode() + b"\0" + (_ICI / nom).read_bytes())
+    return h.hexdigest()[:32]
 
 
 class BacASableAbsent(RuntimeError):
@@ -155,16 +168,22 @@ def roues(racine: Path, requirements: list[str]) -> list[str]:
 
 
 def executer(*, sources: dict, entrypoint: str, requirements: list[str], mode: str,
-             sub: Optional[str], entree: Optional[dict] = None) -> dict:
+             sub: Optional[str], entree: Optional[dict] = None,
+             org_id: Optional[int] = None) -> dict:
     """Joue la fonction (`mode='run'`) ou ses tests (`mode='test'`) dans le bac à sable.
 
     Rend la sortie du harnais — `{ok, result, warnings, files}` ou `{ok, error}` en
     `run`, `{ok, tests}` en `test` — plus `journal` (ce que le code a imprimé) et
     `duree_ms`. Lève `ExecutionEchouee` si le bac à sable n'a rien rendu d'exploitable,
-    `BacASableOccupe` si `sub` ou le processus n'a plus de place (`places.py`).
+    `BacASableOccupe` si `sub` dans l'org `org_id` (la part par compte est par personne
+    ET par org) ou le processus n'a plus de place (`places.py`).
     """
     if mode not in ("run", "test"):
         raise ValueError(f"mode inconnu : {mode}")
+    if distant.actif():
+        return _executer_sur_la_ferme(sources=sources, entrypoint=entrypoint,
+                                      requirements=requirements, mode=mode, sub=sub,
+                                      entree=entree, org_id=org_id)
     racine = _repertoire()
     roues = _roues(racine, requirements)
     nonce = secrets.token_hex(16)
@@ -176,10 +195,53 @@ def executer(*, sources: dict, entrypoint: str, requirements: list[str], mode: s
                 "input": entree if entree is not None else {}},
     }
     # Au plus `DELAI_S` puis l'arrêt du processus (`_jouer`) : ce qu'un refus annonce.
-    with places.place(sub, DELAI_S + places.MARGE_ARRET_S):
+    with places.place(sub, DELAI_S + places.MARGE_ARRET_S, org_id=org_id):
         debut = time.monotonic()
         code, sortie, erreurs = _jouer(lancement(racine, _SCRIPT, DELAI_S),
                                        json.dumps(tache).encode())
+    duree = int((time.monotonic() - debut) * 1000)
+    reponse = _lire_reponse(sortie, nonce)
+    if reponse is None:
+        raise ExecutionEchouee(
+            f"le bac à sable n'a rendu aucune réponse (code {code}) : "
+            f"{erreurs.decode(errors='replace')[-1500:]}")
+    if not reponse.get("ok"):
+        raise ExecutionEchouee(reponse.get("erreur") or "échec sans message")
+    rendu = dict(reponse["sortie"])
+    rendu["journal"] = reponse.get("journal") or ""
+    rendu["duree_ms"] = duree
+    return rendu
+
+
+def _executer_sur_la_ferme(*, sources: dict, entrypoint: str, requirements: list[str],
+                           mode: str, sub: Optional[str], entree: Optional[dict],
+                           org_id: Optional[int] = None) -> dict:
+    """L'aller simple sur la ferme de recettes (`distant.py`) : la même tâche, avec les
+    chemins de Pyodide et des roues que la box rend à l'ouverture. La place de
+    `places.py` est prise ICI (part équitable par compte) ; la ferme a les siennes."""
+    for dependance in requirements:
+        if dependance not in contract.DEPENDANCES:
+            raise ValueError(f"dépendance hors liste blanche : {dependance}")
+    nonce = secrets.token_hex(16)
+    harnais = _HARNAIS.read_text(encoding="utf-8")
+
+    def tache(pyodide: str, roues: list[str]) -> dict:
+        return {"pyodide": pyodide, "wheels": roues, "nonce": nonce, "harness": harnais,
+                "job": {"sources": sources, "entrypoint": entrypoint, "mode": mode,
+                        "input": entree if entree is not None else {}}}
+
+    with places.place(sub, DELAI_S + places.MARGE_ARRET_S, org_id=org_id):
+        debut = time.monotonic()
+        try:
+            code, sortie, erreurs = distant.jouer_aller(
+                requirements=sorted(set(requirements)), tache=tache, duree_max_s=DELAI_S,
+                empreinte=empreinte(), limite_sortie=MAX_REPONSE,
+                queue_erreurs=QUEUE_ERREURS)
+        except TimeoutError:
+            raise ExecutionEchouee(f"délai dépassé ({DELAI_S} s)") from None
+        except OverflowError:
+            raise ReponseTropLongue(f"réponse de plus de {MAX_REPONSE} octets : "
+                                    "processus arrêté") from None
     duree = int((time.monotonic() - debut) * 1000)
     reponse = _lire_reponse(sortie, nonce)
     if reponse is None:

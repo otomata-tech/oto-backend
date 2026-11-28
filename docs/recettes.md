@@ -126,9 +126,10 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   1 $ = 1 000 000 — `docs/monitoring.md` §Le coût des runs Apify) : une recette qui mêle
   deux outils additionne deux unités. Atteint, les appels suivants sont refusés et le reçu le dit (`stopped`).
 - **Une place dans le bac à sable** : une recette-code en prend une, comme une fonction
-  (`docs/fonctions.md` §Combien d'exécutions à la fois) — au plus une par compte, au plus
-  `OTO_FUNCTIONS_MAX_SIMULTANEES` par processus. Pas de place : 429 `sandbox_busy` avec
-  `Retry-After`, rien n'est lancé ni appelé.
+  (`docs/fonctions.md` §Combien d'exécutions à la fois) — au plus le plafond moins une
+  réserve par compte (une personne dans une org, `(sub, org_id)`), au plus `OTO_FUNCTIONS_MAX_SIMULTANEES` par processus ; une recette
+  sans place attend son tour (au plus `OTO_FUNCTIONS_ATTENTE_MAX_S`, file équitable), puis
+  429 `sandbox_busy` avec `Retry-After`, rien n'est lancé ni appelé.
 - **Pas de reprise** (`resume_not_supported`) : une relance repart du début, et ses
   écritures par clé ne doublent rien.
 - **Le reçu** est ce que rend le code, borné à `code.MAX_RECU` caractères : des

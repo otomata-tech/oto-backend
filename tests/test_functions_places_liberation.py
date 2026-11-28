@@ -31,6 +31,24 @@ from oto_mcp.capabilities import recipes as cap_recettes
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 from oto_mcp.functions import executor, isolement, places, pont
 
+
+@pytest.fixture(autouse=True)
+def _refus_immediat(monkeypatch):
+    """Ces bancs éprouvent la libération et le `Retry-After` : sans attente (0), comme
+    avant le 28/11/2026 ; l'attente a ses bancs (`test_functions_places_file.py`)."""
+    monkeypatch.setenv(places.ENV_ATTENTE, "0")
+    monkeypatch.delenv(places.ENV_RESERVE, raising=False)
+    for f in (places.plafond, places.reserve, places.attente_max_s):
+        f.cache_clear()
+    yield
+    for f in (places.plafond, places.reserve, places.attente_max_s):
+        f.cache_clear()
+
+
+def _un_par_compte(monkeypatch) -> None:
+    monkeypatch.setenv(places.ENV_RESERVE, str(places.MAX_DEFAUT - 1))
+    places.reserve.cache_clear()
+
 # Le faux bac à sable : il lit sa tâche, lance ses demandes (`job.input.calls`), attend
 # autant de réponses, puis finit.
 _FAUX_BAC = r'''
@@ -215,15 +233,16 @@ def _plafond(monkeypatch, n: int) -> None:
     places.plafond.cache_clear()
 
 
-def test_le_refus_par_compte_annonce_ce_qui_reste_a_son_execution():
+def test_le_refus_par_compte_annonce_ce_qui_reste_a_son_execution(monkeypatch):
+    _un_par_compte(monkeypatch)
     with places.place("a", 100):
         with pytest.raises(places.BacASableOccupe) as e:
             with places.place("a", 100):
                 pytest.fail("un compte a tenu deux exécutions à la fois")
     assert 99 <= e.value.retry_after <= 100
     message = str(e.value)
-    assert message.startswith("sandbox_busy: this account already has 1 execution running")
-    assert "per-account limit" in message and f"retry in {e.value.retry_after} s" in message
+    assert message.startswith("sandbox_busy: this person already has 1 execution(s) running")
+    assert "per-person-per-org limit" in message and f"retry in {e.value.retry_after} s" in message
 
 
 def test_le_refus_du_plafond_annonce_la_premiere_place_a_se_liberer(monkeypatch):
@@ -249,8 +268,9 @@ def test_une_place_sans_borne_garde_le_pas_fixe(monkeypatch):
     assert e.value.retry_after == places.ATTENTE_S
 
 
-def test_une_place_qui_depasse_sa_borne_se_journalise_sans_le_compte(caplog):
+def test_une_place_qui_depasse_sa_borne_se_journalise_sans_le_compte(caplog, monkeypatch):
     import logging
+    _un_par_compte(monkeypatch)
     with places.place("compte-secret", 0.01):
         time.sleep(0.05)
         with caplog.at_level(logging.WARNING, logger=places.__name__):
@@ -265,6 +285,7 @@ def test_une_place_qui_depasse_sa_borne_se_journalise_sans_le_compte(caplog):
 def test_le_pont_annonce_sa_borne_au_refus_suivant(monkeypatch):
     """Une recette-code en cours (budget de 120 s) : le même compte est refusé avec un
     `Retry-After` qui couvre tout ce que l'exécution peut encore tenir sa place."""
+    _un_par_compte(monkeypatch)
     tenue = asyncio.Event()
 
     async def tient(**_kw):

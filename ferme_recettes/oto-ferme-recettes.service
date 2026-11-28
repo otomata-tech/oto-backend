@@ -1,0 +1,24 @@
+# Gabarit : l'agent de la ferme de recettes. Les valeurs propres à la box (adresse
+# privée, secret, places) vivent dans l'EnvironmentFile, jamais dans ce dépôt.
+[Unit]
+Description=oto — agent de la ferme de recettes (bac à sable distant)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oto-ferme
+Group=oto-ferme
+WorkingDirectory=/opt/oto-ferme-recettes
+EnvironmentFile=/etc/oto-ferme-recettes/agent.env
+Environment=PYTHONPATH=/opt/oto-ferme-recettes
+ExecStart=/usr/bin/python3 -m ferme_recettes.agent
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=no
+# `OTO_FUNCTIONS_ISOLATION=systemd` lance chaque processus en unité transitoire sous
+# l'utilisateur dédié du bac à sable : l'agent doit pouvoir le faire (voir
+# oto_mcp/functions/isolement.py). Avec `bwrap`, NoNewPrivileges=yes est possible.
+
+[Install]
+WantedBy=multi-user.target

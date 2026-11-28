@@ -138,7 +138,8 @@ def refus_hors_liste(manque: dict) -> dict:
 
 
 async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
-                   datastore: Any = None, ecrire: bool) -> dict:
+                   datastore: Any = None, ecrire: bool,
+                   org_id: Optional[int] = None) -> dict:
     """Joue une recette-code VALIDÉE. `ecrire=False` = l'épreuve : aucune écriture,
     `data_write` et les écritures chez un tiers refusés. Rend le reçu `{ok, result |
     error, calls, units, refused, stopped, writes, done}` (+ `journal` en épreuve, où
@@ -154,7 +155,7 @@ async def executer(corps: dict, params: dict, *, fastmcp, sub: Optional[str],
         return refus_hors_liste(manque)
     ecritures = pont.compteur_neuf()
     sortie = await pont_bac.executer_avec_pont(
-        sources=corps["sources"], entrypoint=corps["entrypoint"], entree=params, sub=sub,
+        sources=corps["sources"], entrypoint=corps["entrypoint"], entree=params, sub=sub, org_id=org_id,
         appeler=pont.appeleur_de_recette(
             fastmcp, sub, datastore=datastore, ecrire=ecrire,
             ecritures=frozenset(corps.get("writes") or ()),

@@ -66,7 +66,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from . import executor, places
+from . import distant, executor, places
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,8 @@ class Budget:
 async def executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler,
                              sub: Optional[str], budget: Budget = Budget(),
                              requirements: tuple = (),
-                             entree: Optional[dict] = None) -> dict:
+                             entree: Optional[dict] = None,
+                             org_id: Optional[int] = None) -> dict:
     """Joue `entrypoint(oto, entree)` dans le bac à sable, en servant ses appels
     d'outils par `appeler`. Rend `{ok, result | error, calls, units, refused, stopped,
     journal, duree_ms}`. Lève `executor.ExecutionEchouee` si le bac à sable n'a rien
@@ -115,7 +116,10 @@ async def executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler
     l'instance n'en a pas, `executor.BacASableOccupe` si `sub` ou le processus n'a plus
     de place (`places.py`) — la place est tenue jusqu'à la mort du processus, annulation
     comprise, et au plus `duree_max_s(budget)` : ce que le refus d'un autre annonce."""
-    with places.place(sub, duree_max_s(budget)):
+    # L'attente d'une place est un futur asyncio (`places.place_async`) : la boucle n'est
+    # jamais bloquée pendant qu'une recette attend son tour.
+    # La part par compte est par personne ET par org (`places.compte`).
+    async with places.place_async(sub, duree_max_s(budget), org_id=org_id):
         return await _executer_avec_pont(sources=sources, entrypoint=entrypoint,
                                          appeler=appeler, budget=budget,
                                          requirements=requirements, entree=entree)
@@ -140,26 +144,42 @@ async def _avant(fin_dure: float, attente, delai_s: float):
 async def _executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appeler,
                               budget: Budget, requirements: tuple,
                               entree: Optional[dict]) -> dict:
-    racine = executor.repertoire()
-    roues = executor.roues(racine, list(requirements))
     nonce = secrets.token_hex(16)
-    tache = {
-        "pyodide": str(executor.chemin_pyodide(racine)), "wheels": roues, "nonce": nonce,
-        "harness": _HARNAIS.read_text(encoding="utf-8"),
-        "job": {"sources": sources, "entrypoint": entrypoint,
-                "input": entree if entree is not None else {}},
-    }
+    job = {"sources": sources, "entrypoint": entrypoint,
+           "input": entree if entree is not None else {}}
+    harnais = _HARNAIS.read_text(encoding="utf-8")
+    if distant.actif():
+        # La FERME de recettes : seul le processus part sur la box (`distant.py`) ; le
+        # budget, le jugement et le service des appels restent ici, inchangés. Ferme
+        # pleine, injoignable ou d'une autre empreinte : `BacASableOccupe`, avant tout
+        # départ. Les chemins de Pyodide et des roues sont ceux de la box.
+        for dependance in requirements:
+            if dependance not in executor.contract.DEPENDANCES:
+                raise ValueError(f"dépendance hors liste blanche : {dependance}")
+        ouverture = await distant.ouvrir(
+            script="pont", requirements=sorted(set(requirements)),
+            duree_max_s=budget.delai_s + GRACE_S, empreinte=executor.empreinte(),
+            limite=executor.MAX_REPONSE)
+        tache = {"pyodide": ouverture.pyodide, "wheels": ouverture.wheels,
+                 "nonce": nonce, "harness": harnais, "job": job}
+        proc, arreter = ouverture.proc, (lambda: None)
+    else:
+        racine = executor.repertoire()
+        tache = {"pyodide": str(executor.chemin_pyodide(racine)),
+                 "wheels": executor.roues(racine, list(requirements)), "nonce": nonce,
+                 "harness": harnais, "job": job}
+        lance = executor.lancement(racine, _SCRIPT, budget.delai_s + GRACE_S)
+        proc = await asyncio.create_subprocess_exec(
+            *lance.argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, env=lance.env, cwd=lance.cwd,
+            limit=executor.MAX_REPONSE)
+        arreter = lance.arreter
     recu = {"calls": 0, "units": 0.0, "refused": 0, "stopped": None}
     debut = time.monotonic()
     # Deux échéances : celle du budget (au-delà, plus d'appel), et celle où l'on cesse
     # d'attendre la fin du code (`GRACE_S` plus tard) pour qu'il puisse rendre son reçu.
     fin = debut + budget.delai_s
     fin_dure = fin + GRACE_S
-    lance = executor.lancement(racine, _SCRIPT, budget.delai_s + GRACE_S)
-    proc = await asyncio.create_subprocess_exec(
-        *lance.argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, env=lance.env, cwd=lance.cwd,
-        limit=executor.MAX_REPONSE)
     # Vidée en parallèle, BORNÉE : un processus qui remplit sa sortie d'erreur bloquerait
     # sinon, et la lire en entier la garderait toute en mémoire.
     erreurs = asyncio.ensure_future(_queue_erreurs(proc.stderr))
@@ -250,7 +270,7 @@ async def _executer_avec_pont(*, sources: dict, entrypoint: str, appeler: Appele
         _abandonner_ce_qui_vole(en_vol, abandons)
         if proc.returncode is None:
             proc.kill()
-            await asyncio.to_thread(lance.arreter)
+            await asyncio.to_thread(arreter)
         await proc.wait()
         # Fermés sur la boucle, pas laissés au ramasse-miettes (qui les fermerait après
         # elle) : l'entrée, puis la sortie d'erreur attendue jusqu'à sa fin — un processus

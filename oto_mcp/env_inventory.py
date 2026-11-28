@@ -141,6 +141,15 @@ _REQUISES: tuple[Variable, ...] = (
              "six. Pour une instance dont le projet Google n'est vérifié que pour "
              "certains scopes ; un service inconnu lève.",
              ("oto_mcp/auth/google.py:140",)),
+    Variable("GOOGLE_SEARCH_CONSOLE_WRITE", Classe.REGLAGE, "0",
+             "Interrupteur : ouvre le niveau d'accès `full` du service `search_console` "
+             "(Search Console par connexion Google), qui demande le scope `webmasters` "
+             "et sert `search_console_act` (envoi d'un sitemap). Éteint (défaut) : poser "
+             "`full` est refusé, un `full` posé s'applique en `read`, aucun consentement "
+             "ne demande `webmasters`. À n'allumer qu'une fois `webmasters` déclaré au "
+             "projet Google de l'instance (Data Access ; chaque instance déclare "
+             "sur SON projet). Valeur illisible = refus.",
+             ("oto_mcp/connectors/access_levels.py:59",)),
     Variable("GOOGLE_WORKSPACE_CLIENT_ID", Classe.REQUISE, None,
              "Client OAuth Google Workspace — NOTRE app, servie à tout compte dont le "
              "tenant n'a pas posé la sienne en app d'éditeur (`google_oauth.app_for`). "

@@ -828,6 +828,7 @@ sante_essms_search	-	ac3078711024b515
 sante_finess	-	eb5f0f708f494079
 sante_finess_search	-	e78e593b22b6226d
 search_console	get_sitemap inspect_url list_sitemaps list_sites query_search_analytics	7645228005af9ca4
+search_console_act	add_sitemap	db8ffcc688286ec2
 searchapi_search	-	2b9dd2c6d3e47679
 sellsy_contact	companies create custom_fields delete get list search update	40cd5958584016dd
 sellsy_document	create custom_fields delete get linked list payments search status update validate	755dd2ee1d3bc759

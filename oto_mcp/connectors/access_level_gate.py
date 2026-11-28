@@ -129,6 +129,17 @@ def refusal(decl: access_levels.AccessLevels, level: str, source: str, tool: str
                  f"scope='org', org_id={org}, name='{decl.connector}', level='full'))")
     if source == "default":
         par = f"default for `{decl.connector}` (organization #{org} sets none)"
+    if source == access_levels.INSTANCE:
+        par = (f"this instance for `{decl.connector}` (the level set is off here, so its "
+               f"default `{level}` applies)")
+    # Every level that would cover the call is closed on this instance: widening the org's
+    # level would be refused (`access_level_off_on_instance`) — the gesture is the operator's.
+    couvrants = [n for n in decl.levels if decl.covers(n, tool, op)]
+    fermes = sorted({decl.gate_of(n) for n in couvrants if decl.gate_of(n) is not None})
+    if couvrants and len(fermes) and all(decl.gate_of(n) is not None for n in couvrants):
+        geste = (f"a platform operator first turns on the instance setting "
+                 f"{', '.join(fermes)} (off: the level that covers it cannot be set), "
+                 f"then an org admin sets it")
     suite = ("a wider level then needs a new consent (a token obtained for a narrower "
              "level lacks its scopes)" if decl.widening_needs_consent else
              "the next call then claims the wider scopes, no new consent")

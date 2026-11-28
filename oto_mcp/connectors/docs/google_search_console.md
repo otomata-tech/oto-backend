@@ -19,7 +19,7 @@ the level bounds, it does not grant: submitting also needs the service account t
 - `access_level_denied`: the org's level is `read` — an org admin sets `full`
 - `owner_or_full_required`: the level is `full` but the property shares the key as Restricted — give its `client_email` the Owner or Full permission (Settings > Users and permissions)
 
-nothing removes a sitemap or a property.
+nothing removes a sitemap or a property. A person can also submit with their own Google sign-in: the **Search Console (Google sign-in)** card at its `full` level (`search_console_act`).
 
 ## usage — read a property's search performance
 

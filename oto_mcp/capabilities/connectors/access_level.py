@@ -62,7 +62,8 @@ class AccessLevelState(BaseModel):
     """The level of a connector at one scope. `level` = what THIS scope sets (None = it
     sets nothing); `effective` = what applies under it (the org's level for a team that
     sets nothing, else the connector's default level — `full` unless it declares another);
-    `source` ∈ group|org|default says who decided.
+    `source` ∈ group|org|default|instance says who decided (`instance`: the level set is
+    off on this instance, the default applies).
     `levels` = the declared levels, `full` filtering nothing. `deleted` (clear only):
     `false` = there was nothing to remove (idempotent)."""
     connector: str
@@ -93,7 +94,7 @@ def _exiger_org(org_id: int) -> None:
 def _state(decl, scope: str, org_id: int, group_id: Optional[int]) -> dict:
     valeurs = access_levels.settings(org_id, group_id)
     effective, source = access_levels.resolve(decl.connector, org_id, group_id, valeurs)
-    pose = valeurs.get(providers.credential_provider(decl.connector), {}).get(scope)
+    pose = valeurs.get(access_levels.setting_connector(decl.connector), {}).get(scope)
     return {"connector": decl.connector, "scope": scope, "org_id": org_id,
             "group_id": group_id, "level": pose, "effective": effective,
             "source": source,
@@ -104,7 +105,7 @@ def _set(scope: str, scope_id: int, org_id: int, name: str, level: str, sub: str
     try:
         access_levels.set_level(scope, scope_id, name, level, sub, org_id=org_id)
     except access_levels.AccessLevelError as e:
-        if e.code == "access_level_wider_than_org":
+        if e.code in ("access_level_wider_than_org", "access_level_off_on_instance"):
             raise AuthzDenied(409, e.code, str(e))
         raise AuthzDenied(400, e.code, str(e))
 
@@ -150,7 +151,9 @@ _GROUP = "/api/groups/{id}/connectors/{name}/access-level"
 _ERREURS = (DeclaredError(404, "unknown_connector", "connecteur absent du registre"),
             DeclaredError(400, "no_access_levels", "le connecteur ne déclare aucun niveau"))
 _ERREURS_POSE = _ERREURS + (
-    DeclaredError(400, "unknown_access_level", "niveau non déclaré par le connecteur"),)
+    DeclaredError(400, "unknown_access_level", "niveau non déclaré par le connecteur"),
+    DeclaredError(409, "access_level_off_on_instance",
+                  "niveau fermé sur cette instance (réglage d'instance non posé)"),)
 _ORG_ERR = (DeclaredError(404, "unknown_org", "l'org n'existe pas"),)
 
 CAPABILITIES += [

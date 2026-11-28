@@ -946,6 +946,7 @@ EFFETS: dict[str, Union[str, dict[str, str]]] = {
     "sante_essms_search": "lire",
     "sante_finess": "lire",
     "sante_finess_search": "lire",
+    "search_console_act": {"ecrire": "add_sitemap"},
     "searchapi_search": "lire",
     "sellsy_contact": {"lire": "list search get companies", "ecrire": "create update custom_fields", "detruire": "delete"},
     # validate is irreversible (freezes the invoice number); status may cancel or refuse a quote
